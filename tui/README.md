@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v52. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v73. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Add `--delivery-access-token-file /private/user/delivery-token` when the server
 operator provisioned committed-delivery access for this client (see `/files`).
 
-Both modes use App Server protocol v52. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v73. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -151,8 +151,9 @@ An empty initial catalog automatically creates and attaches one Session using th
 launch settings. There is no global active Session or restart-based selection.
 Catalog browsing is read-only. If an unfocused resume view becomes empty after
 deletion or reconnect, it offers **New Session** (Enter). Creation occurs only
-after that user action, through the same operation as `/new`; successful
-attachment enables the editor. Later empty catalogs never create automatically.
+after that user action, through the same operation as `/new`; the editor opens
+while attachment prepares, and runtime controls require its successful receipt.
+Later empty catalogs never create automatically.
 
 Normal local exit sends SIGTERM to the owned child and waits for its #291 drain
 result. Remote exit closes only this client's WebSocket. Remote disconnect
@@ -162,20 +163,86 @@ unanswered mutations are never replayed. If recovery fails,
 Ctrl+R retries connection recovery and Ctrl+C exits. Unsubmitted editor text stays
 local. See [the complete client architecture](../docs/tui-app-server.md).
 
+Once the replacement transport is initialized, a confirmed Session/node uses
+the same editable connecting surface as ordinary startup. A cold MCP attachment
+does not hold the editor disabled. Only a new explicit Send records
+`session/submissionIntent` on that replacement Host, before waiting for its one
+attachment continuation; captured input reaches `turn/start` only after both the
+intent acknowledgement and the fresh attachment have settled. Escape withdraws
+the local queued input, and connection loss, stale selection or quitting cannot
+forward it later. Unanswered requests from the prior connection remain unknown
+and are never resent.
+
+The focused Session keeps one local draft throughout cold reconnection. Edits,
+including deleting all text or clearing a captured Send, update that same draft
+while attachment waits. Attachment completion cannot restore the text from
+before disconnection. A queued Send consumes only its captured input; text typed
+afterward remains in the editor through attachment and input acknowledgement.
+Switching to another Session still restores that Session's independent draft.
+Selection saves the old complete draft and withdraws its submission target
+before awaiting the new Session's metadata. Typing or paste during that read
+belongs only to the selected target's independent draft; Send waits for its exact
+node. Metadata or Attach failure leaves that input unbound and recoverable through
+a new explicit selection, rather than executing it against the previous Session.
+Only never-bound input uses a pending Session key in the existing draft cache.
+Previously bound text and receipts stay under their exact Conversation key; a
+different confirmed Conversation cannot inherit them. Once the exact target is
+confirmed, its retained draft and newly authored pending blocks keep their order.
+An attachment cached after checkpoint does not transfer that pending input:
+subscription can still fail. Pending input remains independently recoverable
+until App binding to the exact Conversation combines it with the retained draft.
+Final resynchronization and submission-intent acknowledgement precede that
+binding. Until then, captured Q and subsequent R keep their own draft owner;
+withdrawal restores Q before R, then combines the older cached P ahead of both.
+The complete text/receipt order P → Q → R is independent of when Attach finishes.
+Restoration and navigation preserve raw text, receipts and ordering baselines;
+they do not run submission validation. Editing restored text across an upload
+boundary can still require restoring its original order at the next explicit
+Send, but cannot turn a successful attachment into an opening failure. New input
+must not erase that ambiguity or become an automatic submission.
+Keeping the same logical draft also keeps the editor's paste provenance: a
+pasted leading slash stays literal through reconnection. Deliberately clearing
+or replacing the draft retains the ordinary command-provenance reset rules.
+
+An explicit Send captures the complete ordered `ComposerDraft.submission`,
+including text preceding a confirmed upload, its Session receipt and any tail
+text. An empty tail does not make an attachment-bearing draft empty. The queued
+owner forwards those captured blocks directly after attachment and intent
+confirmation; it does not reconstruct them from editor text. Later typing stays
+independent. Withdrawal, rejected preparation or attachment failure restores the
+known-unsent blocks before later input in that same Session/conversation draft.
+These restored message blocks keep literal input semantics, including a leading
+slash; a refusal or withdrawal cannot turn captured text into a command.
+Once an input request is dispatched, its failure or unknown outcome is never
+automatically replayed.
+The queued owner also captures the explicit Queue choice. During a running
+Attempt, Tab still dispatches `turn/start` after reconnection synchronization;
+Enter uses the current native projection to choose Send or Steer.
+
+Native owns initial MCP readiness, including the submission-triggered absolute
+budget from `[mcp_startup_policy].wait_timeout_ms` (default 15000). An attachment
+waiting before submission consumes no such budget. Successful live discovery
+needs no TUI configuration adoption, and neither do authored configuration
+changes: native commits them at the Session's safe boundary.
+
 Root Tool/Skill/Plugin/Agent/Workflow capability selection is authored in
 `rustx.toml`; named Agents own independent complete profiles. `/settings` shows
 native authored sources independently of Session existence. `/model` changes only
-Session intent. `/session settings` inspects native application and `/session adopt`
-explicitly adopts the inspected candidate. Source commits transfer automatic
-application to the native coordinator; context adoption remains explicit.
+Session intent. `/session settings` inspects native application. Source commits
+transfer application to the native coordinator, which commits a prepared Session
+configuration itself at the Session's safe boundary; nothing in the TUI confirms
+or adopts it.
 
 ## Startup sequence
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v52)
+  -> initialize (App Server protocol v73)
   -> session/create or choose a durable Session
-  -> session/attach (bounded identity receipt)
+  -> resolve the exact Session/node; begin session/attach and editable connecting
+       -> first explicit Send records session/submissionIntent
+       -> native selected MCP readiness settles under that submission's budget
+  -> session/attach receipt establishes the fresh runtime identity
   -> session/checkpoint (bounded authoritative cut and cursor)
   -> session/subscribe (receipt accepted before following events)
   -> interactive
@@ -193,7 +260,7 @@ bounded continuations.
 
 Before the first real transcript turn, the screen includes a compact welcome
 block with the published effective model, protocol/provider display label,
-context occupancy, reasoning state, active Session name when the native
+context occupancy, selected profile, active Session name when the native
 Session read is available, and the basic keyboard hints. Once a real turn or
 durably accepted transcript content exists, that block is reclaimed and the
 compact footer carries the durable Session metadata and live status instead.
@@ -251,14 +318,17 @@ terminal inference, or activation generation is performed.
 | `app-server/child-process.ts` | spawn, stdio, bounded stderr tail, stdin close, wait, fallback termination | anything semantic; it never reads stdout |
 | `protocol/jsonl.ts` | LF framing, CRLF, the 1 MiB bound in encoded bytes | protocol meaning |
 | `app-server/client.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
-| `app-server/session.ts` | attach receipt, checkpoint install, subscribe, resync repair, detach | agent/session semantics |
-| `presentation/projection.ts` | the ephemeral render cache and bounded transcript page | canonical history, authority of any kind |
+| `app-server/session.ts` | attach receipt, checkpoint install, subscribe, resync repair, detach, the Session epoch and control gate | agent/session semantics |
+| `app-server/session-readers.ts` | bounded epoch-fenced reads: inspection viewports, deferred fields, deliveries, child pages | the attachment or the fold |
+| `presentation/projection.ts` | the terminal transcript adaptation over the shared native fold (`protocol/app-server/projection.ts`, evaluated once per event or batch) | native-owned facts, canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `presentation/todos.ts` | reading the runtime's task-list projection and folding newly committed `todo` results into it | task identity, status, and dependencies, which the runtime owns |
 | `sanitize.ts` | the one rule for what externally-derived text may be handed to a terminal | what any of that text *means* |
-| `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |
+| `commands/` | slash-command parsing and dispatch (`dispatcher.ts`), typed outcomes (`outcome.ts`), pure Markdown renderers (`presentation.ts`) | parallel runtime semantics |
 | `ui/components/` | the semantic presentation grammar | every fact it displays |
 | `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |
+| `ui/app.ts` | global focus and exit, Session binding, draft/submit, the presentation lease | every fact it displays |
+| `ui/human-input.ts`, `ui/selectors.ts`, `ui/conversation-view.ts` | HITL focus/paging/responses; selection popups; the total-render conversation view — each under the app's one lease | lifecycle or epoch state |
 | `ui/` | Pi components and rendering | every fact it displays |
 
 ## Presentation surfaces
@@ -418,8 +488,8 @@ searchable selector over `model_catalog_get` and applies a choice through
 selection remains available during active execution. Native confirmation changes
 the Session's selection for future independent Attempts; the running Attempt's
 frozen model/Profile remains separately labelled, even for same-Model changes.
-Profile changes preserve independent request/output overrides and Summary Model
-policy; choosing another Model resets only primary overrides. Uncertain outcomes
+Profile changes preserve independent request/output overrides and Summary and Title
+policies; choosing another Model resets only primary overrides. Uncertain outcomes
 repair displayed state by reading authority, never by replaying the mutation.
 Readback does not settle an unanswered native request; the TUI keeps that
 diagnostic across reconnect. Deliberately selecting the current Model submits
@@ -521,9 +591,9 @@ the transcript, combined for User and Workspace; an `unresolved` or
 `commit_uncertain` receipt shows as a warning or error. The first keystroke
 acknowledges it, a receipt identity is announced once across reconnects, and the
 line is never a conversation Turn or model input. Source notices are routed by the
-host itself, independently of any attached Session. `/session settings` reports native preparation,
-candidate and eligibility; `/session adopt` submits the inspected candidate and
-binding. Uncertain mutations are reread, never replayed. Runtime approval prompts
+host itself, independently of any attached Session. `/session settings` reports native
+preparation and application; native commits the prepared configuration at the
+Session's safe boundary. Uncertain mutations are reread, never replayed. Runtime approval prompts
 remain independent of these source-authoring commands.
 
 To add a file while preserving prompt text, press Ctrl+P and enter
@@ -547,6 +617,12 @@ pasted Enter/Tab/Esc cannot send, queue or interrupt. A pasted leading slash sta
 literal on subsequent submission. An explicitly typed command token followed by
 a pasted argument (such as `/attach ` plus a path) remains a command; pasting
 into the leading token makes it literal until the draft is cleared or replaced.
+Command-token provenance, including a pending token-end paste decision, belongs
+to the logical Session/conversation draft. Activating a retained draft restores
+both text and provenance, including after a refused Attach and explicit selection
+of the same Session. Temporary presentation drafts and A/B selection cannot turn
+a retained literal message into a command. Truly clearing or replacing text still
+starts a new command-provenance boundary.
 Newlines and tabs follow Pi's text normalization.
 No separate text editor or timing heuristic is introduced. OS IME composition
 belongs to the terminal: Pi-TUI 0.82.1 exposes committed text, not composition
@@ -995,9 +1071,9 @@ Whole optional segments drop before essential facts use the second row.
 Catalog metadata and live configuration are likewise never merged. A catalog
 row states what a model *offers*, including the profile the catalog would fall
 back to (`catalog default medium`). What the session asked for and what the
-runtime resolved are separate lines (`configured reasoning`, `effective
-reasoning`). A catalog default is never presented as current configuration, and
-no reasoning scale is invented for a capable model that declares no profiles.
+runtime resolved are separate lines (`configured profile`, `effective
+profile`). A catalog default is never presented as current configuration, and
+no profile list is invented for a model that declares no profiles.
 
 ### Reasoning visibility is not reasoning configuration
 
@@ -1006,7 +1082,7 @@ spellings such as `reasoning` and `reasoning_content` never enter the
 TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
 client preference (`/show-reasoning`, `ctrl+t`); when hidden it collapses to a
 `Thinking…` marker rather than becoming assistant text. What rustX *asks a
-provider for* is `SessionModelConfig.profile` / `reasoningEnabled`,
+provider for* is the effective provider `requestParams` selected by `SessionModelConfig.profile`,
 which only `session/setModel` changes.
 
 ### Working status is proven, never timed
@@ -1056,13 +1132,13 @@ Pi source is copied into this repository.
 configuration status. `/debug` displays low-level native facts. Reconnect rereads
 authority without replaying controls or implicitly adopting configuration.
 
-Use `/model profile set <id>` or `/model profile clear` for generation-time reasoning
+Use `/model profile set <id>` or `/model profile clear` to select request parameter presets
 (profile IDs such as `default` and `clear` remain selectable through `set`), and
 `/show-reasoning on|off` for display only. `/reasoning` is no longer a command.
 
 There are no `/defaults`, `/save-default`, `/permissions`, or `/configuration`
-compatibility aliases. `/model` does not save defaults. Explicit context adoption
-is checked at the native Session admission gate, never queued for later idleness.
+compatibility aliases. `/model` does not save defaults. Native commits a prepared Session configuration
+at its safe boundary, under the same lock as Attempt admission.
 See [the complete source/lifetime matrix and write guarantee](../docs/effective-settings.md).
 
 ### Delete historical Sessions inside `/resume`
@@ -1228,3 +1304,5 @@ receipt count/byte bounds. `/attach` uses one file per transfer; native
 `uploaded_content` finally validates all accumulated receipts at send/steer using
 persisted admitted sizes. Prepared loopback capabilities are revoked on host drain;
 an already admitted carrier remains host-owned until terminal settlement.
+
+Session selector rows use native Catalog metadata in manual-name, generated-title, opening-preview, identity order. The active Session header uses its native Session snapshot, which carries manual/generated labels and identity but no preview. It never reconstructs a preview from transcript text.

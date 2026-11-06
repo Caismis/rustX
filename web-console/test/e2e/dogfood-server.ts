@@ -105,10 +105,10 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
     const providerUrl = await readiness(provider, 'stdout', line => {
       const message = JSON.parse(line); return message.ready ? `http://${message.host}:${message.port}` : undefined;
     });
-    const primaryModel = scenario === 'tui_multi_session' ? 'integration-model' : 'console-model';
-    const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nreasoning_enabled = true\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nreasoning_enabled = false\nmax_output_tokens = 1024\n' : '';
+    const primaryModel = ['tui_multi_session', 'mcp_startup'].includes(scenario) ? 'integration-model' : 'console-model';
+    const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
     const catalog = `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
-      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = ${scenario === 'tui_multi_session'} }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
+      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
     if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
       const agents = join(fixtureHome, 'rustx/.agents');
       mkdirSync(agents, { recursive: true });
@@ -132,7 +132,7 @@ timezone = "UTC"
 ` : '';
     const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
-    if (scenario === 'web_child_capabilities') writeFileSync(settings, readFileSync(settings, 'utf8') + '\n[native_tools.write]\napproval = "never"\n');
+    if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n[native_tools.write]\napproval = "never"\n');
     // Automatically repairable sources (#464): the App Server repairs the User
     // document at startup and Workspace A before its first Session resolves.
     if (scenario === 'web_config_repair') {
@@ -144,12 +144,12 @@ timezone = "UTC"
       writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Continuable reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_child_capabilities' ? '[tools]\nbuiltin = ["read", "write", "present"]\n[tools.sources]\nimage_fixture = ["render_image"]\n' : ''));
       writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nagents = ["reviewer"]\n');
     }
-    if (scenario === 'web_workflow_conformance') {
+    if (['web_workflow_conformance', 'web_workflow_observation', 'web_workflow_review'].includes(scenario)) {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });
       mkdirSync(join(workspaceA, '.agents/workflows'), { recursive: true });
       mkdirSync(join(workspaceA, '.agents/skills/acceptance'), { recursive: true });
-      writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Workflow-only reviewer"\ninstructions = "Review requests carefully."\n');
-      writeFileSync(join(workspaceA, '.agents/workflows/review_pr.yaml'), readFileSync(resolve(root, 'web-console/test/e2e/review_pr.yaml')));
+      writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Workflow-only reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_workflow_observation' ? '[tools]\nbuiltin = ["read"]\n' : ''));
+      writeFileSync(join(workspaceA, '.agents/workflows/review_pr.yaml'), readFileSync(resolve(root, scenario === 'web_workflow_review' ? 'web-console/test/e2e/workflow_review.yaml' : 'web-console/test/e2e/review_pr.yaml')));
       writeFileSync(join(workspaceA, '.agents/skills/acceptance/SKILL.md'), '---\nname: acceptance\ndescription: Inspect the native acceptance fixture.\n---\nUse native authority.\n');
       writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nworkflows = ["review_pr"]\n');
     }
@@ -157,9 +157,11 @@ timezone = "UTC"
     const tokenFile = join(directory, 'socket-token'); writeFileSync(tokenFile, token, { mode: 0o600 });
     const productHostToken = randomBytes(32).toString('base64url');
     const productHostTokenFile = join(directory, 'product-host-token'); writeFileSync(productHostTokenFile, productHostToken, { mode: 0o600 });
+    const deliveryToken = randomBytes(32).toString('base64url');
+    const deliveryTokenFile = join(directory, 'delivery-token'); writeFileSync(deliveryTokenFile, deliveryToken, { mode: 0o600 });
     let appErrors = '';
     const startApp = async (listen = 'ws://127.0.0.1:0') => {
-      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile, '--delivery-access-token-file', deliveryTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
       appIdentity = nativeIdentity(app.pid);
       if (app.pid !== undefined) measurement?.process?.({ role: 'native', pid: app.pid });
       if (measurement) observeMeasurementLines(app, measurement.line);
@@ -172,13 +174,13 @@ timezone = "UTC"
       if (!response.ok) throw new Error(`Provider barrier failed: ${await response.text()}`);
       return response.json();
     };
-    const hostConfig = { transportToken: token, productHostToken, endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
+    const hostConfig = { nativeFilesystem: 'shared' as const, transportToken: token, productHostToken, endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
       { id: 'root-a', cwd: workspaceA, displayName: 'Workspace A' }, { id: 'root-b', cwd: workspaceB, displayName: 'Workspace B' },
     ] };
     const workspaceHost = await startWorkspaceHost(hostConfig);
     const hostConfigFile = join(directory, 'host-config.json');
     writeFileSync(hostConfigFile, JSON.stringify(hostConfig), { mode: 0o600 });
-    return { hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
+    return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, deliveryToken, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
@@ -188,7 +190,7 @@ timezone = "UTC"
         const { AppServerHost } = await import('../../../tui/src/app-server/host');
         const remote = await AppServerHost.connectRemote({ endpoint, token });
         let id: string;
-        try { id = (await remote.createSession({ cwd: workspaceA })).session.id; }
+        try { id = (await remote.createSession({ cwd: workspaceA })).session.id; await remote.renameSession(id, 'New session'); }
         finally { await remote.shutdown(); }
         app!.kill('SIGTERM');
         await exited(app!);

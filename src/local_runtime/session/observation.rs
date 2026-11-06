@@ -1,5 +1,6 @@
 //! Finite catalog observation. Immutable metadata remains in the native catalog;
 //! byte reads slice the retained original string without cloning a whole Node.
+use super::projection::validate_page_limit;
 use super::{
     LineageSide, SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
 };
@@ -65,11 +66,11 @@ pub struct SessionNodeValueChunk {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionUserMessageBoundaryObservation {
     pub surface_revision: SurfaceRevision,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub message: Option<crate::message::types::UserMessageBlock>,
     pub block_count: u64,
-    pub content: Vec<crate::runtime_client::checkpoint::ContentBinding>,
-    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
+    pub content: Vec<crate::observation::cut::ContentBinding>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
 impl SessionCatalog {
     fn observation_node(
@@ -143,7 +144,7 @@ impl SessionCatalog {
         offset: usize,
         limit: usize,
     ) -> Result<(Vec<SessionNodeObservation>, Option<usize>), SessionError> {
-        super::validate_page_limit(limit, super::SESSION_TREE_PAGE_LIMIT)?;
+        validate_page_limit(limit, super::SESSION_TREE_PAGE_LIMIT)?;
         self.snapshot(session_id)?;
         let nodes = self.node_observation_index.get(session_id).ok_or_else(|| {
             SessionError::UnknownSession {
@@ -257,7 +258,10 @@ mod tests {
                         } else {
                             "x".repeat(70_000)
                         }),
-                        source_locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: index + 1 },
+                        source_locator:
+                            crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                                position: index + 1,
+                            },
                         side: LineageSide::Before,
                     },
                 },

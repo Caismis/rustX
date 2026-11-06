@@ -9,6 +9,8 @@ use nix::fcntl::{AtFlags, OFlag, open, openat};
 use nix::sys::stat::{Mode, fstat, fstatat};
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod preview;
+
 /// One JSON frame is 1 MiB. 512 KiB becomes at most 699,052 base64 bytes.
 pub const SESSION_FILE_MAX_BYTES: usize = 512 * 1024;
 /// File bodies are never retained in canonical history.

@@ -1,0 +1,116 @@
+{
+  "phase": "coordinator_owned_startup_readiness",
+  "status": "passed",
+  "source_identity": {
+    "algorithm": "SHA-256 of lexicographically sorted POSIX path strings + NUL + file-byte SHA-256 hex + LF",
+    "scope": "Cargo.toml, Cargo.lock, rust-toolchain.toml and Rust sources under src/tests/examples",
+    "file_count": 1010,
+    "sha256": "1de0ea4db02c2a2c0d5a8b0f82b5ba1e6b90fbc9786449e1febc3fc1854f2924"
+  },
+  "environment": {
+    "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+    "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1",
+    "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+    "CARGO_BUILD_JOBS": "4",
+    "platform": "Linux x86_64"
+  },
+  "checks": [
+    {
+      "id": "mcp_readiness",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo test --lib --all-features mcp_readiness -- --test-threads=4",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "8 passed; 0 failed; 0 ignored",
+      "log": "/tmp/issue499/review-round2-mcp-readiness.log",
+      "log_sha256": "38770e12cbf0939681e5dfe798a2b4932a4520dc7833d0a9e2b22322f49cef02"
+    },
+    {
+      "id": "headless_adoption_and_exact_cached_selection",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "/home/capi/Documents/codes/rustX/target/debug/deps/rustx-de65d91917bef4fa local_runtime::composition::tests::headless_capability_adoption_refuses_busy_and_preserves_admitted_attempt local_runtime::composition::tests::cached_catalog_absence_does_not_reject_a_new_exact_root_tool --exact --test-threads=4",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "2 passed; 0 failed; 0 ignored",
+      "log": "/tmp/issue499/review-round2-headless.log",
+      "log_sha256": "964f0e5f802d595b7d92c3f37187fcd9e9d785170c2bc69bfcfb8d71035da868"
+    },
+    {
+      "id": "process_mcp",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo test --test process --all-features capability_startup::mcp -- --test-threads=4",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "4 passed; 0 failed; 0 ignored",
+      "log": "/tmp/issue499/review-round2-process.log",
+      "log_sha256": "1323771c4a703e52cb581ff5401b607396e28e34b93b652db096adc8505d1df5"
+    },
+    {
+      "id": "clippy",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed; warnings denied",
+      "log": "/tmp/issue499/review-round2-clippy.log",
+      "log_sha256": "5cf87e48190bf87e3ab6abc872402d4ec689981b58583ebd745f881ec5e44f40"
+    },
+    {
+      "id": "fmt",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo fmt --all -- --check",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed",
+      "log": "/tmp/issue499/review-round2-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "test_lanes",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo run --all-features --example check_test_lanes",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "test lane coverage holds on linux",
+      "log": "/tmp/issue499/review-round2-test-lanes.log",
+      "log_sha256": "7cf301ff4d869269645abb72bff2038f7dc3cade38c185a395347aa31bb921ce"
+    },
+    {
+      "id": "all_targets",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "5444 passed; 0 failed; 17 ignored across 20 target results",
+      "counts": {
+        "passed": 5444,
+        "failed": 0,
+        "ignored": 17,
+        "target_results": 20
+      },
+      "log": "/tmp/issue499/review-round2-all-targets.log",
+      "log_sha256": "419dfa2747104ed9b61085bb83b191c0a04780bb3a16bb0deeb0330a0198e1d8"
+    },
+    {
+      "id": "diff_check",
+      "command": "git diff --check",
+      "status": "passed",
+      "exit_code": 0,
+      "result": "passed"
+    }
+  ],
+  "pending_checks": [],
+  "independent_review": {
+    "result": "approved; no verified correctness gaps",
+    "scope": "Six production/test files against base_revision; read-only independent agent review including a separate process-test reviewer."
+  },
+  "notes": [
+    "Completed startup facts remain owned by the coordinator until adoption, including across a temporary Todo capability change and reversal.",
+    "Headless adoption consumes owned startup discovery before retrying unavailable siblings, keeps pending discovery running, and retains published-epoch invalidation recovery precedence.",
+    "Historical timing artifacts and prior stage validation records remain unchanged. No benchmark rerun is claimed.",
+    "The exact-head full CI result belongs in PR metadata. macOS and Windows were not run locally."
+  ],
+  "recorded_at": "2026-10-24T00:52:33.722798+00:00",
+  "base_revision": "9a6019fcca6173c67809fc71492851752a3e5a45",
+  "reported_review_revision": "f988efd2029ef55528a802902ab5a2b30d0337fc"
+}

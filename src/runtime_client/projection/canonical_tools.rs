@@ -1,10 +1,8 @@
 //! Complete native proposals can arrive without an intermediate live frame.
 use super::{ForegroundToolState, RuntimeClientEvent, RuntimeClientProjection};
 use crate::durable::observation::MessageHeader;
+use crate::observation::content::{CanonicalContentLocator, ContentRepresentation, ContentSource};
 use crate::runtime::identity::AttemptId;
-use crate::runtime_client::content::{
-    CanonicalContentLocator, ContentRepresentation, ContentSource,
-};
 use crate::runtime_client::snapshot::RuntimeClientToolCall;
 
 impl RuntimeClientProjection {

@@ -11,6 +11,7 @@
 #![allow(clippy::similar_names)] // sibling tool fixtures intentionally share names
 
 use super::super::{common, support};
+use rustx::durable::{JournalStore, RequestStore};
 
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +24,6 @@ use rustx::context::{
     AgentStatusClock, AgentStatusConfig, AgentStatusEngine, ContextRuntime, DefaultTokenEstimator,
     SessionContextPolicy, TODO_STATUS_EMISSION_KEY,
 };
-use rustx::durable::ConversationStore;
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -92,14 +92,14 @@ impl AgentExecutionObserver for StatusRecorder {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
+        _receipt: &rustx::durable::TranscriptCommitReceipt,
     ) {
     }
 
     fn observe_status(
         &self,
         observation: &AgentStatusObservation,
-        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+        _source: Option<&rustx::durable::StatusObservationSource>,
     ) {
         self.observations
             .lock()
@@ -126,7 +126,7 @@ impl AgentExecutionObserver for StatusRecorder {
         &self,
         _attempt_id: &AttemptId,
         _audit: &rustx::publication::PublicationAudit,
-        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
+        _receipt: &rustx::durable::PublicationAuditReceipt,
     ) {
     }
 }

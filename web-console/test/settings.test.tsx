@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { TextField } from '../src/app/settings/forms/controls';
 import { UnitForm } from '../src/app/settings/forms/bridge';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
+import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import {
   confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,
@@ -28,23 +28,26 @@ async function revisionOnAdvanced(pattern: RegExp, back?: string) {
 
 it('C09 Workspace A/B drafts survive navigation and Session focus without retargeting', async () => {
  const s = cfg3Client(); const host = cfg3Host(s);
+ // Query the semantic unit being edited: scanning every label on this large
+ // page repeatedly makes the contract depend on unrelated editors' DOM size.
+ const nativeTools = () => within(screen.getByRole('form', { name: 'Native Tools' }));
  const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await settingsReady(); await openSettingsPage('Tools & Permissions');
- fireEvent.click(screen.getByLabelText('read'));
+ fireEvent.click(nativeTools().getByLabelText('read'));
  // A different Workspace Settings instance is a different target and must not
  // receive Workspace A's draft.
  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('B', 'B')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
- await waitFor(() => expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(false));
- fireEvent.click(screen.getByLabelText('write'));
+ await waitFor(() => expect((nativeTools().getByLabelText('read') as HTMLInputElement).checked).toBe(false));
+ fireEvent.click(nativeTools().getByLabelText('write'));
  // Returning to A restores A's own draft and excludes B's.
  ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
- await waitFor(() => expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(true));
- expect((screen.getByLabelText('write') as HTMLInputElement).checked).toBe(false);
+ await waitFor(() => expect((nativeTools().getByLabelText('read') as HTMLInputElement).checked).toBe(true));
+ expect((nativeTools().getByLabelText('write') as HTMLInputElement).checked).toBe(false);
  s.state.views = {}; ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
  await openSettingsPage('Tools & Permissions');
- fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+ fireEvent.click(nativeTools().getByRole('button', { name: 'Save Native Tools' }));
  await waitFor(() => expect(s.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { mutation: { authored: ['read'] } } } }));
 });
 
@@ -75,8 +78,8 @@ it('C10 Workspace revocation disables mutation and preserves local draft', async
 });
 
 it.each(['target', 'connection'] as const)('C10 late response after %s replacement cannot overwrite new authority', async invalidation => {
- let release!: (result: import('../../protocol/app-server/v52').MethodResult) => void;
- const pending = new Promise<import('../../protocol/app-server/v52').MethodResult>(resolve => { release = resolve; });
+ let release!: (result: import('../../protocol/app-server/v73').MethodResult) => void;
+ const pending = new Promise<import('../../protocol/app-server/v73').MethodResult>(resolve => { release = resolve; });
  let reads = 0;
  const s = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++reads === 1) return pending; });
  const host = cfg3Host(s); const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
@@ -179,15 +182,15 @@ it('Workspace Settings is bound to one exact target and never retargets on Sessi
 
 it('saves a whole Workspace Provider with explicit credentials without copying User members', async () => {
   const subject = cfg3Client(); await open(subject, 'Models');
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'transport' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
-  expect((screen.getByLabelText('Endpoint') as HTMLInputElement).value).toBe('');
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://workspace.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('');
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await screen.findByText(/Provider transport saved/);
   expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
-  expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'session/adoptConfiguration')).toHaveLength(0);
   expect(screen.queryByRole('button', { name: /Adopt/ })).toBeNull();
 });
 
@@ -302,7 +305,7 @@ it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a dis
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
 
-it('process state comes from native classification, outside Session adoption', async () => {
+it('process state comes from native classification, outside the Session commit', async () => {
  const subject = cfg3Client(); subject.source.application = cfg3Application(); subject.source.application.units.process_bindings = { status: 'process_restart' };
  await open(subject, 'Advanced', 'User');
  expect(screen.getByText(/Restart required/)).toBeTruthy();
@@ -349,7 +352,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v52').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v73').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
@@ -372,32 +375,70 @@ it('removes literal credentials from a successful Provider draft using the redac
     }
   });
   await open(subject, 'Models');
-  fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
+  fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
   fireEvent.click(screen.getByRole('button', { name: /Credential source/ }));
   fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
-  fireEvent.change(await screen.findByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
+  fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   await screen.findByText(/Provider secret saved/);
-  await waitFor(() => expect(screen.queryByLabelText('New literal credential')).toBeNull());
+  await waitFor(() => expect(screen.queryByLabelText('API Key')).toBeNull());
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
   fireEvent.click(screen.getByRole('button', { name: '← Models' }));
   await openResourceRow('secret');
   expect((await screen.findByRole('button', { name: /Credential source/ })).textContent).toContain('Keep the credential this scope already authored');
 });
 
+it('round-trips the single native JSON Schema claim through whole Workspace Model replacement', async () => {
+  const subject = cfg3Client(async (op, source) => {
+    if (op.method !== 'configuration/sourceWrite' || op.params.mutation.kind !== 'config') return;
+    const mutation = op.params.mutation.mutation;
+    if (mutation.unit === 'model' && mutation.authored) {
+      source.workspace!.authored = { models: { [mutation.id]: structuredClone(mutation.authored) } };
+    }
+  });
+  const inherited = subject.effective.document.models!.main;
+  inherited.capabilities.json_schema_output = true;
+  subject.source.user.authored!.models = { main: structuredClone(inherited) };
+  subject.source.resolved = structuredClone(subject.effective.document);
+  await open(subject, 'Models');
+  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
+  await openResourceRow('main');
+  const nativeSchema = () => screen.getByRole('switch', { name: 'Native JSON Schema output' }) as HTMLInputElement;
+  expect(screen.getAllByRole('switch', { name: 'Native JSON Schema output' })).toHaveLength(1);
+  expect(nativeSchema().checked).toBe(true);
+  expect((screen.getByRole('button', { name: 'Save Model main' }) as HTMLButtonElement).disabled).toBe(true);
+  for (const enabled of [false, true]) {
+    fireEvent.click(nativeSchema());
+    fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+    await screen.findByText(/Model main saved/);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Model main' })).getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: '← Models' }));
+    const reads = subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead').length;
+    fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
+    await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(reads + 1));
+    await openResourceRow('main');
+    await waitFor(() => expect(nativeSchema().checked).toBe(enabled));
+    const lastWrite = subject.request.mock.calls.flatMap(([op]) => op.method === 'configuration/sourceWrite' ? [op] : []).at(-1);
+    expect(lastWrite).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...inherited, capabilities: { ...inherited.capabilities, json_schema_output: enabled } } } } } });
+    expect(subject.source.user.authored!.models!.main.capabilities.json_schema_output).toBe(true);
+  }
+});
+
 it('retains a Model draft when native validation rejects its semantic unit', async () => {
- const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32000, message: 'Native validation failed', data: { kind: 'configuration_adoption', rejection: { status: 'failed', diagnostic: 'Invalid provider reference' } } }); });
+ const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32602, message: 'Invalid provider reference', data: { kind: 'invalid_params' } }); });
  await open(subject, 'Models');
  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
+ fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
  fireEvent.change(await screen.findByLabelText('New Model identity'), { target: { value: 'draft-model' } });
- fireEvent.click(screen.getByRole('button', { name: 'Add Model' }));
- fireEvent.change(await screen.findByLabelText('Wire model identity'), { target: { value: 'wire' } });
+ fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+ fireEvent.change(await screen.findByLabelText('Model ID'), { target: { value: 'wire' } });
+ fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration' }));
  fireEvent.change(screen.getByLabelText('Provider identity'), { target: { value: 'missing' } });
  fireEvent.click(screen.getByRole('button', { name: 'Save Model draft-model' }));
  expect((await screen.findByRole('alert')).textContent).toContain('Invalid provider reference');
  expect((screen.getByLabelText('Provider identity') as HTMLInputElement).value).toBe('missing');
- expect(subject.request.mock.calls.filter(([op]) => op.method === 'session/adoptConfiguration')).toHaveLength(0);
 });
 
 it('preserves the original revision when removing an otherwise clean unit conflicts', async () => {
@@ -425,20 +466,26 @@ it('preserves a clean removal\'s frozen CAS base across an editor remount and ad
   });
   subject.source.workspace!.authored = { agent: { tools: { builtin: ['bash'] } } };
   await open(subject, 'Tools & Permissions');
-  await confirmAction('Use global default Native Tools');
-  await screen.findByRole('button', { name: 'Use reviewed revision' });
+  // The transaction belongs to this semantic unit. Scoping queries avoids
+  // recomputing every unrelated editor's accessible names on each retry.
+  const nativeTools = () => within(screen.getByRole('form', { name: 'Native Tools' }));
+  await confirmAction('Use global default Native Tools', nativeTools());
+  await nativeTools().findByRole('button', { name: 'Use reviewed revision' });
   // Leaving and re-entering the page remounts the editor subtree. The frozen
   // base is durable transaction state, not component-local state.
   await openSettingsPage('Agent');
   await openSettingsPage('Tools & Permissions');
-  await screen.findByRole('button', { name: 'Use global default Native Tools' });
-  expect(screen.getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
-  await confirmAction('Use global default Native Tools');
+  await nativeTools().findByRole('button', { name: 'Use global default Native Tools' });
+  expect(nativeTools().getByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
+  await confirmAction('Use global default Native Tools', nativeTools());
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(2));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { mutation: { authored: null } } } });
+  // Submission alone does not settle its conflict and authoritative reread.
+  // Wait for the unit to admit another removal before reviewing that revision.
+  await waitFor(() => expect((nativeTools().getByRole('button', { name: 'Use global default Native Tools' }) as HTMLButtonElement).disabled).toBe(false));
   // Only the explicit reviewed-revision gesture advances the operation to R2.
-  fireEvent.click(screen.getByRole('button', { name: 'Use reviewed revision' }));
-  await confirmAction('Use global default Native Tools');
+  fireEvent.click(nativeTools().getByRole('button', { name: 'Use reviewed revision' }));
+  await confirmAction('Use global default Native Tools', nativeTools());
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(3));
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[2][0]).toMatchObject({ params: { expected_revision: 'external-removal-conflict', mutation: { mutation: { authored: null } } } });
 });
@@ -447,7 +494,7 @@ it.each([
   ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v52').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v73').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
@@ -524,23 +571,24 @@ it('T17 a post-commit read that observes the exact pre-save revision asks for re
 });
 
 it('retires a confirmed Provider save, including its literal credential, after the editor unmounts', async () => {
-  let release!: (result: import('../../protocol/app-server/v52').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v52').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v73').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v73').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await settingsReady(); await openSettingsPage('Models');
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Provider' }));
-  fireEvent.change(screen.getByLabelText('Endpoint'), { target: { value: 'https://native.invalid' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
   fireEvent.click(screen.getByRole('button', { name: /Credential source/ }));
   fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
-  fireEvent.change(await screen.findByLabelText('New literal credential'), { target: { value: 'SECRET_SENTINEL' } });
+  fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));
   // The editor unmounts while the native write is still in flight.
   await openSettingsPage('Agent');
-  expect(screen.queryByLabelText('New literal credential')).toBeNull();
+  expect(screen.queryByLabelText('API Key')).toBeNull();
   // Native commit and its authoritative reread both succeed after unmount.
   subject.source.workspace!.revision = 'saved-2';
   subject.source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
@@ -559,8 +607,8 @@ it('retires a confirmed Provider save, including its literal credential, after t
 });
 
 it('a late acknowledgement advances the CAS base without erasing a newer draft submitted after it', async () => {
-  let release!: (result: import('../../protocol/app-server/v52').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v52').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v73').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v73').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);

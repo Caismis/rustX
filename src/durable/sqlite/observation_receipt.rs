@@ -1,7 +1,7 @@
 //! Finite immutable evidence prepared by the existing native write transaction.
 //! A derived-read failure leaves the semantic commit intact and its receipt absent.
 use super::{Arc, Connection, ConversationId};
-use crate::durable::inbox::CanonicalObservationBatch;
+use crate::durable::CanonicalObservationBatch;
 use crate::durable::observation::{
     ModelTurnObservationBoundary, NativeObservationBatch, NativeObservationTransition,
     NativeToolResultCommit, ObservationEventWitness,
@@ -256,7 +256,7 @@ pub(super) fn model_turn_settlement(
     canonical: (&RuntimeEventEnvelope, Arc<CanonicalObservationBatch>),
     boundary: Option<ModelTurnBoundaryEvents<'_>>,
     canonical_batch: Arc<CanonicalObservationBatch>,
-    pending: Option<Arc<crate::durable::inbox::PendingObservationReceipt>>,
+    pending: Option<Arc<crate::durable::PendingObservationReceipt>>,
 ) -> Option<Arc<NativeObservationBatch>> {
     let pending_unavailable =
         matches!(boundary, Some(ModelTurnBoundaryEvents::Adopted { .. })) && pending.is_none();
@@ -353,7 +353,7 @@ pub(super) fn request_start(
     emissions: &[RuntimeEventEnvelope],
     canonical: Option<Arc<CanonicalObservationBatch>>,
     snapshot: &crate::model::snapshot::RequestSnapshot,
-    sources: &[crate::durable::inbox::StatusObservationSource],
+    sources: &[crate::durable::StatusObservationSource],
 ) -> Option<Arc<NativeObservationBatch>> {
     let contributions = emissions
         .iter()
@@ -381,7 +381,7 @@ pub(super) fn request_start(
                         let crate::context::contribution::ContributionPresentation::AgentStatus(
                             status,
                         ) = contribution.presentation.as_ref()?;
-                        Some(crate::runtime_client::projection::prepared_status(
+                        Some(crate::observation::status::prepared_status(
                             &snapshot.identity.attempt_id,
                             snapshot.identity.turn.as_str().parse().ok()?,
                             &contribution.message_id,
@@ -434,7 +434,7 @@ pub(super) fn tool_results(
     messages: &[crate::message::types::MessageBlock],
     canonical: Arc<CanonicalObservationBatch>,
 ) -> Option<Arc<NativeObservationBatch>> {
-    use crate::runtime_client::content::{
+    use crate::observation::content::{
         CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
     };
     let last = events.last()?;
@@ -455,7 +455,7 @@ pub(super) fn tool_results(
         let crate::message::types::MessageBlock::Tool(tool) = message else {
             return None;
         };
-        let result_ledger_position = super::content::canonical_position(
+        let result_ledger_position = crate::durable::sqlite::content::canonical_position(
             connection,
             &CanonicalContentLocator::ByMessageId {
                 message_id: tool.id.clone(),
@@ -469,7 +469,7 @@ pub(super) fn tool_results(
             block_index: crate::message::types::ContentBlockIndex::new(0),
             component: CanonicalContentComponent::MessageMetadata,
         };
-        let metadata = super::content::descriptor(
+        let metadata = crate::durable::sqlite::content::descriptor(
             connection,
             conversation,
             &source,
@@ -535,7 +535,7 @@ pub(super) fn pending(
     selected: Option<u64>,
     removed: Option<(u64, Option<crate::durable::TranscriptCursor>)>,
     adopted: Option<(u64, u64)>,
-) -> Option<Arc<crate::durable::inbox::PendingObservationReceipt>> {
+) -> Option<Arc<crate::durable::PendingObservationReceipt>> {
     let read_cut = super::reading::cut(connection, conversation).ok()?;
     let mut page =
         super::observation::pending_page(connection, conversation, &read_cut, None, 32).ok()?;
@@ -563,7 +563,7 @@ pub(super) fn pending(
         header.message.collections.clear();
         header.message.locator = None;
     }
-    Some(Arc::new(crate::durable::inbox::PendingObservationReceipt {
+    Some(Arc::new(crate::durable::PendingObservationReceipt {
         native_release_sequence: None,
         ready_through: super::observation_readiness::frontier(connection, 0, read_cut.journal).ok(),
         ready_t_through: super::observation_readiness::transcript_frontier(
@@ -589,8 +589,8 @@ pub(super) fn status_sources(
     connection: &Connection,
     conversation: &ConversationId,
     snapshot: &crate::model::snapshot::RequestSnapshot,
-) -> Vec<crate::durable::inbox::StatusObservationSource> {
-    use crate::runtime_client::content::{
+) -> Vec<crate::durable::StatusObservationSource> {
+    use crate::observation::content::{
         CanonicalContentComponent as Component, CanonicalContentLocator as Locator,
         ContentRepresentation as Rep, ContentSource,
     };
@@ -599,10 +599,10 @@ pub(super) fn status_sources(
         contribution.presentation.as_ref()?;
         let position: u64 = connection.query_row_cached("SELECT position FROM message_ledger WHERE message_id=?1",[contribution.message_id.as_str()],|row|row.get(0)).ok()?;
         let locator = Locator::ByLedgerPosition {position};
-        let reference = |locator: &Locator, component: Component, representation: Rep| super::content::descriptor(connection,conversation,&ContentSource::CanonicalMessageBlock {component,locator:locator.clone(),block_index:crate::message::types::ContentBlockIndex::new(0)},representation).ok().flatten();
+        let reference = |locator: &Locator, component: Component, representation: Rep| crate::durable::sqlite::content::descriptor(connection,conversation,&ContentSource::CanonicalMessageBlock {component,locator:locator.clone(),block_index:crate::message::types::ContentBlockIndex::new(0)},representation).ok().flatten();
         let target = contribution.opportunities.fresh_inbound.as_ref().and_then(|fresh| connection.query_row("SELECT m.position,t.position FROM message_ledger m LEFT JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id WHERE m.message_id=?1",[fresh.target_message_id.as_str()],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,Option<u64>>(1)?))).ok());
         let target_locator=target.map(|(position,_)|Locator::ByLedgerPosition {position});
-        Some(crate::durable::inbox::StatusObservationSource {
+        Some(crate::durable::StatusObservationSource {
             contribution_ordinal:ordinal as u64,
             request_id:snapshot.request_id.clone(),
             rendered_ref:reference(&locator,Component::Payload,Rep::Utf8Text),

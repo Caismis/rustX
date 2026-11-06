@@ -115,72 +115,75 @@ pub fn materialize_skill(
     source_root: &Path,
     files: &[PathBuf],
     destination_root: &Path,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<String, SkillMaterializationError> {
-    std::fs::create_dir_all(destination_root).map_err(|error| SkillMaterializationError::Io {
-        path: destination_root.display().to_string(),
+    let io = |path: &Path, error: std::io::Error| SkillMaterializationError::Io {
+        path: path.display().to_string(),
         detail: error.to_string(),
+    };
+    let parent = destination_root.parent().ok_or_else(|| {
+        io(
+            destination_root,
+            std::io::Error::other("destination has no parent"),
+        )
     })?;
-    for relative in files {
-        // The frozen list comes from a package walk, but it crosses a
-        // process boundary, so it is re-validated here rather than trusted:
-        // only plain relative components may be written under the child
-        // root.
-        if relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-        {
-            return Err(SkillMaterializationError::UnsafePath {
-                path: relative.display().to_string(),
-            });
+    std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+    let staging = tempfile::Builder::new()
+        .prefix(".skill-")
+        .tempdir_in(parent)
+        .map_err(|e| io(parent, e))?;
+    let content = staging.path().join("content");
+    std::fs::create_dir(&content).map_err(|e| io(&content, e))?;
+    let content = content.canonicalize().map_err(|e| io(&content, e))?;
+    let result = (|| {
+        let source = crate::package_io::PackageDirectory::open(source_root)
+            .map_err(|e| io(source_root, e))?;
+        for relative in files {
+            if relative.as_os_str().is_empty()
+                || relative
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_)))
+            {
+                return Err(SkillMaterializationError::UnsafePath {
+                    path: relative.display().to_string(),
+                });
+            }
+            crate::package_io::copy(&source, relative, &content.join(relative), cancellation)
+                .map_err(|e| io(&source_root.join(relative), e))?;
         }
-        let from = source_root.join(relative);
-        let to = destination_root.join(relative);
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| SkillMaterializationError::Io {
-                path: parent.display().to_string(),
-                detail: error.to_string(),
-            })?;
-        }
-        // A symlink in the source would copy its target's bytes and break
-        // the digest contract, so the source metadata is checked first.
-        let metadata =
-            std::fs::symlink_metadata(&from).map_err(|error| SkillMaterializationError::Io {
-                path: from.display().to_string(),
-                detail: error.to_string(),
-            })?;
-        if !metadata.is_file() {
-            return Err(SkillMaterializationError::Io {
-                path: from.display().to_string(),
-                detail: "the frozen Skill file is not a regular file".to_owned(),
-            });
-        }
-        std::fs::copy(&from, &to).map_err(|error| SkillMaterializationError::Io {
-            path: from.display().to_string(),
-            detail: error.to_string(),
-        })?;
-    }
-    let markdown = destination_root.join(crate::skills::package::SKILL_MARKDOWN_FILE);
-    let markdown_bytes =
-        std::fs::read(&markdown).map_err(|error| SkillMaterializationError::Io {
-            path: markdown.display().to_string(),
-            detail: error.to_string(),
-        })?;
-    // The one authority: the materialized bytes must hash back to the
-    // frozen version identity, computed by exactly the same function that
-    // produced it during parent discovery.
-    let observed =
-        crate::skills::identity::package_version_id(destination_root, files, &markdown_bytes)
+        let (observed, _) = crate::skills::identity::inspect_package(&content, files, cancellation)
             .map_err(|detail| SkillMaterializationError::Io {
-                path: destination_root.display().to_string(),
+                path: staging.path().display().to_string(),
                 detail,
             })?;
-    if observed != binding.version_id {
-        return Err(SkillMaterializationError::IdentityMismatch {
-            skill: binding.skill_id.as_str().to_owned(),
-            expected: binding.version_id.as_str().to_owned(),
-            observed: observed.as_str().to_owned(),
-        });
+        if observed != binding.version_id {
+            return Err(SkillMaterializationError::IdentityMismatch {
+                skill: binding.skill_id.as_str().to_owned(),
+                expected: binding.version_id.as_str().to_owned(),
+                observed: observed.as_str().to_owned(),
+            });
+        }
+        crate::package_io::check_cancelled(cancellation).map_err(|e| io(destination_root, e))?;
+        std::fs::rename(&content, destination_root).map_err(|e| io(destination_root, e))?;
+        Ok(())
+    })();
+    // Cleanup is part of settlement. A failure includes the retained location;
+    // the child runtime root remains the lifecycle owner's cleanup responsibility.
+    let cleanup = staging.close().map_err(|e| io(parent, e));
+    match (result, cleanup) {
+        (Err(cause), Err(cleanup)) => {
+            return Err(SkillMaterializationError::Io {
+                path: parent.display().to_string(),
+                detail: format!(
+                    "{cause}; staging cleanup also failed: {cleanup}; the child runtime owner retains cleanup responsibility"
+                ),
+            });
+        }
+        (Err(cause), Ok(())) => return Err(cause),
+        (Ok(()), Err(cleanup)) => return Err(cleanup),
+        (Ok(()), Ok(())) => {}
     }
+    let markdown = destination_root.join(crate::skills::package::SKILL_MARKDOWN_FILE);
     markdown.to_str().map(str::to_owned).ok_or_else(|| {
         SkillMaterializationError::UnrepresentablePath {
             skill: binding.skill_id.as_str().to_owned(),
@@ -196,7 +199,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn source(dir: &std::path::Path) -> (PathBuf, Vec<PathBuf>, SkillVersionId) {
-        let root = dir.join("source/pdf");
+        let root = dir.canonicalize().unwrap().join("source/pdf");
         std::fs::create_dir_all(root.join("reference")).expect("dirs");
         std::fs::write(
             root.join("SKILL.md"),
@@ -208,9 +211,7 @@ mod tests {
             PathBuf::from("SKILL.md"),
             PathBuf::from("reference/guide.md"),
         ];
-        let markdown = std::fs::read(root.join("SKILL.md")).expect("read");
-        let version =
-            crate::skills::identity::package_version_id(&root, &files, &markdown).expect("digest");
+        let version = crate::skills::identity::package_version_id(&root, &files).expect("digest");
         (root, files, version)
     }
 
@@ -228,8 +229,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp");
         let (root, files, version) = source(dir.path());
         let destination = dir.path().join("child/skills/pdf");
-        let location = materialize_skill(&binding(version), &root, &files, &destination)
-            .expect("materialization");
+        let location = materialize_skill(
+            &binding(version),
+            &root,
+            &files,
+            &destination,
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .expect("materialization");
         assert_eq!(location, destination.join("SKILL.md").display().to_string());
         assert_eq!(
             std::fs::read_to_string(destination.join("reference/guide.md")).expect("guide"),
@@ -246,7 +253,13 @@ mod tests {
         std::fs::write(root.join("reference/guide.md"), "tampered\n").expect("tamper");
         let destination = dir.path().join("child/skills/pdf");
         assert!(matches!(
-            materialize_skill(&binding(version), &root, &files, &destination),
+            materialize_skill(
+                &binding(version),
+                &root,
+                &files,
+                &destination,
+                &crate::runtime::CancellationSignal::new()
+            ),
             Err(SkillMaterializationError::IdentityMismatch { .. })
         ));
     }
@@ -263,7 +276,8 @@ mod tests {
                 &binding(version),
                 &root,
                 &[PathBuf::from("../escape.md")],
-                &destination
+                &destination,
+                &crate::runtime::CancellationSignal::new(),
             ),
             Err(SkillMaterializationError::UnsafePath {
                 path: "../escape.md".to_owned()

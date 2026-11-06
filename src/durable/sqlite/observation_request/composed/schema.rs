@@ -1,4 +1,4 @@
-use super::{Connection, ConversationStoreError, storage};
+use super::{Connection, ConversationStoreError};
 const TABLES: [(&str, &str); 4] = [
     (
         "request_source_pages",
@@ -23,7 +23,7 @@ pub(in crate::durable::sqlite) fn create_schema(
     for (_, sql) in TABLES {
         connection
             .execute_batch(sql)
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
 }
@@ -31,7 +31,7 @@ pub(in crate::durable::sqlite) fn verify_schema(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
     for (table, expected) in TABLES {
-        let sql:Option<String>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name=?1",[table],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let sql:Option<String>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name=?1",[table],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if sql.as_deref() != Some(expected) {
             return Err(ConversationStoreError::IncompatibleSchema(
                 "composed observation schema differs".into(),

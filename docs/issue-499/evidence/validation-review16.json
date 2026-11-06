@@ -1,0 +1,925 @@
+{
+  "schema": "issue-499-partial-observation-draft-poison-followup-v1",
+  "recorded_at": "2026-10-25T02:49:42.647166+00:00",
+  "previous_head": "ec76eaf2131f5876eca17669d885bf5f864447c6",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "git": {
+    "worktree": "/home/capi/.codex/worktrees/issue-499/rustX",
+    "branch": "codex/issue-499-cache-aware-mcp",
+    "head": "ec76eaf2131f5876eca17669d885bf5f864447c6",
+    "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+    "worktrees": "worktree /home/capi/Documents/codes/rustX\nHEAD df833bb6d94d1cb73f0b7d375875c43d6a68d65a\nbranch refs/heads/codex/default-system-prompt-optimization\n\nworktree /home/capi/.codex/worktrees/issue-480-fair-provider/rustX\nHEAD 4c9a0ab9c3a6acd843e8cd366daf9e33cf568608\nbranch refs/heads/codex/issue-480-fair-provider-benchmark\n\nworktree /home/capi/.codex/worktrees/issue-499/rustX\nHEAD ec76eaf2131f5876eca17669d885bf5f864447c6\nbranch refs/heads/codex/issue-499-cache-aware-mcp"
+  },
+  "recording_cut": "Immutable pre-commit focused/lint/build/measurement checkpoint, not a full-verification verdict. Eventual normal follow-up commit and actual FULL CI/Merge verdict are recorded in PR503. No merge or auto-merge.",
+  "scope": {
+    "tui": "Retain pending draft until exact Conversation binding despite Host preparation/Subscribe failure; raw-state joins preserve text/receipts and invalid ordering without running submission validation during navigation.",
+    "web": "Observe an existing current Lifecycle proof after same-generation explicit observation refresh; no Open, duplicate Attach, input replay or target/authority widening.",
+    "mcp": "Every catalog health rejection invokes existing protocol poison/shutdown before returning sanitized failure; generation retains physical settlement ownership.",
+    "auxiliary_fixture": "Wait for old counted owner, and park unrelated admission worker through existing cfg(test) Gate. New raw-owner generation interleaving demonstrates legitimate Busy without provider dispatch; original CI subtype is unknown.",
+    "unchanged": "15000ms default, earliest submission receipt/absolute deadline, CFG3, startup/live generation policy, frozen Attempts, native automatic publication, authored adoption, AppServer57/Runtime77 and #504 exclusions."
+  },
+  "source": {
+    "current_delta": {
+      "count": 14,
+      "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+      "inputs": [
+        {
+          "path": "src/runtime/conversation_runtime/probe.rs",
+          "sha256": "a27176ce0962e875a5cf5cd5221639329e39817a939b4f4333d0ab29e03b5096"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog.rs",
+          "sha256": "6bc8de1976127faaca8b1f55bc3e1e73eb6011899f4853f6bde764c9a8d63e69"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "b1615b712a92da3261bf667794a8305686b6b505f558bf8cc3c1b2650f9c095a"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "a5e58e2e1bbd121324009169468aa8828dfb7871ea6c46c7a2838950f4f082a5"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "233f444e8c58f979ff0eeceeb4f06ad1aa19bc9a6bb1feb1092f72df73684552"
+        },
+        {
+          "path": "tests/scripted/runtime_client/auxiliary.rs",
+          "sha256": "0108687278affcc1fc224dc233af37106389d2e0d12848a310e76db4c8483f85"
+        },
+        {
+          "path": "tui/src/app-server/editor.ts",
+          "sha256": "53b41a57e9dde4db84fb58b75d4987ac0b224699e39e50925b214272e64959d5"
+        },
+        {
+          "path": "tui/src/ui/app.ts",
+          "sha256": "2dbd6779283f128723d88b55b27d9187b0dd3d53f5f263263a614d8992d05900"
+        },
+        {
+          "path": "tui/src/ui/composer-draft.ts",
+          "sha256": "3048761a44da5f0e61398c655e9694fe1153ad2cd0f78ee09ad8a6c6b1c821da"
+        },
+        {
+          "path": "tui/test/composer-app.test.ts",
+          "sha256": "e1102143198b05092a57966f4feac4ae83e39c7ae1605b82bb2ba409fb7f7ece"
+        },
+        {
+          "path": "tui/test/startup.test.ts",
+          "sha256": "6b58b58922ef9bf5f8a8d3cc73d194fd07c43528932332437481fae88b1e41ee"
+        },
+        {
+          "path": "web-console/src/app/navigation/machine.ts",
+          "sha256": "9516038a539fd4468db53167abd565e00297650d02ebab63198e59c4e818b94f"
+        },
+        {
+          "path": "web-console/test/cold-session-navigation.test.tsx",
+          "sha256": "7ccf8c51e7c9d8f10dac1622743f543ac1800280ec02af2a3eb210b9a4b66988"
+        },
+        {
+          "path": "web-console/test/navigation-ownership.test.ts",
+          "sha256": "a2fd027cebbc5813c0df76541463171878da40916f956f38bc73aa42621e4b71"
+        }
+      ]
+    },
+    "native": {
+      "count": 1013,
+      "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+      "reconstruction": "Same1013 paths as preceding audit; apply the Native entries in current_delta and independently rehash all paths. No Native path was added or removed."
+    },
+    "audit": {
+      "location": "/tmp/issue499/review16-source-audit-final.json",
+      "sha256": "f8eccccd92b4b1cc3ff255a81741b9923f326bcaadabe4b5466ce4a675657697"
+    }
+  },
+  "previous_evidence": {
+    "count": 63,
+    "all_unchanged": true,
+    "files": {
+      "docs/issue-499/evidence/baseline-manifest.json": {
+        "sha256": "ecaa33019a6a50fd02a7a2b98beaeb517b5e64e1daafc3eafab30b71df18c681",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/baseline-model-startup.json": {
+        "sha256": "c1f78e3982caa7916bbd5a1c9597ff18a1b010016b53e33cc9ebbbeaff5edea6",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/baseline-source-preparation.json": {
+        "sha256": "6fed4c601f0597b3881a996eb34e6373eff626d6695e0357ddbf3b56d8aacc96",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/baseline-startup.json": {
+        "sha256": "ae4a818719e3f00d676ab2b9941059b97f87b0382a82375d11f21e1321f7cbda",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/head-manifest.json": {
+        "sha256": "48d9900e8c864f7d4aed13ae411e55479a7556d28de61bfa00e41db96ce5a82b",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/head-model-startup.json": {
+        "sha256": "928364ab52b1780a08c5783ffa5199732b6ed696e02b199df6076a02862be075",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/head-source-preparation.json": {
+        "sha256": "3e7e58b4aa15f10257b86babec52c6ee966718d7d1137fa6f11c51be71d2e715",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/head-startup.json": {
+        "sha256": "1023426f9feaf277da61e0981a1a954184b19f3ad8801f4084978ef7c49cf26d",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview10.md": {
+        "sha256": "d2c497563b3170ba58f91625fc737f93e3b6ddd3b7a4c8d12ee1486025c4adf9",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview11.md": {
+        "sha256": "ccf6d1efe183f55629c62e4307531b4fd2838119428a3ab3d068ca6d1cc3443b",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview12.md": {
+        "sha256": "4e17f519c77660f6987c4305bac206c00c58d76cdfa3a5017706f5876bf21587",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview13.md": {
+        "sha256": "6ab09d0db1c449f2d9a9546fde8548e360ad27f0180bcc7589762f9cdba1790c",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview14.md": {
+        "sha256": "77d764564c0591b26715af5099919ebf01f6e34fab317713c30e43eef89b0f2d",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview15.md": {
+        "sha256": "2b8f3a20ce2b86c13bc8c75d62613e47e0250ff0580516fc72447632a3d80edf",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview4.md": {
+        "sha256": "771ebbf0782e193f082f6dba8d4b2d64fef6efc7e46eb36e08d5712a7412ebec",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview5.md": {
+        "sha256": "85fcd21f4ba937e3d38700e7ea2f1c4428007c478856d7225c6c9e45e3d13b4f",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview6.md": {
+        "sha256": "80eb8a8f4bcf711246385d1f9d1da4affb506bc88b5e4bd2488506f212d2717d",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview7.md": {
+        "sha256": "a7182cbbba65b35fcf1fe1feaa064adc14b51a12ce29bcd590f585ec4869127a",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview8.md": {
+        "sha256": "e8c81808003b425320e8a769a5f226734cecd5799cc808b6a55a084c30e618dd",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/independentreview9.md": {
+        "sha256": "a38420f577d822de770c3c090a9a2d8851584df953426bdbfbe2828653476a05",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/mcp-startup-1440.png": {
+        "sha256": "993931cec638a29c0de5919e9c304ecab53e9c15c6abf4d505be3f54b7a0cdfc",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/mcp-startup-390.png": {
+        "sha256": "4ce692e83424e3f32ae4b2bfc80704d611565b7a0fa171eeb5cebe0467be39a0",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/measurement-revision.json": {
+        "sha256": "5e598319cb049e719ded7dba3d2acbfcdc0930b00c3cbabd6b6cff78923d0054",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/ownership-settlement-validation.json": {
+        "sha256": "88757cef96303d6d0e08dfd2b2cd529de4a1d7cbdb543c89ab1a9340d38af53d",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/readiness-ownership-validation.json": {
+        "sha256": "b851cd8c28b8b2bb071b379765c99e2bd631f47446ff3292acd6a2bb98c53ab3",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/review-fix-validation.json": {
+        "sha256": "278474307516943a023d5fc6b3ea09f7779226b6f242525329f2f77f169790be",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-baseline-adapter.json": {
+        "sha256": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-baseline.json": {
+        "sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-current.json": {
+        "sha256": "96debdb6fb3abd627b20773f5f00dca5ed1a9cff346edbec0e0f3f44f021f3a1",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-independent-review.md": {
+        "sha256": "c526535c732c49e7eecdbbdcf39723d87e8c723a1b303ff8e4c50a9a88c61505",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-manifest.json": {
+        "sha256": "b2fd3cbd7b6fe207d7fd11f08a2b7e1ecaeecf96cf42b79a506b19feb7d87aa7",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review15-current.json": {
+        "sha256": "d7366f0ae506db1f31aad0462c6135a0808c163c27e5a0a3690483e800fe1aed",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review15-manifest.json": {
+        "sha256": "f26009d9941e2773f7764425512c33eafc60045b6b13f6ea72503bda9644d5ca",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review2-current.json": {
+        "sha256": "e502c37e9f7493e882fd7bbd8a8b9abd15c3d0a436de8254aa22da3618348029",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review2-independent-review.md": {
+        "sha256": "e71ea3aa67e35470fb26cc70d976b52059289505283feda3fd2a9e2e2d40e2fc",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review2-manifest.json": {
+        "sha256": "597a25a4f48d81f536780a3ae024acdb0f6823f201724109cab420d3c1b123a9",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review3-current.json": {
+        "sha256": "03bdf903a3bb60f740960e13eb2563e3c867c553e93e767f160fe17877b5ce2a",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review3-independent-review.md": {
+        "sha256": "9e547d732123142deadc4038298193826aaabc26461f8744602257ccf9e1225f",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review3-manifest.json": {
+        "sha256": "58c153fb3af095e262dbb4290fa8281be9d28128d9b2a98fac94216c98cc2505",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review4-current.json": {
+        "sha256": "e096a82ccc8c045374da1b86f05c84608f684855b4971d0b294059a50afab9e8",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review4-manifest.json": {
+        "sha256": "3affeb7704e3b40fcfc6f54da6daba57c46845099f9ccdceca64a33cf6153f73",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review5-current.json": {
+        "sha256": "f5c1c8a01448846b136f6a70f349e9073aa9dab32fa571cb421fb10ee6fbe15c",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review5-manifest.json": {
+        "sha256": "c2aaf9f983617c27e1d4b589639ab0d3b6dd8dc741133617232f0f9b6df33eab",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review8-current.json": {
+        "sha256": "2ac10e9242eda0d6df0d94beb8ebafa4d4cde2636d40e170bb1a397b36519899",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/submission-live-review8-manifest.json": {
+        "sha256": "f10a0c70663878543cb0efcaca31d5e6e5312b34152824c4de0ae5ec1e594e36",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-redesign.json": {
+        "sha256": "017026bf07dc5d0226312aa404eabba6161a69742a6e9782e579c52c7f594974",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review10.json": {
+        "sha256": "55a6a8a5245ba7212d6bef78761c0b9a7caccd17f263aea7dc0e3d045cd8e9b9",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review11.json": {
+        "sha256": "f53196f0de111beef221ff04b06671b2a62f1a26ff493cd01df7c5f694daf4d5",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review12.json": {
+        "sha256": "7f7d776fb5d53ad090dc674ea59f326add88ff016e35e8fdb44c539822b552ef",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review13.json": {
+        "sha256": "962b26885040e9bcccfc539ad96195bc3b3fb4d503bd471196418349712eb75a",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review14.json": {
+        "sha256": "bd31d47337ed1001c44e271c619015f18e2b31243db70c1a2bb364d495bb7715",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review15.json": {
+        "sha256": "65da4d0aa0ef54af357e536d24ef0b5ee11f6d761c9aeb39713d7186ff4967d1",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review2.json": {
+        "sha256": "ee2a29b811aceb0867bc1fe4a44fe9ca978cb64b395de5c21886b739c3b45178",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review3.json": {
+        "sha256": "291e943bc5a24414170307a380d28ef1dca132106d2a13af17b56c41780172e4",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review4.json": {
+        "sha256": "2e4a44f3eec7e6bdebc9c986fa12a5e56df3c46e117e82874a3c8282d47223d5",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review5.json": {
+        "sha256": "9c57eee3f559b7bb98873a9792057067e74d8492d6e6987df7b2c6a30d65f43b",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review6.json": {
+        "sha256": "561ea4f3da96661c3bc89a62a5880746d317d4776db37954e3c4f557005cb552",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review7.json": {
+        "sha256": "6bd27ef419f17651d0e7c31774dc5a243e5cf709d5f0684026aa323ddd60620a",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review8.json": {
+        "sha256": "d570d0362d5855006d857afaacb35032f7811f3724dc7eafe3ad2afa0071745a",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-review9.json": {
+        "sha256": "7c717ae767f203b7306c0a6ec1ba075200f5da90f81540e88eda718e41eb5158",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation-tui-ci-repair.json": {
+        "sha256": "6edfbf0b10059b7887b18ec87e2a326715d1721ab212c388f8003a412f322785",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/validation.json": {
+        "sha256": "7dcc657506832c9dace475bdeb4e849fd76ab8ad5bbfb735a8b867cd2348e561",
+        "unchanged": true
+      },
+      "docs/issue-499/evidence/warm-seed-synchronization.json": {
+        "sha256": "b3c5ce6e024ab19f4a8fdc376be9cbe5d67039d567df93564a4746d9a8ba6a70",
+        "unchanged": true
+      }
+    }
+  },
+  "independent_review": {
+    "path": "independentreview16.md",
+    "sha256": "91d275492c159231b9a81ce0f9e7126d7f70ecda2dc9eb7ddbda2d735d185a54",
+    "scope": "No new actionable finding on exact frozen14/1013 inputs; independently Web126/TUI192/type0/NativeAux10/catalog19/framing9; does not approve pending full/CI."
+  },
+  "author_reports": {
+    "review16-native-owner-report.md": {
+      "location": "/tmp/issue499/review16-native-owner-report.md",
+      "sha256": "998ac6302882361877d6942c9d03cef28a5cad1e667ccbbaa8ad147ceddc1084",
+      "role": "implementation/test author evidence, not independent approval"
+    },
+    "review16-tui-owner-report.md": {
+      "location": "/tmp/issue499/review16-tui-owner-report.md",
+      "sha256": "2725f400bd92f72725324509da765e75890a447b00fc471beb994b15bcbcd012",
+      "role": "implementation/test author evidence, not independent approval"
+    },
+    "review16-web-refresh-author-report.md": {
+      "location": "/tmp/issue499/review16-web-refresh-author-report.md",
+      "sha256": "598b99dcef3cf4e8d5de0028b123f944a4711b02f63a1d9a85f6d87e5b9eccf6",
+      "role": "implementation/test author evidence, not independent approval"
+    }
+  },
+  "completed_local_checks": {
+    "fmt": {
+      "receipt": {
+        "command": "cargo fmt --all -- --check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:43:55.931235+00:00",
+        "finished_at": "2026-10-25T02:44:01.776051+00:00",
+        "elapsed_seconds": 5.844818760990165,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:44:01.812633+00:00",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [],
+        "RUSTX_BINARY": null
+      }
+    },
+    "clippy": {
+      "receipt": {
+        "command": "cargo clippy --all-targets --all-features -- -D warnings",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:44:01.865537+00:00",
+        "finished_at": "2026-10-25T02:45:28.140771+00:00",
+        "elapsed_seconds": 86.275237474998,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "8c1a6a3e7186b1d2f12cba9f793e1a3f9903029a4e81f2dc934282db594c77fa"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:45:28.176072+00:00",
+        "command": [
+          "cargo",
+          "clippy",
+          "--all-targets",
+          "--all-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [],
+        "RUSTX_BINARY": null
+      }
+    },
+    "build-bins": {
+      "receipt": {
+        "command": "cargo build --bins",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:45:28.227071+00:00",
+        "finished_at": "2026-10-25T02:46:56.193165+00:00",
+        "elapsed_seconds": 87.96609728300245,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "78a417796cf2ce9b21db3b43462a0d894dd96cf3c581313ca01f622c66da6c35"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:46:56.227866+00:00",
+        "command": [
+          "cargo",
+          "build",
+          "--bins"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [],
+        "RUSTX_BINARY": null
+      }
+    },
+    "measurement": {
+      "receipt": {
+        "command": "env RUSTX_STARTUP_TIMING_JSON=docs/issue-499/evidence/submission-live-review16-current.json cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:46:56.279105+00:00",
+        "finished_at": "2026-10-25T02:47:49.144200+00:00",
+        "elapsed_seconds": 52.865098762034904,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "1d1603f2fcac260369d8a2e9a67e8476a2d5524870ed668c04dd5af870975475"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:47:49.180180+00:00",
+        "command": [
+          "env",
+          "RUSTX_STARTUP_TIMING_JSON=docs/issue-499/evidence/submission-live-review16-current.json",
+          "cargo",
+          "test",
+          "--lib",
+          "--all-features",
+          "capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing",
+          "--",
+          "--ignored",
+          "--exact",
+          "--nocapture"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [
+          {
+            "status": "ok",
+            "passed": "1",
+            "failed": "0",
+            "ignored": "0",
+            "measured": "0",
+            "filtered_out": "4776"
+          }
+        ],
+        "RUSTX_BINARY": null
+      }
+    },
+    "emulator-sync": {
+      "receipt": {
+        "command": "uv sync --project test-support/fake-provider --frozen",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:42:52.105883+00:00",
+        "finished_at": "2026-10-25T02:42:52.114777+00:00",
+        "elapsed_seconds": 0.008889921999070793,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "934319edb4b966e30bb5e78d7726782623119e1a3f920864200549a7b0f6adad"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:42:52.153223+00:00",
+        "command": [
+          "uv",
+          "sync",
+          "--project",
+          "test-support/fake-provider",
+          "--frozen"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [],
+        "RUSTX_BINARY": null
+      }
+    },
+    "emulator": {
+      "receipt": {
+        "command": "uv run --project test-support/fake-provider --frozen pytest -o addopts= -q test-support/fake-provider/tests",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:42:52.205309+00:00",
+        "finished_at": "2026-10-25T02:42:52.485358+00:00",
+        "elapsed_seconds": 0.28005251596914604,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "f55ec4f379cf6d33fa9b4ec786ec9dd3591701de3c529f3c706cc90922d249a9"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:42:52.520815+00:00",
+        "command": [
+          "uv",
+          "run",
+          "--project",
+          "test-support/fake-provider",
+          "--frozen",
+          "pytest",
+          "-o",
+          "addopts=",
+          "-q",
+          "test-support/fake-provider/tests"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [],
+        "RUSTX_BINARY": null
+      }
+    },
+    "protocol-typecheck": {
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:42:52.572057+00:00",
+        "finished_at": "2026-10-25T02:42:53.648237+00:00",
+        "elapsed_seconds": 1.0761823530192487,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:42:53.684326+00:00",
+        "command": [
+          "pnpm",
+          "--dir",
+          "protocol/app-server",
+          "typecheck"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [],
+        "RUSTX_BINARY": null
+      }
+    },
+    "launcher-typecheck": {
+      "receipt": {
+        "command": "pnpm --dir dev typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:42:53.735172+00:00",
+        "finished_at": "2026-10-25T02:42:55.164536+00:00",
+        "elapsed_seconds": 1.4293668659520335,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:42:55.203835+00:00",
+        "command": [
+          "pnpm",
+          "--dir",
+          "dev",
+          "typecheck"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [],
+        "RUSTX_BINARY": null
+      }
+    },
+    "launcher-test": {
+      "receipt": {
+        "command": "pnpm --dir dev test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T02:42:55.255558+00:00",
+        "finished_at": "2026-10-25T02:42:58.622009+00:00",
+        "elapsed_seconds": 3.3664536160067655,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "a8cf564f48e4fc61c37278a36c8824f4d8fad4b2e76091555a545bf14bf5bebb"
+      },
+      "source_observation": {
+        "recorded_at": "2026-10-25T02:42:58.658510+00:00",
+        "command": [
+          "pnpm",
+          "--dir",
+          "dev",
+          "test"
+        ],
+        "before": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "after": {
+          "current_delta": {
+            "count": 14,
+            "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+            "matches_frozen": true
+          },
+          "native": {
+            "count": 1013,
+            "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+            "matches_frozen": true
+          }
+        },
+        "source_stable": true,
+        "exit_code": 0,
+        "test_summaries": [],
+        "RUSTX_BINARY": null
+      }
+    }
+  },
+  "measurement": {
+    "manifest": "submission-live-review16-manifest.json",
+    "manifest_sha256": "12becc78d4c0e75f11da0cc6a056c71d2cbe31675d5e6c7a4f2e6f692f71aec1",
+    "raw_sha256": "4e156cf64a5b9ff9bfcb53d1e7a6e49ee1f0da109ee66a1f4ac6c48a25d0437d",
+    "rows": 24,
+    "baseline_rerun_this_round": false,
+    "limitations": "Single shared-host loopback samples with one actual scripted model request; affected tool is an explicit post-Attempt invocation, not a model-generated call. Historical42ms/grace superseded."
+  },
+  "prior_ci_failure": {
+    "run": 40152443011,
+    "number": 1541,
+    "head": "ec76eaf2131f5876eca17669d885bf5f864447c6",
+    "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+    "merge": "241a5046279b5260ba3affff369304d8fcce894c",
+    "linux_contracts": "4515passed/1failed/6ignored; retained_result_capacity_refuses_before_another_provider_request received Auxiliary{reason:Busy}; original subtype/iteration absent; failed gate retained honestly.",
+    "log_sha256": "80d1cc2deb9c1f54cc18f05e942dad19bcfd531a4a8f69697718202e81f9d772"
+  },
+  "required_pending": [
+    "git diff --check and normal commit/push on same existing branch",
+    "fresh full cargo all-target/all-feature mandatory-emulator suite",
+    "test-lane coverage",
+    "protocol regeneration/drift check",
+    "complete TUI and Web/Host checks",
+    "complete unfiltered browser acceptance",
+    "actual final-head FULL CI including macOS and current Merge verification"
+  ],
+  "execution_plan": "Serialize native Cargo compile/process suites and final browser product build before client suites. No concurrent Cargo relinking during process clients; preserve failed receipts, do not replace missing emulator with skipped coverage. Root reports actual final results in PR503.",
+  "pr": "https://github.com/Caismis/rustX/pull/503"
+}

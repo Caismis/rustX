@@ -118,6 +118,7 @@ pub(super) type StreamHandle = tokio::task::JoinHandle<Result<(), CaptureFailure
 pub(super) async fn capture_stream<R>(
     mut pipe: R,
     capture: Arc<Mutex<PreviewCapture>>,
+    complete: Option<crate::tools::output::BoundedStdoutCapture>,
     combined_tx: tokio::sync::mpsc::Sender<(u8, String)>,
     stream_id: u8,
     name: &'static str,
@@ -140,6 +141,9 @@ where
                 )));
             }
         };
+        if let Some(complete) = &complete {
+            complete.push(&buffer[..read]);
+        }
         let text = decoder.push(&buffer[..read]);
         if text.is_empty() {
             continue;
@@ -159,6 +163,9 @@ where
             .map_err(|_| CaptureFailure::ConsumerClosed(name))?;
     }
     drop(combined_tx);
+    if let Some(complete) = complete {
+        complete.finish();
+    }
     #[cfg(test)]
     if let Some(park) = park {
         park.parked.send(true).ok();
@@ -263,12 +270,10 @@ mod settlement_tests {
                 directory.path().join("tool-output"),
             )
             .unwrap();
-            let results = store.root().join("results");
             if write_failure {
                 store.fail_writes_after(0);
             } else {
-                std::fs::remove_dir(&results).unwrap();
-                std::fs::write(&results, "not a directory").unwrap();
+                store.set_force_open_failures(true);
             }
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             let (failed, failure) = tokio::sync::oneshot::channel();
@@ -290,6 +295,7 @@ mod settlement_tests {
                 let result = capture_stream(
                     &b"later chunk"[..],
                     Arc::new(Mutex::new(PreviewCapture::new(128))),
+                    None,
                     tx,
                     0,
                     "stdout",
@@ -311,7 +317,7 @@ mod settlement_tests {
                 assert!(cause.contains("test-forced output write failure"));
             } else {
                 assert!(cause.contains("cannot allocate the foreground result spill"));
-                assert!(cause.contains(&results.display().to_string()));
+                assert!(cause.contains("forced"));
             }
             {
                 let drain = await_drain(&mut stdout, &mut stderr, &mut combined);

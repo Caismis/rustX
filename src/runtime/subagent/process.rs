@@ -51,10 +51,11 @@ use super::ipc::{
 use super::registry::{SubagentInteractionSink, SubagentTerminalMode};
 use super::resolver::ResolvedSubagentSpec;
 
-/// The liveness guard of the startup handshake. The child composes only
-/// local state before `Ready` (catalog file, durable store, capability
-/// plane), so a handshake that outlasts this bound is a hung child; the
-/// stage is then torn down. This is a supervision policy bound, never a
+/// The liveness guard while the parent awaits the startup handshake. Before
+/// `Ready`, the child composes its local state and realizes its frozen selected
+/// MCP contracts, including negotiation and complete discovery. A handshake
+/// that outlasts this bound retires the staged launch. This is a separate
+/// supervision policy from Root submission readiness, never a
 /// test synchronization mechanism, and tests run under the same bound: a
 /// real child's startup time depends on the host, so a shortened test bound
 /// would turn a slow real startup into a spurious handshake failure. Its
@@ -231,7 +232,7 @@ pub(crate) struct PhysicalChildRuntimeRoot {
     path: PathBuf,
     /// The stable child Message Ledger/Event Journal database, when this is a
     /// production-allocated root. Test-only roots do not own a durable store.
-    durable_store: Option<PathBuf>,
+    durable_store: Option<(ConversationId, PathBuf, PathBuf)>,
     physical_owner: Option<std::sync::Arc<super::physical_recovery::ParentPhysicalLease>>,
 }
 
@@ -345,7 +346,11 @@ impl PhysicalChildRuntimeRoot {
                 Ok(()) => {
                     return Ok(Self {
                         path,
-                        durable_store: (!existing).then_some(durable_store),
+                        durable_store: (!existing).then_some((
+                            conversation_id.clone(),
+                            durable_store,
+                            product.root().to_owned(),
+                        )),
                         physical_owner: None,
                     });
                 }
@@ -400,7 +405,7 @@ impl PhysicalChildRuntimeRoot {
     /// committed child never calls this method: its durable conversation is
     /// retained after the physical execution root is settled.
     fn remove_durable_store(&self) -> std::io::Result<()> {
-        let Some(database) = &self.durable_store else {
+        let Some((conversation_id, database, product)) = &self.durable_store else {
             return Ok(());
         };
         let mut failures = Vec::new();
@@ -418,13 +423,14 @@ impl PhysicalChildRuntimeRoot {
         // This Conversation never crossed ownership admission. Its staged
         // model-readable outputs have the same rollback owner as its database.
         // Retain the Conversation directory itself as the no-overwrite reservation.
-        if let Some(conversation) = database.parent() {
-            let outputs = conversation.join("tool-output");
-            if let Err(error) = std::fs::remove_dir_all(&outputs)
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                failures.push(format!("{}: {error}", outputs.display()));
-            }
+        if let Some(conversation) = database.parent()
+            && let Err(error) = crate::tools::managed_output::storage::rollback(
+                product,
+                conversation,
+                conversation_id,
+            )
+        {
+            failures.push(format!("temporary outputs for {conversation_id}: {error}"));
         }
         if failures.is_empty() {
             Ok(())
@@ -3212,6 +3218,7 @@ mod tests {
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
             parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             resolved: crate::runtime::subagent::ResolvedSubagentSpec {
+                resource_sources: std::collections::BTreeSet::new(),
                 environment: Vec::new(),
                 generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
                 skill_roots: Vec::new(),

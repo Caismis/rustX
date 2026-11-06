@@ -26,6 +26,13 @@ on:
 permissions:
   contents: read
 
+# Artifacts are built once and consumed by other jobs, so every Node setup
+# must use the same exact patch even when runners cache different releases.
+# Linux jobs share Ubuntu 26.04 so native artifacts, consumers, and the installed
+# AppArmor document-sandbox profile stay aligned; the latest alias must not roll it.
+env:
+  NODE_VERSION: "24.22.0"
+
 # A newer run for the same pull request (a push, or a label) supersedes its
 # unfinished predecessor. main, scheduled and dispatched runs each form their
 # own group and are never cancelled; another pull request never shares one.
@@ -33,14 +40,10 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  # Prepared inputs require an identical Node patch on producer and consumers.
-  RUSTX_CI_BROWSER_NODE: "24.21.0"
-
 jobs:
   plan:
     name: Verification plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -60,7 +63,7 @@ jobs:
 
   notifications:
     name: Notification metadata and signing
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +76,7 @@ jobs:
     name: Format, lint, and whitespace
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['quality']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     steps:
@@ -157,7 +160,7 @@ jobs:
     name: Fast Rust contracts and real-process workflows (Linux)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-fast']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       VERIFICATION_PROFILE: fast
@@ -223,7 +226,43 @@ jobs:
         run: cargo test --all-features --test process
 
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-fast
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-fast
+
+  # FAST documentation contracts: a low-risk documentation change merges on
+  # FAST, but the `contracts` target reads the top-level, docs/, Web and TUI
+  # Markdown (tests/contracts/documentation.rs, runtime_examples.rs). This
+  # lane runs that target alone so such a change cannot merge unchecked. FULL
+  # runs the same target in rust-contracts and does not select this job.
+  documentation-contracts:
+    name: Documentation contracts (Linux)
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['documentation-contracts']
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      VERIFICATION_PROFILE: fast
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+
+      - name: Install SQLite binding build dependency
+        uses: ./.github/actions/libclang
+      # A consumer of the rust-contracts lineage (the same dependency graph):
+      # this lane never publishes a cache of its own, so it adds no lineage to
+      # the shared cache budget; see the policy note in the `quality` job.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-contracts
+          save-if: false
+
+      - name: Run the documentation and runtime-example contracts
+        run: cargo test --test contracts --all-features
 
   # Fast deterministic classes: source-module unit tests, the in-crate
   # scripted contract suites, and the pure contract targets. No cross-module
@@ -241,7 +280,7 @@ jobs:
     name: Deterministic contracts (Linux)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-contracts']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Preparation and the two native builds consumed about 11 minutes in
     # run 38883956631. Budget compilation and complete test execution here;
     # individual liveness guards and the other lanes retain their bounds.
@@ -303,7 +342,7 @@ jobs:
       # deterministic tests ran above as part of `--examples`.
       # Reuse the all-feature library already compiled by the tested targets.
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-contracts
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
@@ -316,8 +355,11 @@ jobs:
     name: Boundary suites (Linux)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-boundaries']
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    runs-on: ubuntu-26.04
+    # Cold libclang setup and both native builds exhausted 25 minutes in
+    # runs 39798438811 and 39811600857. Budget the complete test and coverage
+    # tail as well as preparation, with the same ceiling as rust-contracts.
+    timeout-minutes: 45
 
     env:
       VERIFICATION_PROFILE: full
@@ -358,7 +400,7 @@ jobs:
         run: uv run --frozen pytest
 
       # Compiling the external targets first also builds every real
-      # executable (`rustx`, `bash-supervisor`, `interactive-supervisor`)
+      # executable (`rustx`, `bash-supervisor`, `interactive-supervisor`, `workflow-renderer`)
       # against the same all-feature library the tests link, and places them
       # at `target/debug/`. The in-crate text_spill suite execs
       # `bash-supervisor` there by path; `cargo test --lib` alone does not
@@ -404,7 +446,7 @@ jobs:
       # targets already compiled (dev-dependency features included); without
       # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-boundaries
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-boundaries
 
   # Rust platform coverage is intentional, not duplicated by habit. macOS
   # runs only platform-sensitive classes, natively; desktop-macos separately
@@ -536,7 +578,7 @@ jobs:
       # Native macOS discovery: every required external target (see
       # REQUIREMENTS in the checker) must execute here.
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-platform-core
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-platform-core
 
       - name: Native Cargo timing reports
         if: always()
@@ -669,7 +711,7 @@ jobs:
       # tests, and `boundary_suites::` and every external target (see
       # REQUIREMENTS in the checker) must execute here entirely.
       - name: Check test lane coverage
-        run: cargo run --all-features --example check_test_lanes -- --job rust-platform-boundaries
+        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-platform-boundaries
 
       - name: Native Cargo timing reports
         if: always()
@@ -686,7 +728,7 @@ jobs:
     name: TUI typecheck and tests
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['tui']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
 
     steps:
@@ -764,10 +806,10 @@ jobs:
           shared-key: tui
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      # The integration suite drives the real binary over the real stdio
-      # transport, so it must exist before the tests run.
-      - name: Build the rustx binary
-        run: cargo build --bin rustx
+      # Real stdio integration also launches MCP through the sibling
+      # interactive-supervisor, so build the executable set before testing.
+      - name: Build the real integration binaries
+        run: cargo build --bins
 
       - name: Test
         working-directory: tui
@@ -779,8 +821,10 @@ jobs:
     name: App Server generated protocol
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['app-server-protocol']
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-26.04
+    # FULL #1477 spent 11m03s downloading libclang, leaving too little of the
+    # prior 15m budget for the native generator and both protocol checks.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -798,7 +842,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned protocol toolchain
         working-directory: protocol/app-server
         run: |
@@ -832,10 +876,10 @@ jobs:
       # The supervisor already compiles the rustx library; the real App Server
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server
-        run: cargo build --bin interactive-supervisor --bin rustx --locked
+        run: cargo build --bins --locked
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Node dependencies
         run: |
           corepack enable
@@ -885,13 +929,13 @@ jobs:
     name: Browser inputs (build once)
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['browser-prepare']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "${{ env.RUSTX_CI_BROWSER_NODE }}"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
         working-directory: web-console
         run: |
@@ -952,13 +996,13 @@ jobs:
     name: Web client, Host and launcher tests
     needs: [plan, browser-prepare]
     if: fromJSON(needs.plan.outputs.run)['web-client']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "${{ env.RUSTX_CI_BROWSER_NODE }}"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Web dependencies
         working-directory: web-console
         run: |
@@ -1006,7 +1050,7 @@ jobs:
     name: Browser acceptance (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     needs: [plan, browser-prepare]
     if: fromJSON(needs.plan.outputs.run)['browser-shard']
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Per-test deadlines, fixture budgets and required assertions stay unchanged.
     timeout-minutes: 45
     strategy:
@@ -1018,7 +1062,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "${{ env.RUSTX_CI_BROWSER_NODE }}"
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
         working-directory: web-console
         run: |
@@ -1082,19 +1126,21 @@ jobs:
     name: Browser acceptance coverage
     needs: [plan, browser-prepare, browser-shard]
     if: ${{ !cancelled() && fromJSON(needs.plan.outputs.run)['browser-report'] }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "${{ env.RUSTX_CI_BROWSER_NODE }}"
-      - name: Install pinned browser toolchain
+          node-version: ${{ env.NODE_VERSION }}
+      # Report aggregation uses locked development tools and existing artifacts.
+      # The app's install hook builds native addons that this job never loads.
+      - name: Install pinned report toolchain
         working-directory: web-console
         run: |
           corepack enable
           corepack install
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --dev --ignore-scripts
       - uses: actions/download-artifact@v4
         with:
           name: browser-inventory
@@ -1141,6 +1187,7 @@ jobs:
       - notifications
       - quality
       - rust-fast
+      - documentation-contracts
       - rust-contracts
       - rust-boundaries
       - rust-platform-core
@@ -1153,7 +1200,7 @@ jobs:
       - browser-shard
       - browser-report
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read

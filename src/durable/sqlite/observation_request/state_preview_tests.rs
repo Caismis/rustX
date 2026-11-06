@@ -20,7 +20,7 @@ fn fixture() -> Fixture {
 }
 fn connection() -> Connection {
     let mut connection = Connection::open_in_memory().unwrap();
-    crate::durable::sqlite::create_schema(&mut connection).unwrap();
+    crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
     connection
 }
 
@@ -170,12 +170,12 @@ fn lazy_preview_cold_reads_are_bounded_and_invalid_layout_is_rejected() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("previews.sqlite");
     let mut connection = Connection::open(&path).unwrap();
-    crate::durable::sqlite::create_schema(&mut connection).unwrap();
+    crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
     let value = serde_json::json!({"body":"x".repeat(2_000_000), "rows":(0..2048).collect::<Vec<_>>(), "small":u64::MAX});
     index_state(&connection, "preview_test", "source", &value).unwrap();
     drop(connection);
     let connection = Connection::open(&path).unwrap();
-    crate::durable::sqlite::verify_schema_shape(&connection).unwrap();
+    crate::durable::sqlite::schema::shape::verify_schema_shape(&connection).unwrap();
     connection
         .execute_batch("PRAGMA query_only=ON; PRAGMA cache_size=8")
         .unwrap();
@@ -250,7 +250,7 @@ fn lazy_preview_cold_reads_are_bounded_and_invalid_layout_is_rejected() {
     connection
         .execute_batch("PRAGMA query_only=OFF; DROP INDEX state_observation_children_idx")
         .unwrap();
-    assert!(crate::durable::sqlite::verify_schema_shape(&connection).is_err());
+    assert!(crate::durable::sqlite::schema::shape::verify_schema_shape(&connection).is_err());
     connection.execute_batch("CREATE UNIQUE INDEX state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal); ALTER TABLE state_observation_fields DROP COLUMN preview_key;").unwrap();
     assert!(state_preview::verify_schema(&connection).is_err());
 }
@@ -358,10 +358,12 @@ fn duplicate_named_paths_keep_existing_optional_failure_and_historical_bytes() {
     )
     .unwrap();
     let before = field_from(&connection, "state_observation_fields", "historical", &[]).unwrap();
-    let failed = crate::durable::sqlite::optional_display_layout(&connection, || {
+    let transaction = connection.unchecked_transaction().unwrap();
+    let failed = crate::durable::sqlite::optional_display_layout(&transaction, || {
         index_state(&connection, "preview_test", "duplicate", &fixture)
     });
-    assert!(failed.is_none());
+    assert!(failed.unwrap().is_none());
+    transaction.commit().unwrap();
     for table in [
         "state_observation_fields",
         "content_segments",

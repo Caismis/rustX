@@ -54,16 +54,16 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
+use rustx::observation::tool::ForegroundToolState;
 use rustx::runtime::identity::ToolExecutionId;
 use rustx::runtime::types::CancellationReason;
 use rustx::runtime_client::transport::stdio::{
     StdioSessionEnd, StdioTransportError, serve_stdio_jsonl_with_io,
 };
 use rustx::runtime_client::{
-    EventDelivery, ForegroundToolState, RequestId, RuntimeClientCursor, RuntimeClientEndpoint,
-    RuntimeClientError, RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome,
-    RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
-    RuntimeClientSnapshot,
+    EventDelivery, RequestId, RuntimeClientCursor, RuntimeClientEndpoint, RuntimeClientError,
+    RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome, RuntimeClientProtocolEvent,
+    RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult, RuntimeClientSnapshot,
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
@@ -172,7 +172,10 @@ impl DriverFactory for DirectDriverFactory {
 /// arrive at any moment, including between a request and its response.
 /// Notifications observed while waiting for a response are buffered *in the
 /// client* for later `next_event` calls; the transport itself queues
-/// nothing.
+/// nothing. The buffer belongs to the current subscription and is retired by
+/// a successful `Detached` or replacement `Subscribed` acknowledgement;
+/// rejected requests retain it. Notifications outside an acknowledged active
+/// subscription are rejected, never hidden by a later acknowledgement.
 pub struct StdioJsonlDriver {
     /// The client's request stream (closing it is EOF for the session).
     to_session: Option<tokio::io::DuplexStream>,
@@ -180,6 +183,8 @@ pub struct StdioJsonlDriver {
     from_session: BufReader<tokio::io::DuplexStream>,
     /// Notifications observed while awaiting a correlated response.
     buffered_events: VecDeque<RuntimeClientProtocolEvent>,
+    /// Whether the peer has acknowledged a currently active subscription.
+    has_subscription: bool,
     /// The running session task.
     session: Option<tokio::task::JoinHandle<Result<StdioSessionEnd, StdioTransportError>>>,
 }
@@ -213,6 +218,7 @@ impl StdioJsonlDriver {
             to_session: Some(to_session),
             from_session: BufReader::new(from_session),
             buffered_events: VecDeque::new(),
+            has_subscription: false,
             session: Some(session),
         }
     }
@@ -262,6 +268,10 @@ impl StdioJsonlDriver {
         // Structural classification: notifications carry a cursor and no
         // request id, responses carry a request id and no cursor.
         if value.get("cursor").is_some() {
+            assert!(
+                self.has_subscription,
+                "a notification requires an acknowledged active subscription"
+            );
             OutboundRecord::Event(
                 serde_json::from_str(payload).expect("a notification decodes exactly"),
             )
@@ -296,16 +306,23 @@ impl RuntimeClientProtocolDriver for StdioJsonlDriver {
                             response.id, id,
                             "a response record correlates its request id exactly"
                         );
-                        if matches!(response.result, Some(RuntimeClientResult::Detached)) {
-                            // The acknowledged detach retires this subscription.
-                            // Its already-buffered notifications cannot be replayed
-                            // as notifications of a later subscription.
+                        let subscription_state = match (&response.result, &response.error) {
+                            (Some(RuntimeClientResult::Subscribed { .. }), None) => Some(true),
+                            (Some(RuntimeClientResult::Detached), None) => Some(false),
+                            _ => None,
+                        };
+                        if let Some(active) = subscription_state {
+                            // The session acknowledges replacement/removal
+                            // after retiring the old registration and before
+                            // pumping any new one. Only already-received old
+                            // notifications are retired at this boundary.
                             self.buffered_events.clear();
+                            self.has_subscription = active;
                         }
                         return response;
                     }
                     // A notification arriving before the response is normal:
-                    // buffer it in the client, never drop it.
+                    // buffer it for this attachment's next_event calls.
                     OutboundRecord::Event(event) => self.buffered_events.push_back(event),
                 }
             }
@@ -314,6 +331,7 @@ impl RuntimeClientProtocolDriver for StdioJsonlDriver {
 
     fn next_event(&mut self) -> BoxFuture<'_, RuntimeClientProtocolEvent> {
         Box::pin(async move {
+            assert!(self.has_subscription, "the subscription must be active");
             if let Some(event) = self.buffered_events.pop_front() {
                 return event;
             }
@@ -347,6 +365,90 @@ pub fn all_driver_factories() -> Vec<Box<dyn DriverFactory>> {
         Box::new(DirectDriverFactory),
         Box::new(StdioJsonlDriverFactory),
     ]
+}
+
+/// Forces real old-subscription bytes through the stdio driver's response
+/// demultiplexer, then verifies replay after detach or subscription replacement.
+pub async fn stdio_subscription_change_retires_buffered_notifications(detach: bool) {
+    tokio::time::timeout(LIVENESS_GUARD, async {
+        let fixture = ConformanceFixture::builder(&conversation(
+            &StdioJsonlDriverFactory,
+            if detach {
+                "detach-buffer"
+            } else {
+                "resubscribe-buffer"
+            },
+        ))
+        .script(one_turn_stop())
+        .build()
+        .await;
+        let mut driver = StdioJsonlDriver::new(&fixture.host);
+        let (_, cursor) = initialize(&mut driver, 1).await;
+        submit(&mut driver, 2, "complete before replay").await;
+        fixture.runtime.child_attempt_settlement(0).await;
+        fixture.host.projection_settled().await;
+        let (_, settled) = snapshot(&mut driver, 3).await;
+
+        subscribe(&mut driver, 4, cursor).await;
+        // No response is outstanding. These bytes are a real notification
+        // already written before the next request; leave it unread so that
+        // request's ordinary demultiplexer must buffer it before its response.
+        assert!(!driver.from_session.fill_buf().await.unwrap().is_empty());
+        snapshot(&mut driver, 5).await;
+        let buffered = driver
+            .buffered_events
+            .front()
+            .expect("the request buffered an old-subscription notification")
+            .cursor;
+        assert_eq!(buffered.get(), cursor.get() + 1);
+        assert!(settled > buffered, "the completed turn has a replay suffix");
+
+        let (_, through) = if detach {
+            assert_eq!(
+                result(
+                    driver
+                        .request(RuntimeClientRequest::Detach {
+                            id: RequestId::new(6),
+                        })
+                        .await
+                ),
+                RuntimeClientResult::Detached
+            );
+            initialize(&mut driver, 7).await
+        } else {
+            let unavailable = RuntimeClientCursor::new(u64::MAX);
+            let rejected = driver
+                .request(RuntimeClientRequest::SubscribeEvents {
+                    id: RequestId::new(6),
+                    after_cursor: unavailable,
+                })
+                .await;
+            assert!(matches!(
+                error(rejected),
+                RuntimeClientError::ResyncRequired { after_cursor, .. }
+                    if after_cursor == unavailable
+            ));
+            assert_eq!(
+                driver.buffered_events.front().map(|event| event.cursor),
+                Some(buffered),
+                "a rejected subscription preserves the current notification queue"
+            );
+            assert!(
+                driver.has_subscription,
+                "the original subscription stays active"
+            );
+            snapshot(&mut driver, 7).await
+        };
+        subscribe(&mut driver, 8, buffered).await;
+        // The previous buffer begins at `buffered`, while the new replay
+        // must begin at `buffered + 1`. Keep the shared strict cursor check.
+        let replay = receive_until(&mut driver, buffered, |event| event.cursor == through).await;
+        assert_eq!(settlements(&replay), 1);
+        assert_eq!(driver.finish().await.unwrap(), StdioSessionEnd::InputEof);
+        fixture.runtime.shutdown().await.unwrap();
+    })
+    .await
+    .expect("subscription replacement and replay must complete");
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +614,7 @@ pub async fn snapshot(
 pub async fn transcript_page(
     driver: &mut dyn RuntimeClientProtocolDriver,
     id: u64,
-) -> rustx::runtime_client::RuntimeClientTranscriptPage {
+) -> rustx::observation::transcript::RuntimeClientTranscriptPage {
     let RuntimeClientResult::TranscriptPage { page } = result(
         driver
             .request(RuntimeClientRequest::TranscriptPageGet {
@@ -535,7 +637,7 @@ pub async fn transcript_page(
 async fn capability_field<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
     driver: &mut dyn RuntimeClientProtocolDriver,
     id: u64,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &rustx::observation::cut::CheckpointReadCut,
     domain: &str,
     item_offset: u64,
     field: &str,
@@ -580,14 +682,14 @@ async fn capability_field<T: serde::de::DeserializeOwned + schemars::JsonSchema>
             serde_json::from_slice(&bytes).expect("original native structural field")
         }
     };
-    rustx::runtime_client::checkpoint::decode_domain_value(value)
+    rustx::observation::bounded::decode_domain_value(value)
         .expect("typed original capability field")
 }
 
 /// Positive per-canonical Assistant carriers keep C results distinct from J state.
 pub fn transcript_tool_slots(
-    page: &rustx::runtime_client::RuntimeClientTranscriptPage,
-) -> Vec<rustx::runtime_client::ForegroundToolExecution> {
+    page: &rustx::observation::transcript::RuntimeClientTranscriptPage,
+) -> Vec<rustx::observation::tool::ForegroundToolExecution> {
     let mut slots: Vec<_> = page
         .entries
         .iter()
@@ -600,8 +702,8 @@ pub fn transcript_tool_slots(
         if value.get("tool_calls").is_none() {
             continue;
         }
-        let descriptor: rustx::runtime_client::snapshot::RuntimeClientMessageDescriptor =
-            rustx::runtime_client::checkpoint::decode_domain_value(value.clone())
+        let descriptor: rustx::observation::transcript::RuntimeClientMessageDescriptor =
+            rustx::observation::bounded::decode_domain_value(value.clone())
                 .expect("typed finite native message descriptor");
         slots.extend(descriptor.tool_calls);
     }
@@ -670,9 +772,7 @@ async fn receive_read_domain_suffix(
             .iter()
             .all(|event| event.event.facts().iter().any(|fact| matches!(
                 fact,
-                RuntimeClientEvent::TraceChanged
-                    | RuntimeClientEvent::ReadDomainsUpdated { .. }
-                    | RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. }
+                RuntimeClientEvent::TraceChanged | RuntimeClientEvent::ReadDomainsUpdated { .. }
             )))
     );
 }
@@ -712,45 +812,10 @@ pub async fn await_model_parked(model: &FakeModel) {
 /// `initialize` admits the attachment with its finite native identity receipt;
 /// a separate checkpoint supplies the complete captured read cut.
 pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
-
     let fixture = ConformanceFixture::builder(&conversation(factory, "init"))
         .build()
         .await;
-    // Join activation's original publication before comparing two reads. The
-    // builder activates the runtime, but its queued Eligible fact can otherwise
-    // arrive between the Stdio checkpoints without either read publishing.
-    let (observer, _) = fixture
-        .host
-        .attach_read_only(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .expect("the startup observer attaches read-only");
-    let subscription = observer
-        .subscribe_events(RuntimeClientCursor::new(0))
-        .expect("the startup observer follows native activation");
-    tokio::time::timeout(LIVENESS_GUARD, async {
-        loop {
-            let EventDelivery::Event(event) = subscription.next().await else {
-                panic!("the startup subscription retains activation's publication");
-            };
-            if event.event.facts().iter().any(|fact| match fact {
-                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
-                    *eligibility == AdoptionEligibility::Eligible
-                }
-                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
-                    assert_eq!(checkpoint.cursor, event.cursor);
-                    checkpoint.snapshot.configuration_adoption_eligibility
-                        == AdoptionEligibility::Eligible
-                }
-                _ => false,
-            }) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("activation publishes its native eligible state");
-    drop(subscription);
-    observer.detach();
+    // Join activation's original publication before comparing two reads.
     fixture.host.projection_settled().await;
     let inner = fixture
         .host
@@ -793,10 +858,6 @@ pub async fn initialize_admits_the_attachment(factory: &dyn DriverFactory) {
     assert_eq!(agent_id.as_str(), "agent-a");
     let (snapshot, cursor) = snapshot(&mut *driver, 2).await;
     assert_eq!(snapshot.conversation_id(), &conversation_id);
-    assert_eq!(
-        snapshot.configuration_adoption_eligibility,
-        AdoptionEligibility::Eligible
-    );
 
     // The attachment is live and the snapshot cursor is stable.
     let (_, again) = snapshot_of(&mut *driver, 3).await;
@@ -812,10 +873,12 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         .await;
     let mut driver = connect(&fixture, factory);
 
+    // v73 cannot decode the new closed ModelCapabilities view. Reject it
+    // before any checkpoint or model catalog can cross this connection.
     let old = driver
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(6),
-            protocol_version: 5,
+            protocol_version: 73,
         })
         .await;
     assert_eq!(old.id, RequestId::new(6));
@@ -823,7 +886,7 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         error(old),
         RuntimeClientError::UnsupportedProtocolVersion {
             supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-            requested: 5,
+            requested: 73,
         }
     );
 
@@ -1047,7 +1110,7 @@ pub async fn shutdown_is_not_detach(factory: &dyn DriverFactory) {
 
     let (after, _) = snapshot_of(&mut *driver, 5).await;
     assert_eq!(after.messages, before.messages);
-    let _: rustx::runtime_client::snapshot::CapabilityView =
+    let _: rustx::observation::capability_source::CapabilityView =
         super::super::common::native_domain_single(result(
             driver
                 .request(RuntimeClientRequest::CapabilityGet {
@@ -1892,7 +1955,7 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
     };
     assert_eq!(page.items.len(), 1);
     let execution: rustx::runtime_client::RuntimeClientJob =
-        rustx::runtime_client::structural_json::decode(
+        rustx::observation::structural_json::decode(
             page.items[0].value.clone().expect("small job inline"),
         )
         .expect("native job");
@@ -2266,7 +2329,7 @@ pub async fn capability_projection_covers_python_origins() {
     for factory in all_driver_factories() {
         let mut driver = connect(&fixture, &*factory);
         initialize(&mut *driver, 1).await;
-        let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+        let capabilities: rustx::observation::capability_source::CapabilityView =
             super::super::common::native_domain_single(result(
                 driver
                     .request(RuntimeClientRequest::CapabilityGet {
@@ -2351,7 +2414,7 @@ pub async fn capability_projection_covers_mcp_origins(
     let mut driver = connect(&fixture, factory);
     initialize(&mut *driver, 1).await;
 
-    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+    let capabilities: rustx::observation::capability_source::CapabilityView =
         super::super::common::native_domain_single(result(
             driver
                 .request(RuntimeClientRequest::CapabilityGet {

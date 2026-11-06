@@ -1,17 +1,29 @@
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ClientView, SessionView } from '../src/client/app-server';
+import type { ClientView, SessionView } from '../src/client/contracts';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 
 const connected = { connection: 'connected' as const, uncertain: [] };
 const base = (): SessionView => ({ id: 'A', attachment: 'attached', attachmentIntent: 'wanted',
   target: { session_id: 'A', conversation_id: 'conversation-A', runtime_incarnation: 'native-incarnation', attachment_id: 'native-attachment' }, snapshot: snapshot() });
 const running = () => ({ attempt_id: 'private-attempt', phase: { type: 'running' as const }, turn: 1 });
 const uncertain = { id: 'lost-request', method: 'turn/cancel' as const, sessionId: 'A', generation: 7 };
+
+it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progress while retaining real failures', transition => {
+  const tx = translator('en'), view: SessionView = { ...base(), target: undefined, attachment: 'detached', attachmentIntent: 'released' };
+  const project = (state: Pick<ClientView, 'connection' | 'uncertain'> = connected, source = view) => deriveSessionProductState(tx, state, source, 'A', transition);
+  expect(project()).toMatchObject({ status: 'connecting', severity: 'quiet' });
+  expect(project().recovery).toBeUndefined();
+  expect(project({ ...connected, connection: 'stale' })).toMatchObject({ status: 'reconnect', recovery: { action: 'connect' } });
+  expect(project({ ...connected, uncertain: [uncertain] }).status).toBe('uncertain');
+  expect(project(connected, { ...view, snapshot: { ...snapshot(), durability_failure: { operation: 'commit', diagnostic: 'storage-failure' } } }).status).toBe('failure');
+  expect(project(connected, { ...base(), attachment: 'error', error: 'Read failed' }).status).toBe('unavailable');
+  expect(deriveSessionProductState(tx, connected, view).status).toBe('reconnect');
+});
 
 it.each([
   ['idle', {}, {}, 'idle', undefined],
@@ -57,32 +69,19 @@ async function mount() {
   await act(async () => { render(<App client={server!.client} workspaceHost={server!.workspaceHost} />); });
   return server;
 }
-it('ordinary chrome is product-only; Inspector retains exact facts and emits no native operations', async () => {
+it('conversation chrome exposes product controls without developer diagnostics', async () => {
   const server = await mount();
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(screen.getByText('Deep diving…', {selector:'[role=status]'})).toBeTruthy();
   const product = within(document.querySelector('.session-panel') as HTMLElement);
   for (const label of ['Attach / cold resume', 'Resync', 'Detach', 'Unload runtime', 'private-attempt']) expect(product.queryByText(label)).toBeNull();
   expect(document.querySelector('.attempt-status')).toBeNull();
-  const baseline = server.requests.length;
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  const panel = screen.getByRole('complementary', { name: 'Developer inspector' });
-  for (const section of ['Identity', 'Execution', 'Attachment / residency', 'Inbound / interactions', 'Configuration / revisions', 'Recovery / uncertainty', 'Protocol']) expect(within(panel).getByText(section)).toBeTruthy();
-  expect(within(panel).getByText('private-attempt')).toBeTruthy();
-  fireEvent.click(within(panel).getByText('Complete native runtime facts'));
-  const facts = JSON.parse(within(panel).getByLabelText('Native diagnostic JSON').textContent!);
-  expect(facts).toMatchObject({ SessionId: 'A', ConversationId: 'conversation-A', attachment_intent: 'wanted', attachment: 'attached', runtime_incarnation: server.client.target('A').runtime_incarnation, attachment_id: server.client.target('A').attachment_id, connection_generation: server.client.getSnapshot().generation, attempt: running(), capability_revision: '0' });
-  fireEvent.change(within(panel).getByLabelText('Method filter'), { target: { value: 'turn' } });
-  fireEvent.click(within(panel).getByRole('button', { name: 'Pause log' }));
-  fireEvent.click(within(panel).getByRole('button', { name: 'Clear log' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Close Inspector' }));
-  expect(server.requests.slice(baseline)).toEqual([]);
-  const settled = { ...snapshot(), resources: { revision: '9007199254740993', inspection: { definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] } }, capabilities: { configured_tools: [], revision: '9007199254740994' }, attempt: { ...running(), phase: { type: 'settled' as const, outcome: { type: 'completed' as const, finish_reason: { type: 'stop' as const } } } } };
-  await act(async () => server.update('A', settled));
+  expect(screen.queryByRole('button', { name: /Inspector/ })).toBeNull();
+  expect(screen.queryByText('More conversation details')).toBeNull();
+  expect(screen.queryByRole('complementary', { name: 'Developer inspector' })).toBeNull();
+  await act(async () => server.update('A', { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } } } }));
   expect(screen.queryByLabelText('Session status')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  const exact = JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!);
-  expect(exact).toMatchObject({ resource_revision: '9007199254740993', capability_revision: '9007199254740994', attempt: { attempt_id: 'private-attempt', phase: { type: 'settled', outcome: { type: 'completed' } } } });
+  expect(screen.queryByLabelText('Native diagnostic JSON')).toBeNull();
 });
 it('lost cancellation remains uncertain through reconnect and a settled snapshot, with no replay', async () => {
   const server = await mount(); server.held.add('turn/cancel');
@@ -91,12 +90,11 @@ it('lost cancellation remains uncertain through reconnect and a settled snapshot
   expect(screen.getByLabelText('Session status').textContent).toBe('Stopping…');
   await act(async () => server.socket.close());
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
+  expect(screen.getByRole('button', { name: 'Review outcome' })).toBeTruthy();
   server.snapshots.get('A')!.attempt = { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } };
   await act(async () => server.connect());
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle Inspector' }));
-  const facts = JSON.parse(screen.getByLabelText('Native diagnostic JSON').textContent!);
-  expect(facts.uncertain_operations).toMatchObject([{ method: 'turn/cancel', sessionId: 'A' }]);
+  expect(server.client.getSnapshot().uncertain).toMatchObject([{ method: 'turn/cancel', sessionId: 'A' }]);
   expect(server.requests.filter(row => row.request.method === 'turn/cancel')).toHaveLength(1);
 });
 it('lost authoritative attachment exposes one Open Session action and sends one admission-fenced attach', async () => {

@@ -1539,7 +1539,7 @@ mod interactive_tests {
         let fixture = Fixture::new();
         let marker = fixture.path("operating");
         let script = format!(
-            "i=0; while [ $i -lt 300 ]; do echo 'stderr flood line number {{{{i}}}} {}'; i=$((i+1)); done; echo operating > {}; sleep 30",
+            "i=0; while [ $i -lt 4096 ]; do echo 'stderr flood line number {{{{i}}}} {}' >&2; i=$((i+1)); done; echo operating > {}; sleep 30",
             "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
             marker.display()
         );
@@ -1547,7 +1547,13 @@ mod interactive_tests {
         // The marker appears only if the stderr pipe keeps being drained
         // past the 64 KiB preview bound; a drain that stopped at the bound
         // would block the server on a full pipe forever.
-        wait_for_file(&marker, "server continued operating marker");
+        tokio::time::timeout(DEADLINE, async {
+            while !marker.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the server continues after stderr exceeds the preview and pipe capacity");
         let preview_len = process.stderr_preview().len();
         assert!(
             preview_len <= MAX_PROCESS_OUTPUT_BYTES,

@@ -6,7 +6,8 @@ mod tests {
         engine::{ContextConfig, ContextEngine},
         tokens::{DefaultTokenEstimator, ObservedAnchor},
     };
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::CanonicalStore;
+    use crate::durable::SqliteConversationStore;
     use crate::message::types::{MessageBlock, UserContentBlock};
     use crate::message::{
         content::ImageReference,

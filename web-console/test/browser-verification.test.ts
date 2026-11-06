@@ -185,9 +185,18 @@ describe('prepared browser inputs', () => {
     const { stage } = staged();
     const root = directory();
     install(stage, root, identity);
+    expect(record(join(root, 'target/debug/workflow-renderer')).executable).toBe(true);
     expect(check(root, identity).identity).toEqual(identity);
     writeFileSync(join(root, 'target/debug/rustx'), 'tampered');
     expect(() => check(root, identity)).toThrow('target/debug/rustx: content differs from the prepared checksum');
+  });
+  it('refuses a prepared artifact that omits the native Template renderer', () => {
+    const missing = staged();
+    rmSync(join(missing.stage, 'target/debug/workflow-renderer'));
+    expect(() => install(missing.stage, directory(), identity)).toThrow('target/debug/workflow-renderer: missing');
+    const incomplete = staged();
+    delete incomplete.manifest.files['target/debug/workflow-renderer'];
+    expect(fileErrors(incomplete.manifest, incomplete.stage)).toEqual(['target/debug/workflow-renderer: not a prepared executable']);
   });
   it('refuses inputs prepared for another commit', () => {
     const { stage } = staged();

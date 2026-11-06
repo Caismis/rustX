@@ -35,12 +35,12 @@ fn columns(
 ) -> Result<Vec<i32>, ConversationStoreError> {
     let mut statement = connection
         .prepare(&format!("PRAGMA main.table_xinfo({table})"))
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let actual = statement
         .query_map([], |row| {
             Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| storage(error.to_string()))?;
     wanted
@@ -221,7 +221,7 @@ impl FoldCache {
     ) -> Result<(u64, Option<Frame>), ConversationStoreError> {
         let data: u64 = connection
             .query_row_cached("PRAGMA main.data_version", [], |row| row.get(0))
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let mut seat = self.seat.lock().expect("statistics fold");
         let certificate = seat.pending.take().or_else(|| seat.committed.take());
         let epoch = self.epoch.load(Ordering::Acquire);

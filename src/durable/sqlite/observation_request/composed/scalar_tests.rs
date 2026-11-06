@@ -2,14 +2,18 @@
 use super::super::{RootKind, scalar, take_work};
 use super::*;
 use crate::context::ContextGeneration;
+#[cfg(test)]
+use crate::durable::{
+    CanonicalStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
+};
 use crate::durable::{ConversationStore, SqliteConversationStore};
 use crate::model::{
     ModelCapabilities, ModelCompat, ModelInvocationConfig, ModelProtocol, ModelRequest,
     RequestIdentity, RequestParams, RequestSnapshot,
 };
+use crate::observation::trace::frozen;
 use crate::runtime::identity::{AttemptId, CapabilityRevision, ConversationId, ToolId, TurnId};
 use crate::runtime::read_layout::SeekableObservationSource;
-use crate::runtime_client::trace::frozen;
 
 fn snapshot(turn: u32, retry: u32, wide: bool) -> RequestSnapshot {
     let properties: serde_json::Map<String, serde_json::Value> = (0..if wide { 128 } else { 48 })
@@ -44,12 +48,11 @@ fn snapshot(turn: u32, retry: u32, wide: bool) -> RequestSnapshot {
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: u32::MAX,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         u64::MAX,
         None,
-        false,
         tools,
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -263,7 +266,7 @@ fn shared_scalar_changes_config_exactly_and_preserves_order_and_versions() {
     let same = captured_root(&connection, &revision);
     assert_eq!(take_work().scalar_reuses, 1);
     assert_eq!(same.scalar.fields.hash, first.scalar.fields.hash);
-    let mut versions = vec![original.clone(); 7];
+    let mut versions = vec![original.clone(); 6];
     versions[0].invocation.model.push_str("-new");
     versions[1].effective_system_prompt.push(' ');
     versions[2].profile = Some(crate::model::catalog::ModelProfileId::new("profile-v2"));
@@ -274,7 +277,7 @@ fn shared_scalar_changes_config_exactly_and_preserves_order_and_versions() {
     versions[4].tool_definitions.swap(0, 1);
     std::sync::Arc::make_mut(&mut versions[5].tool_definitions[0].input_schema)["revision"] =
         serde_json::json!(2);
-    versions[6].reasoning_enabled = true;
+
     for next in versions {
         take_work();
         let changed = captured_root(&connection, &next);
@@ -283,6 +286,16 @@ fn shared_scalar_changes_config_exactly_and_preserves_order_and_versions() {
         assert_ne!(changed.scalar.bytes.hash, first.scalar.bytes.hash);
         assert_oracle(&connection, &changed, &next);
     }
+    // Native response schemas are frozen separately. They are outside the
+    // public Trace allowlist, so changing them must not rebuild this Source.
+    let mut response_only = original.clone();
+    response_only.response_schema = Some(crate::model::structured::PreparedResponseSchema { schema: crate::model::structured::ResponseSchema::new("response".into(), serde_json::json!({"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}), 1024).unwrap(), strategy: crate::model::structured::StructuredOutputStrategy::Native });
+    take_work();
+    let unchanged = captured_root(&connection, &response_only);
+    let work = take_work();
+    assert_eq!((work.scalar_captures, work.scalar_reuses), (0, 1));
+    assert_eq!(unchanged.scalar.fields.hash, first.scalar.fields.hash);
+    assert_oracle(&connection, &unchanged, &response_only);
     take_work();
     let retained = captured_root(&connection, &original);
     let work = take_work();
@@ -299,6 +312,8 @@ fn commit(
     snapshot.canonical_frontier =
         crate::context::resources::LedgerFrontier(store.load_head().unwrap().revision.get());
     let request = ModelRequest {
+        response_schema: snapshot.response_schema.clone(),
+        response_byte_limit: None,
         messages: history.messages,
         images: crate::model::images::ResolvedImages::new(),
         invocation: snapshot.invocation.clone(),
@@ -514,7 +529,7 @@ fn assert_native_oracle(
         );
     }
     let top = page(&connection, &sequence.to_string(), &[], 0, 32).unwrap();
-    assert_eq!(top.total, 24);
+    assert_eq!(top.total, frozen::REQUEST_FIELD_COUNT);
     assert_eq!(
         top.fields
             .iter()
@@ -825,7 +840,7 @@ fn configuration_bound_scalar_schema_refuses_the_previous_encoding_identity() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 93,
-            expected: 96
+            expected: 97
         })
     ));
 }

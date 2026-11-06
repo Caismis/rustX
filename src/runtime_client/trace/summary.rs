@@ -1,12 +1,12 @@
 //! Optional historical relationships over native frozen summary headers.
 use super::TraceProjection;
-use super::types::{
-    TraceRequestPredecessor, TraceSystemPromptPresentation, TraceSystemPromptState,
-    TraceToolCatalogState,
-};
 use crate::durable::ConversationStoreError;
 use crate::durable::observation::{
     RequestReadSummary, TraceRequestContextPage, TraceRequestPredecessorHeader,
+};
+use crate::observation::trace::types::{
+    TraceRequestPredecessor, TraceSystemPromptPresentation, TraceSystemPromptState,
+    TraceToolCatalogState,
 };
 
 impl TraceProjection<'_> {
@@ -28,13 +28,15 @@ impl TraceProjection<'_> {
             self.cut()?,
             start,
             0,
-            super::bounds::TRACE_SUMMARY_CONTEXT,
+            crate::observation::trace::bounds::TRACE_SUMMARY_CONTEXT,
         )?;
         #[cfg(test)]
         if !page.items.is_empty() {
             probe::record(&probe::CONTEXT_LEDGER_JOIN);
         }
-        while super::bounds::encoded_len(&page.items) > super::bounds::TRACE_SUMMARY_CONTEXT_BYTES {
+        while crate::observation::trace::bounds::encoded_len(&page.items)
+            > crate::observation::trace::bounds::TRACE_SUMMARY_CONTEXT_BYTES
+        {
             page.items.pop();
             page.next_offset = Some(page.items.len() as u64);
         }

@@ -1,5 +1,6 @@
 //! Cross-owner WF-02 composition. Every wait below names an observed frontier.
 use super::*;
+use crate::durable::JournalStore;
 
 #[test]
 fn typed_failure_aggregation_uses_definition_keys_with_unknown_dominance() {
@@ -17,10 +18,7 @@ fn typed_failure_aggregation_uses_definition_keys_with_unknown_dominance() {
         ("zeta".into(), failure(ToolExecutionStatus::TimedOut)),
         ("alpha".into(), failure(denied.clone())),
     ]);
-    let joined = |failures| WorkflowRunError::ParallelFailed {
-        node: "join".into(),
-        failures,
-    };
+    let joined = |failures| WorkflowRunError::NodesFailed { failures };
     assert_eq!(joined(failures.clone()).execution_status(), denied);
     failures.insert("zeta".into(), failure(unknown.clone()));
     assert_eq!(joined(failures).execution_status(), unknown);
@@ -65,7 +63,7 @@ async fn simultaneous_leaf_completion_outer_deadline_and_cancellation_have_one_t
         assert_eq!(
             events
                 .iter()
-                .filter(|event| matches!(event.event, RuntimeEvent::WorkflowNodeSettled { .. }))
+                .filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeSettled { instance, .. } if instance.node == "check"))
                 .count(),
             1
         );
@@ -157,27 +155,22 @@ fn projection_rejects_oversized_or_missing_parts_without_parsing_text() {
             text: "x".repeat(MAX_VALUE_BYTES + 1),
         },
     )];
-    assert!(
-        WorkflowToolResult::Text { part: 0 }
-            .project(&result, &node)
-            .is_err()
-    );
+    assert!(WorkflowToolResult::Text {}.project(&result, &node).is_err());
     result.content = vec![ToolResultContent::Json {
         value: json!("x".repeat(MAX_VALUE_BYTES + 1)),
     }];
-    assert!(
-        WorkflowToolResult::Json {
-            part: 0,
-            schema: json!({"type":"string"})
-        }
-        .project(&result, &node)
-        .is_err()
-    );
-    assert!(
-        WorkflowToolResult::Text { part: 1 }
-            .project(&result, &node)
-            .is_err()
-    );
+    let structured = WorkflowToolResult::Json {
+        schema: json!({"type":"string"}),
+    };
+    assert!(structured.project(&result, &node).is_err());
+    // Exactly one structured part: none or two are both refused.
+    result.content = Vec::new();
+    assert!(structured.project(&result, &node).is_err());
+    result.content = vec![
+        ToolResultContent::Json { value: json!("a") },
+        ToolResultContent::Json { value: json!("b") },
+    ];
+    assert!(structured.project(&result, &node).is_err());
 }
 
 struct BrokenComposite(Arc<Probe>);
@@ -272,7 +265,7 @@ async fn every_native_non_success_survives_the_actual_outer_adapter_once() {
         assert_eq!(
             events
                 .iter()
-                .filter(|event| matches!(event.event, RuntimeEvent::WorkflowNodeSettled { .. }))
+                .filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeSettled { instance, .. } if instance.node == "check"))
                 .count(),
             1
         );
@@ -343,7 +336,7 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
             selector: target, ..
         } = definition.block.nodes.get_mut("check").unwrap()
         {
-            *target = selector;
+            *target = selector.into();
         }
         let program = Arc::new(compile_test(definition).unwrap());
         let (_, cancellation) = workflow_cancellation();
@@ -378,7 +371,7 @@ fn ext259_a_workflow_cannot_admit_an_extension_tool() {
         selector: target, ..
     } = definition.block.nodes.get_mut("check").unwrap()
     {
-        *target = selector;
+        *target = selector.into();
     }
     let error = compile_test(definition).expect_err("an extension Tool is not admittable");
     let rendered = format!("{error:?}");
@@ -398,139 +391,6 @@ fn composite_deadline_is_trusted_finite_configuration() {
     let mut definition = program_definition();
     definition.timeout_ms = 86_400_000;
     assert_eq!(compile_test(definition).unwrap().timeout_ms(), 86_400_000);
-}
-
-#[tokio::test]
-#[allow(clippy::too_many_lines)] // The two deliberately opposite terminal paths share one gated scenario.
-async fn mixed_parallel_all_settles_in_key_order_without_internal_history() {
-    for status in [
-        ToolExecutionStatus::Success,
-        ToolExecutionStatus::OutcomeUnknown {
-            detail: "remote effect unresolved".into(),
-        },
-    ] {
-        let plane = workflow_test_plane(1);
-        let mut child = stage_workflow_child(&plane);
-        let runtime = workflow_runtime(&plane);
-        let mut observations = runtime.observations.subscribe();
-        let probe = Probe::new(status.clone());
-        let context = context(&plane, probe, crate::agent::AttemptLifecycle::default());
-        let mut definition = program_definition();
-        let leaf = definition.block.clone();
-        let mut agent = leaf.clone();
-        agent.entry = "agent".into();
-        agent.nodes = BTreeMap::from([
-            (
-                "agent".into(),
-                WorkflowNodeDefinition::Agent {
-                    profile: profile("reviewer"),
-                    task: "Return a boolean".into(),
-                    input: BTreeMap::new(),
-                    output: leaf.output.clone(),
-                    invocation_override: None,
-                },
-            ),
-            (
-                "done".into(),
-                WorkflowNodeDefinition::Return {
-                    output: WorkflowValue::Reference {
-                        path: vec!["agent".into()],
-                    },
-                },
-            ),
-        ]);
-        agent.edges = vec![edge("agent", "done")];
-        let input = WorkflowValue::Literal {
-            value: json!({"passed":false}),
-        };
-        definition.block.entry = "fanout".into();
-        definition.block.output = schema(
-            json!({"alpha":leaf.output, "beta":agent.output}),
-            &["alpha", "beta"],
-        );
-        definition.block.nodes = BTreeMap::from([
-            (
-                "fanout".into(),
-                WorkflowNodeDefinition::Parallel {
-                    branches: BTreeMap::from([
-                        (
-                            "alpha".into(),
-                            WorkflowBranch {
-                                input: input.clone(),
-                                block: leaf,
-                            },
-                        ),
-                        (
-                            "beta".into(),
-                            WorkflowBranch {
-                                input,
-                                block: agent,
-                            },
-                        ),
-                    ]),
-                },
-            ),
-            (
-                "done".into(),
-                WorkflowNodeDefinition::Return {
-                    output: WorkflowValue::Reference {
-                        path: vec!["fanout".into()],
-                    },
-                },
-            ),
-        ]);
-        definition.block.edges = vec![edge("fanout", "done")];
-        let program = Arc::new(compile_test(definition).unwrap());
-        let (_, cancellation) = workflow_cancellation();
-        let task = tokio::spawn(async move {
-            runtime
-                .run_test_foreground(
-                    program,
-                    ToolCallId::new("outer"),
-                    context,
-                    json!({"passed":false}),
-                    cancellation,
-                )
-                .await
-        });
-        child.expect_delegate().await; // beta is admitted and held before terminal output
-        observations.wait_for(|events| events.iter().any(|event| matches!(event, RuntimeEvent::WorkflowBlockSettled {instance,..} if instance.definition.blocks == ["fanout","alpha"]))).await.unwrap();
-        assert!(
-            !task.is_finished(),
-            "even an unknown alpha must drain the owned beta"
-        );
-        child
-            .send_result(
-                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
-                Some(r#"{"passed":true}"#),
-            )
-            .await;
-        let result = task.await.unwrap();
-        if status == ToolExecutionStatus::Success {
-            assert_eq!(
-                result.unwrap(),
-                json!({"alpha":{"passed":false},"beta":{"passed":true}})
-            );
-        } else {
-            assert_eq!(result.unwrap_err().execution_status(), status);
-        }
-        let events = plane.store.read_events(None, 256).unwrap().events;
-        assert!(!events.iter().any(|event| matches!(
-            event.event,
-            RuntimeEvent::AssistantMessageCommitted { .. }
-                | RuntimeEvent::ToolMessageCommitted { .. }
-        )));
-        let settled = events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    event.event,
-                    RuntimeEvent::WorkflowCompleted { .. } | RuntimeEvent::WorkflowFailed { .. }
-                )
-            })
-            .count();
-        assert_eq!(settled, 1, "one outer run terminal after all branches");
-    }
 }
 
 #[tokio::test]

@@ -2,12 +2,13 @@ import { useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
+import { firstSubmissions } from './first-submit';
 
 /** Retained input belongs to the old authority. Inspection/discard only; never
  * offer a replay or associate its Session ID with the replacement endpoint. */
 export function DetachedFirstSubmissions({ client, binding, active }: { client: AppServerClient; binding: string; active: boolean }) {
   const tx = useTranslation();
-  const owner = client.firstSubmissions;
+  const owner = firstSubmissions(client);
   const retained = useSyncExternalStore(owner.subscribe, owner.detachedSnapshot);
   return retained.filter(value => owner.draft(value.binding) !== value || value.binding !== binding || active).map(value => <section className="notice" key={`${value.authority}:${value.binding}`}>
     <details><summary>{tx('common:startup.detached')}</summary>

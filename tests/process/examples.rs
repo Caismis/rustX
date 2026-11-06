@@ -94,12 +94,7 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
         .workflows()
         .get(&WorkflowId::parse("parallel_review").expect("workflow id"))
         .expect("parallel_review is registered");
-    assert!(
-        parallel
-            .nodes()
-            .values()
-            .any(|node| matches!(node, WorkflowNodeProgram::Parallel { .. }))
-    );
+    assert!(parallel.outgoing(parallel.entry()).len() >= 2);
     assert!(
         parallel
             .nodes()

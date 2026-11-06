@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v52 envelope and method vocabulary.
+//! Rust authority for the App Server v73 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 52;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 73;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -116,6 +116,44 @@ pub use crate::local_runtime::session::uploads::UserInputBlock;
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Wire commands are short-lived and bounded by the transport frame.
 pub enum Method {
+    #[serde(rename = "auxiliary/classify")]
+    AuxiliaryClassify {
+        target: AttachmentTarget,
+        submission: crate::runtime::auxiliary::submission::ClassificationSubmission,
+    },
+    #[serde(rename = "auxiliary/btw")]
+    AuxiliaryBtw {
+        target: AttachmentTarget,
+        submission: crate::runtime::auxiliary::submission::BtwSubmission,
+    },
+    #[serde(rename = "auxiliary/status")]
+    AuxiliaryStatus {
+        target: AttachmentTarget,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    #[serde(rename = "auxiliary/result")]
+    AuxiliaryResult {
+        target: AttachmentTarget,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    #[serde(rename = "auxiliary/cancel")]
+    AuxiliaryCancel {
+        target: AttachmentTarget,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    #[serde(rename = "auxiliary/discard")]
+    AuxiliaryDiscard {
+        target: AttachmentTarget,
+        call_id: crate::runtime::identity::AuxiliaryCallId,
+    },
+    #[serde(rename = "auxiliary/submissionLookup")]
+    AuxiliarySubmissionLookup {
+        target: AttachmentTarget,
+        correlation: crate::runtime::auxiliary::submission::CorrelationId,
+        #[serde(default)]
+        scope: Option<crate::model::AuxiliaryAttribution>,
+    },
+
     #[serde(rename = "agent/artifactRead")]
     AgentArtifactRead {
         target: AttachmentTarget,
@@ -126,7 +164,7 @@ pub enum Method {
     AgentDeliveryRead {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
@@ -134,7 +172,7 @@ pub enum Method {
     AgentDeliveryLocate {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
@@ -152,7 +190,7 @@ pub enum Method {
     #[serde(rename = "delivery/read")]
     DeliveryRead {
         target: AttachmentTarget,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
@@ -163,12 +201,12 @@ pub enum Method {
     #[serde(rename = "delivery/locate")]
     DeliveryLocate {
         target: AttachmentTarget,
-        locator: crate::runtime_client::content::CanonicalContentLocator,
+        locator: crate::observation::content::CanonicalContentLocator,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         delivery_index: usize,
     },
-    /// Cancels this connection's own in-flight `delivery/read` or
-    /// `delivery/locate` with exactly this request id.
+    /// Cancels this connection's own in-flight delivery operation, including
+    /// auxiliary status/result/lookup reads, with exactly this request id.
     ///
     /// `accepted: true` means the cancellation won before that request's
     /// publication commit: its one response is `delivery_cancelled`, sent
@@ -182,6 +220,8 @@ pub enum Method {
     SessionUploadPrepare {
         target: AttachmentTarget,
         operation_id: String,
+        /// One file per wire operation keeps committed receipts recoverable within a record.
+        #[schemars(length(min = 1, max = 1))]
         files: Vec<crate::local_runtime::session::uploads::UploadMetadata>,
     },
     #[serde(rename = "session/uploadStatus")]
@@ -212,8 +252,8 @@ pub enum Method {
         target: AttachmentTarget,
         #[serde(default)]
         #[schemars(length(max = 128))]
-        records: Vec<crate::runtime_client::trace::TraceCursor>,
-        before: Option<crate::runtime_client::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
     },
     /// Heavy inspection detail for one exact Trace record identity.
@@ -269,6 +309,63 @@ pub enum Method {
     CompactContext {
         target: AttachmentTarget,
         request_id: crate::runtime::identity::ManualCompactionRequestId,
+    },
+    /// Durable exact-node controls. These do not acquire a runtime attachment.
+    #[serde(rename = "workflow/scheduled/getRecovery")]
+    WorkflowScheduledRecovery {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after_effect_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
+    #[serde(rename = "workflow/scheduled/cancel")]
+    WorkflowScheduledCancel {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+    },
+    #[serde(rename = "workflow/scheduled/reconcile")]
+    WorkflowScheduledReconcile {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        after_effect_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
+    #[serde(rename = "schedule/catalog")]
+    ScheduleCatalog {
+        session_id: Option<SessionId>,
+        after: Option<crate::local_runtime::session_runtime_manager::ScheduleCatalogCursor>,
+        limit: u32,
+        query: Option<String>,
+    },
+    #[serde(rename = "schedule/list")]
+    ScheduleList {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        after_ordinal: u64,
+        #[schemars(range(min = 1, max = 100))]
+        limit: u32,
+    },
+    #[serde(rename = "schedule/get")]
+    ScheduleGet {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        id: crate::scheduler::ScheduleId,
+    },
+    #[serde(rename = "schedule/command")]
+    ScheduleCommand {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        command: crate::scheduler::ScheduleCommand,
+    },
+    #[serde(rename = "schedule/recoverStorage")]
+    ScheduleRecoverStorage {
+        session_id: SessionId,
+        node_id: SessionNodeId,
     },
     #[serde(rename = "goal/control")]
     Goal {
@@ -334,11 +431,11 @@ pub enum Method {
     AgentTrace {
         target: AttachmentTarget,
         agent_id: crate::runtime::identity::AgentId,
-        before: Option<crate::runtime_client::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
         #[serde(default)]
         #[schemars(length(max = 8))]
-        records: Vec<crate::runtime_client::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     },
     #[serde(rename = "agent/traceDetail")]
     AgentTraceDetail {
@@ -387,7 +484,22 @@ pub enum Method {
     /// Commit Session identity and validated initial settings without composing a runtime.
     /// An acknowledged identity remains committed when `durability_diagnostic` is present.
     #[serde(rename = "session/create")]
-    SessionCreate { settings: SessionPersistentState },
+    SessionCreate {
+        settings: SessionPersistentState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        submission: Option<crate::local_runtime::mcp_drafts::McpDraftTarget>,
+    },
+    /// Start or replace this connection's silent, ephemeral Workspace draft.
+    #[serde(rename = "mcp/draftPrepare")]
+    McpDraftPrepare {
+        target: crate::local_runtime::mcp_drafts::McpDraftTarget,
+        cwd: std::path::PathBuf,
+    },
+    /// Revoke only an exact untransferred draft generation.
+    #[serde(rename = "mcp/draftCancel")]
+    McpDraftCancel {
+        target: crate::local_runtime::mcp_drafts::McpDraftTarget,
+    },
     #[serde(rename = "session/read")]
     SessionRead { session_id: SessionId },
     /// Read durable history without loading runtime resources or acquiring control.
@@ -403,7 +515,7 @@ pub enum Method {
     SessionTraceHistory {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-        before: Option<crate::runtime_client::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
     },
     #[serde(rename = "session/traceHistoryDetail")]
@@ -416,7 +528,7 @@ pub enum Method {
     SessionTracePage {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
@@ -427,7 +539,7 @@ pub enum Method {
     SessionTraceValueRead {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         item_offset: u64,
@@ -442,8 +554,8 @@ pub enum Method {
     SessionTraceContentRead {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
-        content_ref: crate::runtime_client::content::ContentRef,
+        cut: crate::observation::cut::CheckpointReadCut,
+        content_ref: crate::observation::content::ContentRef,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
         #[schemars(range(min = 1, max = 65_536))]
@@ -454,7 +566,7 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
         cut: crate::durable::observation::ObservationReadCut,
-        content_ref: crate::runtime_client::content::ContentRef,
+        content_ref: crate::observation::content::ContentRef,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
         #[schemars(range(min = 1, max = 65_536))]
@@ -541,7 +653,7 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
         surface_revision: crate::conversation::SurfaceRevision,
-        boundary: Option<crate::runtime_client::content::CanonicalContentLocator>,
+        boundary: Option<crate::observation::content::CanonicalContentLocator>,
         side: crate::local_runtime::session::LineageSide,
     },
     #[serde(rename = "session/branch")]
@@ -549,7 +661,7 @@ pub enum Method {
         session_id: SessionId,
         node_id: SessionNodeId,
         surface_revision: crate::conversation::SurfaceRevision,
-        boundary: crate::runtime_client::content::CanonicalContentLocator,
+        boundary: crate::observation::content::CanonicalContentLocator,
         side: crate::local_runtime::session::LineageSide,
     },
     #[serde(rename = "session/deletePreview")]
@@ -566,6 +678,20 @@ pub enum Method {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
     },
+    /// Explicitly retry a terminal failed initialization. No-op when there is
+    /// no failed owner; never creates a Session or admits/replays input.
+    #[serde(rename = "session/retryInitialization")]
+    SessionRetryInitialization {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+    },
+    /// Record an actual first submission before waiting for attachment. Native
+    /// time arms the existing preparation owner; this admits no user content.
+    #[serde(rename = "session/submissionIntent")]
+    SessionSubmissionIntent {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+    },
     #[serde(rename = "session/editorRead")]
     SessionEditorRead {
         locator: super::editor_read::EditorLocator,
@@ -579,12 +705,24 @@ pub enum Method {
     SessionDetach { target: AttachmentTarget },
     #[serde(rename = "session/attachmentStatus")]
     SessionAttachmentStatus { session_id: SessionId },
+    #[serde(rename = "conversation/changes")]
+    ConversationChanges {
+        target: AttachmentTarget,
+        attempt_id: crate::runtime::identity::AttemptId,
+    },
+    #[serde(rename = "conversation/changeDiff")]
+    ConversationChangeDiff {
+        target: AttachmentTarget,
+        attempt_id: crate::runtime::identity::AttemptId,
+        #[schemars(range(max = 499))]
+        index: usize,
+    },
     #[serde(rename = "conversation/contentRead")]
     ConversationContentRead {
         target: AttachmentTarget,
         #[serde(default)]
         agent_id: Option<crate::runtime::identity::AgentId>,
-        content_ref: crate::runtime_client::content::ContentRef,
+        content_ref: crate::observation::content::ContentRef,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
         #[schemars(range(min = 1, max = 65_536))]
@@ -594,7 +732,7 @@ pub enum Method {
     ConversationCheckpointValueRead {
         target: AttachmentTarget,
         agent_id: Option<crate::runtime::identity::AgentId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         item_offset: u64,
@@ -610,7 +748,7 @@ pub enum Method {
         target: AttachmentTarget,
         #[serde(default)]
         agent_id: Option<crate::runtime::identity::AgentId>,
-        cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
@@ -622,7 +760,7 @@ pub enum Method {
         /// Bounded loaded Trace identities to repair at the same snapshot cut.
         #[serde(default)]
         #[schemars(length(max = 8))]
-        trace_records: Vec<crate::runtime_client::trace::TraceCursor>,
+        trace_records: Vec<crate::observation::trace::TraceCursor>,
     },
     #[serde(rename = "session/subscribe")]
     SessionSubscribe {
@@ -642,13 +780,13 @@ pub enum Method {
     #[serde(rename = "inbound/edit")]
     InboundEdit {
         target: AttachmentTarget,
-        expected: crate::durable::inbox::PendingInboundRef,
+        expected: crate::durable::PendingInboundRef,
         text: String,
     },
     #[serde(rename = "inbound/remove")]
     InboundRemove {
         target: AttachmentTarget,
-        expected: crate::durable::inbox::PendingInboundRef,
+        expected: crate::durable::PendingInboundRef,
     },
     #[serde(rename = "turn/cancel")]
     TurnCancel { target: AttachmentTarget },
@@ -714,11 +852,112 @@ pub enum Method {
         #[schemars(range(min = 1, max = 65_536))]
         max_bytes: u32,
     },
+    /// Connection-owned expanded-document scratch, never a source publication.
+    #[serde(rename = "workflow/documentBegin")]
+    WorkflowDocumentBegin {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        byte_length: u32,
+        sha256: String,
+    },
+    #[serde(rename = "workflow/documentWrite")]
+    WorkflowDocumentWrite {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowDocumentRef,
+        offset: u32,
+        data: String,
+    },
+    #[serde(rename = "workflow/documentFinish")]
+    WorkflowDocumentFinish {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowDocumentRef,
+    },
+    #[serde(rename = "workflow/documentRead")]
+    WorkflowDocumentRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowDocumentRef,
+        offset: u32,
+        max_bytes: u32,
+    },
+    #[serde(rename = "workflow/documentRelease")]
+    WorkflowDocumentRelease {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowDocumentRef,
+    },
+    #[serde(rename = "workflow/checkReportRead")]
+    WorkflowCheckReportRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowCheckReportRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        max_bytes: u32,
+    },
+    #[serde(rename = "workflow/checkReportRelease")]
+    WorkflowCheckReportRelease {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowCheckReportRef,
+    },
+    /// The Workflow files physically owned by exactly one source scope
+    /// (Issue #491); never the merged effective catalog.
+    #[serde(rename = "workflow/list")]
+    WorkflowList {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+    },
+    /// The complete authorized source of one exact Workflow file.
+    #[serde(rename = "workflow/read")]
+    WorkflowRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+    },
+    /// Bounded, revision-fenced registered Model/Profile choices. No execution.
+    #[serde(rename = "workflow/modelChoices")]
+    WorkflowModelChoices {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        query: crate::local_runtime::workflow_authoring::WorkflowModelChoicesQuery,
+        #[serde(default)]
+        expected_revision: Option<String>,
+    },
+    /// The MCP servers and Managed Python packages a Workflow of this scope
+    /// can choose Tools from, unlisted; or one `source` connected once,
+    /// listed and closed. Executes no Tool.
+    #[serde(rename = "workflow/toolCatalog")]
+    WorkflowToolCatalog {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        cursor: Option<crate::local_runtime::workflow_tools::WorkflowToolCatalogCursor>,
+    },
+    /// Offline structural check, optional explanation, and dependency
+    /// admission in an explicit Workspace context of one candidate document.
+    /// Executes nothing; writes nothing.
+    #[serde(rename = "workflow/analyze")]
+    WorkflowAnalyze {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+        document: Box<super::workflow_documents::WorkflowDocumentRef>,
+        generation: String,
+        #[serde(default)]
+        query: Option<crate::runtime::workflow::authoring::WorkflowAnalysisQuery>,
+    },
+    #[serde(rename = "workflow/check")]
+    WorkflowCheck {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::workflow::WorkflowId,
+        document: Box<super::workflow_documents::WorkflowDocumentRef>,
+        /// A User (Global) file's explicit Workspace dependency context. A
+        /// Workspace file is always checked in its own Workspace.
+        #[serde(default)]
+        context: Option<std::path::PathBuf>,
+        #[serde(default)]
+        explain: bool,
+    },
     #[serde(rename = "configuration/sourceWrite")]
     SourcesWrite {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         expected_revision: String,
-        mutation: crate::local_runtime::configuration::settings::SourceMutation,
+        mutation: crate::local_runtime::configuration::settings::SourceMutation<
+            Box<super::workflow_documents::WorkflowDocumentRef>,
+        >,
     },
     #[serde(rename = "session/settings")]
     SettingsRead { session_id: SessionId },
@@ -746,12 +985,6 @@ pub enum Method {
     },
     #[serde(rename = "session/configuration")]
     SessionConfiguration { session_id: SessionId },
-    #[serde(rename = "session/adoptConfiguration")]
-    AdoptConfiguration {
-        session_id: SessionId,
-        candidate: crate::local_runtime::configuration::application::ApplicationIdentity,
-        expected_binding: u64,
-    },
 }
 
 impl Method {
@@ -760,7 +993,14 @@ impl Method {
     pub(crate) const fn may_commit(&self) -> bool {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
-            Self::AgentArtifactRead { .. }
+            Self::WorkflowScheduledRecovery { .. }
+            | Self::ScheduleCatalog { .. }
+            | Self::ScheduleList { .. }
+            | Self::ScheduleGet { .. }
+            | Self::AuxiliaryStatus { .. }
+            | Self::AuxiliaryResult { .. }
+            | Self::AuxiliarySubmissionLookup { .. }
+            | Self::AgentArtifactRead { .. }
             | Self::AgentDeliveryRead { .. }
             | Self::AgentDeliveryLocate { .. }
             | Self::ArtifactRead { .. }
@@ -813,6 +1053,8 @@ impl Method {
             | Self::SessionDeletePreview { .. }
             | Self::SessionCheckpoint { .. }
             | Self::ConversationContentRead { .. }
+            | Self::ConversationChanges { .. }
+            | Self::ConversationChangeDiff { .. }
             | Self::ConversationCheckpointPage { .. }
             | Self::ConversationCheckpointValueRead { .. }
             | Self::SessionAttachmentStatus { .. }
@@ -823,12 +1065,29 @@ impl Method {
             | Self::SourcesRead { .. }
             | Self::SourcesPage { .. }
             | Self::SourcesValueRead { .. }
+            | Self::WorkflowList { .. }
+            | Self::WorkflowRead { .. }
+            | Self::WorkflowDocumentBegin { .. }
+            | Self::WorkflowDocumentWrite { .. }
+            | Self::WorkflowDocumentFinish { .. }
+            | Self::WorkflowDocumentRead { .. }
+            | Self::WorkflowDocumentRelease { .. }
+            | Self::WorkflowCheckReportRead { .. }
+            | Self::WorkflowCheckReportRelease { .. }
+            | Self::WorkflowModelChoices { .. }
+            | Self::WorkflowToolCatalog { .. }
+            | Self::WorkflowCheck { .. }
+            | Self::WorkflowAnalyze { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
             | Self::SettingsValueRead { .. }
             | Self::SessionConfiguration { .. }
             | Self::SessionApplicationValueRead { .. } => false,
-            Self::DeliveryCancel { .. }
+            Self::AuxiliaryClassify { .. }
+            | Self::AuxiliaryBtw { .. }
+            | Self::AuxiliaryCancel { .. }
+            | Self::AuxiliaryDiscard { .. }
+            | Self::DeliveryCancel { .. }
             | Self::SessionUploadPrepare { .. }
             | Self::SessionSwitchNode { .. }
             | Self::ModelSet { .. }
@@ -840,7 +1099,13 @@ impl Method {
             | Self::AgentInterrupt { .. }
             | Self::Initialize(..)
             | Self::SessionExportPrepare { .. }
+            | Self::McpDraftPrepare { .. }
+            | Self::McpDraftCancel { .. }
             | Self::SessionCreate { .. }
+            | Self::WorkflowScheduledCancel { .. }
+            | Self::WorkflowScheduledReconcile { .. }
+            | Self::ScheduleCommand { .. }
+            | Self::ScheduleRecoverStorage { .. }
             | Self::SessionName { .. }
             | Self::SessionFork { .. }
             | Self::SessionForkProjection { .. }
@@ -848,6 +1113,8 @@ impl Method {
             | Self::SessionDelete { .. }
             | Self::SessionRecoverDeletion { .. }
             | Self::SessionAttach { .. }
+            | Self::SessionSubmissionIntent { .. }
+            | Self::SessionRetryInitialization { .. }
             | Self::SessionDetach { .. }
             | Self::SessionSubscribe { .. }
             | Self::TurnStart { .. }
@@ -858,8 +1125,7 @@ impl Method {
             | Self::InteractionRespond { .. }
             | Self::InteractionCancel { .. }
             | Self::SourcesWrite { .. }
-            | Self::ConfigurationReconcile { .. }
-            | Self::AdoptConfiguration { .. } => true,
+            | Self::ConfigurationReconcile { .. } => true,
         }
     }
 }
@@ -867,12 +1133,14 @@ impl Method {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    Auxiliary {
+        reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
+    },
     SessionFileRead {
         reason: crate::tools::session_files::SessionFileReadFailure,
     },
-    ConfigurationAdoption {
-        rejection: crate::local_runtime::configuration::application::AdoptionError,
-    },
+    /// A newer Session binding superseded the model selection's fence.
+    ModelSelectionConflict,
     /// The Session's published Model Catalog does not admit its configured
     /// selection, so no work is accepted until `session/setModel` commits a
     /// selection it does admit. Nothing falls back to a default.
@@ -937,13 +1205,18 @@ pub enum ErrorData {
         node_id: SessionNodeId,
     },
     SourceConflict {
-        scope: crate::local_runtime::configuration::settings::SourceScope,
+        scope: crate::runtime::resources::SourceScope,
         expected: String,
         actual: String,
     },
     StaleSettings {
         expected: u64,
         actual: u64,
+    },
+    /// The native parser or compiler rejected a Workflow candidate; the file
+    /// is unchanged.
+    WorkflowInvalid {
+        diagnostic: Box<crate::local_runtime::workflow_authoring::WorkflowDiagnostic>,
     },
     InteractionNotPending {
         interaction: InteractionRef,
@@ -1007,6 +1280,26 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    ScheduledWorkflowRecovery { recovery:Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery> },
+
+    ScheduleCatalog { page: crate::local_runtime::session_runtime_manager::ScheduleCatalogPage },
+    Schedules {
+        schedules: Vec<crate::scheduler::ScheduleHeader>,
+        next_ordinal: Option<u64>,
+    },
+    Schedule { schedule: Option<crate::scheduler::ScheduleSnapshot> },
+    ScheduleCommand { result: crate::scheduler::ScheduleCommandResult },
+    ScheduleStorageRecovered { generation: u64 },
+    WorkspaceChanges { summary: Option<crate::workspace_changes::ChangesSummary> },
+    WorkspaceChangeDiff { comparison: Option<crate::workspace_changes::FileComparison> },
+    McpDraftAccepted {},
+    AuxiliarySubmitted { receipt: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionReceipt },
+    AuxiliaryStatus { status: crate::runtime::conversation_runtime::auxiliary::AuxiliaryStatus },
+    AuxiliaryResult { result: Option<crate::runtime::auxiliary::delivery::AuxiliaryResult> },
+    AuxiliarySubmissionLookup { lookup: crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup },
+    AuxiliaryCancelled { accepted: bool },
+    AuxiliaryDiscarded { discarded: bool },
+
     SessionFileBytes {
         file: crate::tools::session_files::SessionFileReference,
         data: String,
@@ -1026,7 +1319,7 @@ pub enum MethodResult {
         download: super::archive_download::ArchiveDownloadDescriptor,
     },
     InboundMutation {
-        outcome: crate::durable::inbox::PendingMutationOutcome,
+        outcome: crate::durable::PendingMutationOutcome,
     },
     ArtifactBytes {
         data: String,
@@ -1041,7 +1334,7 @@ pub enum MethodResult {
         snapshot: crate::app_server::host::ServerDiagnostics,
     },
     ContextCompacted {
-        compaction: Option<crate::runtime_client::snapshot::RuntimeClientCompactionView>,
+        compaction: Option<crate::observation::head::RuntimeClientCompactionView>,
     },
     Projections {
         page: crate::runtime_client::projection_history::ProjectionPage,
@@ -1050,7 +1343,7 @@ pub enum MethodResult {
         detail: Box<crate::runtime_client::projection_history::ProjectionDetail>,
     },
     Trace {
-        page: crate::runtime_client::trace::TracePage,
+        page: crate::observation::trace::TracePage,
         /// Complete input prefix examined; resubmit any remaining interests.
         #[schemars(range(max = 128))]
         refreshed: usize,
@@ -1064,13 +1357,13 @@ pub enum MethodResult {
     },
     SessionStatistics {
         conversation_id: ConversationId,
-        read_cut: crate::runtime_client::checkpoint::CheckpointReadCut,
-        statistics: crate::runtime_client::response::ConversationStatistics,
-        occupancy: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+        read_cut: crate::observation::cut::CheckpointReadCut,
+        statistics: crate::observation::statistics::ConversationStatistics,
+        occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
     },
     SessionTraceHistory {
         conversation_id: ConversationId,
-        page: crate::runtime_client::trace::TracePage,
+        page: crate::observation::trace::TracePage,
     },
     SessionTraceHistoryDetail {
         conversation_id: ConversationId,
@@ -1080,7 +1373,7 @@ pub enum MethodResult {
         window: crate::runtime_client::snapshot::ConversationWindow,
     },
     ConversationTurns {
-        page: crate::runtime_client::turn::ObservedTurnPage,
+        page: crate::observation::turn::ObservedTurnPage,
     },
     GoalMutation {
         reference: Option<crate::goal::GoalRef>,
@@ -1098,7 +1391,7 @@ pub enum MethodResult {
         observation: crate::runtime_client::agent_observation::AgentObservation,
     },
     AgentStatistics {
-        metrics: crate::runtime_client::agent_statistics::AgentStatistics,
+        metrics: crate::observation::statistics::AgentStatistics,
     },
     AgentMessage {
         agent_id: crate::runtime::identity::AgentId,
@@ -1164,8 +1457,9 @@ pub enum MethodResult {
         target: Option<AttachmentTarget>,
         configuration_revision: Option<u64>,
     },
+    SubmissionIntentAccepted {},
     ContentChunk {
-        chunk: crate::runtime_client::content::ContentChunk,
+        chunk: crate::observation::content::ContentChunk,
     },
     DomainPage {
         page: crate::runtime_client::checkpoint::CheckpointPage,
@@ -1223,6 +1517,27 @@ pub enum MethodResult {
     SourceSettings {
         projection: Box<crate::local_runtime::configuration::observation::BoundedSourceSettings>,
     },
+    WorkflowDocument { reference: super::workflow_documents::WorkflowDocumentRef },
+    WorkflowDocumentChunk { chunk: super::workflow_documents::WorkflowDocumentChunk },
+    WorkflowDocumentAccepted {},
+    WorkflowLibrary {
+        library: crate::local_runtime::workflow_authoring::WorkflowLibrary,
+    },
+    WorkflowSource {
+        source: Box<crate::local_runtime::workflow_authoring::WorkflowSource<Box<super::workflow_documents::WorkflowDocumentRef>>>,
+    },
+    WorkflowModelChoices {
+        choices: crate::local_runtime::workflow_authoring::WorkflowModelChoices,
+    },
+    WorkflowToolCatalog {
+        catalog: crate::local_runtime::workflow_tools::WorkflowToolCatalog,
+    },
+    WorkflowCheck { report: super::workflow_documents::WorkflowCheckReportRef },
+    WorkflowCheckReportChunk { chunk: super::workflow_documents::WorkflowCheckReportChunk },
+    WorkflowCheckReportReleased {},
+    WorkflowAnalysis {
+        report: Box<crate::local_runtime::workflow_authoring::WorkflowAnalysisReport>,
+    },
     SessionConfiguration {
         projection: Option<crate::local_runtime::configuration::observation::BoundedSessionApplication>,
     },
@@ -1273,6 +1588,15 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    /// Task definitions or their latest trigger changed; clients re-read native facts.
+    #[serde(rename = "schedule/changed")]
+    ScheduleChanged {},
+    #[serde(rename = "auxiliary/segment")]
+    Auxiliary {
+        target: AttachmentTarget,
+        registration_id: String,
+        segment: crate::runtime::auxiliary::observer::AuxiliarySegment,
+    },
     /// Retire this Session's execution generations through the inclusive native watermark.
     #[serde(rename = "session/ownershipRetired")]
     OwnershipRetired {

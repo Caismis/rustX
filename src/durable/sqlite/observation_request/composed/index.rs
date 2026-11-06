@@ -46,9 +46,9 @@ fn persist(connection: &Connection, page: &Page) -> Result<Reference, Conversati
     let hash: Hash = Sha256::digest(&bytes).into();
     connection
         .prepare_cached("INSERT OR IGNORE INTO request_source_pages(hash,bytes) VALUES(?1,?2)")
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .execute(params![hash.as_slice(), bytes])
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(Reference { hash, last, depth })
 }
 pub(super) fn store_blob(
@@ -61,9 +61,9 @@ pub(super) fn store_blob(
     let digest: Hash = Sha256::digest(bytes).into();
     connection
         .prepare_cached("INSERT OR IGNORE INTO request_source_pages(hash,bytes) VALUES(?1,?2)")
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .execute(params![digest.as_slice(), bytes])
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(digest)
 }
 #[cfg(test)]
@@ -81,7 +81,7 @@ pub(super) fn load_blob_reusing(
     digest: Hash,
     encoded: Option<&[u8]>,
 ) -> Result<(Vec<u8>, bool), ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE hash=?1").map_err(|error|storage(error.to_string()))?.query_row([digest.as_slice()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.flatten();
+    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE hash=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([digest.as_slice()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
     let bytes = bytes.ok_or_else(|| storage("original fragment metadata unavailable"))?;
     #[cfg(test)]
     super::record_index(bytes.len());
@@ -98,9 +98,9 @@ fn load(connection: &Connection, reference: &Reference) -> Result<Page, Conversa
     }
     let bytes: Option<Vec<u8>> = connection.prepare_cached(
         "SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE hash=?1",
-    ).map_err(|error| storage(error.to_string()))?.query_row(
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(
         [reference.hash.as_slice()], |row| row.get(0),
-    ).optional().map_err(|error| storage(error.to_string()))?.flatten();
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
     let bytes = bytes.ok_or_else(|| storage("original fragment page unavailable"))?;
     #[cfg(test)]
     super::record_index(bytes.len());

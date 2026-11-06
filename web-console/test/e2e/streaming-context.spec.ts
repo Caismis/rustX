@@ -5,7 +5,7 @@ for (const width of [1440, 390]) test(`context reading survives streaming at ${w
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/startup.html?existing`);
-  await expect(page).toHaveTitle('rustX startup ownership fixture');
+  await expect(page).toHaveTitle('rustX');
   await expect(page).toHaveURL(/test\/fixtures\/startup\.html\?existing/);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });

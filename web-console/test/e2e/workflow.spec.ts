@@ -1,35 +1,74 @@
 import { connectRemote } from './shell-actions';
-import { chooseWorkspace, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { openEmptySession, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
+import { wireProbe } from './wire-probe';
 
 test('native Workflow Agent child composes with Chat, Trace, reload and resource inventory', async ({ page }) => {
-  const fixture = await startDogfood('web_workflow_conformance'); let passed = false;
+  const fixture = await startDogfood('web_workflow_observation'); let passed = false;
+  const wire = await wireProbe(page);
+  let session: string | undefined;
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const workflowPath = join(fixture.workspaceA, '.agents/workflows/review_pr.yaml');
   const agentPath = join(fixture.workspaceA, '.agents/agents/reviewer.toml');
-  const workflow = readFileSync(workflowPath, 'utf8'), agent = readFileSync(agentPath, 'utf8');
+  const original = readFileSync(workflowPath, 'utf8');
+  const prefix = `${original}\n#`;
+  const workflow = prefix + 'x'.repeat(16_777_216 - Buffer.byteLength(prefix));
+  writeFileSync(workflowPath, workflow);
+  const agent = readFileSync(agentPath, 'utf8');
   const connect = async () => {
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    // Transport initialization precedes restoration of the selected Session.
+    // Large authored inputs must finish native attachment before replay checks.
+    if (session) await wire.attachedTarget(session);
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
-    await chooseWorkspace(page, 'Workspace A');
+    session = await openEmptySession(page, fixture, 'Workspace A');
     await page.getByLabel('Message', { exact: true }).fill('workflow conformance request');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('workflow-child-admitted');
-    // Workflow-owned finite activations remain under their Workflow; they are
-    // not continuable Agents and must not acquire message/resume controls.
+    // Workflow-owned one-shot children open from their own node, with read-only
+    // Chat and Trace rather than continuable Agent controls.
     const child = page.locator('[data-workflow-activation-id]');
     const run = page.locator('[data-workflow-run-id]');
+    // Chat restores request notices independently of the Workflow header.
+    // Chat hides the initial system prompt (Harness hidden rows), so no late
+    // row insertion can move the node under the pointer.
+    const openChild = async () => {
+      await run.getByRole('button', { name: 'View review', exact: true }).click();
+    };
     await expect(child).toHaveCount(1); await expect(run).toHaveCount(1);
     const childId = await child.getAttribute('data-workflow-activation-id');
     const runId = await run.getAttribute('data-workflow-run-id');
     await expect(run).toContainText('review_pr');
+    const catalog = page.getByRole('button', { name: 'Subagents', exact: true });
+    await expect(catalog).toHaveText('1 subagents');
+    await catalog.click();
+    await expect(page.getByRole('treeitem', { name: /review/ })).toHaveCount(1);
+    await expect(page.getByText('Workflow · review_pr · Read-only')).toBeVisible();
+    await page.getByRole('treeitem', { name: /review/ }).press('Escape');
+    const parentTitle = await page.locator('#session-title').innerText();
+    await openChild();
+    const childView = page.locator('[data-agent-id][data-view="chat"]:visible');
+    await expect(childView).toHaveCount(1);
+    await expect(childView).toContainText('Review the request and commit the result.');
+    await expect(childView.getByRole('textbox')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Wait for current activation', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: '/tmp/rustx-workflow-child-chat.png' });
+    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    const childTrace = page.locator('[data-agent-id][data-view="trajectory"]:visible');
+    await expect(childTrace.locator('[data-display-type="RecordRow"]')).not.toHaveCount(0);
+    await expect(childTrace).not.toContainText('UnknownAgent');
+    await page.screenshot({ path: '/tmp/rustx-workflow-child-trace.png' });
+    await page.getByRole('button', { name: parentTitle, exact: true }).click();
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await expect(catalog).toHaveText('1 subagents');
+    await expect(run.getByRole('button', { name: 'View review', exact: true })).toBeVisible();
     await page.screenshot({ path: test.info().outputPath('native-workflow-subagent.png') });
     await page.reload(); await connect();
     await expect(child).toHaveAttribute('data-workflow-activation-id', childId!);
@@ -42,10 +81,43 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
     await inspector.getByRole('tab', { name: 'Timing', exact: true }).click();
     await expect(inspector).toContainText('Not available');
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await openChild();
+    await expect(childView).toContainText('One-shot subagent record');
+    await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await fixture.release('workflow-child-admitted');
+    await fixture.gate('workflow-child-read');
+    const readRow = childTrace.locator('[data-display-type="RecordRow"][data-kind="tool"]').filter({ hasText: 'read' });
+    await expect(readRow).toHaveCount(1);
+    await readRow.click();
+    const childDetails = childTrace.getByRole('complementary', { name: 'Event details' });
+    await childDetails.getByRole('tab', { name: 'Result', exact: true }).click();
+    await expect(childDetails).toContainText('Workflow-only reviewer');
+    const inspectedNode = await childDetails.elementHandle();
+    await fixture.release('workflow-child-read');
+    await expect(page.locator('#subagent-header-actions').getByRole('status')).toContainText('Completed');
+    await expect(childDetails).toContainText('Workflow-only reviewer');
+    expect(await childDetails.evaluate((node, previous) => node === previous, inspectedNode)).toBe(true);
+    await expect(childTrace).toContainText('One-shot subagent record');
+    await page.screenshot({ path: '/tmp/rustx-workflow-child-completed.png' });
+    await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
     await expect(run).toContainText('completed');
+    await expect(catalog).toHaveText('1 subagents');
+    await run.getByRole('button').first().click();
+    await openChild();
+    await expect(childView).toContainText('One-shot subagent record');
+    await expect(childView.getByRole('textbox')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Close Child view', exact: true }).click();
+    await openChild();
+    await expect(childView).toContainText('One-shot subagent record');
+    await page.getByRole('button', { name: parentTitle, exact: true }).click();
+    await page.reload(); await connect();
+    await run.getByRole('button').first().click();
+    await openChild();
+    await expect(childView).toContainText('One-shot subagent record');
+    await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await closeSettings(page);
@@ -60,13 +132,9 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await settings.screenshot({ path: test.info().outputPath('native-workflow-inventory.png') });
     await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
     await expect(settings.getByRole('button', { name: 'Skill acceptance', exact: true })).toBeVisible();
-    await openSettingsPage(page, 'Tools & Permissions');
-    await settings.getByRole('button', { name: 'Remove workflows 1', exact: true }).click();
-    await settings.getByRole('button', { name: 'Save Workflow allowlist', exact: true }).click();
-    await expect(settings.getByText('Workflow allowlist saved.')).toBeVisible();
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);
     expect(readFileSync(agentPath, 'utf8')).toBe(agent);
-    expect((await fixture.control('requests')).requests).toHaveLength(3);
+    expect((await fixture.control('requests')).requests).toHaveLength(4);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics()); throw error; }
   finally { await page.close(); await fixture.stop(passed); }

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, chooseWorkspace } from './shell-actions';
+import { connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { transitionFacts } from '../../../protocol/app-server/projection';
 
@@ -16,7 +16,7 @@ test('native child live cuts, independent title, active and file-only resume upl
   try {
     await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
     await routeWorkspaceHost(page, fixture); await page.goto('/');
-    await connectRemote(page, fixture.endpoint, fixture.token); await chooseWorkspace(page, 'Workspace A');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByLabel('Message', { exact: true }).fill('CHILD_CAPABILITIES_PARENT');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await Promise.all([fixture.gate('child-first-0'), fixture.gate('child-first-1')]);
@@ -88,9 +88,9 @@ test('native child live cuts, independent title, active and file-only resume upl
     if (await step.isVisible() && await step.getAttribute('aria-expanded') === 'false') await step.click();
     const disclosure = tool.getByRole('button', { expanded: false });
     if (await disclosure.count()) await disclosure.click();
-    await child.getByRole('button', { name: 'Load attachment', exact: true }).click();
-    await expect(child.locator('img')).toBeVisible();
-    await expect.poll(() => child.locator('img').evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
+    await tool.getByRole('button', { name: /^Load attachment / }).click();
+    await expect(tool.locator('img')).toBeVisible();
+    await expect.poll(() => tool.locator('img').evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
     expect(wire.requests.some(request => request.method === 'agent/artifactRead' && request.params.agent_id === id)).toBe(true);
     // The native locator, not the currently loaded Trace page, owns Inspect.
     await tool.getByRole('button', { name: 'Inspect', exact: true }).click();

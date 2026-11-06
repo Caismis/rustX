@@ -228,7 +228,6 @@
 /* The Tools lane: rustX detached executions share the Tool colour. */
 .span[data-timeline-span='tool'],
 .span[data-timeline-span='background'],
-.span[data-timeline-span='subagent'],
 .span[data-timeline-span='workflow'] {
   background: var(--dsw-alias-state-warn-label);
   opacity: 1;

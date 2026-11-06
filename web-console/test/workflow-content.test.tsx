@@ -1,0 +1,71 @@
+import { act, cleanup, fireEvent, render, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, expect, it } from 'vitest';
+import { useWorkflowContent } from '../src/app/agent/useWorkflowContent';
+import { checkpoint, Server, snapshot } from './fixture';
+import { workflowRun } from './workflow-data';
+import { WorkflowRunPanel } from '../src/app/agent/WorkflowRunPanel';
+afterEach(cleanup);
+
+it('keeps the complete Workflow snapshot during a bounded refresh and publishes its replacement atomically', async () => {
+  const server = new Server(); await server.attached('A');
+  try {
+    const original = workflowRun();
+    const s = { ...snapshot(), workflows: { revision: '1', runs: [original], omitted_runs: 0 } };
+    const view = { ...server.client.getSnapshot().views.A, snapshot: s, checkpoint: checkpoint(s) };
+    const ui = renderHook(({ view }) => useWorkflowContent(server.client, view, true), { initialProps: { view } });
+    const replacement = { ...original, instances: [...original.instances, { ...original.instances[1], node: 'new-node' }] };
+    const next = { ...s, workflows: { revision: '2', runs: [{ ...replacement, instances: replacement.instances.slice(0, 1) }], omitted_runs: 0 } };
+    const check = checkpoint(next, '2');
+    check.collections = [{ domain: 'workflows.runs', revision: '2', total: '1', loaded: '1', next_offset: null }, { domain: 'workflows.runs.@0.instances', revision: '2', total: String(replacement.instances.length), loaded: '1', next_offset: '1' }];
+    server.held.add('conversation/checkpointPage');
+    ui.rerender({ view: { ...view, snapshot: next, checkpoint: check } });
+    const request = await server.waitFor('conversation/checkpointPage', 1);
+    expect(ui.result.current.snapshot).toBe(s.workflows);
+    await act(async () => server.socket.success(request, { type: 'checkpoint_page', page: { domain: 'workflows.runs', cursor: check.read_cut.revision, read_cut: check.read_cut, total: '1', items: [{ offset: '0', identity: 'run', value: replacement as never, deferred: false, content: [] }], next_offset: null, collections: [] } }));
+    expect(ui.result.current.snapshot?.revision).toBe('2');
+    expect(ui.result.current.snapshot?.runs[0].instances).toEqual(replacement.instances);
+    const empty = { ...s, workflows: { revision: '3', runs: [], omitted_runs: 0 } };
+    ui.rerender({ view: { ...view, snapshot: empty, checkpoint: checkpoint(empty, '3') } });
+    expect(ui.result.current.snapshot?.runs).toEqual([]);
+  } finally { server.client.disconnect(); }
+});
+
+it('keeps a manually expanded completed Workflow open while deferred nodes hydrate', async () => {
+  const server = new Server(); await server.attached('A'); server.held.add('conversation/checkpointPage');
+  try {
+    const original = workflowRun(); original.state = { type: 'settled', outcome: 'completed' };
+    original.instances = original.instances.slice(0, 3).map(instance => ({ ...instance, state: { type: 'settled', outcome: 'completed' } }));
+    const s = snapshot(); s.workflows = { revision: '1', runs: [{ ...original, instances: original.instances.slice(0, 2) }], omitted_runs: 0 };
+    const check = checkpoint(s); check.collections = [{ domain: 'workflows.runs', revision: '1', total: '1', loaded: '1', next_offset: null }, { domain: 'workflows.runs.@0.instances', revision: '1', total: '3', loaded: '2', next_offset: '2' }];
+    const view = { ...server.client.getSnapshot().views.A, snapshot: s, checkpoint: check };
+    function Panel() { const content = useWorkflowContent(server.client, view, true); return <WorkflowRunPanel run={content.snapshot!.runs[0]}/>; }
+    const ui = render(<Panel/>), request = await server.waitFor('conversation/checkpointPage', 1);
+    const toggle = ui.container.querySelector('[data-workflow-run-id] [data-disclosure-row]')!; fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    await act(async () => server.socket.success(request, { type: 'checkpoint_page', page: { domain: 'workflows.runs', cursor: check.read_cut.revision, read_cut: check.read_cut, total: '1', items: [{ offset: '0', identity: 'run', value: original as never, deferred: false, content: [] }], next_offset: null, collections: [] } }));
+    await waitFor(() => expect(toggle.textContent).toContain('Nodes 2'));
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  } finally { server.client.dispose(); }
+});
+
+it('reads all retained nodes beyond the finite display header at one cut and retires hydrated values when reading history', async () => {
+  const server = new Server(); await server.attached('A');
+  try {
+    const original = workflowRun();
+    original.instances = Array.from({ length: 40 }, (_, index) => ({ ...original.instances[1], node: `node-${index}` }));
+    const s = snapshot(); s.workflows = { revision: '1', runs: [{ ...original, instances: original.instances.slice(0, 32) }], omitted_runs: 0 };
+    const check = checkpoint(s); check.collections = [
+      { domain: 'workflows.runs', revision: '1', total: '1', loaded: '1', next_offset: null },
+      { domain: 'workflows.runs.@0.instances', revision: '1', total: '40', loaded: '32', next_offset: '32' },
+    ];
+    const view = { ...server.client.getSnapshot().views.A, snapshot: s, checkpoint: check };
+    server.handlers.set('conversation/checkpointPage', () => ({ type: 'checkpoint_page', page: { domain: 'workflows.runs', cursor: check.read_cut.revision, read_cut: check.read_cut, total: '1', items: [{ offset: '0', identity: 'run', value: original as never, deferred: false, content: [] }], next_offset: null, collections: [] } }));
+    const ui = renderHook(({ view, active }) => useWorkflowContent(server.client, view, active), { initialProps: { view, active: true } });
+    await waitFor(() => expect(ui.result.current.snapshot?.runs[0].instances).toHaveLength(40));
+    const request = server.requests.find(row => row.request.method === 'conversation/checkpointPage')!.request;
+    expect(request.params).toMatchObject({ cut: check.read_cut, domain: 'workflows.runs', agent_id: null });
+    ui.rerender({ view, active: false });
+    expect(ui.result.current.snapshot?.runs[0].instances).toHaveLength(32);
+    expect(s.workflows.runs[0].instances).toHaveLength(32);
+  } finally { server.client.disconnect(); }
+});

@@ -93,7 +93,7 @@ fn direct_wire_matches_legacy_flattened_envelopes_and_nested_checkpoint() {
                 "conversation_id":"conv_00000000-0000-7000-8000-000000000001",
                 "runtime_incarnation":u64::MAX.to_string(),"attachment_id":"a"},
             "source":{"kind":"session_file","locator":{"type":"by_message_id","message_id":"m"},
-                "delivery_index":0},"roots":["/workspace"]
+                "delivery_index":0},"roots":["/workspace"],"read":{"kind":"bytes","max_bytes":65536}
         }))
         .unwrap();
     assert_wire(&file);
@@ -118,8 +118,8 @@ fn direct_wire_preserves_exact_native_record_limit_and_errors() {
 struct Direct<'a, T>(&'a T);
 impl<T: Serialize + schemars::JsonSchema> Serialize for Direct<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let schema = crate::runtime_client::structural_json::root::<T>();
-        crate::runtime_client::structural_json::serialize_wire(self.0, &schema, serializer)
+        let schema = crate::observation::structural_json::root::<T>();
+        crate::observation::structural_json::serialize_wire(self.0, &schema, serializer)
     }
 }
 

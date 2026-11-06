@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::assembly::ContextGeneration;
 use crate::durable::SqliteConversationStore;
+use crate::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::TextBlock;
 use crate::message::types::InboundKind;
@@ -177,6 +178,9 @@ fn request_timed(
         attempt,
         if failed {
             RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: snapshot.identity.clone(),
+                },
                 request_id: snapshot.request_id,
                 error: crate::model::error::ModelError {
                     kind: crate::model::error::ModelErrorKind::Transport,
@@ -194,6 +198,9 @@ fn request_timed(
             }
         } else {
             RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: snapshot.identity.clone(),
+                },
                 request_id: snapshot.request_id,
                 finish_reason: ModelFinishReason::Stop,
                 usage,
@@ -226,12 +233,11 @@ fn start_request_with_window(
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 100,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         context_window,
         None,
-        false,
         vec![],
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -247,6 +253,8 @@ fn start_request_with_window(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                response_schema: None,
+                response_byte_limit: None,
                 messages: history.messages.clone(),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
@@ -264,9 +272,9 @@ fn start_request_with_window(
 }
 fn usage(cached: Option<u64>) -> ModelUsage {
     ModelUsage {
-        input_tokens: 100,
-        output_tokens: 20,
-        total_tokens: 120,
+        input_tokens: Some(100),
+        output_tokens: Some(20),
+        total_tokens: Some(120),
         details: Some(UsageDetails {
             reasoning_tokens: None,
             cached_input_tokens: cached,
@@ -278,7 +286,7 @@ fn page(
     before: Option<crate::durable::TranscriptCursor>,
     limit: usize,
 ) -> RuntimeClientTranscriptPage {
-    let mut page = super::super::snapshot::transcript_page_view(
+    let mut page = crate::observation::transcript::transcript_page_view(
         store.load_transcript_page(before, limit).unwrap(),
     )
     .unwrap();
@@ -375,7 +383,7 @@ fn conversation_totals_and_clock_are_native_and_independent_of_loaded_rows() {
     assert_eq!(totals.turns, 2);
     assert_eq!(totals.steps, 2);
     assert_eq!(totals.model_requests, 2);
-    assert_eq!(totals.reported_usage.unwrap().total_tokens, 240);
+    assert_eq!(totals.reported_usage.unwrap().total_tokens, Some(240));
     assert_eq!(
         totals.timing.unwrap(),
         crate::durable::response::ConversationTiming {
@@ -435,7 +443,7 @@ fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent(
     assert_eq!(tails.len(), 1);
     assert_eq!(tails[0].closing_message_id, Some(MessageId::new("closing")));
     assert_eq!(tails[0].retry_message_id, Some(MessageId::new("input-a")));
-    assert_eq!(tails[0].usage.as_ref().unwrap().total_tokens, 240);
+    assert_eq!(tails[0].usage.as_ref().unwrap().total_tokens, Some(240));
     assert_eq!(
         tails[0]
             .usage
@@ -495,7 +503,7 @@ fn historical_pages_reopen_and_later_attempts_preserve_identity_and_totals() {
             .as_ref()
             .unwrap()
             .total_tokens,
-        240
+        Some(240)
     );
     drop(store);
     let reopened = SqliteConversationStore::open_existing(id, &path).unwrap();
@@ -616,7 +624,7 @@ fn context_measurement_survives_pending_and_failed_compaction() {
         "a newer unmeasured request preserves the last measured reading"
     );
     let mut zero = usage(None);
-    zero.input_tokens = 0;
+    zero.input_tokens = Some(0);
     request(&store, "a", 2050, Some(zero));
     assert_eq!(
         crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())
@@ -845,7 +853,7 @@ fn process_membership_uses_exact_attempts_across_steering_and_pages() {
                 assert_eq!(
                     process.final_message_locator,
                     Some(
-                        super::super::content::CanonicalContentLocator::ByLedgerPosition {
+                        crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                             position: final_position,
                         }
                     )
@@ -1099,8 +1107,8 @@ fn terminal_cases() -> [(&'static str, RuntimeEvent, TurnProcessOutcome); 4] {
 
 fn assert_original_tool_view(
     store: &dyn ConversationStore,
-    bounded: &crate::runtime_client::snapshot::ForegroundToolExecution,
-    original: &crate::runtime_client::snapshot::ForegroundToolExecution,
+    bounded: &crate::observation::tool::ForegroundToolExecution,
+    original: &crate::observation::tool::ForegroundToolExecution,
 ) {
     assert_eq!(
         bounded.committed_result, original.committed_result,
@@ -1122,8 +1130,7 @@ fn assert_original_tool_view(
     else {
         panic!("the actual original Tool occurrence");
     };
-    let crate::runtime_client::snapshot::ForegroundToolState::Assembled { arguments } =
-        &bounded.state
+    let crate::observation::tool::ForegroundToolState::Assembled { arguments } = &bounded.state
     else {
         panic!("canonical C without a native Tool terminal must stay Assembled");
     };
@@ -1135,7 +1142,7 @@ fn assert_original_tool_view(
     assert_eq!(bounded.tool_id.as_ref(), Some(&call.tool_id));
     assert_eq!(
         bounded.occurrence.locator,
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position: store
                 .message_ledger_position(original_message_id)
                 .unwrap()
@@ -1171,7 +1178,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
         )
         .unwrap();
     let frozen_cut = selected.cut.read.clone();
-    let mut expected = crate::runtime_client::snapshot::transcript_header_view(selected.page);
+    let mut expected = crate::observation::transcript::transcript_header_view(selected.page);
     super::decorate_window(&store, &mut expected, selected.cut.read.journal).unwrap();
     assert_original_tool_view(
         &store,
@@ -1202,7 +1209,8 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
             )
         })
         .collect::<Vec<_>>();
-    crate::durable::sqlite::append_assistant_history_fixture(&store, &unrelated).unwrap();
+    crate::durable::sqlite::canonical::append_assistant_history_fixture(&store, &unrelated)
+        .unwrap();
     let old = store
         .read_window_headers(
             &crate::durable::reading::ConversationWindowAt::Older {
@@ -1212,7 +1220,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
             4,
         )
         .unwrap();
-    let mut retained = crate::runtime_client::snapshot::transcript_header_view(old.page);
+    let mut retained = crate::observation::transcript::transcript_header_view(old.page);
     super::decorate_window(&store, &mut retained, old.cut.read.journal).unwrap();
     assert_eq!(
         retained, expected,
@@ -1228,7 +1236,7 @@ fn exact_window_decoration_keeps_attempt_tool_occurrences_and_response_identity(
             4,
         )
         .unwrap();
-    let mut window = crate::runtime_client::snapshot::transcript_header_view(read.page);
+    let mut window = crate::observation::transcript::transcript_header_view(read.page);
     super::decorate_window(&store, &mut window, read.cut.read.journal).unwrap();
     assert_eq!(window.entries, expected.entries);
     assert_eq!(
@@ -1292,8 +1300,9 @@ fn model_failure_keeps_normalized_diagnostics_without_provider_fields() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One native history proves identical live and replayed statistics.
 fn agent_statistics_replays_incrementally_with_full_native_metrics() {
-    use crate::runtime_client::agent_statistics::StatisticsFold;
+    use crate::observation::statistics::StatisticsFold;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("agent.sqlite");
     let id = ConversationId::generate();
@@ -1333,7 +1342,7 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
             .is_some_and(|value| value.model.len() <= 512)
     );
     let expected_occupancy = native_occupancy.as_ref().map(|value| {
-        crate::runtime_client::occupancy::RuntimeClientContextOccupancy::from_native(value, None)
+        crate::observation::occupancy::RuntimeClientContextOccupancy::from_native(value, None)
     });
     assert_eq!(first.occupancy, expected_occupancy);
     assert!(
@@ -1370,7 +1379,10 @@ fn agent_statistics_replays_incrementally_with_full_native_metrics() {
         .unwrap();
     assert_eq!(live.statistics.model_requests, 2);
     assert_eq!(live.statistics.requests_with_usage, 1);
-    assert_eq!(live.statistics.reported_usage.unwrap().total_tokens, 120);
+    assert_eq!(
+        live.statistics.reported_usage.unwrap().total_tokens,
+        Some(120)
+    );
     assert_eq!(live.occupancy, first.occupancy);
     assert!(live.duration.active.as_ref().unwrap().running);
     assert_eq!(live.duration.settled_ms, 10_000);
@@ -1411,6 +1423,9 @@ fn occupancy_compaction_absence_invalid_window_and_failed_usage_are_boundaries()
         &store,
         "a",
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
             request_id: snapshot.request_id,
             finish_reason: ModelFinishReason::Stop,
             usage: Some(usage(None)),
@@ -1517,7 +1532,8 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
     let selected_window = child
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut copied_page = super::super::snapshot::transcript_header_view(selected_window.page);
+    let mut copied_page =
+        crate::observation::transcript::transcript_header_view(selected_window.page);
     super::decorate_window(&child, &mut copied_page, selected_window.cut.read.journal).unwrap();
     assert_eq!(
         tails(&copied_page)[0].origin.conversation_id,
@@ -1570,6 +1586,7 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
 /// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
 mod scale {
     use super::*;
+    use crate::durable::JournalStore;
 
     #[test]
     fn occupancy_thousands_of_unmeasured_terminal_requests_do_not_invent_a_reading() {
@@ -1601,14 +1618,14 @@ fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() 
     let read = store
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut empty = super::super::snapshot::transcript_header_view(read.page);
+    let mut empty = crate::observation::transcript::transcript_header_view(read.page);
     super::decorate_window(&store, &mut empty, read.cut.read.journal).unwrap();
     assert!(empty.entries.is_empty());
     user(&store, "human-only");
     let read = store
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut human = super::super::snapshot::transcript_header_view(read.page);
+    let mut human = crate::observation::transcript::transcript_header_view(read.page);
     super::decorate_window(&store, &mut human, read.cut.read.journal).unwrap();
     assert!(human.entries[0].turn_process.is_none());
     assert!(human.entries[0].completed_response.is_none());
@@ -1625,7 +1642,7 @@ fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() 
     let read = store
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
         .unwrap();
-    let mut historical = super::super::snapshot::transcript_header_view(read.page);
+    let mut historical = crate::observation::transcript::transcript_header_view(read.page);
     let mut old_window = frozen.clone();
     super::decorate_window(&store, &mut old_window, 0).unwrap();
     assert_eq!(old_window, frozen, "the genuine old native cut stays exact");
@@ -1654,9 +1671,10 @@ fn cutless_response_decoration_is_rejected_without_changing_native_page() {
     ))
     .unwrap();
     store.initialize(&[]).unwrap();
-    let mut page =
-        super::super::snapshot::transcript_page_view(store.load_transcript_page(None, 1).unwrap())
-            .unwrap();
+    let mut page = crate::observation::transcript::transcript_page_view(
+        store.load_transcript_page(None, 1).unwrap(),
+    )
+    .unwrap();
     let original = page.clone();
     for window in [false, true] {
         let result = if window {

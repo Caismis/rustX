@@ -5,7 +5,7 @@ import clsx from 'clsx'
 import { CodeToolbar } from './CodeToolbar';
 import { writeClipboard } from '../primitives/clipboard.ts'
 import {
-  StreamingHighlightSession, grammarLoadCount, highlightToHtml, subscribeGrammarLoaded,
+  StreamingHighlightSession, grammarLoadCount, highlightToCodeHtml, subscribeGrammarLoaded,
 } from './highlight.ts'
 import type { HighlightSpan, StreamingHighlightFrame } from './highlight.ts'
 import { useViewportHighlighting } from './useViewportHighlighting.ts'
@@ -128,7 +128,7 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
   }, [streaming, highlighting, trimmed, lang, loaded])
   const html = useMemo(
     () => (highlighting && streaming !== true
-      ? highlightToHtml(trimmed, lang)
+      ? highlightToCodeHtml(trimmed, lang)
       : undefined),
     [streaming, highlighting, trimmed, lang, loaded],
   )
@@ -158,7 +158,7 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
         ))}</code></pre>
       )
       : (
-        <div dangerouslySetInnerHTML={{ __html: html }} />
+        <pre {...SHIKI_PRE_PROPS}><code dangerouslySetInnerHTML={{ __html: html }}/></pre>
       )
 
   return (

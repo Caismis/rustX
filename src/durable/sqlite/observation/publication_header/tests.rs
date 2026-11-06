@@ -1,9 +1,11 @@
 use super::super::{PublicationHeader, index_message, index_publication_message};
-use crate::durable::{ConversationStore, sqlite::SqliteConversationStore};
+#[cfg(test)]
+use crate::durable::CanonicalStore;
+use crate::durable::sqlite::SqliteConversationStore;
 use crate::message::content::TextBlock;
 use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, MessageBlock};
+use crate::observation::{bounded::bounded_bytes, preflight::required_budget};
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
-use crate::runtime_client::{checkpoint::bounded_bytes, preflight::required_budget};
 use crate::tools::types::ToolCall;
 use rusqlite::params;
 
@@ -54,7 +56,7 @@ fn publication_header_reuse_preserves_transcript_rebinding_admission_boundary() 
             [],
         )
         .unwrap();
-    let cursor = crate::durable::sqlite::append_transcript_reference(
+    let cursor = crate::durable::sqlite::canonical::ledger::append_transcript_reference(
         &transaction,
         "message",
         message.id().as_str(),

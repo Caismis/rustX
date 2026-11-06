@@ -1,0 +1,152 @@
+{
+  "schema": "issue-499-tui-ci-repair-v1",
+  "native_source_sha256": "64e9a3768527922cae763bbade69b7774602097f75fdbd1c7207d9dbada95b46",
+  "scope": "CI build prerequisites and test harness only; no production Rust or production TypeScript changes",
+  "reviewed_five_file_sha256": "527052a3936e91c3e35310590ffa72bb7828e213d02f8454907063b270b8b5fd",
+  "independent_review": "submission-live-independent-review.md",
+  "failed_ci": {
+    "run": 1514,
+    "run_id": 40065780535,
+    "head": "e8a446fd37dfa469df4b5553f00d1581fccc2cdd",
+    "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+    "merge": "5bb7cf663f1ebeafa18760643a88faf9842d997b",
+    "job": 120788999302,
+    "url": "https://github.com/Caismis/rustX/actions/runs/40065780535/job/120788999302",
+    "conclusion": "cancelled after 25-minute job budget",
+    "failure": "new early TUI MCP startup test timed out after120007ms; unobserved abort retained fixture callback until job cancellation",
+    "cause": "clean TUI lane built only rustx, omitting the sibling interactive-supervisor required by the real stdio peer",
+    "log_sha256": "08536b99118274e2059cf570ea9528700d31c4812cf9f7d88b420e4507f8cccb"
+  },
+  "completed_checks": [
+    {
+      "receipt_file": "repair-tui-typecheck.result.json",
+      "command": "pnpm --dir tui typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:53:37.296672+00:00",
+      "finished_at": "2026-10-24T05:53:41.295811+00:00",
+      "elapsed_seconds": 3.9991443589678966,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+    },
+    {
+      "receipt_file": "repair-tui-gate-tests.result.json",
+      "command": "pnpm --dir tui exec node --test test/mcp-startup-gate.test.ts",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:53:37.296724+00:00",
+      "finished_at": "2026-10-24T05:53:37.742243+00:00",
+      "elapsed_seconds": 0.44552528602071106,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "2cbb75f16b87a1e76e7583e780782b407feb8c1d4d807466cde3e03eab535ebd"
+    },
+    {
+      "receipt_file": "repair-ci-scripts.result.json",
+      "command": "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:53:37.296400+00:00",
+      "finished_at": "2026-10-24T05:53:37.385925+00:00",
+      "elapsed_seconds": 0.0895274420036003,
+      "exit_code": 0,
+      "environment": {},
+      "log_sha256": "d6d3f82745c0abdd0f220285a241f2db780d34fd8b2b0b176ab00361cc7f687e"
+    },
+    {
+      "receipt_file": "repair-tui-complete-bundle.result.json",
+      "command": "env RUSTX_BINARY=/tmp/issue499/isolated-tui-bundles/complete/rustx pnpm --dir tui exec node --test '--test-name-pattern=early TUI startup waits' test/integration.test.ts",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:54:55.818178+00:00",
+      "finished_at": "2026-10-24T05:54:58.282426+00:00",
+      "elapsed_seconds": 2.464251030003652,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "23ab05f8902da447ecc860d2858835aba9354573f45421f58968ce8abd11a2d0"
+    },
+    {
+      "receipt_file": "repair-tui-full.result.json",
+      "command": "pnpm --dir tui test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:55:45.794609+00:00",
+      "finished_at": "2026-10-24T05:56:22.267244+00:00",
+      "elapsed_seconds": 36.472637310042046,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "b20c0cc9973d761f6bfb800c251601a31f9d459dc611bbcfbacd03ce412e7fdd"
+    },
+    {
+      "receipt_file": "repair-test-lanes.result.json",
+      "command": "cargo run --all-features --example check_test_lanes",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:55:46.995493+00:00",
+      "finished_at": "2026-10-24T05:56:12.438228+00:00",
+      "elapsed_seconds": 25.442724810971413,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "0dd12404a7fa121b68947ac2722cf5148e90c1179f5638afe467141726d77cf7"
+    },
+    {
+      "receipt_file": "repair-doc-contracts.result.json",
+      "command": "cargo test --test contracts --all-features",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:58:57.796813+00:00",
+      "finished_at": "2026-10-24T05:58:59.669804+00:00",
+      "elapsed_seconds": 1.8729926600353792,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "b481aebe86d6fc22084757cbfc9f6f29d82201c902e2973f6625a460cf64c297"
+    }
+  ],
+  "expected_negative": {
+    "expected_exit_code": 1,
+    "observed": {
+      "command": "env RUSTX_BINARY=/tmp/issue499/isolated-tui-bundles/missing-supervisor/rustx pnpm --dir tui exec node --test '--test-name-pattern=early TUI startup waits' test/integration.test.ts",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T05:54:55.820010+00:00",
+      "finished_at": "2026-10-24T05:54:57.169551+00:00",
+      "elapsed_seconds": 1.3495452169445343,
+      "exit_code": 1,
+      "environment": {
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "a473285f2436ebe4da0a436b1992ffc2ac3f5737b57135fb66fd1c634c05d5a8"
+    },
+    "meaning": "isolated bundle with only rustx fails immediately in preflight, before provider/workspace/socket allocation; the same actual test succeeds with rustx plus interactive-supervisor"
+  },
+  "results": {
+    "gate_tests": {
+      "passed": 3,
+      "failed": 0
+    },
+    "full_tui": {
+      "passed": 1200,
+      "failed": 0,
+      "skipped": 1,
+      "suites": 105
+    },
+    "complete_bundle": {
+      "actual_provider_requests": 1,
+      "tools_list": 1,
+      "tool_schema": "exact startupToolSchema"
+    }
+  },
+  "ci_requirement": "A new FULL run and current Merge verification for the repair follow-up head remain required; old1514 is not a green verdict."
+}

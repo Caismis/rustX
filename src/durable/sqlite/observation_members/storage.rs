@@ -7,9 +7,9 @@ type Record = (
     u64,
     Option<crate::durable::TranscriptCursor>,
     Option<crate::runtime::identity::MessageId>,
-    Option<crate::runtime_client::content::CanonicalContentLocator>,
+    Option<crate::observation::content::CanonicalContentLocator>,
     bool,
-    Option<crate::runtime_client::content::ContentRef>,
+    Option<crate::observation::content::ContentRef>,
     bool,
     Option<crate::durable::observation::MemberProcessHeader>,
 );

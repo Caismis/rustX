@@ -4,6 +4,7 @@ use crate::durable::observation::{
     TraceFactKind as K, TraceFactQuery, TraceFactScope,
 };
 use crate::durable::{ConversationStore, ConversationStoreError};
+use crate::observation::head::RuntimeClientCompactionView;
 use crate::runtime_client::event::RuntimeClientOutcome;
 use crate::runtime_client::projection::PreparedDurableToolReading;
 use crate::runtime_client::snapshot::{
@@ -35,8 +36,8 @@ fn latest(
     )
 }
 fn same_attempt(
-    left: &crate::runtime_client::trace::TraceLocation,
-    right: &crate::runtime_client::trace::TraceLocation,
+    left: &crate::observation::trace::TraceLocation,
+    right: &crate::observation::trace::TraceLocation,
 ) -> bool {
     left.attempt_id
         .as_ref()
@@ -94,7 +95,12 @@ pub(super) fn read(
         };
     }
     for kind in [K::TurnStarted, K::ModelRequestCompleted] {
-        if let Some(fact) = latest(store, cut, vec![kind], TraceFactScope::All, 1)?.pop()
+        let scope = if kind == K::ModelRequestCompleted {
+            TraceFactScope::Agent
+        } else {
+            TraceFactScope::All
+        };
+        if let Some(fact) = latest(store, cut, vec![kind], scope, 1)?.pop()
             && same_attempt(&start.location, &fact.location)
         {
             if let Some(B::Turn { number }) = fact.bootstrap {
@@ -114,10 +120,10 @@ fn field(
     cut: &ObservationReadCut,
     sequence: u64,
     name: &str,
-) -> Result<crate::runtime_client::snapshot::JournalFieldRef, ConversationStoreError> {
+) -> Result<crate::observation::tool::JournalFieldRef, ConversationStoreError> {
     let path = vec!["event".into(), name.into()];
     let chunk = store.event_value_read(sequence, cut.read.journal, &path, 0, 1)?;
-    Ok(crate::runtime_client::snapshot::JournalFieldRef {
+    Ok(crate::observation::tool::JournalFieldRef {
         sequence,
         path,
         encoded_bytes: chunk.readable_end,
@@ -147,7 +153,7 @@ fn terminal_outcome(
                 if summary.failure_readable_end == 0 {
                     return Err(missing());
                 }
-                Some(crate::runtime_client::snapshot::JournalFieldRef {
+                Some(crate::observation::tool::JournalFieldRef {
                     sequence: terminal.sequence,
                     path: vec!["normalized_failure".into()],
                     encoded_bytes: summary.failure_readable_end,
@@ -191,7 +197,19 @@ fn read_compaction(
             context.compaction_error = Some(detail.text.clone());
         }
     }
-    if let Some(reading) = latest(
+    if let Some(compaction) = read_latest_compaction(store, cut)? {
+        context.latest_compaction = Some(compaction);
+        context.compaction_count = 1;
+    }
+    Ok(())
+}
+
+/// Reads one committed completion at the bootstrap cut without replaying live state.
+pub(super) fn read_latest_compaction(
+    store: &dyn ConversationStore,
+    cut: &ObservationReadCut,
+) -> Result<Option<RuntimeClientCompactionView>, ConversationStoreError> {
+    Ok(latest(
         store,
         cut,
         vec![K::CompactionCompleted],
@@ -200,13 +218,9 @@ fn read_compaction(
     )?
     .pop()
     .and_then(|fact| match fact.bootstrap {
-        Some(B::CompactionCompleted { reading }) => Some(reading),
+        Some(B::CompactionCompleted { reading }) => Some(reading.compaction),
         _ => None,
-    }) {
-        context.latest_compaction = Some(reading.compaction);
-        context.compaction_count = 1;
-    }
-    Ok(())
+    }))
 }
 fn read_tools(
     store: &dyn ConversationStore,
@@ -237,7 +251,7 @@ fn read_tools(
                 "historical Tool occurrence unavailable".into(),
             ));
         };
-        let locator = crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        let locator = crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position: occurrence.ledger_position,
         };
         let page = store.transcript_tool_headers(
@@ -253,14 +267,13 @@ fn read_tools(
             .ok_or_else(|| {
                 ConversationStoreError::Storage("historical Tool header unavailable".into())
             })?;
-        let view =
-            crate::runtime_client::tool_observation::foreground(&page, header).map_err(|_| {
-                ConversationStoreError::Storage("historical Tool reading unavailable".into())
-            })?;
+        let view = crate::observation::tool::foreground(&page, header).map_err(|_| {
+            ConversationStoreError::Storage("historical Tool reading unavailable".into())
+        })?;
         content.push(PreparedDurableToolReading {
             occurrence: view.occurrence.clone(),
-            content: crate::runtime_client::tool_observation::content(header, &view),
-            collections: crate::runtime_client::tool_observation::collections(header),
+            content: crate::observation::tool::content(header, &view),
+            collections: crate::observation::tool::collections(header),
         });
         attempt.foreground.push(view);
     }

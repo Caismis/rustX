@@ -10,7 +10,7 @@ export class ConnectionController {
   private listeners = new Set<() => void>();
   private epoch = 0;
   // Remember explicit Remote material for the page lifetime, including while Local is active.
-  private remote?: { endpoint: string; token: string };
+  private remote?: { endpoint: string; token: string; deliveryToken?: string };
   constructor(private client: AppServerClient, private fetchBootstrap: (path: string, init?: RequestInit) => Promise<Response> = carrierFetch) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
@@ -19,7 +19,7 @@ export class ConnectionController {
     const epoch = ++this.epoch;
     this.publish({ selectedMode: mode, busy: true, error: undefined });
     if (mode === 'local') await this.local(epoch);
-    else if (this.remote) await this.connect(this.remote.endpoint, this.remote.token, epoch, 'remote');
+    else if (this.remote) await this.connect(this.remote.endpoint, this.remote.token, epoch, 'remote', this.remote.deliveryToken);
     else this.publish({ busy: false });
   }
 
@@ -28,13 +28,13 @@ export class ConnectionController {
     const epoch = ++this.epoch;
     this.publish({ busy: true, error: undefined });
     if (this.state.mode === 'local') await this.local(epoch);
-    else if (this.remote) await this.connect(this.remote.endpoint, this.remote.token, epoch, 'remote');
+    else if (this.remote) await this.connect(this.remote.endpoint, this.remote.token, epoch, 'remote', this.remote.deliveryToken);
     else this.publish({ busy: false, error: message('settings:connection.remote-required') });
   }
-  async connectRemote(endpoint: string, token: string) {
+  async connectRemote(endpoint: string, token: string, deliveryToken?: string) {
     const epoch = ++this.epoch;
     this.publish({ busy: true, error: undefined });
-    await this.connect(endpoint, token, epoch, 'remote');
+    await this.connect(endpoint, token, epoch, 'remote', deliveryToken);
   }
   async disconnect() {
     const epoch = ++this.epoch; this.publish({ busy: false, error: undefined });
@@ -48,16 +48,17 @@ export class ConnectionController {
       const material: unknown = await response.json();
       if (!material || typeof material !== 'object' || !('connectionMode' in material) || material.connectionMode !== 'local'
         || !('appServerEndpoint' in material) || typeof material.appServerEndpoint !== 'string'
-        || !('appServerTransportToken' in material) || typeof material.appServerTransportToken !== 'string') throw new Error('Invalid local bootstrap response.');
-      if (epoch === this.epoch) await this.connect(material.appServerEndpoint, material.appServerTransportToken, epoch, 'local');
+        || !('appServerTransportToken' in material) || typeof material.appServerTransportToken !== 'string'
+        || !('appServerDeliveryToken' in material) || typeof material.appServerDeliveryToken !== 'string') throw new Error('Invalid local bootstrap response.');
+      if (epoch === this.epoch) await this.connect(material.appServerEndpoint, material.appServerTransportToken, epoch, 'local', material.appServerDeliveryToken);
     } catch { if (epoch === this.epoch) this.publish({ busy: false, error: message('settings:connection.local-unavailable') }); }
   }
-  private async connect(endpoint: string, token: string, epoch: number, mode: ConnectionMode) {
+  private async connect(endpoint: string, token: string, epoch: number, mode: ConnectionMode, deliveryToken?: string) {
     try { await this.client.connect(endpoint, token, this.client.isSameAuthority(endpoint) ? 'reconnect' : 'replace-authority', () => {
       // Commit ownership even if the new socket subsequently fails. No fallback.
-      if (mode === 'remote') this.remote = { endpoint, token };
+      if (mode === 'remote') this.remote = { endpoint, token, deliveryToken };
       if (epoch === this.epoch) this.publish({ mode, selectedMode: mode });
-    }); }
+    }, deliveryToken); }
     catch (error) { if (epoch === this.epoch) this.publish({ error: error instanceof Error ? error.message : message('settings:connection.failed') }); }
     finally { if (epoch === this.epoch) this.publish({ busy: false }); }
   }

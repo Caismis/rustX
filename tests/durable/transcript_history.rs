@@ -9,6 +9,9 @@
 #![allow(clippy::too_many_lines)]
 
 use crate::launch_fixture::LaunchFixture;
+use rustx::durable::{
+    CanonicalStore, InboxStore, JournalStore, ProjectionStore, PublicationStore, RequestStore,
+};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -125,11 +128,11 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
             artifacts: Vec::new(),
             truncation: None,
             workflow: None,
-            managed_output: Some(Box::new(rustx::tools::types::ManagedOutputContinuation::Complete {
-                locator:
-                    "/private/tool-output/results/result_01900000-0000-7000-8000-000000000001.txt"
-                        .into(),
-            })),
+            managed_output: Some(Box::new(
+                rustx::tools::types::ManagedOutputContinuation::Complete {
+                    locator: "/tmp/rx-0000000000000001/r-0000000000000001.txt".into(),
+                },
+            )),
         },
     })
 }
@@ -163,6 +166,7 @@ fn page_message_ids(page: &rustx::durable::TranscriptPage) -> Vec<String> {
             TranscriptItem::PublicationAudit { .. }
             | TranscriptItem::InteractionRequested { .. }
             | TranscriptItem::InteractionSettled { .. }
+            | TranscriptItem::ConfigurationApplied { .. }
             | TranscriptItem::AttemptTerminal { .. }
             | TranscriptItem::InheritedTurn { .. } => None,
         })
@@ -170,18 +174,29 @@ fn page_message_ids(page: &rustx::durable::TranscriptPage) -> Vec<String> {
 }
 
 fn client_page_message_ids(
-    page: &rustx::runtime_client::RuntimeClientTranscriptPage,
+    page: &rustx::observation::transcript::RuntimeClientTranscriptPage,
 ) -> Vec<String> {
     page.entries
         .iter()
         .filter_map(|entry| match &entry.item {
-            rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } => {
+            rustx::observation::transcript::RuntimeClientTranscriptItem::Message { message } => {
                 Some(message_id(message).as_str().to_owned())
             }
-            rustx::runtime_client::RuntimeClientTranscriptItem::PublicationAudit { .. }
-            | rustx::runtime_client::RuntimeClientTranscriptItem::InteractionRequested { .. }
-            | rustx::runtime_client::RuntimeClientTranscriptItem::InteractionSettled { .. }
-            | rustx::runtime_client::RuntimeClientTranscriptItem::AttemptTerminal { .. } => None,
+            rustx::observation::transcript::RuntimeClientTranscriptItem::PublicationAudit {
+                ..
+            }
+            | rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionRequested {
+                ..
+            }
+            | rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionSettled {
+                ..
+            }
+            | rustx::observation::transcript::RuntimeClientTranscriptItem::ConfigurationApplied {
+                ..
+            }
+            | rustx::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal {
+                ..
+            } => None,
         })
         .collect()
 }
@@ -225,12 +240,11 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -525,9 +539,6 @@ max_output_tokens = 4096
 [models."local/issue110-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."local/issue110-model".compat]
 chat_reasoning_replay = "omit"
 "#;
@@ -574,10 +585,8 @@ async fn seed_composed_store(paths: &mut LaunchFixture, messages: &[MessageBlock
     runtime.shutdown().await.unwrap();
     let database = runtime
         .tool_runtime()
-        .tool_output()
+        .artifacts()
         .root()
-        .parent()
-        .unwrap()
         .join("conversation.sqlite");
     let store =
         SqliteConversationStore::open(runtime.runtime().conversation_id().clone(), &database)
@@ -629,37 +638,6 @@ fn initialized_snapshot(
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("explicit native read cut")
         .0
-}
-
-async fn await_native_activation(attachment: &rustx::runtime_client::RuntimeAttachment) {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
-    use rustx::runtime_client::{EventDelivery, RuntimeClientCursor, RuntimeClientEvent};
-    let subscription = attachment
-        .subscribe_events(RuntimeClientCursor::new(0))
-        .expect("subscribe to original activation");
-    tokio::time::timeout(std::time::Duration::from_mins(2), async {
-        loop {
-            let EventDelivery::Event(event) = subscription.next().await else {
-                panic!("startup observer retains the original activation event");
-            };
-            if event.event.facts().iter().any(|fact| match fact {
-                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
-                    *eligibility == AdoptionEligibility::Eligible
-                }
-                RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
-                    assert_eq!(checkpoint.cursor, event.cursor);
-                    checkpoint.snapshot.configuration_adoption_eligibility
-                        == AdoptionEligibility::Eligible
-                }
-                _ => false,
-            }) {
-                break;
-            }
-        }
-    })
-    .await
-    .expect("native activation becomes eligible");
-    drop(subscription);
 }
 
 /// Requirement 5: detaching and reattaching the Runtime Client does not
@@ -865,6 +843,13 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
             "provider-complete-unaccepted",
             "unaccepted",
             RuntimeEvent::ModelRequestCompleted {
+                owner: rustx::model::ModelRequestOwner::Agent {
+                    identity: RequestIdentity {
+                        attempt_id: attempt(),
+                        turn: TurnId::new("unaccepted"),
+                        retry_number: 0,
+                    },
+                },
                 request_id,
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
@@ -889,6 +874,7 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
             TranscriptItem::Message { .. }
             | TranscriptItem::InteractionRequested { .. }
             | TranscriptItem::InteractionSettled { .. }
+            | TranscriptItem::ConfigurationApplied { .. }
             | TranscriptItem::AttemptTerminal { .. }
             | TranscriptItem::InheritedTurn { .. } => None,
         })
@@ -971,11 +957,11 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
         .expect("historical audit page");
     assert!(matches!(
         page.entries[0].item,
-        rustx::runtime_client::RuntimeClientTranscriptItem::InteractionRequested { .. }
+        rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionRequested { .. }
     ));
     assert!(matches!(
         page.entries[1].item,
-        rustx::runtime_client::RuntimeClientTranscriptItem::InteractionSettled { .. }
+        rustx::observation::transcript::RuntimeClientTranscriptItem::InteractionSettled { .. }
     ));
     assert!(matches!(
         runtime
@@ -1130,7 +1116,6 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
         .expect("attach");
     // Join the producer's startup event before the two pure reads. Paging
     // must not be credited with a later activation publication.
-    await_native_activation(&attachment).await;
     let live_before = runtime
         .host()
         .checkpoint()
@@ -1341,12 +1326,11 @@ fn requirement_15_old_request_snapshot_reconstructs_old_system_bytes() {
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 64,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, false),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         1024,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -1419,6 +1403,7 @@ fn requirement_16_read_tool_result_is_pageable_after_source_disappears() {
         | TranscriptItem::PublicationAudit { .. }
         | TranscriptItem::InteractionRequested { .. }
         | TranscriptItem::InteractionSettled { .. }
+        | TranscriptItem::ConfigurationApplied { .. }
         | TranscriptItem::AttemptTerminal { .. }
         | TranscriptItem::InheritedTurn { .. } => None,
     });

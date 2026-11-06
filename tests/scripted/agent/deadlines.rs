@@ -17,8 +17,7 @@ use rustx::agent::{
 };
 use rustx::context::{
     AgentStatusEngine, CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime,
-    ContextSummarizer, DefaultTokenEstimator, ModelBackedSummarizer, SessionContextPolicy,
-    SummaryRequest,
+    DefaultTokenEstimator, ModelBackedSummarizer, SessionContextPolicy, SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -112,6 +111,7 @@ async fn make_execution<'a>(
         capability.into_lease(),
         cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
             model_timeout_policy: policy,
@@ -152,9 +152,9 @@ fn reasoning(text: &str) -> ModelEvent {
 fn usage(input_tokens: u64, output_tokens: u64) -> ModelEvent {
     ModelEvent::UsageUpdate {
         usage: ModelUsage {
-            input_tokens,
-            output_tokens,
-            total_tokens: input_tokens + output_tokens,
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+            total_tokens: Some(input_tokens + output_tokens),
             details: None,
         },
     }
@@ -245,10 +245,6 @@ async fn runtime_with_manual_clock(
         rustx::context::ContextAssembly::new(),
         capability.current_snapshot(),
     ));
-    let resource_loader: Arc<dyn rustx::runtime::RuntimeResourceLoader> =
-        Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
-            capability.current_snapshot().workspace_root(),
-        ));
     let runtime = ConversationRuntime::with_test_monotonic_clock(
         RuntimeConversationConfig {
             explicit_model: true,
@@ -270,7 +266,6 @@ async fn runtime_with_manual_clock(
             tool_runtime,
             capability,
             resources,
-            resource_loader,
             clock: None,
             initial_messages,
             subagents: None,
@@ -375,9 +370,9 @@ fn timeout_failures(
             } => Some((
                 request_id.clone(),
                 ModelUsage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    total_tokens: 0,
+                    input_tokens: Some(0),
+                    output_tokens: Some(0),
+                    total_tokens: Some(0),
                     details: None,
                 },
                 error.kind.clone(),
@@ -592,9 +587,9 @@ async fn generation_and_liveness_progress_are_applied_by_the_primary_loop() {
     assert_eq!(model.requests().len(), 1);
     let failures = timeout_failures(&audit);
     assert_eq!(failures.len(), 1);
-    assert_eq!(failures[0].1.input_tokens, 17);
-    assert_eq!(failures[0].1.output_tokens, 5);
-    assert_eq!(failures[0].1.total_tokens, 22);
+    assert_eq!(failures[0].1.input_tokens, Some(17));
+    assert_eq!(failures[0].1.output_tokens, Some(5));
+    assert_eq!(failures[0].1.total_tokens, Some(22));
 
     let snapshot = serde_json::to_value(audit.snapshot_history()[0].clone())
         .expect("request snapshot serializes");
@@ -700,14 +695,14 @@ impl AgentExecutionObserver for OrderingObserver {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
+        _receipt: &rustx::durable::TranscriptCommitReceipt,
     ) {
     }
 
     fn observe_status(
         &self,
         _observation: &rustx::agent::AgentStatusObservation,
-        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+        _source: Option<&rustx::durable::StatusObservationSource>,
     ) {
     }
 
@@ -734,7 +729,7 @@ impl AgentExecutionObserver for OrderingObserver {
         &self,
         _attempt_id: &AttemptId,
         _audit: &rustx::publication::PublicationAudit,
-        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
+        _receipt: &rustx::durable::PublicationAuditReceipt,
     ) {
     }
 }
@@ -761,6 +756,7 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
         capability.into_lease(),
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
             model_timeout_policy: timeout_policy(100, 5),
@@ -859,6 +855,7 @@ async fn provider_progress_wins_when_ready_with_response_timeout() {
         capability.into_lease(),
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
             model_timeout_policy: timeout_policy(10, 100),
@@ -947,6 +944,7 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
         capability.into_lease(),
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
             model_timeout_policy: timeout_policy(10, 20),
@@ -1128,21 +1126,25 @@ async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry() {
-    for (script, expected) in [
-        (
-            vec![FakeStep::Emit(started())],
-            "summary generation timed out",
-        ),
-        (
-            vec![FakeStep::Emit(started()), FakeStep::Emit(text("partial"))],
-            "summary generation timed out",
-        ),
+async fn model_backed_summarizer_uses_the_same_deadlines_across_bounded_auxiliary_retries() {
+    for (partial, expected) in [
+        (false, "response-start deadline"),
+        (true, "stream-idle deadline"),
     ] {
-        let (release, release_rx) = model_release();
-        let mut script = script;
-        script.push(FakeStep::ParkUntilReleased(release_rx));
-        let model = fake_model(vec![script]);
+        let mut releases = Vec::new();
+        let scripts = (0..3)
+            .map(|_| {
+                let (release, release_rx) = model_release();
+                releases.push(release);
+                let mut script = vec![FakeStep::Emit(started())];
+                if partial {
+                    script.push(FakeStep::Emit(text("partial")));
+                }
+                script.push(FakeStep::ParkUntilReleased(release_rx));
+                script
+            })
+            .collect();
+        let model = fake_model(scripts);
         let invocation = summary_invocation(&model);
         let clock = Arc::new(ManualMonotonicClock::new());
         let summarizer = ModelBackedSummarizer::new(
@@ -1151,23 +1153,32 @@ async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry()
             clock.clone() as Arc<dyn MonotonicClock>,
         );
         let mut parked = model.parked();
+        let mut opened = model.streams_started();
         let mut exited = model.streams_exited();
         let advance_clock = clock.clone();
         let controller = tokio::spawn(async move {
-            // The fake provider marks ParkUntilReleased immediately before
-            // waiting for its next pull. Reaching this state proves that the
-            // summarizer consumed every preceding event, ran deadline.observe
-            // and its stream-state handling, and requested the next item.
-            parked
-                .wait_for(|is_parked| *is_parked)
-                .await
-                .expect("summary provider park remains observable");
-            advance_clock.advance(20);
-            exited
-                .wait_for(|count| *count >= 1)
-                .await
-                .expect("timed-out summary stream exits");
-            drop(release);
+            for (ordinal, release) in releases.into_iter().enumerate() {
+                let count = u64::try_from(ordinal + 1).unwrap();
+                opened
+                    .wait_for(|opened| *opened >= count)
+                    .await
+                    .expect("retry opens a fresh summary stream");
+                // Stream entry resets parked before publishing its count.
+                // The next true proves all prior items reached the fold.
+                parked
+                    .wait_for(|is_parked| *is_parked)
+                    .await
+                    .expect("summary provider park remains observable");
+                advance_clock.advance(20);
+                exited
+                    .wait_for(|exited| *exited >= count)
+                    .await
+                    .expect("timed-out summary stream exits");
+                drop(release);
+                if ordinal < 2 {
+                    advance_clock.advance(2_000 << ordinal);
+                }
+            }
         });
         let error = tokio::time::timeout(
             Duration::from_secs(2),
@@ -1185,16 +1196,19 @@ async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry()
         .expect("summary timeout must be deterministic")
         .expect_err("summary must fail on timeout");
         controller.await.expect("summary controller completes");
-        assert_eq!(error.kind, rustx::context::ContextErrorKind::SummaryFailed);
+        assert_eq!(
+            error.kind,
+            rustx::context::ContextErrorKind::AuxiliaryDeadlineExceeded
+        );
         assert!(error.message.contains(expected));
-        assert_eq!(model.requests().len(), 1, "summarizer has no generic retry");
+        assert_eq!(model.requests().len(), 3, "auxiliary retries are bounded");
     }
 }
 
 /// The model-backed summarizer is a shared consumer of the model plane, so
 /// it carries the same generation-safety guard as the primary path — and maps
 /// the result through its own summary-failure boundary rather than entering
-/// generic model retry, exactly as it already does for a deadline.
+/// execution retry. Unlike transient deadlines, generation rejection never retries.
 ///
 /// A degenerate or truncated summary is the dangerous case: compaction
 /// *replaces* retired history, so committing a repetition loop or a sentence
@@ -1293,6 +1307,18 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
     .expect("summary provider reaches its parked next pull")
     .expect("summary parked watch remains open");
     clock.advance(10);
+    let mut summary_exited = model.streams_exited();
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        summary_exited.wait_for(|count| *count >= 1),
+    )
+    .await
+    .expect("the shared clock drives the summary request deadline")
+    .expect("summary stream-exit watch remains open");
+    // The request timeout permits a bounded retry. Expire the original
+    // auxiliary owner deadline while it settles/backoffs, using the same
+    // clock; this must not consume the following primary fixture stream.
+    clock.advance(300_000);
     let summary_error = tokio::time::timeout(Duration::from_secs(2), summary_task)
         .await
         .expect("summary deadline must settle")
@@ -1301,7 +1327,7 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
     assert!(matches!(
         summary_error,
         rustx::runtime::conversation_runtime::ManualCompactionError::Context(error)
-            if error.kind == rustx::context::ContextErrorKind::SummaryFailed
+            if error.kind == rustx::context::ContextErrorKind::AuxiliaryDeadlineExceeded
     ));
     drop(summary_release);
 
@@ -1357,8 +1383,10 @@ async fn runtime_composition_shares_one_clock_between_primary_and_summarizer() {
             .iter()
             .filter(|event| matches!(
                 event.event,
-                RuntimeEvent::ModelRequestFailed { ref error, .. }
-                    if error.kind == rustx::model::ModelErrorKind::Timeout
+                RuntimeEvent::ModelRequestFailed {
+                    owner: rustx::model::ModelRequestOwner::Agent { .. },
+                    ref error, ..
+                } if error.kind == rustx::model::ModelErrorKind::Timeout
             ))
             .count(),
         1,

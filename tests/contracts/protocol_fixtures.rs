@@ -182,7 +182,7 @@ fn tool_outcome_unknown_round_trip() {
 fn manifest_round_trip() {
     let manifest: RuntimeManifest =
         serde_json::from_str(&read_fixture("e_manifest.json")).expect("parse fixture");
-    assert_eq!(manifest.schema_version, 3);
+    assert_eq!(manifest.schema_version, 4);
     assert_eq!(manifest.runtime_version, "0.1.0");
     assert_eq!(manifest.agent.id.as_str(), "agent-a");
     assert_eq!(manifest.agent.version_id.as_str(), "agent-v1");
@@ -195,7 +195,6 @@ fn manifest_round_trip() {
         manifest.model.profile,
         Some(rustx::model::ModelProfileId::new("high"))
     );
-    assert!(manifest.model.reasoning_enabled);
     assert_eq!(manifest.capabilities.revision, CapabilityRevision::new(42));
     assert_eq!(manifest.capabilities.skills.len(), 1);
     assert_eq!(manifest.capabilities.tools.len(), 2);
@@ -577,22 +576,22 @@ fn user_message_without_timestamp_stays_compatible() {
 fn t08_t19_bounded_content_reference_and_chunk_contract_round_trip() {
     use base64::Engine;
     use rustx::message::types::ContentBlockIndex;
+    use rustx::observation::content::{
+        ContentChunk, ContentRef, ContentRepresentation, ContentSource,
+    };
     use rustx::runtime::identity::{
         AttemptId, ConversationId, PublicationStreamId, RequestId, TurnId,
     };
-    use rustx::runtime_client::content::{
-        ContentChunk, ContentRef, ContentRepresentation, ContentSource,
-    };
     let sources = [
         ContentSource::CanonicalMessageBlock {
-            component: rustx::runtime_client::content::CanonicalContentComponent::Payload,
-            locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            component: rustx::observation::content::CanonicalContentComponent::Payload,
+            locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: MessageId::new("message"),
             },
             block_index: ContentBlockIndex::new(0),
         },
         ContentSource::DurableTranscriptAudit {
-            component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+            component: rustx::observation::content::PublicationContentComponent::Payload,
             stream_id: PublicationStreamId::new("stream"),
             message_id: MessageId::new("message"),
             attempt_id: AttemptId::new("attempt"),
@@ -601,7 +600,7 @@ fn t08_t19_bounded_content_reference_and_chunk_contract_round_trip() {
             block_index: ContentBlockIndex::new(0),
         },
         ContentSource::LivePublicationPrefix {
-            component: rustx::runtime_client::content::PublicationContentComponent::Payload,
+            component: rustx::observation::content::PublicationContentComponent::Payload,
             stream_id: PublicationStreamId::new("stream"),
             message_id: MessageId::new("message"),
             attempt_id: AttemptId::new("attempt"),

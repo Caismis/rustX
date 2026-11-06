@@ -1,0 +1,262 @@
+# Visual Workflow authoring
+
+The editor authors the same native Workflow file used by the CLI and runtime.
+It uses App Server's file revision, validation, analysis and CAS boundaries.
+See [the file contract](workflow-authoring.md) and [execution semantics](workflow-programs.md).
+
+When aligning Workflow features with Dify, vision, AI prompt generation and
+similar auxiliary AI authoring features are omitted by default, including
+disabled placeholder controls. They are added only when explicitly requested.
+
+## Reference and graph model
+
+The read-only Dify checkout was inspected outside rustX at
+[`80265fcfe110f0aea056fcb3566d322986014b78`](https://github.com/langgenius/dify/tree/80265fcfe110f0aea056fcb3566d322986014b78).
+Reference paths below are relative to `web/app/components/workflow/`.
+
+The data-node work additionally inspected Dify at
+[`ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`](https://github.com/langgenius/dify/tree/ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0):
+`nodes/template-transform/`, `nodes/list-operator/`, `nodes/question-classifier/`,
+`nodes/variable-assigner/`, `nodes/assigner/` and `nodes/code/` (types, defaults
+and configuration panels). That revision's `api/pyproject.toml` pins Graphon's
+backend implementation at
+[`4fa22141774dff80e90e4dfa98ea3e6fbf0421bb`](https://github.com/langgenius/graphon/tree/4fa22141774dff80e90e4dfa98ea3e6fbf0421bb).
+The inspected execution sources are `src/graphon/nodes/template_transform/template_transform_node.py`,
+`list_operator/node.py`, `variable_aggregator/variable_aggregator_node.py` and
+`question_classifier/question_classifier_node.py` under the same nodes directory.
+They informed named Jinja bindings, filter/sort/limit order, grouped aggregation
+and class-specific exits. rustX retains its native typed scope proofs and fails
+invalid classifier output explicitly. Code Execution reuses native Bash in the
+Session workspace, as requested, rather than adding Dify's separate sandbox.
+
+| Reference | Adopted interaction |
+| --- | --- |
+| `nodes/_base/node.tsx`, `nodes/_base/components/node-handle.tsx` | Readable cards, colored icons, output handles and add-after actions |
+| `nodes/_base/components/workflow-panel/index.tsx`, `nodes/panel-components.ts` | Shared inspector shell and specialized configuration panels |
+| `nodes/start/panel.tsx` | Start input schema and an inline next-step list |
+| `nodes/_base/components/variable/var-reference-picker.tsx` | Searchable variables beside the exact consumer |
+| `nodes/if-else/node.tsx` | IF/ELSE exits |
+| `nodes/loop/node.tsx`, `nodes/iteration/use-interactions.ts` | Nested body frame, focus and sizing |
+| `nodes/loop/panel.tsx`, `nodes/loop/components/` | Loop variables, termination condition (the IF/ELSE condition list) and maximum loop count |
+| `nodes/iteration/panel.tsx` | Iteration input and output variable, parallel mode, error response method and flattening |
+| `nodes/assigner/`, `nodes/loop-end/` | Variable Assigner write rows by type, and Exit Loop |
+| `custom-edge.tsx`, `block-selector/blocks.tsx` | Searchable next-node picker and explicit edge insertion |
+| `block-selector/tabs.tsx`, `blocks.tsx`, `tool/action-item.tsx`, `preview-card.tsx` | Nodes and Tools tabs, classified rows, a node per Tool and a hover preview card |
+| `nodes/tool/panel.tsx`, `components/tool-form/`, `mixed-variable-text-input/` | Tool parameters as a form: text with inline variables, a variable/constant switch, folded output variables |
+| `note-node/index.tsx`, `utils/elk-layout.ts` | Notes and hierarchical organize |
+| `nodes/llm/components/json-schema-config-modal/` (studied at `ea5e4e9e21`) | Transactional structured-output dialog, visual field cards, JSON Schema tab and JSON-example import |
+
+The implementation uses rustX's existing XState, XYFlow, shared icons, tokens,
+localization and Markdown components. Dify source, CSS, artwork, branding,
+backend and DSL are not copied or vendored.
+
+Start is a real native node in every Block. Its input contract belongs to the
+Block, while its title and geometry use ordinary node metadata. There is no
+Parallel node or branch-lane container. Parallelism comes from multiple
+connections on any output port, including Start and every Branch exit.
+Loop and Iteration own a body whose Start is Dify's Loop or Iteration Start: it
+has no input of its own, and its inspector says what the body reads.
+
+## Next step and canvas gestures
+
+The inspector's **Next step** section shows the source icon, every existing
+successor and a dashed add row. An empty port says **Select the next node**;
+a connected port says **Add parallel node**. Branch lists each output port
+separately. All node icons have a solid semantic background and a white
+glyph, consistently across cards, inspector headers, successor rows and pickers.
+Node glyphs use Iconify's Lucide set: `log-in`, `bot`, `brain-circuit`, `wrench`,
+`git-branch`, `message-square-more`, `repeat-2`, `list-restart`, `circle-stop`,
+`variable` and `log-out`; private body Starts use `house`. Template, List Operator,
+Question Classifier, Variable Aggregator and Code Execution use `braces`,
+`list-filter`, `tags`, `combine` and `square-terminal`. The offline renderer
+receives a small subset of the pinned `@iconify-json/lucide` dependency, generated
+by `node scripts/workflow-icons.ts` from `web-console/`. Icons render immediately
+without a network request; the full collection remains lazy for the icon picker.
+
+The canvas **+** and the next-step popover share one chooser, as Dify's block
+selector: a **Nodes** tab classified into a default group, **Logic** and data processing, a
+**Tools** tab, and, for a next step, the **Existing** nodes. The Tools tab
+lists the builtin Tools (the scope's vocabulary carries each one's
+description, argument schema and result; `ask_user` is left out, as a
+Workflow asks a person through Review), then, as Dify's tool providers, each
+MCP server and Managed Python package a Workflow of this scope can use, with
+a Global or Workspace badge: a Global Workflow sees the User sources, a
+Workspace Workflow also the Workspace's. A provider folds its Tools; one that
+cannot be listed shows why. `workflow/toolCatalog` lists them when the tab
+first opens, connecting to each source once (preparing a package's
+environment first) and closing it. Each tab keeps its own search; hovering a
+row shows its description in a card beside it. A Tool row adds a Tool node for
+that Tool, titled by its name, described by its first sentence, and with the
+result its Tool declares.
+
+A Tool node's panel is its Tool's parameters as a form: each name, required
+mark and description above its control. Text parameters take typed text with
+`/` or `{` inserting variables (a `template` value); other types switch
+between a variable and a constant, as Dify's `{x}` / ✎ switch. Unset
+parameters are absent from the arguments. Output variables fold below and
+are fixed by the Tool, never edited. Below them, as on a Model, come retry on failure and
+error handling; a fail branch adds the card's error row and `fail` port.
+
+Selecting a node type from the searchable popover creates a new sibling and
+adds one connection. Selecting an existing node adds only that connection.
+Already connected targets are omitted. Existing successors remain connected.
+Each row can focus its target or disconnect that specific edge. All changes
+are ordinary document transactions with Undo/Redo.
+
+The output handle's **+** opens the same append action whether that port has
+zero, one or several edges. Dragging from the handle adds another connection.
+Semantic node edits explicitly refresh React Flow's handle identities and bounds.
+This also applies when the card keeps the same size, such as renaming a Human
+Input action, and when Undo/Redo restores a previous definition.
+Explicit insertion uses the connection's midpoint button: it replaces only
+that edge with two edges through a new single-exit node, preserving siblings.
+Select a connection to reveal its reconnectable endpoints. The selected edge
+is raised above crossing lines. Reconnect changes only that connection,
+including when its new source is Start. Duplicate edges, self-connections, Start as a target and connections
+across Block boundaries are rejected before changing the document.
+
+The picker uses Floating UI for viewport-aware placement and renders through a
+portal. Search takes focus; Escape closes it and restores focus to the trigger.
+Click-away dismissal and desktop/mobile bounds are covered by browser tests.
+The icon rail and connected handle markers do not intercept handle buttons.
+
+## Ownership
+
+| Owner | Responsibility |
+| --- | --- |
+| Native file service | Complete document, source revision, compilation, serialization and CAS |
+| Native candidate analysis | Declarations, activation scope, consumer compatibility and bounded diagnostics |
+| `machines/editor.ts` | Working document, exact-version drafts, history, checks, conflicts and uncertain writes |
+| `document/commands.ts`, `schema.ts`, `geometry.ts`, `clipboard.ts` | Atomic typed transformations |
+| `WorkflowEditor`, `Inspector`, specialized panels | Selection, field navigation, inspector sizing and configuration |
+| `NextStep` | Successor rows and searchable append picker |
+| `NodeChooser`, `Palette` | The shared node and Tool chooser, at the pointer or beside a port |
+| `ToolPanel`, `TemplateInput` | Builtin Tool parameter forms and text with inline variables |
+| `SchemaEditor`, `ValueEditor`, `ReferencePicker` | Native schema/value forms and consumer-addressed analysis queries |
+| `StructuredOutputDialog` | Model-output working copy, field confirmations, native declaration validation and one saved history transaction |
+| `scene.ts`, `WorkflowNode`, `WorkflowEdge`, `Canvas` | Recursive scene, connection gestures and transient viewport state |
+| `connections.ts` | One connection policy for previews and committed gestures |
+| `layout.ts` | Lazy ELK, measured layout, stale-request cancellation and metadata-only updates |
+| File `editor` | Node geometry, titles/descriptions, notes and field order |
+| Personal view state | Exact-file viewport and inspector width |
+
+## Complete node audit (2026-11-04)
+
+All 16 native node types were checked against the local Dify revision
+`ea5e4e9e21e73a8b7406e2d678350a2dd33b8fa0`, including defaults, input and output
+selection, configuration actions, execution rules and context-specific exits.
+The reference directories below are under `web/app/components/workflow/nodes/`;
+execution conditions were also checked in the pinned Graphon revision's
+`src/graphon/utils/condition/processor.py`.
+
+| rustX node | Dify source inspected | Result and intentional native scope |
+| --- | --- | --- |
+| Start (root and body) | `start/`, `loop-start/`, `iteration-start/` | Root input fields, requiredness, typed schema, body-only entry and next-step ownership checked. Native JSON inputs; no Chatflow/File service controls. |
+| Model | `llm/`, `_base/components/prompt/` | Model choice, roles, variable insertion, structured output, retry and fail branch checked. Prompt expansion now fills the inspector and retains its editor; Escape does not close the inspector while editing. Session model authority retained. |
+| Agent | `agent/` | Profile/task, outputs, route rename and connection lifecycle checked. Shares corrected prompt expansion. Uses native Agent profiles and execution budgets rather than Dify plugin strategies. |
+| Tool | `tool/` | Discovered selector, typed argument widgets, output schema, retry and failure ports checked. Inline variable tokens use the corrected common spacing. Native capability admission retained. |
+| Branch | `if-else/` | Ordered IF/ELIF/ELSE and AND/OR checked. Added type-directed numeric ordering/equality and array/empty operators end to end. Numeric right-side pickers now filter incompatible sources. |
+| Human Input | `human-input/` | Variable-aware content, actions, timeout, outputs and renamed exits checked. Shares corrected prompt expansion. Native in-chat interaction and 24-hour timeout limit retained; no Dify email services. |
+| Loop | `loop/` | Defaults, scoped variables, after-round break conditions, count bound and nested execution checked. Numeric termination works with committed writes. Name/type/delete and value mode now remain readable at narrow widths. |
+| Iteration | `iteration/` | Array input, body output, sequential/parallel defaults, concurrency bound, error modes and flattening checked. Native lexical scope and committed-round execution retained. |
+| Exit Loop | `loop-end/` | No configuration or outgoing connector; only offered directly inside Loop bodies. |
+| Variable Assigner | `assigner/` | Type-specific write menus, reference vs constant operands, missing variables and direct Loop scope checked. Assignment rows now fit narrow inspectors; add disables at the native 32-write bound. |
+| Output | `end/` | Named selectors, add/remove and no next-step checked. Auto-generated names now avoid collisions when different sources both expose `text`; user-written names remain explicit. Native empty-object return remains valid. |
+| Template | `template-transform/` | Named bindings, Jinja editing/insertion, output, expansion and bounded rendering checked. Uses native MiniJinja and resource bounds. |
+| Code Execution | `code/` | Python/JavaScript defaults, main signature sync, input/output typing, editor, retry and error handling checked. Executes through native Bash in the Session workspace. |
+| Question Classifier | `question-classifier/` | Input/model, topic order, labels/stable exits, instructions and outputs checked. Uses shared prompt expansion instead of a second geometry implementation. |
+| List Operator | `list-operator/` | Typed operands, filter/sort/extract/limit order, one-based extraction, stable numeric ordering and endpoint outputs checked. Native typed JSON arrays; no File service fields. |
+| Variable Aggregator | `variable-assigner/` | Empty ungrouped defaults, optional retained groups, type filtering, ordered first-available source and output renames checked. Native branch coverage proof retained. |
+
+Shared variable tokens no longer inherit the standalone picker's bottom margin;
+compact mixed text/variable fields retain the same line height. Numeric operator
+buttons use mathematical symbols so the selected variable stays readable. All prompt
+editors expand within the inspector's visible bounds without remounting Lexical.
+Code and Template retain their language-aware editors and use the same bounds
+hook. Vision and AI generation controls remain absent.
+
+`workflow-node-audit.spec.ts` opens every node surface, including both nested
+Starts, at 1440 px and at 390 px with touch and dark mode. It checks horizontal
+geometry, prompt DOM/focus ownership, typed right operands and unique Output
+names. Existing per-node interaction suites cover rename/drag, Undo/Redo,
+Save/reopen, schema editing and execution paths. Browser QA uses the pinned
+Playwright Docker runner because no Browser plugin is available in this session.
+
+## Node panels and scopes
+
+| View | Authoring behavior |
+| --- | --- |
+| Start | Nondeletable Block input schema, descriptions and one or more next nodes |
+| Model | Session/registered model, fixed instruction, bindings and text/JSON output |
+| Agent | Profile picked from the scope's profiles, task in the prompt editor with variables, structured output fields |
+| Tool | Exact selector, arguments and text/JSON result projection |
+| Template | Inline reference bindings, numbered Jinja editor with `/` / `{` insertion, binding reuse and generated-token renames, copy/resize/expand, folded `output:string`; native bounded rendering |
+| List Operator | Array input, type-directed conditions with variable tokens, 1-based extraction, 1–20 limit slider, sort cards, required JSON field selectors and nullable endpoint outputs |
+| Question Classifier | Session/registered model, text/numeric input variable, variable-aware topic cards with separate labels and stable exits, sortable classes and folded instructions; `class_name`, `class_label`, `usage` outputs |
+| Variable Aggregator | Empty ungrouped default, inferred type badges, same-type source pickers, optional retained groups with group.output paths, first-available selection, and confirmed reference cleanup |
+| Code Execution | Named input selectors, Python3/JavaScript defaults, main-parameter synchronization, a language-aware editor with line numbers/copy/expand, typed output rows, retry and error handling; one native workspace Bash invocation |
+| Branch | Compact IF/ELIF/ELSE card, ordered cases, searchable variable conditions, AND/OR and multiple successors per exit |
+| Loop | Loop variables (name, type, variable or constant value), termination conditions as IF/ELSE builds them, and a 1–100 maximum loop count slider |
+| Iteration | Array input and output variable pickers, parallel mode with a 1–10 maximum parallelism slider, error response method and flatten output |
+| Exit Loop | No configuration; offered only inside a Loop body |
+| Variable Assigner | One row per write: a variable of the enclosing Loop, an operation its type offers, and a variable or constant operand; offered only inside a Loop body |
+| Human Input (Review) | Content with variables, user actions each with its own exit, a timeout exit, and `action`/`content` outputs |
+| Output (Return) | As Dify's End: output variables, each a name and a variable picker, added with + and removed per row; no next step. The card shows each chosen variable |
+
+Branch settings add or remove ELIF cases and build conditions from native variable
+choices. AND/OR groups use the existing predicate model; advanced conditions
+retain nested predicates. Case IDs stay stable when an earlier case is removed,
+and only the removed case's edges are deleted. The grouped Next step section
+uses those same exits. Empty conditions remain unfinished and cannot be saved.
+
+Visual schema fields cover scalars, objects, arrays, requiredness, descriptions,
+supported enum/const and display order. Advanced JSON edits the same value.
+Opening an imported schema does not normalize it. Array items are optional;
+removing them retains unfinished child text as a detached draft.
+
+References are structured arrays of literal field names. Native analysis proves
+that a producer is an ancestor and runs whenever the consumer runs. A join can
+read both concurrent producers; it cannot read an optional producer from a
+conditional path. Variable Aggregator alone can select possible ancestors:
+native validation proves exclusive and complete coverage for each output group.
+As in Dify, a body sees the variables around its container,
+the container's own variables (Loop variables, or Iteration `item` and `index`)
+and its own nodes. A break condition and an Iteration output read the body's
+scope after a round. Later consumers see a Loop's variables and an Iteration's
+`output`. The browser does not implement a second type checker.
+
+Qualified identities encode the complete Block path and local node. Each path
+step names a Loop or Iteration owner. Start, ordinary nodes, edges and notes have separate
+view identity domains; actual Start IDs still remain native node IDs. Renaming
+a node updates references (including those in bodies that read it, and a body
+node's references in its container's break condition or output), edges,
+presentation and draft identity atomically. As Dify's IDs, a new or renamed node
+never takes an ID of its block, a block around it or a body inside it.
+Copy/paste clones Loop and Iteration subtrees and their presentation, assigns
+fresh IDs, and preserves literal data. Start cannot be deleted or duplicated. Orphan
+presentation is retained, and a rename/copy collision refuses the transaction.
+
+Field drafts remain attached to their exact document version and structured
+field identity. Navigation, file conflicts and native analysis never silently
+replace unfinished text. Save/Check still require the authoritative native
+compiler. Metadata-only organize, move and resize actions leave executable
+schemas, nodes, references and edges unchanged.
+
+## Verification
+
+| Contract | Coverage |
+| --- | --- |
+| Multi-edge append, duplicate rejection, real Start reconnect and sibling-preserving insertion | `web-console/test/workflow-graph.test.ts` |
+| Inspector append, canvas +, real pointer reconnect, Save YAML and desktop/mobile picker | `web-console/test/e2e/workflow-visual.spec.ts` |
+| Renamed node titles across every native kind, real input/output drags, fail exits, surviving CASE exits and private Block connections | `web-console/test/e2e/workflow-node-connections.spec.ts` |
+| Human Input action ID changes, drag after Undo/Redo, Save and reopening | `web-console/test/e2e/workflow-review-connections.spec.ts` |
+| Data-node panels, renamed classifier drag/Undo/Redo, aggregate output references, Bash-backed Python/JavaScript Code, Loop assignment and Save/reopen at desktop/mobile widths | `web-console/test/e2e/workflow-data-nodes.spec.ts` |
+| Code language/default reset, typed parameter sync, input bindings, numbered editor/copy/expand, output types/renames/order/removal, retry/fail controls and Save/reopen at desktop/mobile widths | `web-console/test/e2e/workflow-code.spec.ts` |
+| Bounded Jinja, stable typed lists, conditional aggregation and actual classifier model dispatch | `src/runtime/workflow/tests/data_nodes.rs`, `tests/model.rs` |
+| Schema/value forms, drafts, references, presentation, clipboard and history | `web-console/test/workflow-*.test.*` |
+| Active-path joins, conditional scope, skipped Returns and retired syntax rejection | `src/runtime/workflow/tests/graph.rs` |
+| Opposite completion orders, capacity one, failure aggregation and cancellation drain | Native Workflow runtime and template tests |
+| Sibling work continues during pending human Review | `src/runtime/workflow/tests/shared_workspace.rs` |
+| Nested Loop execution, output values and inert author notes | `editor_authored_nested_file_executes_keyed_results_and_both_loop_exits` |
+| Loop variables, break conditions, Exit Loop, Iteration order, parallelism and error modes | `src/runtime/workflow/tests/loops.rs` |
+| Native examples, canonical YAML, file size and revision boundaries | Native file and authoring tests |

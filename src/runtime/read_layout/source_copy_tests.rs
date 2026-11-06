@@ -16,7 +16,7 @@ fn fixture() -> (SeekableObservationSource, Vec<u8>) {
         }),
     };
     let mut expected = Vec::new();
-    crate::runtime_client::structural_json::to_writer(&mut expected, &value).unwrap();
+    crate::observation::structural_json::to_writer(&mut expected, &value).unwrap();
     assert!(expected.len() > 3 * 65_536);
     (SeekableObservationSource::new(&value).unwrap(), expected)
 }

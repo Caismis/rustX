@@ -86,6 +86,9 @@ fn run_write(
             target.path().display()
         ));
     }
+    if let Some(changes) = &context.workspace_changes {
+        changes.capture(target.path());
+    }
     if let Err(error) = atomic_commit(&target, input.content.as_bytes()) {
         return failed_result(error);
     }

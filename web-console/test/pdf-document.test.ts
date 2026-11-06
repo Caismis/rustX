@@ -1,3 +1,6 @@
+import { createElement } from 'react';
+import { act, cleanup, render } from '@testing-library/react';
+import PdfPreview from '../src/app/components/documents/PdfPreview';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => ({ load: vi.fn(), bridge: vi.fn(), text: vi.fn(), cleanup: vi.fn() }));
 vi.mock('pdfjs-dist', () => ({ getDocument: api.load, PDFWorker: { create: api.bridge }, TextLayer: class {
@@ -11,6 +14,7 @@ let page: any, document: any, destroy: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   api.load.mockReset(); api.bridge.mockReset(); api.text.mockReset(); api.cleanup.mockReset();
   vi.stubGlobal('Worker', FakeWorker);
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
   destroy = vi.fn(async () => {}); api.bridge.mockReturnValue({ destroy: vi.fn() }); api.text.mockResolvedValue(undefined);
   page = { getViewport: vi.fn(() => ({ width: 600, height: 800 })), cleanup: vi.fn(),
     render: vi.fn(() => ({ promise: Promise.resolve(), cancel: vi.fn() })),
@@ -19,7 +23,7 @@ beforeEach(() => {
   document = { filterFactory: { destroy: vi.fn() }, numPages: 3, getPage: vi.fn(async () => page) };
   api.load.mockReturnValue({ promise: Promise.resolve(document), destroy });
 });
-afterEach(() => { for (const owner of owners.splice(0)) owner.dispose(); workers.splice(0); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); for (const owner of owners.splice(0)) owner.dispose(); workers.splice(0); vi.unstubAllGlobals(); });
 function owner() { const value = new PdfDocumentOwner(new Uint8Array([1]), vi.fn()); owners.push(value); return value; }
 function view() { return { canvas: window.document.createElement('canvas'), layer: window.document.createElement('div'), signal: new AbortController() }; }
 it('admits two visible PDF workers, rejects a third and releases each once on disposal or worker failure', () => {
@@ -69,7 +73,8 @@ it('bounds scratch canvas count, individual and aggregate pixels before allocati
     const entries = Array.from({ length: 4 }, () => budget.create(2048, 2048));
     expect(() => budget.create(1, 1)).toThrow('parser_limit'); expect(context).toHaveBeenCalledTimes(4);
     budget.reset(entries[0], 1, 1);
-    const extra = Array.from({ length: 4 }, () => budget.create(1, 1));
+    // Ordinary Office knockout groups need more than eight tiny canvases.
+    const extra = Array.from({ length: 124 }, () => budget.create(1, 1));
     expect(() => budget.create(1, 1)).toThrow('parser_limit');
     expect(() => budget.reset(extra[0], 2048, 2048)).toThrow('parser_limit');
     const backing = [...entries, ...extra].map(entry => entry.canvas!);
@@ -97,6 +102,36 @@ it('terminal retirement clears the selected page backing store and text nodes', 
   expect(document.filterFactory.destroy).toHaveBeenCalled();
   expect(() => pdf.document).toThrow('obsolete');
 });
+it('keeps finite page geometry while releasing independent offscreen bitmaps', async () => {
+  const pdf = owner(), a = view(), b = view();
+  expect(await pdf.pageSizes).toEqual(Array.from({ length: 3 }, () => ({ width: 600, height: 800 })));
+  expect(page.render).not.toHaveBeenCalled();
+  await pdf.render(1, 1, a.canvas, a.layer, a.signal.signal);
+  await pdf.render(2, 1, b.canvas, b.layer, b.signal.signal);
+  expect([a.canvas.width, b.canvas.width]).toEqual([600, 600]);
+  pdf.release(a.canvas);
+  expect([a.canvas.width, b.canvas.width]).toEqual([0, 600]);
+  pdf.dispose(); expect(b.canvas.width).toBe(0);
+});
+it('preserves PDF-point admission while bounding the fitted CSS raster separately', async () => {
+  page.getViewport.mockImplementation(({ scale }: { scale: number }) => ({ width: 3500 * scale, height: 1000 * scale, scale }));
+  const pdf = owner(), v = view();
+  expect((await pdf.pageSizes)[0].width).toBeGreaterThan(4096);
+  await pdf.render(1, 0.25, v.canvas, v.layer, v.signal.signal);
+  expect(v.canvas.width).toBeLessThan(4096);
+  expect(v.canvas.width * v.canvas.height).toBeLessThanOrEqual(4 * 1024 * 1024);
+});
+it('publishes zoom replacements only after their bitmap and text finish', async () => {
+  const pdf = owner(), v = view();
+  await pdf.render(1, 1, v.canvas, v.layer, v.signal.signal);
+  const held = deferred<void>(), started = deferred<void>();
+  page.render.mockImplementationOnce(() => { started.resolve(); return { promise: held.promise, cancel: vi.fn() }; });
+  const work = pdf.render(1, 0.5, v.canvas, v.layer, v.signal.signal);
+  await started.promise;
+  expect(v.canvas.width).toBe(600); expect(v.layer.childElementCount).toBe(1);
+  held.resolve(); await work;
+  expect(v.canvas.width).toBe(300); expect(v.layer.childElementCount).toBe(1);
+});
 
 it('retirement cancels a held text stream and cannot start a text layer afterwards', async () => {
   const entered = deferred<void>(), canceled = vi.fn();
@@ -105,6 +140,7 @@ it('retirement cancels a held text stream and cannot start a text layer afterwar
   const rejected = expect(work).rejects.toThrow('obsolete');
   await entered.promise; pdf.dispose(); await rejected;
   expect(canceled).toHaveBeenCalledOnce(); expect(api.text).not.toHaveBeenCalled();
+  expect(canceled).toHaveBeenCalledWith(expect.any(Error));
   expect(v.canvas.width).toBe(0); expect(v.layer.childNodes.length).toBe(0);
 });
 it('cleans the global text measurement cache again after a canceled text task settles', async () => {
@@ -123,4 +159,41 @@ it.each(['bridge', 'load'] as const)('failed %s construction detaches old handle
   expect(() => owner()).toThrow('worker_failure');
   expect(workers[0].onerror).toBeNull(); expect(workers[0].terminate).toHaveBeenCalledOnce();
   expect(() => owner()).not.toThrow();
+});
+
+it('does not count healthy pages waiting for the serialized render slot against their active deadline', async () => {
+  vi.useFakeTimers(); document.numPages = 2;
+  page.render.mockImplementation(() => ({ promise: new Promise<void>(resolve => setTimeout(resolve, 8000)), cancel: vi.fn() }));
+  const ui = render(createElement(PdfPreview, { bytes: new Uint8Array([1]), signal: new AbortController().signal, viewState: {}, onViewStateChange() {}, retry() {} }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(page.render).toHaveBeenCalledTimes(1);
+  await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
+  expect(page.render).toHaveBeenCalledTimes(2);
+  await act(async () => { await vi.advanceTimersByTimeAsync(7001); });
+  expect(ui.queryByRole('alert')).toBeNull(); expect(workers[0].terminate).not.toHaveBeenCalled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+  expect(ui.queryAllByRole('status')).toHaveLength(0); expect(ui.getAllByRole('img')).toHaveLength(2);
+});
+it('times out an actually stuck render once and retires its worker and deadline', async () => {
+  vi.useFakeTimers(); const held = deferred<void>(), failed = vi.fn();
+  page.render.mockReturnValue({ promise: held.promise, cancel: vi.fn() });
+  const pdf = new PdfDocumentOwner(new Uint8Array([1]), failed); owners.push(pdf); const v = view();
+  const work = pdf.render(1, 1, v.canvas, v.layer, v.signal.signal), rejected = expect(work).rejects.toThrow('obsolete');
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(failed).toHaveBeenCalledExactlyOnceWith('parser_timeout'); expect(workers[0].terminate).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+  held.resolve(); await rejected;
+  expect(v.layer.childElementCount).toBe(0);
+});
+it('cancels a queued page immediately without starting it or disturbing the active page deadline', async () => {
+  vi.useFakeTimers(); const held = deferred<void>();
+  page.render.mockReturnValueOnce({ promise: held.promise, cancel: vi.fn() });
+  const pdf = owner(), a = view(), b = view();
+  const first = pdf.render(1, 1, a.canvas, a.layer, a.signal.signal);
+  await vi.advanceTimersByTimeAsync(0);
+  const queued = pdf.render(2, 1, b.canvas, b.layer, b.signal.signal), rejected = expect(queued).rejects.toThrow();
+  b.signal.abort(); await rejected;
+  expect(page.render).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(1);
+  held.resolve(); await first; await vi.advanceTimersByTimeAsync(0);
+  expect(page.render).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
 });

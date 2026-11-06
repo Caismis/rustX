@@ -1,0 +1,505 @@
+{
+  "schema": "issue-499-tui-reconnect-single-draft-v1",
+  "previous_head": "f35449b8f64779dbfc503ab0f15be0fc9b8f9012",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "source": {
+    "native_inputs": 1012,
+    "native_sha256": "ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177",
+    "followup_inputs": [
+      {
+        "path": "tui/src/ui/app.ts",
+        "sha256": "be1c6fc225d1eefa1958df35557fba5fe4e02b0c669939e02557826c2ed24c98"
+      },
+      {
+        "path": "tui/test/startup.test.ts",
+        "sha256": "c0f3709dfb2eaad2743f2a6603b44fa6cf59ceff48eb0a456825bffb6943c133"
+      }
+    ],
+    "followup_sha256": "af7c6a8e5166577434a9e0469e68a5d4670ed7589055920c0f9645324f32cd07",
+    "cumulative_repair": {
+      "anchor": "5a86a5631019ea0c7c16e12ed07bd92aa3869198",
+      "inputs": 62,
+      "sha256": "96db4d00935a19584045aa4c870ef4d4bab987db24f76bf31deefef97dfe152f"
+    },
+    "cumulative_followup": {
+      "anchor": "d2a5aff54e9e82df1680ad4887f6824cdb556976",
+      "inputs": 30,
+      "sha256": "c1391a48ad196c7ac6dd6e2d207fb0c09c7bea6e21a196ec112aa2098d3f5c8f"
+    },
+    "recipe": "sorted POSIX path+NUL+ASCII SHA256(file)+LF; review9 source maps with this explicit two-file TUI replacement"
+  },
+  "contract": "Same ComposerDraft reference across cold reconnect and its Session/conversation cache. Explicit empty text updates that owner; ordinary other-Session focus remains independent. Queued input captured once, later editor text survives Attach/intent ACK/inbound ACK; old uncertain requests never replay.",
+  "completed_checks": [
+    {
+      "id": "review10-tui-typecheck",
+      "receipt": {
+        "command": "pnpm --dir tui typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:35:41.863893+00:00",
+        "finished_at": "2026-10-24T14:35:46.138849+00:00",
+        "elapsed_seconds": 4.274956021050457,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "scope": "Final two-file TUI source."
+    },
+    {
+      "id": "review10-tui-full",
+      "receipt": {
+        "command": "pnpm --dir tui test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:35:46.172297+00:00",
+        "finished_at": "2026-10-24T14:36:25.665347+00:00",
+        "elapsed_seconds": 39.49304990598466,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "5f3d3d1577eef9a22b89a31597e8bed206269b4a766a6b368d67be71d258538e"
+      },
+      "scope": "Final source:1214passed/0failed/0cancelled/1platformskip, mandatory external provider emulator and supervisor binaries available."
+    },
+    {
+      "id": "review10-tui-focused-final",
+      "receipt": {
+        "command": "node --test tui/test/startup.test.ts tui/test/composer-app.test.ts tui/test/session-focus.test.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:36:25.695320+00:00",
+        "finished_at": "2026-10-24T14:36:28.209003+00:00",
+        "elapsed_seconds": 2.513682749995496,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "08aa23c76ab3bd3a924eb468032b31f512276bdf7d7d7a9d5a46f21c7d837330"
+      },
+      "scope": "Final startup/composer/focus three suites:95passed/0failed."
+    },
+    {
+      "id": "review10-independent-focused",
+      "receipt": {
+        "command": [
+          "node",
+          "--test",
+          "tui/test/startup.test.ts",
+          "tui/test/composer-app.test.ts",
+          "tui/test/session-focus.test.ts"
+        ],
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:36:10.618827+00:00",
+        "finished_at": "2026-10-24T14:36:13.152599+00:00",
+        "elapsed_seconds": 2.5337715779896826,
+        "exit_code": 0,
+        "source_before": {
+          "tui/src/ui/app.ts": "be1c6fc225d1eefa1958df35557fba5fe4e02b0c669939e02557826c2ed24c98",
+          "tui/test/startup.test.ts": "c0f3709dfb2eaad2743f2a6603b44fa6cf59ceff48eb0a456825bffb6943c133"
+        },
+        "source_after": {
+          "tui/src/ui/app.ts": "be1c6fc225d1eefa1958df35557fba5fe4e02b0c669939e02557826c2ed24c98",
+          "tui/test/startup.test.ts": "c0f3709dfb2eaad2743f2a6603b44fa6cf59ceff48eb0a456825bffb6943c133"
+        },
+        "log_sha256": "672e6f6d90ef38740b3131a6fdc2e4f966b8f506da8c253424ead111156bae44"
+      },
+      "scope": "Reviewer-owned95/0; independently recomputed before/after hashes match."
+    },
+    {
+      "id": "review10-tui-draft-focus-cache-settled",
+      "receipt": {
+        "command": "node --test '--test-name-pattern=ordinary A to B to A focus' tui/test/startup.test.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:35:21.445551+00:00",
+        "finished_at": "2026-10-24T14:35:22.655903+00:00",
+        "elapsed_seconds": 1.210352223017253,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "f454aaf9f37faa820b9fbc51641150b98ddba45562d1143de6bf0a444f50769d"
+      },
+      "scope": "Final actualapp A-B-A-B cached draft proof1/0, no execution."
+    },
+    {
+      "id": "review10-emulator",
+      "receipt": {
+        "command": "uv run --project test-support/fake-provider --frozen pytest -o addopts= -q test-support/fake-provider/tests",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:28:52.571662+00:00",
+        "finished_at": "2026-10-24T14:28:52.867216+00:00",
+        "elapsed_seconds": 0.29555719200288877,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "f55ec4f379cf6d33fa9b4ec786ec9dd3591701de3c529f3c706cc90922d249a9"
+      },
+      "scope": "Mandatory external provider emulator55/0."
+    },
+    {
+      "id": "review10-format",
+      "receipt": {
+        "command": "cargo fmt --all -- --check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:29:59.532433+00:00",
+        "finished_at": "2026-10-24T14:30:05.364697+00:00",
+        "elapsed_seconds": 5.832269200007431,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "scope": "Native1012 input bytes unchanged."
+    },
+    {
+      "id": "review10-clippy",
+      "receipt": {
+        "command": "cargo clippy --all-targets --all-features -- -D warnings",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:30:05.393912+00:00",
+        "finished_at": "2026-10-24T14:30:05.752162+00:00",
+        "elapsed_seconds": 0.3582552829757333,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "9d892c5778d0c975f64a671e66ea5a753502353da3addd1dfdf3825225e406a2"
+      },
+      "scope": "Native all-targets/all-features, warnings denied."
+    },
+    {
+      "id": "review10-build-bins",
+      "receipt": {
+        "command": "cargo build --bins",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:30:05.777589+00:00",
+        "finished_at": "2026-10-24T14:30:06.069035+00:00",
+        "elapsed_seconds": 0.291446212970186,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "5604fc8f0c276397a55db4bd7008236712075c0ad37d3b3a0f1fe362b1b85a36"
+      },
+      "scope": "All real binaries including interactive-supervisor and bash-supervisor."
+    },
+    {
+      "id": "review10-protocol-typecheck",
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:31:23.975193+00:00",
+        "finished_at": "2026-10-24T14:31:25.057032+00:00",
+        "elapsed_seconds": 1.0818388069747016,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152"
+      },
+      "scope": "Current protocol v57."
+    },
+    {
+      "id": "review10-web-typecheck",
+      "receipt": {
+        "command": "pnpm --dir web-console typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:31:25.083944+00:00",
+        "finished_at": "2026-10-24T14:31:40.945723+00:00",
+        "elapsed_seconds": 15.861781671002973,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "scope": "Current full Web TypeScript."
+    },
+    {
+      "id": "review10-web-full",
+      "receipt": {
+        "command": "pnpm --dir web-console test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:31:40.974452+00:00",
+        "finished_at": "2026-10-24T14:32:21.967076+00:00",
+        "elapsed_seconds": 40.99262999702478,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "1215fbe3ae7963e00c3bcd6f6170719dc149e218b30173c4ff664eae0c8697e2"
+      },
+      "scope": "3272passed/0failed/4platformskips; Host native addons built before browser invocation."
+    },
+    {
+      "id": "review10-i18n",
+      "receipt": {
+        "command": "pnpm --dir web-console check:i18n",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:32:21.995654+00:00",
+        "finished_at": "2026-10-24T14:32:22.953935+00:00",
+        "elapsed_seconds": 0.9582807629485615,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b"
+      },
+      "scope": "Current translations."
+    },
+    {
+      "id": "review10-provenance",
+      "receipt": {
+        "command": "pnpm --dir web-console check:provenance",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:32:22.981675+00:00",
+        "finished_at": "2026-10-24T14:32:24.063903+00:00",
+        "elapsed_seconds": 1.082228796032723,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2"
+      },
+      "scope": "311 records."
+    },
+    {
+      "id": "review10-launcher-typecheck",
+      "receipt": {
+        "command": "pnpm --dir dev typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:32:24.090311+00:00",
+        "finished_at": "2026-10-24T14:32:25.640568+00:00",
+        "elapsed_seconds": 1.5502569859963842,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "scope": "Current development launcher."
+    },
+    {
+      "id": "review10-launcher-test",
+      "receipt": {
+        "command": "pnpm --dir dev test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:32:25.673314+00:00",
+        "finished_at": "2026-10-24T14:32:28.155417+00:00",
+        "elapsed_seconds": 2.4821046640281565,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "c5e7d1216a74847065327b1751d270e073efe1d62a71e033711ec235462f0c16"
+      },
+      "scope": "41passed/0failed."
+    }
+  ],
+  "original_red_final": {
+    "receipt": {
+      "command": "node --test '--test-name-pattern=cold reconnect draft ownership:|confirmed cold reconnect.*(ready|authority)' tui/test/startup.test.ts",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T14:27:57.791619+00:00",
+      "finished_at": "2026-10-24T14:27:58.924296+00:00",
+      "elapsed_seconds": 1.1326798560330644,
+      "exit_code": 1,
+      "environment": {},
+      "log_sha256": "caa6c364e9acb264cef0b933a0e3d6334e3558736f1e79bcf160deb5a10655a8"
+    },
+    "result": {
+      "passed": 1,
+      "failed": 5
+    },
+    "scope": "Original app.ts d30418\u2026 before implementation. Four new scenarios plus existing ready/authority final editor assertions; R/S control already passed."
+  },
+  "earlier_red": {
+    "receipt": {
+      "command": "node --test '--test-name-pattern=cold reconnect draft ownership:' tui/test/startup.test.ts",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T14:26:57.253946+00:00",
+      "finished_at": "2026-10-24T14:26:58.381795+00:00",
+      "elapsed_seconds": 1.1278446469805203,
+      "exit_code": 1,
+      "environment": {},
+      "log_sha256": "a5f5158734cc55f81ed0f5979327044575d3026412524a036576ccc68a2dca54"
+    },
+    "scope": "First four-case test iteration:1pass/3fail, retained as recorded, not the final test input."
+  },
+  "nonpassing_fixture_development": [
+    {
+      "id": "review10-tui-draft-focus-cache",
+      "receipt": {
+        "command": "node --test '--test-name-pattern=ordinary A to B to A focus' tui/test/startup.test.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:31:37.793834+00:00",
+        "finished_at": "2026-10-24T14:32:30.819187+00:00",
+        "elapsed_seconds": 53.02535336004803,
+        "exit_code": 1,
+        "environment": {},
+        "log_sha256": "7d57f6490ba8629c4a35854625e2451038b4f96613a94d478239574b5b1460d4"
+      },
+      "scope": "Incomplete new A/B fixture; node/metadata replies corrected before final settled test. Not green and not evidence of a product failure."
+    },
+    {
+      "id": "review10-tui-draft-focus-cache-debug",
+      "receipt": {
+        "command": "node --test --test-timeout=10000 '--test-name-pattern=ordinary A to B to A focus' tui/test/startup.test.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:32:46.675943+00:00",
+        "finished_at": "2026-10-24T14:32:57.783292+00:00",
+        "elapsed_seconds": 11.107349541969597,
+        "exit_code": 1,
+        "environment": {},
+        "log_sha256": "01f556ad271b1cd095c323b3d4af43775b562578b15ca0345265769fab915e6e"
+      },
+      "scope": "Incomplete new A/B fixture; node/metadata replies corrected before final settled test. Not green and not evidence of a product failure."
+    },
+    {
+      "id": "review10-tui-draft-focus-cache-final",
+      "receipt": {
+        "command": "node --test '--test-name-pattern=ordinary A to B to A focus' tui/test/startup.test.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T14:34:20.690488+00:00",
+        "finished_at": "2026-10-24T14:35:21.372212+00:00",
+        "elapsed_seconds": 60.681727804010734,
+        "exit_code": 1,
+        "environment": {},
+        "log_sha256": "59476c84e28e06c92133433e28ff89bb6e65e071452fcde00f62b90f49581201"
+      },
+      "scope": "Incomplete new A/B fixture; node/metadata replies corrected before final settled test. Not green and not evidence of a product failure."
+    }
+  ],
+  "independent_review": {
+    "file": "independentreview10.md",
+    "sha256": "d2c497563b3170ba58f91625fc737f93e3b6ddd3b7a4c8d12ee1486025c4adf9",
+    "verdict": "Approved for bounded source change; no blocking findings. Not merge authorization or final CI verdict."
+  },
+  "unchanged_native_measurement": {
+    "raw": "submission-live-review8-current.json",
+    "raw_sha256": "2ac10e9242eda0d6df0d94beb8ebafa4d4cde2636d40e170bb1a397b36519899",
+    "manifest": "submission-live-review8-manifest.json",
+    "manifest_sha256": "f10a0c70663878543cb0efcaca31d5e6e5312b34152824c4de0ae5ec1e594e36",
+    "scope": "Existing24samples retain exact Native1012ea1 and fixture identity. No new measurement invocation or TUI latency claim."
+  },
+  "historical_ci": {
+    "run": 1526,
+    "run_id": 40098806721,
+    "head": "f35449b8f64779dbfc503ab0f15be0fc9b8f9012",
+    "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+    "merge": "85bcbac44cf6fa6dce684cba732bc25a9c7e2f3b",
+    "conclusion": "success",
+    "merge_verification": "success",
+    "scope": "Preceding f354 only; new source still needs its own FULL CI."
+  },
+  "prior_checkpoint_sha256": {
+    "head-source-preparation.json": "3e7e58b4aa15f10257b86babec52c6ee966718d7d1137fa6f11c51be71d2e715",
+    "head-startup.json": "1023426f9feaf277da61e0981a1a954184b19f3ad8801f4084978ef7c49cf26d",
+    "submission-live-review2-manifest.json": "597a25a4f48d81f536780a3ae024acdb0f6823f201724109cab420d3c1b123a9",
+    "submission-live-review3-independent-review.md": "9e547d732123142deadc4038298193826aaabc26461f8744602257ccf9e1225f",
+    "submission-live-baseline.json": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "mcp-startup-1440.png": "993931cec638a29c0de5919e9c304ecab53e9c15c6abf4d505be3f54b7a0cdfc",
+    "independentreview6.md": "80eb8a8f4bcf711246385d1f9d1da4affb506bc88b5e4bd2488506f212d2717d",
+    "validation-tui-ci-repair.json": "6edfbf0b10059b7887b18ec87e2a326715d1721ab212c388f8003a412f322785",
+    "warm-seed-synchronization.json": "b3c5ce6e024ab19f4a8fdc376be9cbe5d67039d567df93564a4746d9a8ba6a70",
+    "submission-live-review4-manifest.json": "3affeb7704e3b40fcfc6f54da6daba57c46845099f9ccdceca64a33cf6153f73",
+    "submission-live-review5-manifest.json": "c2aaf9f983617c27e1d4b589639ab0d3b6dd8dc741133617232f0f9b6df33eab",
+    "independentreview4.md": "771ebbf0782e193f082f6dba8d4b2d64fef6efc7e46eb36e08d5712a7412ebec",
+    "submission-live-review3-manifest.json": "58c153fb3af095e262dbb4290fa8281be9d28128d9b2a98fac94216c98cc2505",
+    "submission-live-manifest.json": "b2fd3cbd7b6fe207d7fd11f08a2b7e1ecaeecf96cf42b79a506b19feb7d87aa7",
+    "validation-review8.json": "d570d0362d5855006d857afaacb35032f7811f3724dc7eafe3ad2afa0071745a",
+    "baseline-manifest.json": "ecaa33019a6a50fd02a7a2b98beaeb517b5e64e1daafc3eafab30b71df18c681",
+    "validation-review7.json": "6bd27ef419f17651d0e7c31774dc5a243e5cf709d5f0684026aa323ddd60620a",
+    "baseline-source-preparation.json": "6fed4c601f0597b3881a996eb34e6373eff626d6695e0357ddbf3b56d8aacc96",
+    "validation-review4.json": "2e4a44f3eec7e6bdebc9c986fa12a5e56df3c46e117e82874a3c8282d47223d5",
+    "independentreview5.md": "85fcd21f4ba937e3d38700e7ea2f1c4428007c478856d7225c6c9e45e3d13b4f",
+    "validation-review2.json": "ee2a29b811aceb0867bc1fe4a44fe9ca978cb64b395de5c21886b739c3b45178",
+    "ownership-settlement-validation.json": "88757cef96303d6d0e08dfd2b2cd529de4a1d7cbdb543c89ab1a9340d38af53d",
+    "independentreview8.md": "e8c81808003b425320e8a769a5f226734cecd5799cc808b6a55a084c30e618dd",
+    "validation-review9.json": "7c717ae767f203b7306c0a6ec1ba075200f5da90f81540e88eda718e41eb5158",
+    "validation.json": "7dcc657506832c9dace475bdeb4e849fd76ab8ad5bbfb735a8b867cd2348e561",
+    "validation-review6.json": "561ea4f3da96661c3bc89a62a5880746d317d4776db37954e3c4f557005cb552",
+    "mcp-startup-390.png": "4ce692e83424e3f32ae4b2bfc80704d611565b7a0fa171eeb5cebe0467be39a0",
+    "submission-live-review3-current.json": "03bdf903a3bb60f740960e13eb2563e3c867c553e93e767f160fe17877b5ce2a",
+    "independentreview9.md": "a38420f577d822de770c3c090a9a2d8851584df953426bdbfbe2828653476a05",
+    "submission-live-baseline-adapter.json": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+    "submission-live-review2-current.json": "e502c37e9f7493e882fd7bbd8a8b9abd15c3d0a436de8254aa22da3618348029",
+    "submission-live-current.json": "96debdb6fb3abd627b20773f5f00dca5ed1a9cff346edbec0e0f3f44f021f3a1",
+    "submission-live-review2-independent-review.md": "e71ea3aa67e35470fb26cc70d976b52059289505283feda3fd2a9e2e2d40e2fc",
+    "submission-live-independent-review.md": "c526535c732c49e7eecdbbdcf39723d87e8c723a1b303ff8e4c50a9a88c61505",
+    "validation-redesign.json": "017026bf07dc5d0226312aa404eabba6161a69742a6e9782e579c52c7f594974",
+    "validation-review5.json": "9c57eee3f559b7bb98873a9792057067e74d8492d6e6987df7b2c6a30d65f43b",
+    "head-manifest.json": "48d9900e8c864f7d4aed13ae411e55479a7556d28de61bfa00e41db96ce5a82b",
+    "measurement-revision.json": "5e598319cb049e719ded7dba3d2acbfcdc0930b00c3cbabd6b6cff78923d0054",
+    "review-fix-validation.json": "278474307516943a023d5fc6b3ea09f7779226b6f242525329f2f77f169790be",
+    "head-model-startup.json": "928364ab52b1780a08c5783ffa5199732b6ed696e02b199df6076a02862be075",
+    "submission-live-review5-current.json": "f5c1c8a01448846b136f6a70f349e9073aa9dab32fa571cb421fb10ee6fbe15c",
+    "readiness-ownership-validation.json": "b851cd8c28b8b2bb071b379765c99e2bd631f47446ff3292acd6a2bb98c53ab3",
+    "validation-review3.json": "291e943bc5a24414170307a380d28ef1dca132106d2a13af17b56c41780172e4",
+    "baseline-model-startup.json": "c1f78e3982caa7916bbd5a1c9597ff18a1b010016b53e33cc9ebbbeaff5edea6",
+    "submission-live-review4-current.json": "e096a82ccc8c045374da1b86f05c84608f684855b4971d0b294059a50afab9e8",
+    "independentreview7.md": "a7182cbbba65b35fcf1fe1feaa064adc14b51a12ce29bcd590f585ec4869127a",
+    "submission-live-review8-manifest.json": "f10a0c70663878543cb0efcaca31d5e6e5312b34152824c4de0ae5ec1e594e36",
+    "submission-live-review8-current.json": "2ac10e9242eda0d6df0d94beb8ebafa4d4cde2636d40e170bb1a397b36519899",
+    "baseline-startup.json": "ae4a818719e3f00d676ab2b9941059b97f87b0382a82375d11f21e1321f7cbda"
+  },
+  "pending": [
+    "review10-cargo-full actual all-targets/all-features command currently running on unchanged Native1012ea1",
+    "review10-lanes",
+    "review10-protocol-check postcommit regeneration/drift",
+    "review10-browser-full frozen complete415 actual invocation currently running",
+    "new actual final head/base/merge FULL CI/allselected/macOS/Merge verification"
+  ],
+  "live_verification_record": "https://github.com/Caismis/rustX/pull/503",
+  "recorded_at": "2026-10-24T14:38:52.049723+00:00"
+}

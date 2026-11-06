@@ -15,7 +15,7 @@
 //!
 //! The mailbox no longer owns [`InboundSequence`] allocation and no longer
 //! holds a process-local payload queue: the durable
-//! [`ConversationStore`](crate::durable::inbox::ConversationStore) owns the accepted
+//! [`ConversationStore`](crate::durable::ConversationStore) owns the accepted
 //! pending state and the one per-conversation sequence domain. The mailbox
 //! is the narrow acceptance/publisher seam that validates eligibility and
 //! lifecycle, durably accepts through the store, then publishes the
@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::durable::inbox::{
+use crate::durable::{
     AcceptedInbound, ConversationInboundCapability, ConversationStore, ConversationStoreError,
     InboundDraft, TranscriptCursor,
 };
@@ -58,7 +58,7 @@ pub trait InboundObserver: Send + Sync {
     /// Missing derived evidence fences display reads without changing commitment.
     fn on_pending(
         &self,
-        receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+        receipt: Option<&Arc<crate::durable::PendingObservationReceipt>>,
         cut: &crate::durable::reading::ConversationReadCut,
     );
 }
@@ -948,6 +948,37 @@ impl ConversationInboundMailbox {
         Ok(accepted)
     }
 
+    pub(crate) fn schedule_operation(
+        &self,
+        store: &dyn crate::durable::ConversationStore,
+        binding: &crate::scheduler::ScheduleBinding,
+        operation: &crate::scheduler::ScheduleOperation,
+        clock: &dyn crate::runtime::types::RuntimeClock,
+    ) -> Result<crate::scheduler::ScheduleOperationResult, MailboxError> {
+        self.with_running_commit(|| {
+            let _publication = self.publication.lock().expect("inbound publication lock");
+            let result = operation.execute(store, binding, clock)?;
+            if let crate::scheduler::ScheduleOperationResult::Admission(
+                crate::scheduler::ScheduleAdmission::Admitted { inbound, .. },
+            ) = &result
+            {
+                if let Some(observer) = &self.state.lock().expect("inbound mailbox lock").observer {
+                    observer.on_pending(inbound.pending_observation.as_ref(), &inbound.read_cut);
+                }
+                self.wake.notify_one();
+            }
+            if matches!(
+                &result,
+                crate::scheduler::ScheduleOperationResult::Admission(
+                    crate::scheduler::ScheduleAdmission::WorkflowAdmitted { .. }
+                )
+            ) {
+                self.wake.notify_one();
+            }
+            Ok::<_, MailboxError>(result)
+        })?
+    }
+
     /// Goal accounting and ordinary inbound cross one durable frontier.
     pub(crate) fn accept_goal_round(
         &self,
@@ -1243,29 +1274,26 @@ impl ConversationInboundMailbox {
     /// durable reread. Storage errors are uncertain and must never be replayed.
     pub(crate) fn edit_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
+        expected: &crate::durable::PendingInboundRef,
         text: &str,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, MailboxError> {
+    ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
         self.pending_mutation(|| self.inbound.edit_pending(expected, text))
     }
     /// Removes pending user work without touching execution cancellation.
     pub(crate) fn remove_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, MailboxError> {
+        expected: &crate::durable::PendingInboundRef,
+    ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
         self.pending_mutation(|| self.inbound.remove_pending(expected))
     }
     fn pending_mutation(
         &self,
-        commit: impl FnOnce() -> Result<
-            crate::durable::inbox::PendingMutationOutcome,
-            ConversationStoreError,
-        >,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, MailboxError> {
+        commit: impl FnOnce() -> Result<crate::durable::PendingMutationOutcome, ConversationStoreError>,
+    ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
         self.with_running_commit(|| {
             let _publication = self.publication.lock().expect("inbound publication lock");
             let outcome = commit()?;
-            let crate::durable::inbox::PendingMutationOutcome::Applied {
+            let crate::durable::PendingMutationOutcome::Applied {
                 read_cut,
                 pending_observation,
             } = &outcome
@@ -1326,10 +1354,7 @@ pub(crate) struct PendingPublication<'a> {
     _guard: std::sync::MutexGuard<'a, ()>,
 }
 impl PendingPublication<'_> {
-    pub(crate) fn publish_adoption(
-        &self,
-        adopted: crate::durable::inbox::AdoptedBatch,
-    ) -> AdoptedInbound {
+    pub(crate) fn publish_adoption(&self, adopted: crate::durable::AdoptedBatch) -> AdoptedInbound {
         let adoption = adopted.adoption;
         let items: Vec<_> = adopted
             .items
@@ -1367,7 +1392,7 @@ impl PendingPublication<'_> {
 /// Trace-affecting receipt until its owner publishes it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdoptedInbound {
-    pub canonical_receipts: Vec<crate::durable::inbox::TranscriptCommitReceipt>,
+    pub canonical_receipts: Vec<crate::durable::TranscriptCommitReceipt>,
     /// The adopted items, in strict sequence order.
     pub items: Vec<InboundItem>,
     /// The committed adoption fact, present exactly when `items` is non-empty.
@@ -1391,12 +1416,12 @@ mod tests {
 
     #[derive(Default)]
     struct PendingObserver {
-        receipts: std::sync::Mutex<Vec<Arc<crate::durable::inbox::PendingObservationReceipt>>>,
+        receipts: std::sync::Mutex<Vec<Arc<crate::durable::PendingObservationReceipt>>>,
     }
     impl super::InboundObserver for PendingObserver {
         fn on_pending(
             &self,
-            receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+            receipt: Option<&Arc<crate::durable::PendingObservationReceipt>>,
             _cut: &crate::durable::reading::ConversationReadCut,
         ) {
             self.receipts
@@ -1414,13 +1439,13 @@ mod tests {
         let sequence = mailbox.enqueue(human("edited", "old")).unwrap();
         let removed = mailbox.enqueue(human("removed", "gone")).unwrap();
         let selected = mailbox.select_pending_batch().unwrap().unwrap();
-        let expected = crate::durable::inbox::PendingInboundRef {
+        let expected = crate::durable::PendingInboundRef {
             sequence,
             revision: 0,
         };
         mailbox.edit_pending(&expected, "committed").unwrap();
         mailbox
-            .remove_pending(&crate::durable::inbox::PendingInboundRef {
+            .remove_pending(&crate::durable::PendingInboundRef {
                 sequence: removed,
                 revision: 0,
             })
@@ -1448,7 +1473,7 @@ mod tests {
         assert!(mailbox.select_pending_batch().unwrap().is_none());
         assert_eq!(
             mailbox.edit_pending(&expected, "too late").unwrap(),
-            crate::durable::inbox::PendingMutationOutcome::NotPending
+            crate::durable::PendingMutationOutcome::NotPending
         );
         assert_eq!(observer.receipts.lock().unwrap().last().unwrap().total, 0);
     }

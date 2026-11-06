@@ -65,7 +65,8 @@ composed source at the captured cut. Their work limits differ from ordinary
 segmented canonical, Journal and state sources; see [Request field metadata](#request-field-metadata)
 for the current page, traversal and byte limits.
 
-Loaded Trace caches retain at most 512 page records and one protected selection.
+Loaded Trace pages accumulate with one protected selection; the browser does not
+discard earlier records or refuse further paging at a total retained-row limit.
 Lifecycle repair admits at most eight explicit interests in one read; clients batch their cache independently of
 the native event cursor. A page bounds both its records and repair bytes, so a
 large loaded cache cannot turn a bounded row into an oversized response.
@@ -312,14 +313,35 @@ Only an exact native anchor satisfies a navigation scroll. Return to latest
 restores the current live identity and follow mode through ChatViewport. An
 unloaded mark reaches a distant page without accumulating outline history.
 
-The browser keeps at most 256 historical entries and 8 MiB of serialized UTF-16
-entry data, independently of the native live tail (at most 64 entries). A jump to
-an already loaded exact anchor needs no read; any other jump requests one native
-64-entry window. Older and later actions each request one page and trim the
-opposite end of the finite cache. The transcript explicitly identifies historical
-inspection and leaves the intervening history unloaded. Live streaming continues
-from the independent bounded runtime projection; overlapping cursors render exactly once
-using the current native entry. Return to latest releases the historical window.
+Each native Chat page has at most 32 entries and an 8 MiB serialized UTF-16
+admission limit. These are per-response limits, not a cap on retained Session
+history. Initial reading and older-history actions assemble a Harness-style
+window: at least 50 conversational messages and two Turns, with a 500-message
+ceiling or history exhaustion. Tool results and model-only Context do not consume
+that conversational message budget. Loaded Chat and Trace pages accumulate;
+normal live updates do not evict previously read rows or create artificial
+"load earlier" recovery work.
+Attachment hands the exact Conversation's released preview or resident history
+to the new observation. Its bounded checkpoint refreshes overlapping rows instead
+of replacing the reading window with the eight-row native head. Read admission
+and frozen navigation windows still retire at the attachment boundary.
+Returning to the bottom of ordinary Chat preserves all loaded pages; it does not
+reload a smaller latest window. Only an explicit historical jump needs its frozen
+window released on return to latest. Root and child readers share this behavior.
+
+An unresolved response or Tool that leaves the live head is reread automatically
+by its exact native message identity. The old row remains mounted until its fresh
+projection is available. These passive reads coalesce newer observations, retain
+source bindings, and obey the same attachment, Conversation, epoch and navigation
+fences as other native reads. They neither expose an internal cache-reset notice
+nor detach the reader's scrolling position.
+
+A jump to an already loaded exact anchor needs no read; any other jump requests
+one native 32-entry window. Explicit historical navigation leaves intervening
+history unloaded until its continuation is requested. Live streaming continues
+from the independent bounded runtime projection; overlapping cursors render
+exactly once using the current native entry. Return to latest releases the
+historical window.
 
 A new navigation intent retires the previous read's commit authority immediately.
 An older page never joins or broadens a newer jump. Failed reads preserve the last
@@ -382,9 +404,12 @@ independent paging intent and survive window changes; resync retires both domain
 
 ChatViewport is the sole automatic Chat scroll writer. The rail and Return to
 latest share its existing overlay surface, without a second flex wrapper or
-scroll coordinator. It coalesces React and
-ResizeObserver changes into one animation-frame commit. Explicit navigation
-receives an intent ticket and resolves an exact native anchor in that frame.
+scroll coordinator. React changes and explicit navigation queue one frame;
+ResizeObserver flushes that same coordinator after layout and before paint,
+canceling any queued frame. A late-frame conversation switch or content resize
+therefore never paints the previous scroll offset before its correction.
+Explicit navigation receives an intent ticket and resolves an exact native
+anchor in that commit.
 Later native scrolling synchronously retires the ticket. Detached reading retains
 stable rendered anchors across prepend, width/sidebar/panel reflow, Tool disclosure
 and image/content growth. Missing anchors use retained adjacent reading anchors
@@ -422,17 +447,41 @@ windows; an absent cut captures current native facts. A message outside the cut
 or no longer readable fails explicitly. The result carries target_cursor while
 target remains absent: a message identity does not invent Turn ownership.
 
-The Web source action validates the exact message at target_cursor, attachment
-authority and navigation intent before publishing or anchoring. A superseding
-read, reattachment, node switch or user cancellation retires the result. The
-retained presentation remains bounded and later source activity cannot rewrite
-the fork seed boundary.
+The WebUI renders inherited and new fork messages as one continuous stream,
+matching Harness. It adds no fork-source notice or dedicated source-history
+route. The bounded Message window selector remains available to native readers;
+immutable origin metadata and the fork seed boundary remain native facts.
 
-The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 75 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
+Fork and Retry publish progress immediately from the existing navigation intent.
+Repeated clicks on the same pending transition share that intent. Fork keeps the
+source readable until the child's native checkpoint and subscription are ready;
+supplementary settings reads do not delay opening it. Retry preserves its reading
+prefix and presents the intentional detach/attach as preparation while replay is
+pending. Actual transport loss, uncertain outcomes and storage or observation
+failures retain their recovery presentation. These UI states grant no execution
+authority and never replay a native mutation.
+
+Connection feedback follows Harness's compact control beside Settings, with an
+accessible icon in the collapsed rail. Connecting stays visible for at least
+800 ms and a recovered connection confirms for 2 seconds; both are display-only
+timers. Native attachment and execution readiness are never delayed by them.
+Physical outages have one recovery surface instead of repeated conversation and
+Session-row banners. Attachment loss, uncertain outcomes and storage failures
+remain Session-owned, with expandable detail and explicit recovery.
+
+Action failures use the shared, anchored Toast without moving the conversation
+or composer. Repeated errors get a new display occurrence. Long failure notices
+hold for 6 seconds before fading; success confirmations use a polite status and
+green check. Native message/code and diagnostic text stay readable without a
+wire JSON dump. Form validation remains local and terminal model failures stay
+at their durable turn positions. Dismissing a transient notice never verifies a
+native uncertain outcome or replays a request.
+
+The immutable inherited transcript boundary was introduced in SQLite schema 58 and remains part of the current schema 85 lineage bootstrap. Initialization records the final native transcript watermark in the same transaction as the seed, including terminal-only inherited Turns and excluding invisible Context messages. Repeated bounded transcript and checkpoint reads resolve this boundary through a single bootstrap primary-key lookup. Older development stores are rejected without migration.
 
 ## Request field metadata
 
-SQLite schema 75 stores frozen Request metadata separately from the native
+SQLite schema 85 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
@@ -529,7 +578,7 @@ before successful completion; it does not prescan bodies under the capture barri
 
 ## Canonical append frontier
 
-Schema 70 removed `surface_head.active_json`; schema 75 retains that layout.
+Upstream schema 70 removed `surface_head.active_json`; the integrated schema 85 retains that layout.
 The immutable Ledger and selected checkpoint remain the active-identity authorities.
 Cold/invalidated append validates the same bounded suffix and Original dependencies.
 Warm append may reuse a disposable connection-local validation count, checked
@@ -545,13 +594,14 @@ Canonical acceptance, events and staging remain atomic, and publication still
 follows its committed native transition. Older layouts are rejected; there is
 no migration, compatibility reader or dual write.
 
-### Native-state preview computation
+## Ephemeral auxiliary output
 
-Schema 73 replaces stored native-state preview JSON with bounded geometry and
-retained original segments. Field/page reads derive previews on demand with the
-existing 32-node/16 KiB rules; direct range reads bypass previews. Coordinates
-remain indexed eagerly, so a cold small read never parses or reindexes the entire
-Source. Errors remain explicit and reads do not persist a cache or start background
-work. Native-state previews describe retained committed bytes rather than an
-independent preview copy. Schema 74 separately removes duplicate request-capture
-witnesses and origin-proof walks, as described above.
+`auxiliary/status`, `auxiliary/result` and `auxiliary/submissionLookup` use current attachment read authority and DeliveryAccess. Results are repeatable five-minute retained reads without ACK, ContentRef or persistent reconstruction. `auxiliary/segment` is registration-fenced provisional output, separate from the one durable cursor owner. Source unavailability preserves loaded output and stops automatic reading; exact native Call cancellation uses the current controller independently. See [auxiliary consumer bounds and display repair](auxiliary-consumers.md).
+
+Workflow trace pages read original node visits at one immutable Journal cut.
+SQLite schema 84 requires separate run/type/sequence and full-instance/type/sequence
+indexes. Admission counts, revisions and pages seek the selected run; terminal and
+input/output selectors seek the complete visit identity before applying sequence
+bounds. Missing facts do not scan later visits or unrelated runs. Deterministic
+query-plan and VM-step regressions cover 3,903 completed visits and an incomplete
+run followed by 4,096 unrelated runs; pagination remains limited to 32 visits.

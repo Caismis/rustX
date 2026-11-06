@@ -1668,7 +1668,8 @@ impl AgentStatusTestSeam {
 mod tests {
     use super::*;
     use crate::conversation::ConversationState;
-    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::durable::SqliteConversationStore;
+    use crate::durable::{CanonicalStore, ProjectionStore};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         ContextKind, InboundKind, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -2588,7 +2589,6 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)] // One deterministic canonical status and projection eligibility scenario.
     fn compaction_retiring_visible_status_reopens_surface_eligibility() {
-        use crate::durable::ConversationStore;
         use crate::scripted_suites::support::context::{
             checkpoint_commit_fixture, checkpoint_fixture,
         };

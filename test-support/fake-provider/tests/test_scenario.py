@@ -274,9 +274,9 @@ def test_every_registered_scenario_builds():
     for name in SCENARIOS:
         scenario = build(name, "/tmp/rustx-test-workspace")
         assert scenario.name == name
-        if name in {"web_artifact_document", "web_config_repair"}:
-            # Preview-only and configuration-repair fixtures must reject
-            # every model request.
+        if name in {"web_artifact_document", "web_config_repair", "mcp_submission_refused"}:
+            # Preview, configuration repair and refused Workspace submission
+            # fixtures must reject every model request.
             assert scenario.steps == ()
         else:
             assert scenario.steps

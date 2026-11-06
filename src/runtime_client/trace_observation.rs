@@ -1,12 +1,13 @@
 //! Bounded immutable request inspection over native commit-owned field indexes.
-use super::checkpoint::{
-    CheckpointPage, CheckpointPageItem, CheckpointReadCut, CheckpointValueChunk,
-};
-use super::types::{RuntimeClientCursor, RuntimeClientError};
 use crate::durable::ConversationStore;
+use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
+use crate::runtime_client::checkpoint::{CheckpointPage, CheckpointValueChunk};
+use crate::runtime_client::types::{RuntimeClientCursor, RuntimeClientError};
 use base64::Engine as _;
 mod inspection;
+mod workflow;
 pub(crate) use inspection::{canonical_selection, messages_page, messages_selection};
+pub(crate) use workflow::{workflow_page, workflow_selection};
 
 pub(crate) fn context_selection(domain: &str) -> Option<u64> {
     domain
@@ -42,11 +43,13 @@ pub(crate) fn context_page(
                 key: None,
                 offset: offset + index as u64,
                 identity: format!("context:{}", offset + index as u64),
-                value: Some(super::checkpoint::structural_value(&value).ok_or_else(|| {
-                    RuntimeClientError::ObservationUnavailable {
-                        message: "native Context header exceeds bound".into(),
-                    }
-                })?),
+                value: Some(
+                    crate::observation::bounded::structural_value(&value).ok_or_else(|| {
+                        RuntimeClientError::ObservationUnavailable {
+                            message: "native Context header exceeds bound".into(),
+                        }
+                    })?,
+                ),
                 content: Vec::new(),
                 deferred: value.truncated,
             })
@@ -82,8 +85,8 @@ struct RequestView {
     value: serde_json::Value,
     dynamic: bool,
     deferred: bool,
-    content: Vec<super::checkpoint::ContentBinding>,
-    collections: Vec<super::checkpoint::CollectionFrontier>,
+    content: Vec<crate::observation::cut::ContentBinding>,
+    collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
 fn request_view(
     store: &dyn ConversationStore,
@@ -118,22 +121,19 @@ fn request_view(
         .request_outcome_header_at(request, cut.through)
         .map_err(RuntimeClientError::observation_store_error)?;
     if let Some(outcome) = &outcome {
-        value["usage"] = super::checkpoint::structural_value(&outcome.usage).ok_or_else(|| {
-            RuntimeClientError::RuntimeFailure {
-                message: "native usage header exceeds its finite contract".into(),
-            }
-        })?;
-        value["failure"] =
-            super::checkpoint::structural_value(&outcome.failure).ok_or_else(|| {
+        value["usage"] =
+            crate::observation::bounded::structural_value(&outcome.usage).ok_or_else(|| {
                 RuntimeClientError::RuntimeFailure {
-                    message: "native failure header exceeds its finite contract".into(),
+                    message: "native usage header exceeds its finite contract".into(),
                 }
             })?;
-        value["generation"] =
-            super::checkpoint::structural_value(&outcome.generation).ok_or_else(|| {
-                RuntimeClientError::RuntimeFailure {
-                    message: "native generation header exceeds its finite contract".into(),
-                }
+        value["failure"] = crate::observation::bounded::structural_value(&outcome.failure)
+            .ok_or_else(|| RuntimeClientError::RuntimeFailure {
+                message: "native failure header exceeds its finite contract".into(),
+            })?;
+        value["generation"] = crate::observation::bounded::structural_value(&outcome.generation)
+            .ok_or_else(|| RuntimeClientError::RuntimeFailure {
+                message: "native generation header exceeds its finite contract".into(),
             })?;
         deferred |= outcome.failure_deferred;
     }
@@ -227,7 +227,7 @@ pub(crate) fn field_page(
             }));
             CheckpointPageItem {
                 body_complete: None,
-                key: field.key.map(|key| super::checkpoint::CheckpointKey {
+                key: field.key.map(|key| crate::observation::cut::CheckpointKey {
                     path: vec!["$key".into()],
                     preview: key.preview,
                     encoded_bytes: key.encoded_bytes,
@@ -491,13 +491,13 @@ pub(crate) fn history_store_cut(
     Ok(CheckpointReadCut {
         canonical_foreground: None,
         live_publication: None,
-        collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
+        collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         conversation_id: store.conversation_id().clone(),
         activation_id: None,
         revision: 0,
         through: source.read.journal,
         source_cut: Some(source),
-        domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
+        domain_revisions: crate::observation::metadata::MetadataFragment::default(),
     })
 }
 pub(crate) fn validate_history_cut(
@@ -554,17 +554,23 @@ pub(crate) fn history_page(
     limit: usize,
 ) -> Result<CheckpointPage, RuntimeClientError> {
     validate_history_cut(store, cut)?;
+    if domain == "trace.records" {
+        return super::trace::checkpoint_page(store, cut, offset, limit);
+    }
     if canonical_selection(domain) {
         return super::history_observation::page(store, cut, domain, offset, limit);
     }
     if messages_selection(domain).is_some() {
         return messages_page(store, cut, domain, offset, limit);
     }
+    if workflow_selection(domain).is_some() {
+        return workflow_page(store, cut, domain, offset, limit, None);
+    }
     if context_selection(domain).is_some() {
         return context_page(store, cut, domain, offset, limit);
     }
-    if super::delivery::selection(domain).is_some() {
-        return super::delivery::page(store, cut, domain, offset, limit);
+    if crate::runtime_client::delivery::selection(domain).is_some() {
+        return crate::runtime_client::delivery::page(store, cut, domain, offset, limit);
     }
     if super::occupancy::selection(domain).is_some() {
         return super::occupancy::page(store, cut, domain, offset, limit);
@@ -608,11 +614,14 @@ pub(crate) fn history_value_read(
             message: "invalid Trace read bounds".into(),
         });
     }
+    if domain == "trace.records" {
+        return super::trace::header_read(store, cut, item_offset, path, range);
+    }
     if super::projection_history::selection(domain).is_some() {
         return super::projection_history::value_read(store, cut, domain, item_offset, path, range);
     }
-    if super::delivery::selection(domain).is_some() {
-        return super::delivery::value_read(
+    if crate::runtime_client::delivery::selection(domain).is_some() {
+        return crate::runtime_client::delivery::value_read(
             store,
             cut,
             domain,

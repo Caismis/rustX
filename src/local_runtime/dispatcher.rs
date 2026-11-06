@@ -1413,8 +1413,10 @@ mod tests {
         let approval = InteractionRequest {
             id: InteractionId::new("approval-1"),
             conversation_id: ConversationId::new("conv_b520d0ec-730a-7133-8d51-7de417e31c5a"),
-            attempt_id: AttemptId::new("attempt-1"),
-            turn: 1,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: 1,
+            },
             kind: InteractionKind::Approval {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: ToolCallId::new("call-1"),
@@ -1430,8 +1432,10 @@ mod tests {
         let questionnaire = InteractionRequest {
             id: InteractionId::new("questionnaire-1"),
             conversation_id: approval.conversation_id.clone(),
-            attempt_id: AttemptId::new("attempt-1"),
-            turn: 2,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: 2,
+            },
             kind: InteractionKind::Questionnaire {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
@@ -1472,11 +1476,11 @@ mod tests {
             questionnaire.conversation_id.clone(),
             questionnaire.id.clone(),
         );
-        let approval = crate::runtime_client::checkpoint::interaction_request_header(
+        let approval = crate::observation::interaction::interaction_request_header(
             &approval,
             crate::runtime::interaction::InteractionSource::Primary,
         );
-        let questionnaire = crate::runtime_client::checkpoint::interaction_request_header(
+        let questionnaire = crate::observation::interaction::interaction_request_header(
             &questionnaire,
             crate::runtime::interaction::InteractionSource::Primary,
         );

@@ -8,67 +8,54 @@ block:
     required:
     - task
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      summary:
-        type: string
-    required:
-    - summary
-    additionalProperties: false
-  entry: review
   nodes:
+    workflow_start:
+      type: start
     review:
       type: agent
       profile: reviewer
-      task: Review the request and commit the result.
-      input:
-        task:
-          type: reference
-          path:
-          - args
-          - task
+      task:
+      - type: literal
+        value: "Review the request and commit the result."
+      - type: literal
+        value: "\n\ntask: "
+      - type: reference
+        path: ["args", "task"]
       output:
-        type: object
-        properties:
-          passed:
-            type: boolean
-          summary:
-            type: string
-        required:
-        - passed
-        - summary
-        additionalProperties: false
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            passed:
+              type: boolean
+            summary:
+              type: string
+          required:
+          - passed
+          - summary
+          additionalProperties: false
     decision:
       type: branch
-      condition:
-        type: boolean
-        value:
-          type: reference
-          path:
-          - review
-          - passed
-    success:
-      type: return
-      output:
-        type: object
-        fields:
-          summary:
+      cases:
+      - id: 'true'
+        condition:
+          type: boolean
+          value:
             type: reference
             path:
             - review
-            - summary
+            - passed
+    success:
+      type: return
+      outputs:
+      - {variable: summary, value_selector: [review, summary]}
     failure:
       type: return
-      output:
-        type: object
-        fields:
-          summary:
-            type: reference
-            path:
-            - args
-            - task
+      outputs:
+      - {variable: summary, value_selector: [args, task]}
   edges:
+  - from: workflow_start
+    to: review
   - from: review
     to: decision
   - from: decision

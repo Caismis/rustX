@@ -289,6 +289,32 @@ def workflow_tool() -> Scenario:
     )
 
 
+def workflow_model(mode: str) -> Scenario:
+    """One direct model Call lives between the outer Tool call and continuation."""
+    output = "model-node-final-text" if mode == "text" else '{"risk":"low","reason":"bounded"}'
+    return Scenario(
+        f"workflow_model_{mode}",
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("workflow conformance request",), tools_include=("review_pr",)),
+            Stream(ToolCall("call-review-pr", "review_pr",
+                            '{"task":"workflow conformance request"}'), Finish("tool_calls")),
+        ),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("Classify fixed Workflow input", "workflow conformance request"),
+                   body_excludes=('"tools":', '"tool_choice":', "review_pr")),
+            Stream(Text(output), Finish("stop")),
+        ),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("model-node-final-text" if mode == "text" else "bounded",),
+                   tools_include=("review_pr",), body_excludes=("Classify fixed Workflow input",)),
+            Stream(Text("workflow conformance complete"), Finish("stop")),
+        ),
+    )
+
+
 def workflow_reference_parallel() -> Scenario:
     import json
     steps = [Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
@@ -301,7 +327,7 @@ def workflow_reference_parallel() -> Scenario:
                           Stream(Gate(f"parallel-child-{index}"),
                                  ToolCall(f"output-{index}", "workflow_output", json.dumps({"summary": f"Assessment {index}", "acceptable": True})), Finish("tool_calls"))))
     steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
-                             tools_include=("parallel_review",), body_contains=("ready",)),
+                             tools_include=("parallel_review",), body_contains=("acceptable",)),
                       Stream(Text("Reviews ready."), Finish("stop"))))
     return Scenario("workflow_reference_parallel", *steps)
 
@@ -350,7 +376,7 @@ def workflow_reference_repair(exhausted: bool = False, tampered: bool = False) -
         ])
     steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
                              tools_include=("implement_and_review",),
-                             body_contains=(("needs_revision" if exhausted else "implemented"),), body_excludes=("PRIVATE CLAIM", "PRIVATE CHILD QUESTION")),
+                             body_contains=(("failed at least one fixed case" if exhausted else "Both fixed greeting cases passed"),), body_excludes=("PRIVATE CLAIM", "PRIVATE CHILD QUESTION")),
                       Stream(Text("Implementation finished."), Finish("stop"))))
     return Scenario("workflow_reference_tampering" if tampered else "workflow_reference_exhaustion" if exhausted else "workflow_reference_repair", *steps)
 
@@ -499,6 +525,15 @@ def compaction_session_summary() -> Scenario:
 
 def compaction_explicit_summary() -> Scenario:
     return _compaction("compaction_explicit_summary", SUMMARY_MODEL)
+
+
+def compaction_transient_summary() -> Scenario:
+    base = _compaction("compaction_transient_summary", SUMMARY_MODEL)
+    retryable = Step(
+        base.steps[1].expect,
+        HttpError(503, {"error": {"type": "server_error", "message": "temporarily unavailable"}}),
+    )
+    return Scenario(base.name, base.steps[0], retryable, *base.steps[1:])
 
 
 def _compaction_twice(name: str, summary_model: str) -> Scenario:
@@ -735,6 +770,9 @@ SCENARIOS = {
     "skill_read_turn": skill_read_turn,
     "workflow_output": workflow_output,
     "workflow_tool": workflow_tool,
+    "workflow_model_text": lambda: workflow_model("text"),
+    "workflow_model_json": lambda: workflow_model("json"),
+    "workflow_model_native": lambda: workflow_model("native"),
     "workflow_reference_repair": workflow_reference_repair,
     "workflow_reference_tampering": lambda: workflow_reference_repair(tampered=True),
     "workflow_reference_exhaustion": lambda: workflow_reference_repair(True),
@@ -746,6 +784,7 @@ SCENARIOS = {
     "restart_after_request_start": restart_after_request_start,
     "compaction_session_summary": compaction_session_summary,
     "compaction_explicit_summary": compaction_explicit_summary,
+    "compaction_transient_summary": compaction_transient_summary,
     "compaction_twice_session_summary": compaction_twice_session_summary,
     "compaction_twice_explicit_summary": compaction_twice_explicit_summary,
     "frozen_attempt_model": frozen_attempt_model,

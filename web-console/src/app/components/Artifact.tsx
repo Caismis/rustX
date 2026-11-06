@@ -1,18 +1,17 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { CanonicalContentLocator, ToolExecutionResult } from '../../../../protocol/app-server/v52';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v73';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
-import { Button } from '../../presentation/primitives/Button';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
+import { MessageFile } from '../../presentation/agent/Message';
 import { PresentedFileCard, PresentedFiles } from '../../presentation/attachments/PresentedFileCard';
 import cardCss from '../../presentation/attachments/Deliverables.module.css';
 import { IconDownloadOutline16 } from '../../presentation/primitives/icons';
-import { presentedDeliveries, type PresentedDelivery } from '../../bindings/present';
+import type { PresentedDelivery } from '../../bindings/present';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
-export function Artifact({ id, name = id, image = false, mimeType }: { id: string; name?: string; image?: boolean; mimeType?: string }) {
-  const tx = useTranslation();
+export function Artifact({ id, name = id, image = false, mimeType, messageAttachment = false }: { id: string; name?: string; image?: boolean; mimeType?: string; messageAttachment?: boolean }) {
   const resources = useContext(ArtifactContext);
   const preview = useContext(PreviewContext);
   const [attempt, setAttempt] = useState(0);
@@ -20,7 +19,7 @@ export function Artifact({ id, name = id, image = false, mimeType }: { id: strin
   const [error, setError] = useNotice();
   const [loading, setLoading] = useState(false);
   useEffect(() => {
-    if (!resources || !attempt) return;
+    if (!image || !resources || !attempt) return;
     let live = true;
     let owned: string | undefined;
     setLoading(true); setError(''); setUrl(undefined);
@@ -29,27 +28,26 @@ export function Artifact({ id, name = id, image = false, mimeType }: { id: strin
       owned = value; setUrl(value);
     }).catch(cause => { if (live) setError(String(cause)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; if (owned) resources.release(owned); };
-  }, [resources, id, mimeType, attempt]);
-  return <div><AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
+  }, [resources, id, mimeType, image, attempt]);
+  if (messageAttachment && !image) return <MessageFile name={name} onOpen={preview && resources ? () => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}/>;
+  return <AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
+    onOpen={preview && resources ? () => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}
     onDownload={preview && resources ? () => preview.download({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}
-    onLoad={resources ? () => setAttempt(value => value + 1) : undefined}
-    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />{preview && resources && <Button size="sm" onClick={() => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType })}>{tx('artifacts:artifact.preview')}{' '}{name}</Button>}</div>;
-}
-
-/** Only successful committed canonical Tool messages contribute cards. */
-export function ToolDeliveries({ locator, conversationId, result }: { locator: CanonicalContentLocator; conversationId:string; result: ToolExecutionResult }) {
-  return <DeliveryCards conversationId={conversationId} deliveries={presentedDeliveries(locator,result)}/>;
+    onLoad={image && resources ? () => setAttempt(value => value + 1) : undefined}
+    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />;
 }
 
 export function DeliveryCards({conversationId,deliveries,owned}:{conversationId:string;deliveries:PresentedDelivery[];owned?:()=>boolean}) {
   const tx=useTranslation(),preview=useContext(PreviewContext);
-  const intent = (delivery: PresentedDelivery) => ({ source: { kind: 'session_file' as const, conversationId,owned,locator: delivery.locator, index: delivery.index, file: delivery.file },
+  // Message-view ownership admits the gesture. Retained preview ownership is
+  // supplied by PreviewWorkspace (and the child PreviewContext when applicable).
+  const intent = (delivery: PresentedDelivery) => ({ source: { kind: 'session_file' as const, conversationId,locator: delivery.locator, index: delivery.index, file: delivery.file },
     name: delivery.file.name, image: delivery.file.mime_type.startsWith('image/'), mimeType: delivery.file.mime_type });
   return <PresentedFiles files={deliveries.map(delivery => ({ key: delivery.key, name: delivery.file.name, path: delivery.file.path, description: delivery.file.description }))}
     card={view => { const delivery = deliveries.find(item => item.key === view.key)!;
-      return <PresentedFileCard file={view} onPreview={preview ? () => preview.openPreview(intent(delivery)) : undefined} actions={preview &&
+      return <PresentedFileCard file={view} onPreview={preview ? () => { if (!owned || owned()) preview.openPreview(intent(delivery)); } : undefined} actions={preview &&
         <button type="button" className={cardCss.action} aria-label={`${tx('artifacts:attachment-card.download')} ${delivery.file.name}`}
-          title={tx('artifacts:attachment-card.download')} onClick={() => preview.download(intent(delivery))}><IconDownloadOutline16 size={14}/></button>}/>; }}/>;
+          title={tx('artifacts:attachment-card.download')} onClick={() => { if (!owned || owned()) preview.download(intent(delivery)); }}><IconDownloadOutline16 size={14}/></button>}/>; }}/>;
 }
 
 /** Only typed artifact/image/file facts; arbitrary tool JSON is never interpreted. */

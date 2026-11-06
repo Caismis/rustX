@@ -26,6 +26,7 @@
 //! boundary is reached through the coordinator's own observation seam and
 //! through watch channels.
 
+use rustx::durable::CanonicalStore;
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
@@ -733,7 +734,7 @@ async fn interaction_settlement_is_exactly_once_for_one_identity() {
     };
     assert!(
         matches!(
-            rustx::durable::ConversationStore::append_event(run.store.as_ref(), replay),
+            rustx::durable::JournalStore::append_event(run.store.as_ref(), replay),
             Err(rustx::durable::ConversationStoreError::InvalidReference(_))
         ),
         "the generic durable seam refuses a transcript-visible settlement"
@@ -746,7 +747,7 @@ async fn interaction_settlement_is_exactly_once_for_one_identity() {
         .expect("one settled envelope");
     assert!(
         matches!(
-            rustx::durable::ConversationStore::append_interaction_audit(
+            rustx::durable::JournalStore::append_interaction_audit(
                 run.store.as_ref(),
                 RuntimeEventEnvelope {
                     sequence: 0,
@@ -857,7 +858,10 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
         tokio::spawn(async move {
             coordinator
                 .request_questionnaire(
-                    AttemptId::new("attempt-detach"),
+                    crate::runtime::interaction::InteractionExecution::Attempt {
+                        attempt_id: AttemptId::new("attempt-detach"),
+                        turn: 1,
+                    },
                     QuestionnaireFacts {
                         invocation_id: crate::tools::types::ToolInvocationId::Agent {
                             call_id: crate::runtime::identity::ToolCallId::new(
@@ -869,7 +873,6 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
                             tool_name: "ask_user".to_owned(),
                             origin: crate::tools::types::ToolOrigin::Builtin,
                         },
-                        turn: 1,
                         questionnaire: QuestionnaireSpecification {
                             questions: vec![QuestionSpecification {
                                 question: "Which target?".to_owned(),

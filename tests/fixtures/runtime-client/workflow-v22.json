@@ -7,7 +7,10 @@
       {
         "id": {
           "conversation_id": "conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0",
-          "attempt_id": "attempt",
+          "origin": {
+            "type": "tool",
+            "attempt_id": "attempt"
+          },
           "invocation": 1
         },
         "workflow_id": "review",
@@ -22,7 +25,10 @@
             "block": {
               "run": {
                 "conversation_id": "conv_5d71cacf-35af-790f-8022-fe16cd1b9fe0",
-                "attempt_id": "attempt",
+                "origin": {
+                  "type": "tool",
+                  "attempt_id": "attempt"
+                },
                 "invocation": 1
               },
               "definition": {
@@ -45,20 +51,22 @@
               "outcome": "completed"
             },
             "child": null,
+            "child_agent_id": null,
+            "auxiliary_call_id": null,
             "invocation": null,
             "tool_id": null,
             "interaction": null,
             "iteration": null,
             "iterations_max": null,
             "loop_exit": null,
-            "checks_passed": false,
-            "review_accepted": null
+            "checks_passed": false
           }
         ],
         "omitted_instances": 3,
         "steps_consumed": 7,
         "steps_max": 20,
-        "agents_consumed": 1
+        "agents_consumed": 1,
+        "model_calls_consumed": 0
       }
     ]
   }

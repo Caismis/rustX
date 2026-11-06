@@ -76,7 +76,7 @@ class Fixture {
     const initialized = spawnSync(BINARY, [
       "init", "--template", "openai-chat", "--provider", "fixture", "--model-id", "integration-model",
       "--endpoint", providerUrl, "--credential-env", CREDENTIAL_VARIABLE, "--context-window", "128000",
-      "--max-output", "4096", "--tool-calls", "true", "--reasoning", "false",
+      "--max-output", "4096",
       "--compat", 'chat_reasoning_replay = "omit"',
     ], { env: this.env, encoding: "utf8" });
     assert.equal(initialized.status, 0, initialized.stderr);
@@ -105,7 +105,7 @@ class Fixture {
   }
 }
 
-function cutDiagnostic(cut: import('../../protocol/app-server/v52.ts').CheckpointReadCut | undefined) {
+function cutDiagnostic(cut: import('../../protocol/app-server/v73.ts').CheckpointReadCut | undefined) {
   if (!cut) return undefined;
   const source = cut.source_cut;
   return { conversation_id: cut.conversation_id, activation_id: cut.activation_id,
@@ -115,7 +115,7 @@ function cutDiagnostic(cut: import('../../protocol/app-server/v52.ts').Checkpoin
       pending: source.read.pending_through } : null };
 }
 
-function eventDiagnostic(event: import('../../protocol/app-server/v52.ts').RuntimeClientEvent) {
+function eventDiagnostic(event: import('../../protocol/app-server/v73.ts').RuntimeClientEvent) {
   if (event.type === 'checkpoint_advanced') return { type: event.type, cursor: event.checkpoint.cursor,
     conversation_id: event.checkpoint.snapshot.conversation_id, cut: cutDiagnostic(event.checkpoint.read_cut),
     attempt: event.checkpoint.snapshot.attempt?.phase.type };
@@ -126,6 +126,7 @@ function eventDiagnostic(event: import('../../protocol/app-server/v52.ts').Runti
 
 async function deliver(host: AppServerHost, cwd: string, fixture: Fixture, provider: ProviderEmulator): Promise<AppServerSession> {
   const created = await host.createSession({ cwd });
+  await host.renameSession(created.session.id, "TUI delivery fixture");
   const session = await host.attach(created.session.id, created.session.active_node);
   const records: object[] = [];
   const stop = host.client.onNotification(notification => {

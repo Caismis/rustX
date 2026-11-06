@@ -15,7 +15,7 @@
 //! validates the invocation, allocates the deterministic `exec_N`
 //! [`ToolExecutionId`], creates a private prepared record with its own
 //! cancellation resources, and spawns the runner behind a start/commit gate
-//! (the runner cannot begin before the gate is released). [`ConversationBackgroundRegistry::commit_dispatch`]
+//! (the runner cannot begin before the gate is released). [`ConversationBackgroundRegistry::commit_dispatch_owned`]
 //! is the one deterministic linearization point of background ownership:
 //! the registry synchronization boundary is acquired first, the activation
 //! gate and the final attempt-cancellation observation happen at that same
@@ -41,7 +41,7 @@
 //!
 //! Every accepted background execution owns a stable read-only live-output
 //! locator in the conversation's managed tool-output store
-//! (`tasks/exec_N.output`). This is an asynchronous execution observation
+//! (`e-<16 hex>.output`). This is an asynchronous execution observation
 //! channel, NOT context-overflow storage: the file is allocated by
 //! [`ConversationBackgroundRegistry::prepare_dispatch`], strictly before
 //! the ownership commit, so the accepted result can advertise the absolute
@@ -54,7 +54,7 @@
 //! after their logical result is known, their Tool Plane normalization writes
 //! the complete deterministic representation to this same sink before the
 //! executor future returns. Terminal settlement then reuses the exact path;
-//! no `results/result_N.txt` is allocated for an accepted background result,
+//! no `r-<16 hex>.txt` is allocated for an accepted background result,
 //! regardless of origin or result size. The locator is ordinary textual
 //! metadata in both messages, never a `File` modality, and the terminal
 //! canonical message stays bounded while structurally retaining the locator
@@ -73,7 +73,7 @@
 //! A standalone `ConversationToolRuntime` may be claimed by a
 //! `ConversationRuntime` only while its background plane is **pristine**,
 //! and the claim shares the one registry synchronization boundary with
-//! `commit_dispatch` (see
+//! `commit_dispatch_owned` (see
 //! [`ConversationBackgroundRegistry::claim_conversation_runtime_inactive`]):
 //!
 //! ```text
@@ -183,7 +183,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
 
-use crate::durable::inbox::InboundDraft;
+use crate::durable::InboundDraft;
 use crate::events::{
     BackgroundTerminalState, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
     RuntimeEventSink,
@@ -196,7 +196,10 @@ use crate::runtime::identity::{
     ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
 };
 use crate::runtime::inbound::ConversationInboundMailbox;
-use crate::runtime::types::{CancellationReason, ConversationLifecycle, DurabilityGate};
+use crate::runtime::types::{
+    CancellationReason, ConversationLifecycle, DurabilityCommitGuard, DurabilityGate,
+    OwnershipCommitRefused,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::tools::artifacts::ArtifactStore;
@@ -706,7 +709,7 @@ impl std::error::Error for BackgroundDispatchError {}
 /// A prepared but not yet committed background dispatch.
 ///
 /// Between [`ConversationBackgroundRegistry::prepare_dispatch`] and
-/// [`ConversationBackgroundRegistry::commit_dispatch`] the runner is parked
+/// [`ConversationBackgroundRegistry::commit_dispatch_owned`] the runner is parked
 /// behind its start gate and the dispatch is private. Dropping the prepared
 /// dispatch without committing rolls it back: the runner is aborted and no
 /// detached execution exists.
@@ -1005,10 +1008,10 @@ impl ConversationBackgroundRegistry {
     }
 
     /// The one `ConversationToolRuntime -> ConversationRuntime` ownership
-    /// transfer, linearized against [`ConversationBackgroundRegistry::commit_dispatch`].
+    /// transfer, linearized against [`ConversationBackgroundRegistry::commit_dispatch_owned`].
     ///
     /// Under one registry critical section — the same synchronization
-    /// boundary `commit_dispatch` uses for its deciding mailbox-lifecycle
+    /// boundary `commit_dispatch_owned` uses for its deciding mailbox-lifecycle
     /// observation — this method:
     ///
     /// ```text
@@ -1025,14 +1028,14 @@ impl ConversationBackgroundRegistry {
     /// refused [`BackgroundOwnershipClaimError::NotQuiescent`]), or this
     /// transfer linearizes first (the mailbox becomes runtime-owned with
     /// the shared lifecycle `Inactive` before this section ends, and a
-    /// later `commit_dispatch` observes it and is refused with
+    /// later `commit_dispatch_owned` observes it and is refused with
     /// [`BackgroundDispatchError::ConversationInactive`]). A conversation
     /// runtime can therefore never be constructed over a tool runtime that
     /// already contains staged or committed background ownership state, and
     /// a standalone commit can never cross the transfer.
     ///
     /// The mailbox lifecycle bind nests the mailbox lock inside the held
-    /// registry lock, the same order `commit_dispatch` uses; no mailbox ->
+    /// registry lock, the same order `commit_dispatch_owned` uses; no mailbox ->
     /// registry edge exists anywhere, so the lock graph stays acyclic.
     ///
     /// The `coordinator_claimed` atomic is the one-time binding of the
@@ -1119,7 +1122,7 @@ impl ConversationBackgroundRegistry {
     /// synchronization boundary, creates the private prepared record with
     /// its own cancellation signal, and spawns the runner behind the
     /// start/commit gate. The runner cannot begin before the gate is
-    /// released by [`ConversationBackgroundRegistry::commit_dispatch`].
+    /// released by [`ConversationBackgroundRegistry::commit_dispatch_owned`].
     ///
     /// # Errors
     ///
@@ -1265,11 +1268,68 @@ impl ConversationBackgroundRegistry {
         self.notify_state_change();
     }
 
+    /// Waits for native ownership permission without holding registry state.
+    /// Final lifecycle/cancellation validation and durable transfer are one
+    /// synchronous commit section after the permission is obtained.
+    ///
+    /// # Errors
+    /// Returns typed native admission, cancellation or durability refusal.
+    pub async fn commit_dispatch_owned(
+        &self,
+        prepared: PreparedBackgroundDispatch,
+        attempt_cancellation: &CancellationSignal,
+    ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
+        let admission = self
+            .resources
+            .mailbox
+            .begin_running_admission()
+            .map_err(|_| BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })?;
+        let gate = self.state().durability_gate.clone();
+        let permission = match gate.as_ref() {
+            Some(gate) => Some(tokio::select! {
+                biased;
+                () = attempt_cancellation.cancelled() => {
+                    drop(prepared);
+                    return Ok(BackgroundDispatchOutcome::RolledBack);
+                }
+                permission = gate.enter_ownership_commit_async() => permission,
+            }),
+            None => None,
+        };
+        let registry = self.clone();
+        let cancellation = attempt_cancellation.clone();
+        tokio::task::spawn_blocking(move || {
+            let _admission = admission;
+            registry.commit_dispatch_with_permission(prepared, &cancellation, permission.as_ref())
+        })
+        .await
+        .map_err(|error| BackgroundDispatchError::Durable {
+            detail: format!("background ownership worker failed: {error}"),
+        })?
+    }
+
+    /// Synchronous unit fixtures exercise the final native commit section.
+    /// Production uses the awaitable owner above, including on current-thread Tokio.
+    ///
+    /// # Errors
+    /// Returns the same lifecycle, durability and dispatch errors as the native owner.
+    #[cfg(test)]
+    pub fn commit_dispatch(
+        &self,
+        prepared: PreparedBackgroundDispatch,
+        attempt_cancellation: &CancellationSignal,
+    ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
+        let gate = self.state().durability_gate.clone();
+        let permission = gate.as_ref().map(DurabilityGate::enter_ownership_commit);
+        self.commit_dispatch_with_permission(prepared, attempt_cancellation, permission.as_ref())
+    }
+
     /// Stage two: commits the prepared dispatch (the linearization point).
     ///
-    /// The registry synchronization boundary is acquired first; the
-    /// activation gate and the final attempt-cancellation observation
-    /// happen at that same protected boundary, so there is no unchecked
+    /// After awaitable permission acquisition, the registry boundary encloses
+    /// the activation gate and final attempt-cancellation observation, so there is no unchecked
     /// window between the deciding observations and the prepared→owned
     /// transition.
     ///
@@ -1298,10 +1358,11 @@ impl ConversationBackgroundRegistry {
     /// Returns [`BackgroundDispatchError::ConversationInactive`] when the
     /// owning conversation runtime has not been activated.
     #[allow(clippy::too_many_lines)] // Ownership COMMIT, rollback and native installation form one boundary.
-    pub fn commit_dispatch(
+    fn commit_dispatch_with_permission(
         &self,
         mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
+        ownership_permission: Option<&Result<DurabilityCommitGuard, OwnershipCommitRefused>>,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         // Hold the shared lifecycle admission guard across the prepared
         // registry transfer. This keeps a parked ownership attempt inside
@@ -1329,11 +1390,7 @@ impl ConversationBackgroundRegistry {
         // handle is copied out of the registry state first: the guard
         // borrows the gate, never the registry state, so the ownership
         // commit below may still mutate the state while the guard is held.
-        let durability_gate = state.durability_gate.clone();
-        let ownership_permission = durability_gate
-            .as_ref()
-            .map(|gate| gate.enter_ownership_commit());
-        if let Some(Err(refused)) = &ownership_permission {
+        if let Some(Err(refused)) = ownership_permission {
             // Reject: roll the prepared dispatch back completely — the
             // runner is aborted while still parked behind its start gate —
             // and report the runtime-owned health diagnostic.
@@ -1981,6 +2038,9 @@ impl ConversationBackgroundRegistry {
     /// owner's settlement — becomes observable only once that callback has
     /// returned and no conversation callback authority remains.
     fn settle_terminal(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
+        self.resources
+            .tool_output
+            .settle_background_output(execution_id);
         self.finish(execution_id, result);
         let Some(snapshot) = self.retry_terminal_publication(execution_id) else {
             return;
@@ -2326,34 +2386,44 @@ impl ConversationBackgroundRegistry {
     ///
     /// # Panics
     /// Panics only if the registry state lock is poisoned. The state-change
-    /// channel cannot close while this registry owns its sender.
-    pub async fn wait_until_terminal(
+    /// channel cannot close while this registry owns its sender. The returned
+    /// waiter retains only read state and its exact identity, not executor
+    /// resources or the durable mailbox; sender loss reports abandoned publication.
+    #[must_use]
+    pub fn wait_until_terminal(
         &self,
         execution_id: &ToolExecutionId,
-    ) -> Result<BackgroundExecutionSnapshot, BackgroundWaitError> {
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<BackgroundExecutionSnapshot, BackgroundWaitError>,
+    > {
+        let inner = self.inner.clone();
         let mut version = self.state_version.subscribe();
-        loop {
-            {
-                let state = self.state();
-                let index = state
-                    .index
-                    .get(execution_id)
-                    .copied()
-                    .ok_or(BackgroundWaitError::UnknownJob)?;
-                let record = &state.records[index];
-                if record.lifecycle.is_terminal() {
-                    return Ok(snapshot_of(record));
+        let execution_id = execution_id.clone();
+        Box::pin(async move {
+            let mut closed = false;
+            loop {
+                {
+                    let state = inner.lock().expect("background registry lock poisoned");
+                    let index = state
+                        .index
+                        .get(&execution_id)
+                        .copied()
+                        .ok_or(BackgroundWaitError::UnknownJob)?;
+                    let record = &state.records[index];
+                    if record.lifecycle.is_terminal() {
+                        return Ok(snapshot_of(record));
+                    }
+                    if record.publication_abandoned {
+                        return Err(BackgroundWaitError::PublicationAbandoned);
+                    }
                 }
-                if record.publication_abandoned {
+                if closed {
                     return Err(BackgroundWaitError::PublicationAbandoned);
                 }
+                closed = version.changed().await.is_err();
             }
-            // This registry owns the sender throughout the wait.
-            version
-                .changed()
-                .await
-                .expect("Job registry owns its state sender");
-        }
+        })
     }
 
     /// Waits for one execution to enter cancellation settlement using the
@@ -2445,8 +2515,11 @@ impl ConversationBackgroundRegistry {
                 execution_id: execution_id.clone(),
             });
             let context = ToolExecutionContext {
+                stdout_capture: None,
+                workspace_changes: None,
                 model_invocation: None,
                 goal: None,
+                schedule: None,
                 conversation_id: &registry.conversation_id,
                 execution_id: Some(&execution_id),
                 cancellation: ExecutionCancellation::new(cancellation.clone(), cause),
@@ -2898,7 +2971,7 @@ impl ProgressReporter for BackgroundProgressReporter {
 
 /// Test-only synchronization for the dispatch ownership commit boundary.
 ///
-/// [`CommitBoundaryHook::enter`] is called by `commit_dispatch` while the
+/// [`CommitBoundaryHook::enter`] is called by `commit_dispatch_owned` while the
 /// registry synchronization lock is held, immediately before the deciding
 /// attempt-cancellation observation. It signals `entered` and parks the
 /// calling thread until the test calls `proceed`, so a test can prove the
@@ -2960,6 +3033,7 @@ pub(crate) mod test_sync {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::{CanonicalStore, InboxStore, JournalStore};
     use std::sync::Arc;
 
     use tokio::sync::watch;
@@ -2970,7 +3044,6 @@ mod tests {
         BackgroundLifecycle, BackgroundRecord, BackgroundResources, ConversationBackgroundRegistry,
         NotificationState,
     };
-    use crate::durable::inbox::ConversationStore;
     use crate::events::{RecordingEventSink, RuntimeEvent};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
     use crate::runtime::inbound::ConversationInboundMailbox;
@@ -3144,7 +3217,7 @@ mod tests {
         let captured = page.items[0].clone();
         assert!(Arc::ptr_eq(&captured.tool_id, &original));
         captured.with_value(|value| {
-            let header = crate::runtime_client::projection::background_source_view(value);
+            let header = crate::runtime_client::projection::views::background_source_view(value);
             assert!(header.tool_id.is_none());
             assert!(header.deferred_fields.contains(&vec!["tool_id".into()]));
             assert!(serde_json::to_vec(&header).unwrap().len() < 1024);
@@ -4914,7 +4987,13 @@ mod tests {
         assert_eq!(advertised, output_path.to_str().expect("utf8 path"));
         assert!(std::path::Path::new(advertised).is_absolute());
         assert!(
-            advertised.ends_with(&format!("tasks/{execution_id}.output")),
+            advertised.ends_with(".output")
+                && std::path::Path::new(&advertised)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("e-"),
             "the live-output locator shape: {advertised}"
         );
         assert!(
@@ -4955,14 +5034,18 @@ mod tests {
             matches!(error, super::BackgroundDispatchError::Output { .. }),
             "typed output-allocation refusal: {error}"
         );
-        let output_path = fixture
-            .registry
-            .resources()
-            .tool_output
-            .background_output_path(&ToolExecutionId::new(
-                "exec_01900000-0000-7000-8000-000000000001",
-            ));
-        assert!(!output_path.exists(), "no orphan output file");
+        assert_eq!(
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .unwrap()
+                .filter(|e| e
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("e-"))
+                .count(),
+            0
+        );
         assert!(
             fixture.registry.all_snapshots().is_empty(),
             "no execution record exists"
@@ -5093,8 +5176,11 @@ mod tests {
             .start(
                 read_invocation,
                 ToolExecutionContext {
+                    stdout_capture: None,
+                    workspace_changes: None,
                     model_invocation: None,
                     goal: None,
+                    schedule: None,
                     conversation_id: fixture.registry.conversation_id(),
                     execution_id: None,
                     cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
@@ -5141,8 +5227,11 @@ mod tests {
             .start(
                 grep_invocation,
                 ToolExecutionContext {
+                    stdout_capture: None,
+                    workspace_changes: None,
                     model_invocation: None,
                     goal: None,
+                    schedule: None,
                     conversation_id: fixture.registry.conversation_id(),
                     execution_id: None,
                     cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
@@ -5168,7 +5257,14 @@ mod tests {
         };
         assert_eq!(
             grep_text,
-            format!("{execution_id}.output:1: line-A"),
+            format!(
+                "{}:1: line-A",
+                std::path::Path::new(&output_path)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+            ),
             "Grep finds the committed prefix in the live file while the execution runs"
         );
 
@@ -5201,9 +5297,11 @@ mod tests {
         );
         // No foreground-style result spill was created for the same payload.
         assert!(
-            std::fs::read_dir(tool_output.root().join("results"))
+            std::fs::read_dir(tool_output.root().unwrap())
                 .expect("results dir")
-                .next()
+                .find(|entry| entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
                 .is_none(),
             "background output never becomes a second result spill"
         );
@@ -5291,17 +5389,12 @@ mod tests {
             "hello\n"
         );
         assert!(
-            std::fs::read_dir(
-                fixture
-                    .registry
-                    .resources()
-                    .tool_output
-                    .root()
-                    .join("results")
-            )
-            .expect("results dir")
-            .next()
-            .is_none(),
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .expect("results dir")
+                .find(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
+                .is_none(),
             "no result spill exists for tiny background output"
         );
     }
@@ -5521,17 +5614,12 @@ mod tests {
         );
         assert!(!text.contains("Complete output:"), "{text}");
         assert!(
-            std::fs::read_dir(
-                fixture
-                    .registry
-                    .resources()
-                    .tool_output
-                    .root()
-                    .join("results")
-            )
-            .expect("results dir")
-            .next()
-            .is_none(),
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .expect("results dir")
+                .find(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
+                .is_none(),
             "no second result spill exists"
         );
     }
@@ -5625,17 +5713,12 @@ mod tests {
             "the terminal inbound repeats the exact locator: {text}"
         );
         assert!(
-            std::fs::read_dir(
-                fixture
-                    .registry
-                    .resources()
-                    .tool_output
-                    .root()
-                    .join("results")
-            )
-            .expect("results dir")
-            .next()
-            .is_none(),
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .expect("results dir")
+                .find(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
+                .is_none(),
             "no second result spill exists"
         );
     }
@@ -5727,17 +5810,12 @@ mod tests {
             "the terminal publication repeats the same locator: {text}"
         );
         assert!(
-            std::fs::read_dir(
-                fixture
-                    .registry
-                    .resources()
-                    .tool_output
-                    .root()
-                    .join("results")
-            )
-            .expect("results dir")
-            .next()
-            .is_none(),
+            std::fs::read_dir(fixture.registry.resources().tool_output.root().unwrap())
+                .expect("results dir")
+                .find(|e| e
+                    .as_ref()
+                    .is_ok_and(|e| e.file_name().to_string_lossy().starts_with("r-")))
+                .is_none(),
             "no duplicate result spill exists"
         );
     }
@@ -5750,7 +5828,7 @@ mod tests {
     /// the canonical terminal message.
     #[test]
     fn the_terminal_projection_retains_the_locator_under_bounding() {
-        let path = "/owned/conversation/tool-output/tasks/exec_01900000-0000-7000-8000-000000000009.output";
+        let path = "/tmp/rx-0000000000000001/e-0000000000000009.output";
         // \u0001 serializes as \u0001 in JSON (6 chars per byte): an
         // escape-expensive body that crosses the projection bound many
         // times over.
@@ -5912,7 +5990,7 @@ mod tests {
     #[test]
     fn the_continuation_cannot_exceed_the_projection_bound() {
         let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
-        let path = "/owned/conversation/tool-output/tasks/exec_01900000-0000-7000-8000-000000000007.output";
+        let path = "/tmp/rx-0000000000000001/e-0000000000000007.output";
         // A byte-expensive diagnostic: every 'é' costs two bytes, and the
         // payload is many times the projection bound.
         let enormous = "é".repeat(bound * 4);

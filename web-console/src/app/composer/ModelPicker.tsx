@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { modelDefaultLabel, offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
+import { modelEffortChoices, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../../presentation/agent/ModelSelect';
 import { useTranslation } from '../../locale/react';
 import menuCss from '../commands/Commands.module.css';
 import css from './ModelPicker.module.css';
@@ -25,13 +25,12 @@ export function ModelPicker({ state, close, chosen }: { state: ModelPickerState;
   const selected = state.choices.find(choice => choice.id === state.current);
   const stale = selected && profileUnavailable(selected, state.profile);
   const [active, setActive] = useState<string | undefined>(() => JSON.stringify(state.profile !== undefined && !stale ? [state.current, state.profile]
-    : state.profile === undefined && selected?.profiles.length ? [state.current, null] : [state.current]));
+    : state.profile === undefined && selected?.profiles.length ? [state.current, selected.defaultProfile ?? null] : [state.current]));
   const [pending, setPending] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const rows = state.choices.flatMap(choice => [
     { key: JSON.stringify([choice.id]), intent: { kind: 'model', model: choice.id } as ModelSelectionIntent, label: choice.id, suffix: undefined as string | undefined },
-    ...(offersModelDefault(choice, state.current, state.profile) ? [{ key: JSON.stringify([choice.id, null]), intent: { kind: 'model-default', model: choice.id } as ModelSelectionIntent, label: `${choice.id} / ${modelDefaultLabel(tx, choice)}`, suffix: modelDefaultLabel(tx, choice) }] : []),
-    ...choice.profiles.map(profile => ({ key: JSON.stringify([choice.id, profile.id]), intent: { kind: 'profile', model: choice.id, profile: profile.id } as ModelSelectionIntent, label: `${choice.id} / ${profile.id}`, suffix: profile.id })),
+    ...modelEffortChoices(tx, choice, state.current, state.profile).map(row => ({ key: JSON.stringify([choice.id, row.profile ?? null]), intent: row.intent, label: `${choice.id} / ${row.label}`, suffix: row.label })),
   ]).filter(row => row.label.toLowerCase().includes(query.trim().toLowerCase()));
   const index = Math.max(0, rows.findIndex(row => row.key === active));
   const select = async (row: typeof rows[number]) => {
@@ -67,8 +66,8 @@ export function ModelPicker({ state, close, chosen }: { state: ModelPickerState;
       </Fragment>)}
       {!rows.length && <p role="status">{tx(state.loading ? 'agent:model-select.reading-native-models' : 'agent:model-picker.empty')}</p>}
     </div>
-    {!state.loading && stale && <p role="status">{tx('agent:model-select.profile')}{' '}{state.profile} {tx('agent:model-select.is-unavailable-for')}{' '}{state.current} {tx('agent:model-select.in-this-workspace')}</p>}
-    {state.nextPage && <button type="button" disabled={state.loading || pending} onClick={() => void state.nextPage!()}>{tx('common:activity.next-content')}</button>}
+    {!state.loading && stale && <p role="status">{tx('agent:model-select.effort')}{' '}{state.profile} {tx('agent:model-select.is-unavailable-for')}{' '}{state.current} {tx('agent:model-select.in-this-workspace')}</p>}
+    {state.nextPage && <button type="button" disabled={state.loading || pending} onClick={() => void state.nextPage!()}>{tx('common:activity.show-more')}</button>}
     {state.error && <p role="alert">{state.error}</p>}
   </div>;
 }

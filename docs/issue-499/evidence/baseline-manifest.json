@@ -1,0 +1,116 @@
+{
+  "baseline_sha": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "recorded_at": "2026-10-23T17:36:50.867989+00:00",
+  "environment": {
+    "platform": "Linux x86_64",
+    "rustc": "1.98.1 (48a229cea 2026-09-01)",
+    "temporary_root": "/run/user/1000/rustx-issue-499-baseline-tmp",
+    "cargo_target_dir": "/home/capi/Documents/codes/rustX/target",
+    "cargo_build_jobs": 4,
+    "scope": "single controlled sample per scenario; no claim of population percentiles"
+  },
+  "binary_sha256": "8362c4d4741d5acf94a1b583314672d302c2f12b0966671fe5898cd4f7a70f84",
+  "records": [
+    {
+      "fixture": "startup",
+      "command": [
+        "/tmp/issue499/final-baseline/libtest",
+        "capabilities::coordinator::startup_performance_tests::optional_mcp_startup_timing",
+        "--ignored",
+        "--exact",
+        "--nocapture"
+      ],
+      "cwd": "/tmp/rustx-issue-499-integration-baseline",
+      "environment": {
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_STARTUP_TIMING_JSON": "/tmp/issue499/final-baseline-startup.json"
+      },
+      "started_at": "2026-10-23T17:35:21.109035+00:00",
+      "exit_code": 0,
+      "finished_at": "2026-10-23T17:35:47.327153+00:00",
+      "log_sha256": "0329016c62d05df5874c69c1f24b54287ee1a6dc9e843d0de4dcacd2d242fe60"
+    },
+    {
+      "fixture": "model-startup",
+      "command": [
+        "/tmp/issue499/final-baseline/libtest",
+        "capabilities::coordinator::startup_performance_tests::model::first_model_request_timing",
+        "--ignored",
+        "--exact",
+        "--nocapture"
+      ],
+      "cwd": "/tmp/rustx-issue-499-integration-baseline",
+      "environment": {
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_MODEL_STARTUP_TIMING_JSON": "/tmp/issue499/final-baseline-model-startup.json"
+      },
+      "started_at": "2026-10-23T17:35:49.794483+00:00",
+      "exit_code": 0,
+      "finished_at": "2026-10-23T17:36:16.963164+00:00",
+      "log_sha256": "452ab3eeefb4eb4de0b0d12b46579f6aa29fc3d21aee3eb0fa9aa8b6be33c214"
+    },
+    {
+      "fixture": "source-preparation",
+      "command": [
+        "/tmp/issue499/final-baseline/libtest",
+        "capabilities::coordinator::performance_tests::source_preparation_timing",
+        "--ignored",
+        "--exact",
+        "--nocapture"
+      ],
+      "cwd": "/tmp/rustx-issue-499-integration-baseline",
+      "environment": {
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_SOURCE_TIMING_JSON": "/tmp/issue499/final-baseline-source-preparation.json"
+      },
+      "started_at": "2026-10-23T17:36:19.344463+00:00",
+      "exit_code": 0,
+      "finished_at": "2026-10-23T17:36:21.824423+00:00",
+      "log_sha256": "8a1f5cc50f24c0fb1a1ccd12bbc84f4f04fbc2ebdf4c694a562540347e821df3"
+    }
+  ],
+  "binary_bundle": {
+    "directory": "/tmp/issue499/final-baseline",
+    "files": {
+      "interactive-supervisor": {
+        "bytes": 1172392888,
+        "sha256": "b59283eda11b0e587d3c3d2e8a79923abdf4cb757033bd2ef2769eb957597db5"
+      },
+      "libtest": {
+        "bytes": 2558171568,
+        "sha256": "8362c4d4741d5acf94a1b583314672d302c2f12b0966671fe5898cd4f7a70f84"
+      },
+      "bash-supervisor": {
+        "bytes": 1172299704,
+        "sha256": "9d6b0fdfa09830e04706c0cfce9114167a5d991594fb165fb945497a1fe540b0"
+      }
+    }
+  },
+  "helper_build_command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target cargo build --all-features --bin bash-supervisor --bin interactive-supervisor",
+  "build_command": "CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/home/capi/Documents/codes/rustX/target cargo test --lib --all-features --no-run",
+  "source_integrity": {
+    "baseline_sha": "00978bbe3072b211efe835950f7f99666e1cc02d",
+    "verified_original_blobs": 3494,
+    "only_original_file_changed": "src/capabilities/coordinator.rs",
+    "added_test_fixtures": [
+      "src/capabilities/coordinator/tests/performance_startup.rs",
+      "src/capabilities/coordinator/tests/performance_startup_model.rs"
+    ],
+    "adapter_sha256": "73014a4d3fbf8356b7056861dc5d84755a4145bd2b01e445c4a85a7cba5e47bc"
+  },
+  "canonical_fixture_sha256": {
+    "performance.rs": "545f007a604873966721bc6c5720a62b655dc7abd4b3108cf9014759ad7e6e0c",
+    "performance_startup.rs": "412aa26506f96a522b9f183aa7f785a62faeb0840656c58c6c7d7338b3d8c33e",
+    "performance_startup_model.rs": "5f8f338e2ffb69a1f88514ec8e3aa340974367798154103c05a56ec47837c30b"
+  },
+  "compiled_fixture_sha256": {
+    "performance.rs": "545f007a604873966721bc6c5720a62b655dc7abd4b3108cf9014759ad7e6e0c",
+    "performance_startup.rs": "9ce02b2dcac6cd746afe8b0d3359f3225943999698bf3ac7ee7a7f1b2b12dda4",
+    "performance_startup_model.rs": "fbc467defa2ce0d1372fc06700e29ffeb97cc604c53c978fe852bb89af93f9d5"
+  },
+  "evidence_sha256": {
+    "baseline-startup.json": "ae4a818719e3f00d676ab2b9941059b97f87b0382a82375d11f21e1321f7cbda",
+    "baseline-model-startup.json": "c1f78e3982caa7916bbd5a1c9597ff18a1b010016b53e33cc9ebbbeaff5edea6",
+    "baseline-source-preparation.json": "6fed4c601f0597b3881a996eb34e6373eff626d6695e0357ddbf3b56d8aacc96"
+  }
+}

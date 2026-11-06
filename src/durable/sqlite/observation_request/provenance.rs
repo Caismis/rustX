@@ -1,6 +1,6 @@
 //! Complete allowlisted original provenance bytes; finite previews are separate.
 use crate::model::projected::{CanonicalMessageRef, DerivedModelMessage, FrozenModelInput};
-use crate::runtime_client::trace::TraceInputProvenance;
+use crate::observation::trace::TraceInputProvenance;
 use serde::Serialize;
 
 pub(in crate::durable::sqlite) enum Raw<'a> {
@@ -22,9 +22,9 @@ impl<'a> Raw<'a> {
     pub(in crate::durable::sqlite) fn encoded_bytes(
         &self,
     ) -> Result<u64, super::ConversationStoreError> {
-        let root = crate::runtime_client::structural_json::root::<TraceInputProvenance>();
+        let root = crate::observation::structural_json::root::<TraceInputProvenance>();
         super::super::observation_request_summary::serialized_bytes(
-            &crate::runtime_client::structural_json::Encoded {
+            &crate::observation::structural_json::Encoded {
                 value: self,
                 schema: &root,
                 root: &root,

@@ -13,6 +13,9 @@ tokens = 1024
 response_start_timeout_ms = 30000
 stream_idle_timeout_ms = 15000
 
+# One initial selected MCP batch wait, starting at native submission receipt.
+[mcp_startup_policy]
+wait_timeout_ms = 15000
 
 # Runtime child capacity; Workflow static admission remains separate.
 [subagents]
@@ -38,6 +41,10 @@ mode = "limit"
 tokens = 2048
 
 [agent.model.summary_model]
+mode = "session"
+
+# Automatic title uses the same follow/explicit policy and freezes at admission.
+[agent.model.title_model]
 mode = "session"
 
 # Each Plugin is one atomic overlay unit. Omitted Plugins are off.
@@ -79,26 +86,16 @@ default_profile = "off"
 [models."example/demo-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = true
-
 [models."example/demo-model".profiles.off]
-reasoning_enabled = false
 request_params = '{"temperature":0.2}'
 
 [models."example/demo-model".profiles.on]
-reasoning_enabled = true
 max_output_tokens = 2048
 request_params = '''
 {"temperature": 0.2, "reasoning_effort": "low"}
 '''
 
-[models."example/demo-model".compat]
-chat_max_tokens_field = "max_completion_tokens"
-chat_reasoning_replay = "reasoning"
-chat_stream_usage = "supported"
-chat_tool_protocol = "native"
-
+# Protocol defaults are built in; no compat table is required.
 # These global policies apply to every admitted Agent's native invocation.
 [native_tools.read]
 execution = "foreground_only"

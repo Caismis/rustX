@@ -11,6 +11,7 @@ it('closing during dependency reads cancels authority and discards the late fram
   const call: WorkbenchCall = (_request, signal) => { reading = signal; return promise; };
   const create = vi.spyOn(URL, 'createObjectURL');
   const body=render(<HtmlBody data={new TextEncoder().encode('<script src="app.js"></script>')} path="docs/index.html" call={call} signal={new AbortController().signal}/>);
+  await act(async () => {});
   expect(reading?.aborted).toBe(false);
   body.unmount();
   expect(reading?.aborted).toBe(true);
@@ -20,7 +21,7 @@ it('closing during dependency reads cancels authority and discards the late fram
 it('retires a published iframe URL on unmount', async () => {
   const create=vi.spyOn(URL,'createObjectURL').mockReturnValue('blob:test');
   const revoke=vi.spyOn(URL,'revokeObjectURL').mockImplementation(()=>{});
-  const body=render(<HtmlBody data={new TextEncoder().encode('<h1>Preview</h1>')} path="index.html" call={vi.fn()} signal={new AbortController().signal}/>);
+  const body=render(<HtmlBody data={new TextEncoder().encode('<h1>Preview</h1>')} path="index.html" call={vi.fn(async () => ({}))} signal={new AbortController().signal}/>);
   await act(async()=>{});
   expect(create).toHaveBeenCalledOnce();
   expect(body.container.querySelector('iframe')?.getAttribute('sandbox')).toBe('allow-scripts');

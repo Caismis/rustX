@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::durable::{CanonicalStore, ObservationStore};
 use crate::durable::{ConversationStore, SqliteConversationStore};
 use crate::message::content::TextBlock;
 use crate::message::types::{

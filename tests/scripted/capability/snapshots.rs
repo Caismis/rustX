@@ -250,7 +250,7 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
         .collect::<Vec<_>>();
     assert_eq!(manifest_names, vec!["runtime-only", "visible"]);
 
-    let client_view = crate::runtime_client::projection::capability_view(
+    let client_view = crate::runtime_client::projection::views::capability_view(
         &snapshot,
         &crate::capabilities::CapabilityAvailability::new(),
         None,
@@ -324,7 +324,7 @@ async fn selected_skills_remain_visible_independently_of_native_read() {
         assert_eq!(snapshot.skills().catalog_entries().len(), 1);
         assert_eq!(snapshot.skills().catalog_entries()[0].location, location);
         assert!(snapshot.skill_catalog().is_some());
-        let view = crate::runtime_client::projection::capability_view(
+        let view = crate::runtime_client::projection::views::capability_view(
             &snapshot,
             &crate::capabilities::CapabilityAvailability::new(),
             None,
@@ -702,7 +702,7 @@ async fn cfg280_generation_scoped_skill_facts_are_published_not_collapsed() {
         let rendered = second.skill_catalog().expect("catalog");
         assert!(!rendered.contains("<name>broken</name>"), "{change}");
         assert!(!rendered.contains("<name>shadow</name>"), "{change}");
-        let view = crate::runtime_client::projection::capability_view(
+        let view = crate::runtime_client::projection::views::capability_view(
             &second,
             &crate::capabilities::CapabilityAvailability::new(),
             None,
@@ -1249,7 +1249,7 @@ async fn same_digest_preparations_coalesce_for_python_and_node() {
 
 /// Cancelling the initiating preparation only drops that caller's wait. The
 /// EnvironmentStore-owned Python build remains the sole final-path writer;
-/// the second caller joins it while the materialization gate is held.
+/// the second caller remains pending while the physical build is gated.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropped_prepare_waiter_does_not_cancel_python_build_owner() {
     let conversation = conversation();
@@ -1284,14 +1284,14 @@ async fn dropped_prepare_waiter_does_not_cancel_python_build_owner() {
     let mut context = std::task::Context::from_waker(waker);
     assert!(
         matches!(second.as_mut().poll(&mut context), std::task::Poll::Pending),
-        "caller B joins the gated in-flight build"
+        "caller B remains pending while the physical build is gated"
     );
     assert_eq!(
         conversation
             .backend
             .materialization_count(Ecosystem::Python),
         1,
-        "joining a live build never creates a second final-path writer"
+        "pending preparation does not create a second final-path writer"
     );
     let store_root = conversation.dir.path().join("skill-env").join("python");
     assert!(
@@ -1323,19 +1323,23 @@ async fn dropped_prepare_waiter_does_not_cancel_python_build_owner() {
 /// only after the failed physical writer has returned and published failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropped_build_waiter_cannot_start_an_early_retry() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
-    );
-    conversation
-        .backend
-        .fail_python_materialization("injected same-digest failure");
-    let gate = conversation.backend.install_materialize_gate();
-    let first_coordinator = conversation.coordinator.clone();
-    let first = tokio::spawn(async move { first_coordinator.prepare_candidate().await });
+    let directory = tempfile::tempdir().expect("environment store directory");
+    let backend = common::FakeSkillEnvironmentBackend::new();
+    backend.fail_python_materialization("injected same-digest failure");
+    let store = rustx::skills::EnvironmentStore::new(
+        directory.path().join("environments"),
+        Arc::new(backend.clone()),
+    )
+    .expect("environment store");
+    let dependencies = BTreeMap::from([("pypdf".to_owned(), "5.9.0".to_owned())]);
+    let gate = backend.install_materialize_gate();
+    let first_store = store.clone();
+    let first_dependencies = dependencies.clone();
+    let first = tokio::spawn(async move {
+        first_store
+            .ensure_python_environment(&first_dependencies)
+            .await
+    });
     gate.await_entered().await;
 
     first.abort();
@@ -1345,7 +1349,9 @@ async fn dropped_build_waiter_cannot_start_an_early_retry() {
             .expect_err("caller A was aborted")
             .is_cancelled()
     );
-    let mut second = Box::pin(conversation.coordinator.prepare_candidate());
+    // Poll the store waiter itself: a coordinator caller first spawns its
+    // preparation owner, so polling that caller cannot prove it joined this build.
+    let mut second = Box::pin(store.ensure_python_environment(&dependencies));
     let waker = futures_util::task::noop_waker_ref();
     let mut context = std::task::Context::from_waker(waker);
     assert!(
@@ -1353,32 +1359,22 @@ async fn dropped_build_waiter_cannot_start_an_early_retry() {
         "caller B remains attached to the live failed build"
     );
     assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
+        backend.materialization_count(Ecosystem::Python),
         1,
         "no retry writer starts while the original materialization is gated"
     );
     gate.release();
-    assert!(second.await.is_err());
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        1
-    );
-    let retry = conversation
-        .coordinator
-        .prepare_candidate()
+    let failure = second
+        .await
+        .expect_err("the joined waiter shares the failed owner");
+    assert!(failure.to_string().contains("injected same-digest failure"));
+    assert_eq!(backend.materialization_count(Ecosystem::Python), 1);
+    let retry = store
+        .ensure_python_environment(&dependencies)
         .await
         .expect("retry can build after the failed owner");
-    assert!(!retry.skill_packages().is_empty());
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        2
-    );
+    assert!(retry.is_some());
+    assert_eq!(backend.materialization_count(Ecosystem::Python), 2);
 }
 
 #[test]
@@ -2287,10 +2283,15 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         generation_facts,
         "turns never append or re-resolve generation diagnostics"
     );
+    let expected_prompt = format!(
+        "{}\n\nCurrent working directory: {}\n\n{catalog}",
+        rustx::context::DEFAULT_SYSTEM_PROMPT,
+        conversation.workspace.root().display()
+    );
     for request in &requests {
         assert_eq!(
-            request.effective_system_prompt, catalog,
-            "the attempt's immutable Skill snapshot renders into the Effective System Prompt"
+            request.effective_system_prompt, expected_prompt,
+            "the attempt's immutable Skill snapshot extends the built-in System Prompt"
         );
         assert!(
             !request.messages.iter().any(|message| {

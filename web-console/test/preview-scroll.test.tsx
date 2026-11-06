@@ -5,6 +5,7 @@ import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
 import { PreviewWorkspace } from '../src/app/components/PreviewWorkspace';
 import type { PreviewArtifact } from '../src/app/components/ArtifactPreview';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
+function readerScroll(element: Element) { fireEvent.scroll(element); fireEvent(element, new Event('scrollend')); }
 import { RightPanel } from '../src/presentation/right-panel/RightPanel';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { Server } from './fixture';
@@ -42,12 +43,12 @@ async function fixture(mode: 'following' | 'detached' | 'navigated') {
   function Shell() {
     const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
     return <>
-      <button onClick={() => owner.toggleInspector()}>Inspector</button>
+      <button onClick={() => owner.showWorkbench()}>Workbench</button>
       <button onClick={() => owner.reveal()}>Reopen previews</button>
       <ChatViewport ref={node => { if (node) chat = node; }} latestLabel="Return to latest" latestTurn="turn:latest">
         {Object.keys(positions).map(key => <div key={key} data-chat-anchor-key={key} data-chat-turn-owner={key.startsWith('turn:') ? key : undefined}>{key}{key === 'turn:stream' ? ` streamed chunk ${streamed}` : ''}</div>)}
       </ChatViewport>
-      <RightPanel open={snapshot.mode !== 'collapsed'} close={() => owner.collapse()} width={width} canShow={width >= 608} fullscreen={snapshot.workspace?.fullscreen} title="Previews" closeLabel="Collapse previews">
+      <RightPanel open={snapshot.mode !== 'collapsed'} width={width} canShow={width >= 608} fullscreen={snapshot.workspace?.fullscreen} title="Previews">
         <PreviewWorkspace owner={owner} snapshot={snapshot} focusRequest={0} returnFocus={() => {}}/>
       </RightPanel>
     </>;
@@ -60,7 +61,7 @@ async function fixture(mode: 'following' | 'detached' | 'navigated') {
   const flush = () => act(() => { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); });
   const emit = (predicate: (element: Element) => boolean) => observers.filter(observer => [...observer.targets].some(predicate)).forEach(observer => observer.deliver());
   const resizeChat = () => emit(element => element.classList.contains('conversation-scroll'));
-  const scroll = (value: number) => { top = value; fireEvent.scroll(viewport); };
+  const scroll = (value: number) => { top = value; readerScroll(viewport); };
   flush(); expect(top).toBe(1200);
   if (mode === 'detached') { scroll(210); flush(); }
   if (mode === 'navigated') {
@@ -83,8 +84,10 @@ it.each(['following', 'detached', 'navigated'] as const)('actual preview geometr
     act(action);
     // Preview controls never write transcript scroll position themselves.
     expect(f.top()).toBe(before); expect(f.writes()).toBe(writes);
-    act(() => f.reflow(37)); expect(f.top()).toBe(before);
-    f.flush(); expect(f.top()).toBe(mode === 'following' ? f.floor() : before + 37);
+    act(() => f.reflow(37));
+    expect(f.top()).toBe(mode === 'following' ? f.floor() : before + 37);
+    const corrected = f.writes();
+    f.flush(); expect(f.writes()).toBe(corrected);
     const held = f.top(); act(() => f.stream(23)); f.flush();
     expect(f.top()).toBe(mode === 'following' ? f.floor() : held);
     expect(f.ui.queryByRole('button', { name: 'Return to latest' }) !== null).toBe(mode !== 'following');
@@ -108,10 +111,10 @@ it.each(['following', 'detached', 'navigated'] as const)('actual preview geometr
   transition(() => f.width(390)); expect(f.owner.getSnapshot().leases.size).toBe(1);
   transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Switch preview pane' })));
   transition(() => f.width(1000)); expect(f.owner.getSnapshot().leases.size).toBe(2);
-  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Inspector' })));
+  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Workbench' })));
   expect(f.owner.getSnapshot().leases.size).toBe(0);
-  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Inspector' })));
-  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Collapse previews' })));
+  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Reopen previews' })));
+  transition(() => fireEvent.click(f.ui.getByRole('button', { name: 'Collapse preview workspace' })));
   expect(f.owner.getSnapshot().leases.size).toBe(0);
   transition(() => f.width(390)); transition(() => f.width(1000));
   expect(f.owner.getSnapshot().mode).toBe('collapsed');
@@ -122,11 +125,11 @@ it.each(['following', 'detached', 'navigated'] as const)('actual preview geometr
   expect(f.observers).toHaveLength(6); f.observers.forEach(observer => expect(observer.disconnect).toHaveBeenCalledOnce());
 });
 
-it('a user scroll between preview reflow and the owned correction frame wins and remains detached during streaming', async () => {
+it('a user scroll after pre-paint preview correction wins and remains detached during streaming', async () => {
   const f = await fixture('following');
   act(() => f.open('A'));
   act(() => f.reflow(80));
-  const writes = f.writes(); expect(f.frames.size).toBeGreaterThan(0);
+  const writes = f.writes(); expect(f.frames.size).toBe(0);
   f.scroll(240); f.flush();
   expect(f.top()).toBe(240); expect(f.writes()).toBe(writes);
   act(() => { fireEvent.click(f.ui.getByRole('button', { name: 'Fullscreen preview' })); f.stream(800); }); f.flush();

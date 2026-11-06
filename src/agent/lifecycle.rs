@@ -296,10 +296,8 @@ impl PreStepPolicy for AlwaysEnter {
 pub struct PreToolView<'a> {
     /// The owning conversation.
     pub conversation_id: &'a ConversationId,
-    /// The current attempt.
-    pub attempt_id: &'a AttemptId,
-    /// The primary model turn that issued the call.
-    pub turn: u32,
+    /// Actual model turn or durable Scheduled run.
+    pub execution: crate::runtime::interaction::InteractionExecution,
     /// Correlation with the caller's invocation authority.
     pub invocation_id: &'a crate::tools::types::ToolInvocationId,
     /// The registry-resolved tool identity.
@@ -328,7 +326,6 @@ impl PreToolView<'_> {
     #[must_use]
     pub(crate) fn approval_facts(&self, reason: impl Into<String>) -> ApprovalFacts {
         ApprovalFacts {
-            turn: self.turn,
             invocation_id: self.invocation_id.clone(),
             tool_id: self.tool_id.clone(),
             tool_name: self.tool_name.to_owned(),
@@ -358,14 +355,14 @@ enum InteractionBinding {
 impl InteractionBinding {
     fn request_approval(
         &self,
-        attempt_id: AttemptId,
+        execution: crate::runtime::interaction::InteractionExecution,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
     ) -> BoxFuture<'_, Result<InteractionOutcome, InteractionFailure>> {
         match self {
             Self::Unavailable => Box::pin(async { Err(InteractionFailure::Unavailable) }),
             Self::Native(coordinator) => {
-                Box::pin(coordinator.request_approval(attempt_id, facts, cancellation))
+                Box::pin(coordinator.request_approval(execution, facts, cancellation))
             }
             #[cfg(test)]
             Self::Test(rendezvous) => {
@@ -746,12 +743,12 @@ impl AttemptLifecycle {
     /// Requests approval through the attempt's runtime-owned binding.
     pub(crate) fn request_approval(
         &self,
-        attempt_id: AttemptId,
+        execution: crate::runtime::interaction::InteractionExecution,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
     ) -> BoxFuture<'_, Result<InteractionOutcome, InteractionFailure>> {
         self.interaction
-            .request_approval(attempt_id, facts, cancellation)
+            .request_approval(execution, facts, cancellation)
     }
 
     pub(crate) fn native_interaction_coordinator(&self) -> Option<Arc<InteractionCoordinator>> {
@@ -900,8 +897,10 @@ mod tests {
     ) -> PreToolView<'a> {
         PreToolView {
             conversation_id,
-            attempt_id,
-            turn: 1,
+            execution: crate::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: attempt_id.clone(),
+                turn: 1,
+            },
             invocation_id,
             tool_id,
             tool_name: "write",

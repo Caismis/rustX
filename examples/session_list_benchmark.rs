@@ -22,10 +22,11 @@
 //!     --json /tmp/rustx-bench.json
 //! ```
 
+use rustx::durable::CanonicalStore;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use rustx::durable::{ConversationStore, SqliteConversationStore, conversation_store_open_count};
+use rustx::durable::{SqliteConversationStore, conversation_store_open_count};
 use rustx::local_runtime::configuration::SessionConfigInput;
 use rustx::local_runtime::session::{
     SESSION_LIST_PAGE_LIMIT, SessionId, SessionListPage, SessionPersistentState,
@@ -550,6 +551,7 @@ mod tests {
                     cwd: PathBuf::from("/workspace"),
                     id: row.id.clone(),
                     name: row.name.clone(),
+                    generated_title: None,
                     preview: Some(row.preview.clone()),
                     updated_at: chrono::DateTime::UNIX_EPOCH,
                     active_node: SessionNodeId::new("node_00000000-0000-7000-8000-000000000000"),

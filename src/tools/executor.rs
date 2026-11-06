@@ -76,6 +76,10 @@ pub trait ProgressReporter: Send + Sync {
 /// resources (process ids, MCP SDK types) belong inside executor
 /// implementations and never appear here.
 pub struct ToolExecutionContext<'a> {
+    /// An invocation-local complete stdout channel requested by a native
+    /// runtime consumer. It never changes the model-facing preview policy.
+    pub(crate) stdout_capture: Option<crate::tools::output::BoundedStdoutCapture>,
+    pub(crate) workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     /// The owning conversation of the invocation.
     pub conversation_id: &'a ConversationId,
     /// The detached runtime execution identity, `None` for foreground work.
@@ -145,6 +149,7 @@ pub struct ToolExecutionContext<'a> {
     /// [`TodoBatch`]: crate::tools::todo::TodoBatch
     pub(crate) todos: Option<TodoWriter>,
     pub(crate) goal: Option<Box<crate::goal::GoalToolContext<'a>>>,
+    pub(crate) schedule: Option<Box<crate::scheduler::control::ScheduleToolContext<'a>>>,
     /// The attempt-scoped subagent resolution view (Issue #144).
     ///
     /// This is intentionally *not* a runtime handle and intentionally not
@@ -158,7 +163,7 @@ pub struct ToolExecutionContext<'a> {
     /// generic `ToolExecutor` can acquire a runtime-resource handle at all.
     ///
     /// [`AgentExecution`]: crate::agent::AgentExecution
-    pub(crate) subagent: Option<crate::runtime::subagent::AttemptSubagentContext>,
+    pub(crate) subagent: Option<crate::runtime::subagent::NativeExecutionContext>,
 }
 
 impl<'a> ToolExecutionContext<'a> {
@@ -170,6 +175,8 @@ impl<'a> ToolExecutionContext<'a> {
         progress: &'b dyn ProgressReporter,
     ) -> ToolExecutionContext<'b> {
         ToolExecutionContext {
+            stdout_capture: self.stdout_capture.clone(),
+            workspace_changes: self.workspace_changes.clone(),
             conversation_id: self.conversation_id,
             execution_id: self.execution_id,
             cancellation: cancellation.clone(),
@@ -185,6 +192,7 @@ impl<'a> ToolExecutionContext<'a> {
                 .map(|requester| requester.with_cancellation(cancellation)),
             todos: self.todos.clone(),
             goal: self.goal.clone(),
+            schedule: self.schedule.clone(),
             subagent: self.subagent.clone(),
         }
     }
@@ -208,6 +216,7 @@ impl<'a> ToolExecutionContext<'a> {
         environment: &'a ToolEnvironment,
     ) -> Self {
         Self {
+            stdout_capture: None,
             conversation_id,
             execution_id,
             cancellation,
@@ -220,7 +229,9 @@ impl<'a> ToolExecutionContext<'a> {
             questionnaire_requester: None,
             todos: None,
             goal: None,
+            schedule: None,
             subagent: None,
+            workspace_changes: None,
         }
     }
 
@@ -234,7 +245,7 @@ impl<'a> ToolExecutionContext<'a> {
     #[must_use]
     pub(crate) fn with_subagent_context(
         mut self,
-        subagent: crate::runtime::subagent::AttemptSubagentContext,
+        subagent: crate::runtime::subagent::NativeExecutionContext,
     ) -> Self {
         self.subagent = Some(subagent);
         self
@@ -244,7 +255,7 @@ impl<'a> ToolExecutionContext<'a> {
     /// `subagent` implementation.
     pub(crate) fn subagent_context(
         &self,
-    ) -> Option<&crate::runtime::subagent::AttemptSubagentContext> {
+    ) -> Option<&crate::runtime::subagent::NativeExecutionContext> {
         self.subagent.as_ref()
     }
 
@@ -322,6 +333,22 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
+    /// Resolves additional approval requirements from validated business
+    /// arguments and immutable executor authority. This synchronous preflight
+    /// step performs no I/O and cannot weaken the definition's policy. The
+    /// ordinary invocation owner consumes the frozen result before `start`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a preflight rejection when the arguments cannot resolve to
+    /// authorized immutable invocation authority.
+    fn invocation_approval(
+        &self,
+        _arguments: &serde_json::Value,
+    ) -> Result<ToolApprovalPolicy, String> {
+        Ok(ToolApprovalPolicy::Never)
+    }
+
     /// Constructs the handle of one caller-neutral native invocation.
     ///
     /// This method must not dispatch physical work. Dispatch and its cleanup
@@ -702,7 +729,7 @@ pub struct PreparedInvocation {
     pub invocation: ToolInvocation,
     /// The tool's concurrency policy for batch scheduling.
     pub concurrency: ToolConcurrencyPolicy,
-    /// The tool's configured approval policy.
+    /// The effective approval policy frozen from the definition and invocation.
     pub approval: ToolApprovalPolicy,
     /// The canonical registry-resolved origin of the tool.
     ///
@@ -917,6 +944,11 @@ impl ToolRegistry {
             )));
         }
         validate_model_facing_name(&definition.name)?;
+        if crate::tools::mcp::is_resource_tool(&definition.name)
+            && !matches!(definition.origin, crate::tools::types::ToolOrigin::Builtin)
+        {
+            return Err(ToolRegistryError::ReservedName(definition.name.clone()));
+        }
         if self.by_id.contains_key(&definition.id) {
             return Err(ToolRegistryError::DuplicateToolId(definition.id.clone()));
         }
@@ -1200,6 +1232,24 @@ impl ToolRegistry {
                 error: error.to_string(),
             };
         }
+        let approval = match entry.executor.invocation_approval(&normalized) {
+            Ok(policy) => {
+                if entry.definition.approval_policy == ToolApprovalPolicy::Always
+                    || policy == ToolApprovalPolicy::Always
+                {
+                    ToolApprovalPolicy::Always
+                } else {
+                    ToolApprovalPolicy::Never
+                }
+            }
+            Err(error) => {
+                return PreflightOutcome::Rejected {
+                    tool_id: entry.definition.id.clone(),
+                    origin: entry.definition.origin.clone(),
+                    error,
+                };
+            }
+        };
         PreflightOutcome::Ready(PreparedInvocation {
             invocation: ToolInvocation {
                 id,
@@ -1209,7 +1259,7 @@ impl ToolRegistry {
                 arguments: normalized,
             },
             concurrency: entry.definition.concurrency_policy,
-            approval: entry.definition.approval_policy,
+            approval,
             origin: entry.definition.origin.clone(),
             // The executor's declared progress capability is captured here,
             // at invocation resolution, so the admitted call's effective
@@ -1393,7 +1443,7 @@ mod tests {
             )
             .unwrap();
         }
-        let text = ModelCapabilities::text_only(true, true);
+        let text = ModelCapabilities::text_only();
         let mut images = text.clone();
         images.input_modalities.insert(Modality::Image);
         let ((copied, selected, all), effects) = measure(|| {
@@ -1499,6 +1549,40 @@ mod tests {
         )
         .expect_err("duplicate name");
         assert!(matches!(error, ToolRegistryError::DuplicateName(_)));
+    }
+
+    /// Empty identities are rejected.
+    #[test]
+    fn remote_tools_cannot_shadow_native_resource_helpers() {
+        for name in [
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+        ] {
+            for origin in [
+                crate::tools::types::ToolOrigin::Mcp {
+                    server_id: crate::runtime::identity::McpServerId::new("remote"),
+                },
+                crate::tools::types::ToolOrigin::ManagedPython {
+                    package: "package".into(),
+                },
+            ] {
+                let mut definition = definition(
+                    "remote-tool",
+                    name,
+                    ToolExecutionPolicy::ForegroundOnly,
+                    ToolConcurrencyPolicy::Sequential,
+                    object_schema(),
+                );
+                definition.origin = origin;
+                let mut registry = ToolRegistry::new();
+                assert!(matches!(
+                    register(&mut registry, definition),
+                    Err(ToolRegistryError::ReservedName(_))
+                ));
+                assert!(registry.is_empty());
+            }
+        }
     }
 
     /// Empty identities are rejected.
@@ -2136,8 +2220,10 @@ mod tests {
         .expect("managed tool output");
         let reporter = Capturing;
         let context = ToolExecutionContext {
+            stdout_capture: None,
             model_invocation: None,
             goal: None,
+            schedule: None,
             conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             execution_id: None,
             cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
@@ -2152,6 +2238,7 @@ mod tests {
             questionnaire_requester: None,
             todos: None,
             subagent: None,
+            workspace_changes: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
         let handle = executor.start(prepared.invocation.clone(), context);

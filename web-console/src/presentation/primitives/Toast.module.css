@@ -14,15 +14,20 @@
   font-size: 14px;
   line-height: 22px;
   box-shadow: var(--dsw-elevation-panel);
-  animation: toast-in 160ms ease-out, toast-fade 1000ms ease 3000ms forwards;
+  animation: toast-in 160ms ease-out, toast-fade 1000ms ease var(--dsh-toast-hold) forwards;
 }
 .icon { display: grid; place-items: center; flex: none; color: var(--dsw-alias-state-warn-label); }
 .text { min-width: 0; overflow-wrap: anywhere; }
+.success { color: var(--dsw-alias-state-success-primary); border: 1px solid currentColor; border-radius: 50%; width: 16px; height: 16px; }
+.success svg { width: 12px; height: 12px; }
+.action { display: inline; padding: 0; margin-inline: 3px; border: 0; background: none; color: var(--dsw-static-deepseek-400); font: inherit; cursor: pointer; pointer-events: auto; }
+.action:hover { opacity: .8; }
+.action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(-6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 @keyframes toast-fade { to { opacity: 0; visibility: hidden; } }
 @media (prefers-reduced-motion: reduce) {
-  .toast { animation: toast-fade 1000ms ease 3000ms forwards; }
+  .toast { animation: toast-fade 1000ms ease var(--dsh-toast-hold) forwards; }
 }

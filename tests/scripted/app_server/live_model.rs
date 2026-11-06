@@ -1,14 +1,11 @@
 //! Issue #468: exercise durable native selection through the public protocol.
 //! Loopback response-header gates establish admission before selection; the
 //! native observation stream establishes settlement before subsequent work.
+use super::super::model_selection::selection;
 use super::*;
 use crate::model::catalog::{ModelProfileId, ModelRef};
-use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
 use serde_json::json;
-
-fn selection(model: &str) -> SessionModelConfig {
-    SessionModelConfig::of(ModelRef::parse(model).unwrap())
-}
 
 async fn select(
     connection: &AppServerConnection,
@@ -81,7 +78,7 @@ async fn reattach(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn selecting_the_implicit_current_model_persists_explicit_session_authority() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
@@ -133,7 +130,7 @@ async fn selecting_the_implicit_current_model_persists_explicit_session_authorit
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_attempt() {
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("read")).await;
+        let f = Fixture::with_session_count(Some("read"), 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         write_profiles(
@@ -157,7 +154,8 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             profile: Some(ModelProfileId::new("high")),
             request_params: crate::scripted_suites::common::request_params(json!({"seed": 7})),
             max_output_tokens: Some(777),
-            summary_model: SummaryModelPolicy::Explicit {
+            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("local/b").unwrap(),
                 profile: None,
                 request_params: crate::scripted_suites::common::request_params(
@@ -312,7 +310,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             .trace
             .records
             .iter()
-            .filter(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+            .filter(|record| record.kind == crate::observation::trace::TraceKind::Request)
             .collect();
         assert_eq!(historical.len(), 2);
         for record in historical {

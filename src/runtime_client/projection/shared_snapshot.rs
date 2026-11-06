@@ -1,17 +1,22 @@
 //! Internal copy-on-write domains. Published seeds share immutable values;
 //! any mutable domain access detaches only that domain from issued snapshots.
-use super::super::snapshot::{
-    AgentStatusView, CapabilityView, InboundDiagnostics, RuntimeClientAgent,
-    RuntimeClientContextView, RuntimeClientInteractionHeader, RuntimeClientJob,
-    RuntimeClientMessageDescriptorHead, RuntimeClientModelStatus,
-    RuntimeClientPublicationSettlementRecord, RuntimeClientResourcesView, RuntimeClientSnapshot,
-    RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage,
-    RuntimeDurabilityFailure,
-};
 use crate::message::types::MessageBlock;
 use crate::model::session::SessionModelView;
+use crate::observation::capability_source::CapabilityView;
+use crate::observation::interaction::RuntimeClientInteractionHeader;
+use crate::observation::resource_source::RuntimeClientResourcesView;
+use crate::observation::status::AgentStatusView;
+use crate::observation::transcript::{
+    RuntimeClientPublicationSettlementRecord, RuntimeClientTranscriptCursor,
+    RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage,
+};
 use crate::runtime::identity::ConversationId;
 use crate::runtime::types::ApprovalMode;
+use crate::runtime_client::snapshot::{
+    InboundDiagnostics, RuntimeClientAgent, RuntimeClientContextView, RuntimeClientJob,
+    RuntimeClientMessageDescriptorHead, RuntimeClientModelStatus, RuntimeClientSnapshot,
+    RuntimeDurabilityFailure,
+};
 use crate::tools::todo::TodoSnapshot;
 use serde::{Serialize, Serializer};
 use std::ops::{Deref, DerefMut};
@@ -120,15 +125,13 @@ pub(crate) struct SharedSnapshot {
     pub(crate) conversation_id: ConversationId,
     pub(crate) shutting_down: bool,
     pub(crate) effective_approval_mode: ApprovalMode,
-    pub(crate) configuration_adoption_eligibility:
-        crate::local_runtime::configuration::application::AdoptionEligibility,
     pub(crate) durability_failure: CowDomain<Option<RuntimeDurabilityFailure>>,
     pub(crate) messages: CowDomain<Vec<MessageBlock>>,
     pub(crate) message_descriptors: CowDomain<RuntimeClientMessageDescriptorHead>,
     pub(crate) publication_settlements: CowDomain<Vec<RuntimeClientPublicationSettlementRecord>>,
     pub(crate) transcript: SharedTranscript,
     pub(crate) trace: SharedTrace,
-    pub(crate) trace_updates: CowDomain<Vec<super::super::trace::TraceLifecycle>>,
+    pub(crate) trace_updates: CowDomain<Vec<crate::observation::trace::TraceLifecycle>>,
     pub(crate) attempt: CowDomain<Option<super::shared_attempt::SharedAttempt>>,
     pub(crate) inbound: CowDomain<InboundDiagnostics>,
     pub(crate) pending_interactions: CowDomain<Vec<RuntimeClientInteractionHeader>>,
@@ -141,7 +144,7 @@ pub(crate) struct SharedSnapshot {
     pub(crate) model: CowDomain<Option<SessionModelView>>,
     pub(crate) model_status: Option<RuntimeClientModelStatus>,
     pub(crate) todos: CowDomain<Option<TodoSnapshot>>,
-    pub(crate) goal: CowDomain<Option<crate::runtime_client::goal::RuntimeClientGoalView>>,
+    pub(crate) goal: CowDomain<Option<crate::observation::goal::RuntimeClientGoalView>>,
 }
 impl From<RuntimeClientSnapshot> for SharedSnapshot {
     fn from(value: RuntimeClientSnapshot) -> Self {
@@ -152,7 +155,6 @@ impl From<RuntimeClientSnapshot> for SharedSnapshot {
             conversation_id,
             shutting_down,
             effective_approval_mode,
-            configuration_adoption_eligibility,
             durability_failure,
             messages,
             message_descriptors,
@@ -181,7 +183,6 @@ impl From<RuntimeClientSnapshot> for SharedSnapshot {
             conversation_id,
             shutting_down,
             effective_approval_mode,
-            configuration_adoption_eligibility,
             durability_failure: durability_failure.into(),
             messages: messages.into(),
             message_descriptors: message_descriptors
@@ -218,7 +219,6 @@ impl SharedSnapshot {
             conversation_id: self.conversation_id.clone(),
             shutting_down: self.shutting_down,
             effective_approval_mode: self.effective_approval_mode,
-            configuration_adoption_eligibility: self.configuration_adoption_eligibility.clone(),
             durability_failure: self.durability_failure.owned(),
             messages: self.messages.owned(),
             message_descriptors: self.message_descriptors.iter().cloned().collect(),
@@ -250,7 +250,6 @@ impl PartialEq<SharedSnapshot> for RuntimeClientSnapshot {
             && self.conversation_id == other.conversation_id
             && self.shutting_down == other.shutting_down
             && self.effective_approval_mode == other.effective_approval_mode
-            && self.configuration_adoption_eligibility == other.configuration_adoption_eligibility
             && self.durability_failure == *other.durability_failure
             && self.messages == *other.messages
             && self
@@ -285,18 +284,20 @@ impl PartialEq<RuntimeClientSnapshot> for SharedSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct SharedTranscript {
     pub(crate) source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    pub(crate) content:
-        super::super::checkpoint::MetadataFragment<Vec<super::super::checkpoint::ContentBinding>>,
-    pub(crate) collections: super::super::checkpoint::MetadataFragment<
-        Vec<super::super::checkpoint::CollectionFrontier>,
+    pub(crate) content: crate::observation::metadata::MetadataFragment<
+        Vec<crate::observation::cut::ContentBinding>,
     >,
-    pub(crate) deferred_entries: super::super::checkpoint::MetadataFragment<
-        Vec<super::super::checkpoint::CheckpointPageItem>,
+    pub(crate) collections: crate::observation::metadata::MetadataFragment<
+        Vec<crate::observation::cut::CollectionFrontier>,
+    >,
+    pub(crate) deferred_entries: crate::observation::metadata::MetadataFragment<
+        Vec<crate::observation::cut::CheckpointPageItem>,
     >,
     pub(crate) inherited_through: Option<RuntimeClientTranscriptCursor>,
-    pub(crate) statistics: CowDomain<Option<super::super::response::ConversationStatistics>>,
+    pub(crate) statistics:
+        CowDomain<Option<crate::observation::statistics::ConversationStatistics>>,
     pub(crate) entries:
-        super::super::checkpoint::MetadataFragment<Vec<Arc<RuntimeClientTranscriptEntry>>>,
+        crate::observation::metadata::MetadataFragment<Vec<Arc<RuntimeClientTranscriptEntry>>>,
     pub(crate) next_cursor: Option<RuntimeClientTranscriptCursor>,
 }
 impl From<RuntimeClientTranscriptPage> for SharedTranscript {
@@ -375,14 +376,14 @@ impl PartialEq<RuntimeClientTranscriptPage> for SharedTranscript {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct SharedTrace {
-    pub(crate) read_cut: Option<super::super::checkpoint::CheckpointReadCut>,
-    pub(crate) records: CowDomain<Vec<super::super::trace::TraceRecord>>,
-    pub(crate) updates: CowDomain<Vec<super::super::trace::TraceLifecycle>>,
-    pub(crate) next_cursor: Option<super::super::trace::TraceCursor>,
+    pub(crate) read_cut: Option<crate::observation::cut::CheckpointReadCut>,
+    pub(crate) records: CowDomain<Vec<crate::observation::trace::TraceRecord>>,
+    pub(crate) updates: CowDomain<Vec<crate::observation::trace::TraceLifecycle>>,
+    pub(crate) next_cursor: Option<crate::observation::trace::TraceCursor>,
 }
-impl From<super::super::trace::TracePage> for SharedTrace {
-    fn from(value: super::super::trace::TracePage) -> Self {
-        let super::super::trace::TracePage {
+impl From<crate::observation::trace::TracePage> for SharedTrace {
+    fn from(value: crate::observation::trace::TracePage) -> Self {
+        let crate::observation::trace::TracePage {
             read_cut,
             records,
             updates,
@@ -397,7 +398,7 @@ impl From<super::super::trace::TracePage> for SharedTrace {
     }
 }
 impl SharedTrace {
-    pub(super) fn install(&mut self, trace: &super::super::trace::TracePage) {
+    pub(super) fn install(&mut self, trace: &crate::observation::trace::TracePage) {
         self.read_cut.clone_from(&trace.read_cut);
         if !self.records.is_empty() || !trace.records.is_empty() {
             self.records.replace_from(&trace.records);
@@ -408,8 +409,8 @@ impl SharedTrace {
         self.next_cursor.clone_from(&trace.next_cursor);
     }
     #[cfg(test)]
-    pub(crate) fn owned(&self) -> super::super::trace::TracePage {
-        super::super::trace::TracePage {
+    pub(crate) fn owned(&self) -> crate::observation::trace::TracePage {
+        crate::observation::trace::TracePage {
             read_cut: self.read_cut.clone(),
             records: self.records.owned(),
             updates: self.updates.owned(),
@@ -417,8 +418,8 @@ impl SharedTrace {
         }
     }
 }
-impl PartialEq<super::super::trace::TracePage> for SharedTrace {
-    fn eq(&self, other: &super::super::trace::TracePage) -> bool {
+impl PartialEq<crate::observation::trace::TracePage> for SharedTrace {
+    fn eq(&self, other: &crate::observation::trace::TracePage) -> bool {
         self.read_cut == other.read_cut
             && *self.records == other.records
             && *self.updates == other.updates
@@ -427,7 +428,7 @@ impl PartialEq<super::super::trace::TracePage> for SharedTrace {
 }
 
 impl SharedTrace {
-    pub(super) fn stamp_cut(&mut self, cut: &super::super::checkpoint::CheckpointReadCut) {
+    pub(super) fn stamp_cut(&mut self, cut: &crate::observation::cut::CheckpointReadCut) {
         if self.read_cut.is_none() && (!self.records.is_empty() || !self.updates.is_empty()) {
             self.read_cut = Some(cut.clone());
         }

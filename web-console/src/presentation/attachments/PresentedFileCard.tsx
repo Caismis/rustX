@@ -46,7 +46,7 @@ export function PresentedFileCard({ file, onPreview, actions }: { file: Presente
   </div>;
 }
 
-/** The ordered committed files of one Tool result: one row, or a 2x2 summary. */
+/** One Turn's ordered delivery selection: one row, or a 2x2 summary. */
 export function PresentedFiles({ files, card }: { files: readonly PresentedFileView[]; card: (file: PresentedFileView) => ReactNode }) {
   const tx = useTranslation();
   const [expanded, setExpanded] = useState(false);

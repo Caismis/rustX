@@ -69,8 +69,10 @@ pub fn uv_prerequisite(
 }
 
 /// The upper bound on a control-plane barrier wait. Deadlock protection
-/// only: ordering is always established by the observation itself.
-const AWAIT_TIMEOUT: Duration = Duration::from_secs(20);
+/// only: ordering is always established by the observation itself, and a
+/// scenario that starts child processes can take tens of seconds to reach a
+/// gate while the whole suite shares the CPU and disk.
+const AWAIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A running scenario in the external provider process.
 pub struct ProviderEmulator {

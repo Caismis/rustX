@@ -14,6 +14,8 @@ const packages = new Map<string, string>();
  * is pinned to one exact version and one declared license, so an upgrade or a
  * license change fails closed instead of inheriting this record. */
 const declaredOnly: Record<string, { license: string | undefined; notice: string }> = {
+  '@uiw/react-codemirror 4.25.12': { license: 'MIT', notice: readFileSync(join(root, 'licenses/react-codemirror-4.25.12.txt'), 'utf8') },
+  '@uiw/codemirror-extensions-basic-setup 4.25.12': { license: 'MIT', notice: readFileSync(join(root, 'licenses/react-codemirror-4.25.12.txt'), 'utf8') },
   '@fortune-sheet/core 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
   '@fortune-sheet/react 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
   'brotli 1.3.3': { license: 'MIT', notice: readFileSync(join(root, 'licenses/brotli-1.3.3.txt'), 'utf8') },
@@ -26,6 +28,7 @@ const declaredOnly: Record<string, { license: string | undefined; notice: string
   'buffers 0.1.1': { license: undefined, notice: readFileSync(join(root, 'licenses/buffers-0.1.1.txt'), 'utf8') },
   '@nodable/entities 3.1.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/nodable-entities-3.1.0.txt'), 'utf8') },
   'saxes 6.0.0': { license: 'ISC', notice: readFileSync(join(root, 'licenses/saxes-6.0.0.txt'), 'utf8') },
+  '@iconify-json/lucide 1.2.144': { license: 'ISC', notice: readFileSync(join(root, 'licenses/iconify-json-lucide-1.2.144.txt'), 'utf8') },
   'client-only 0.0.1': {
     license: 'MIT',
     notice: 'License: MIT, as declared in the package manifest; the published package contains no license file.\n'
@@ -52,6 +55,11 @@ function visit(file: string) {
 }
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 for (const name of Object.keys(manifest.dependencies)) visit(locate(root, name));
+// PDF.js ships separately licensed font/CMap data, now included in the lazy reader.
+const pdfPackage = locate(root, 'pdfjs-dist'), pdfVersion = JSON.parse(readFileSync(pdfPackage, 'utf8')).version;
+for (const asset of ['cmaps/LICENSE', 'standard_fonts/LICENSE_FOXIT', 'standard_fonts/LICENSE_LIBERATION']) {
+  packages.set(`pdfjs-dist ${pdfVersion} (${asset})`, readFileSync(join(dirname(pdfPackage), asset), 'utf8'));
+}
 packages.set('Lucide 0.468.0 (vendored git-fork and wrench icons)', readFileSync(join(root, 'public/LICENSE-Lucide.txt'), 'utf8'));
 packages.set('Lucide 1.17.0 (vendored Cable icon used by ZCode)', readFileSync(join(root, 'public/LICENSE-Lucide-1.17.txt'), 'utf8'));
 const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim().replace(/[ \t]+$/gm, '')}\n`).join('\n');

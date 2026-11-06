@@ -112,6 +112,9 @@ fn run_edit(
     if updated == original_with_bom {
         return failed_result(no_change_error(&input.path, input.edits.len()));
     }
+    if let Some(changes) = &context.workspace_changes {
+        changes.capture(target.path());
+    }
     if let Err(error) = atomic_commit(&target, updated.as_bytes()) {
         return failed_result(error);
     }

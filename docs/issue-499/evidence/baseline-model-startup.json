@@ -1,0 +1,397 @@
+{
+  "measurement": "real ConversationRuntime inbound -> AgentExecution -> scripted ModelAdapter::stream(request); timestamp recorded at adapter entry",
+  "timing_scope": "starts immediately before native source preparation, includes runtime construction, activation, admission and context assembly; authored config, fixture servers and tool-runtime storage setup are outside the clock",
+  "provider": "scripted model, one real ModelRequest per successful composition; no external provider network latency",
+  "rows": [
+    {
+      "profile": "fast",
+      "servers": 0,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1.126541,
+      "composition_error": null,
+      "first_model_request_ms": 69.050198,
+      "attempt_settled_ms": 87.10381000000001,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "fast",
+      "servers": 0,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.22322,
+      "composition_error": null,
+      "first_model_request_ms": 38.029914,
+      "attempt_settled_ms": 54.662545,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "fast",
+      "servers": 1,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 78.311344,
+      "composition_error": null,
+      "first_model_request_ms": 112.32865699999999,
+      "attempt_settled_ms": 128.12050299999999,
+      "model_request_count": 1,
+      "first_request_tool_count": 1,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 1,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 50.895225,
+      "composition_error": null,
+      "first_model_request_ms": 88.27196099999999,
+      "attempt_settled_ms": 106.096119,
+      "model_request_count": 1,
+      "first_request_tool_count": 1,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 4,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 54.223819999999996,
+      "composition_error": null,
+      "first_model_request_ms": 90.976285,
+      "attempt_settled_ms": 108.729017,
+      "model_request_count": 1,
+      "first_request_tool_count": 4,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 4,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 55.937228999999995,
+      "composition_error": null,
+      "first_model_request_ms": 95.251589,
+      "attempt_settled_ms": 113.521516,
+      "model_request_count": 1,
+      "first_request_tool_count": 4,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 8,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 98.197092,
+      "composition_error": null,
+      "first_model_request_ms": 146.01271,
+      "attempt_settled_ms": 162.078998,
+      "model_request_count": 1,
+      "first_request_tool_count": 8,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 8,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 98.667357,
+      "composition_error": null,
+      "first_model_request_ms": 147.133272,
+      "attempt_settled_ms": 163.216058,
+      "model_request_count": 1,
+      "first_request_tool_count": 8,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 0,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.251278,
+      "composition_error": null,
+      "first_model_request_ms": 31.496401,
+      "attempt_settled_ms": 47.126184,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "slow",
+      "servers": 0,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.219466,
+      "composition_error": null,
+      "first_model_request_ms": 31.020455,
+      "attempt_settled_ms": 46.415065999999996,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "slow",
+      "servers": 1,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1531.582244,
+      "composition_error": null,
+      "first_model_request_ms": 1576.054016,
+      "attempt_settled_ms": 1591.681546,
+      "model_request_count": 1,
+      "first_request_tool_count": 1,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 1,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1534.582722,
+      "composition_error": null,
+      "first_model_request_ms": 1581.537158,
+      "attempt_settled_ms": 1597.1934129999997,
+      "model_request_count": 1,
+      "first_request_tool_count": 1,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 4,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1527.556618,
+      "composition_error": null,
+      "first_model_request_ms": 1565.1585,
+      "attempt_settled_ms": 1582.1173669999998,
+      "model_request_count": 1,
+      "first_request_tool_count": 4,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 4,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1536.9670150000002,
+      "composition_error": null,
+      "first_model_request_ms": 1588.293513,
+      "attempt_settled_ms": 1604.3929380000002,
+      "model_request_count": 1,
+      "first_request_tool_count": 4,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 8,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 3069.470047,
+      "composition_error": null,
+      "first_model_request_ms": 3120.670037,
+      "attempt_settled_ms": 3136.653144,
+      "model_request_count": 1,
+      "first_request_tool_count": 8,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 8,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 3067.631373,
+      "composition_error": null,
+      "first_model_request_ms": 3117.681406,
+      "attempt_settled_ms": 3133.991832,
+      "model_request_count": 1,
+      "first_request_tool_count": 8,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 0,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.172926,
+      "composition_error": null,
+      "first_model_request_ms": 31.277766999999997,
+      "attempt_settled_ms": 48.13501,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "failed",
+      "servers": 0,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.207556,
+      "composition_error": null,
+      "first_model_request_ms": 31.149135,
+      "attempt_settled_ms": 46.617067,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "failed",
+      "servers": 1,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1530.972054,
+      "composition_error": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "model_request_count": 0,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 1,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1533.3746079999999,
+      "composition_error": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "model_request_count": 0,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 4,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1530.853098,
+      "composition_error": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "model_request_count": 0,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 4,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1532.0079250000001,
+      "composition_error": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "model_request_count": 0,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 8,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 3074.3073210000002,
+      "composition_error": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "model_request_count": 0,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 8,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 3067.277609,
+      "composition_error": "tool activation failed: selected Agent capability cannot be admitted: Tool(SourceUnavailable { selector: \"source:startup-00\", source: Mcp(McpServerId(\"startup-00\")), reason: Unavailable { reason: \"source preparation failed\" } })",
+      "first_model_request_ms": null,
+      "attempt_settled_ms": null,
+      "model_request_count": 0,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    }
+  ]
+}

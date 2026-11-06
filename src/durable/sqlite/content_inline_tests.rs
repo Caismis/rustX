@@ -42,7 +42,7 @@ fn immutable_inline_reads_keep_the_selected_revision_when_another_frontier_exist
 
 fn connection() -> Connection {
     let mut connection = Connection::open_in_memory().unwrap();
-    super::super::create_schema(&mut connection).unwrap();
+    crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
     connection
 }
 
@@ -60,7 +60,7 @@ fn sqlite_tail_append_keeps_binary_bytes_all_encodings_and_historical_prefixes()
         connection
             .execute_batch(&format!("PRAGMA encoding='{encoding}'"))
             .unwrap();
-        super::super::create_schema(&mut connection).unwrap();
+        crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
         let key = ("live", "binary-tail", 0, Rep::RawJsonUtf8);
         let mut expected = Vec::new();
         let mut cuts = Vec::new();
@@ -223,7 +223,7 @@ fn immutable_inline_first_json_native_and_pending_keep_exact_bytes() {
         opaque: serde_json::json!({"float": -0.0, "integer": u64::MAX}),
     };
     let mut expected = Vec::new();
-    crate::runtime_client::structural_json::to_writer(&mut expected, &value).unwrap();
+    crate::observation::structural_json::to_writer(&mut expected, &value).unwrap();
     assert_eq!(
         index_structural_value(&connection, "native", "native", 0, &value).unwrap(),
         expected.len() as u64

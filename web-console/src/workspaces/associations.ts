@@ -1,5 +1,6 @@
 import { WorkspaceAuthority, type WorkspaceAuthorityObservation } from './authority';
-import type { AppServerClient, ClientView } from '../client/app-server';
+import type { AppServerClient } from '../client/app-server';
+import type { ClientView } from '../client/contracts';
 import { endpointIdentity, sameEndpoint } from './endpoint';
 import { validateLocations, type SessionLocation, type WorkspaceAuthorityScope, type WorkspaceCatalog } from './host';
 

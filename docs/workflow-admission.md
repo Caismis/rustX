@@ -2,9 +2,13 @@
 
 YAML defines a complete bounded program at `.agents/workflows/<name>.yaml`.
 User and Workspace discovery follows [CFG3 identity shadowing](configuration.md).
-Existence grants no Root authority: `agent.workflows` is an exact allowlist.
-Unused invalid resources remain diagnostic entries. Selecting an invalid program
-fails admission; no partial program executes.
+Existence grants no Root authority: `agent.workflows` enables Workflows for
+Sessions, merged across the User and Workspace documents and switched per file on
+the Workflows page. Each document enables only the files its own scope owns,
+so a Global entry never enables the Workspace file that shadows it. Invalid
+resources remain diagnostic entries. An enabled
+program that fails its check stays off: it is never admitted, never keeps a
+Session from starting, and no partial program executes.
 
 Each Tool node selects one concrete ordinary Tool. Agent nodes select complete
 named profiles and may replace supported dimensions through the native override

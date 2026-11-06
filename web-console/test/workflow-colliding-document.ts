@@ -1,0 +1,31 @@
+import type { WorkflowFileDocument } from '../../protocol/app-server/v73';
+import type { WorkflowSource } from '../../protocol/app-server/workflow-documents.ts';
+import { exampleSource } from './workflow-fixtures';
+
+/** A complete, natively valid Workflow whose Tool arguments hold both a
+ * direct field named `a.fields.b` and a field `a` constructing `{ b }`:
+ * two fields a dotted path would conflate. JSON is YAML, so the same text
+ * is written as a native file by the browser acceptance test. */
+export const COLLIDING_FIELDS: WorkflowFileDocument = {
+  description: 'Two object fields a dotted path would conflate.',
+  block: {
+    input: { type: 'object', properties: {}, additionalProperties: false },
+    nodes: {workflow_start:{type:'start'}, ...{
+      done: {
+        type: 'tool',
+        selector: { origin: 'builtin', name: 'unlisted' },
+        result: { type: 'text' },
+        arguments: { type: 'object', fields: {
+          'a.fields.b': { type: 'literal', value: 1 },
+          a: { type: 'object', fields: { b: { type: 'literal', value: 2 } } },
+        } },
+      },
+      end: { type: 'return', outputs: [] },
+    }},
+    edges: [{ from: 'workflow_start', to: 'done' }, { from: 'done', to: 'end' }],
+  },
+} as WorkflowFileDocument;
+
+export function collidingFields(): WorkflowSource {
+  return { ...exampleSource('parallel_review'), id: 'colliding', relative_path: '.agents/workflows/colliding.yaml', document: structuredClone(COLLIDING_FIELDS) };
+}

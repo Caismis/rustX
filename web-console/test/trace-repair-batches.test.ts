@@ -1,5 +1,5 @@
 import {afterEach,expect,it} from 'vitest';
-import type {Request,TraceLifecycle,TraceRecord} from '../../protocol/app-server/v52';
+import type {Request,TraceLifecycle,TraceRecord} from '../../protocol/app-server/v73';
 import {Server,checkpoint,snapshot,traceReceipt} from './fixture';
 import {requestDetail,traceRecord,traceTool} from './trace-fixture';
 
@@ -49,7 +49,7 @@ it('bounded prefix replies cover the whole loaded window, late canonical binding
   return {type:'trace',refreshed:prefix.length,page:{read_cut:cut('1'),records:records.slice(-request.params.limit),next_cursor:'trace:257',
    updates:prefix.flatMap(position=>{const record=records.find(record=>record.position===position);return record?[lifecycle(record)]:[];})}};
  });
- emit('1');await server.client['traceReads'].get('A')!.work;
+ emit('1');await server.client['traces']['traceReads'].get('A')!.work;
  const requests=traceRequests().slice(start),after=server.client.getSnapshot().views.A.trace!;
  expect(requests).toHaveLength(5);
  expect(requests.every(request=>request.params.records!.length<=128)).toBe(true);
@@ -73,7 +73,7 @@ it('a later prefix failure stays visible and a later successful repair clears it
   return {type:'trace',refreshed:prefix.length,page:{read_cut:cut('1'),records:records.slice(-request.params.limit),updates:prefix.flatMap(position=>records.filter(record=>record.position===position).map(lifecycle))}};
  });
  server.held.add('session/trace');const start=traceRequests().length;emit('1');
- const work=server.client['traceReads'].get('A')!.work.catch(()=>{}),first=await server.waitFor('session/trace',start+1);
+ const work=server.client['traces']['traceReads'].get('A')!.work.catch(()=>{}),first=await server.waitFor('session/trace',start+1);
  server.reply(first);const second=await server.waitFor('session/trace',start+2);
  server.socket.deliver({jsonrpc:'2.0',id:second.id,error:{code:-32000,message:'Later Trace prefix failed',data:{kind:'operation_failed'}}});await work;
  expect(server.client.getSnapshot().views.A.trace?.error).toContain('Later Trace prefix failed');
@@ -82,7 +82,7 @@ it('a later prefix failure stays visible and a later successful repair clears it
   const prefix=request.params.records??[];
   return {type:'trace',refreshed:prefix.length,page:{read_cut:cut('2'),records:records.slice(-request.params.limit),updates:prefix.flatMap(position=>records.filter(record=>record.position===position).map(lifecycle))}};
  });
- server.held.delete('session/trace');emit('2');await server.client['traceReads'].get('A')!.work;
+ server.held.delete('session/trace');emit('2');await server.client['traces']['traceReads'].get('A')!.work;
  expect(server.client.getSnapshot().views.A.trace?.error).toBeUndefined();
  expect(server.client.getSnapshot().views.A.trace?.page.records).toHaveLength(288);
 });
@@ -90,7 +90,7 @@ it('a later prefix failure stays visible and a later successful repair clears it
 it('zero prefix progress fails visibly without issuing an unbounded retry loop',async()=>{
  const records=await loadedWindow(),start=traceRequests().length;
  server.handlers.set('session/trace',()=>({type:'trace',refreshed:0,page:{read_cut:cut('1'),records:records.slice(-32)}}));
- emit('1');await server.client['traceReads'].get('A')!.work.catch(()=>{});
+ emit('1');await server.client['traces']['traceReads'].get('A')!.work.catch(()=>{});
  expect(traceRequests().length-start).toBe(1);
  expect(server.client.getSnapshot().views.A.trace?.error).toContain('Trace repair returned invalid progress');
  expect(server.client.getSnapshot().views.A.trace?.page.records).toHaveLength(288);

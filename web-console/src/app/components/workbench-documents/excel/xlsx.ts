@@ -24,13 +24,14 @@ export async function convertXlsx(bytes: Uint8Array<ArrayBuffer>, limits: ExcelL
   const workbook = new ExcelJS.Workbook()
   let unsupportedFeatures: Set<ExcelUnsupportedFeature>
   try {
-    const archive = new XlsxPreviewArchive(bytes)
+    const archive = new XlsxPreviewArchive(bytes, limits.maxCells)
     const preview = archive.withoutDrawings()
     const input = preview.byteOffset === 0 && preview.byteLength === preview.buffer.byteLength
       ? preview.buffer : preview.buffer.slice(preview.byteOffset, preview.byteOffset + preview.byteLength)
     await workbook.xlsx.load(input, { ignoreNodes: ['drawing'] })
     unsupportedFeatures = archive.unsupportedFeatures
   } catch (error) {
+    if (error instanceof ExcelPreviewError) throw error
     throw new ExcelPreviewError('invalid', { cause: error })
   }
   if (!workbook.worksheets.some(sheet => sheet.state === 'visible')) throw new ExcelPreviewError('invalid')

@@ -1,14 +1,16 @@
+import { useToastNotice } from '../../locale/use-toast-notice';
+import { actionError } from '../../bindings/action-error';
 import { ComposerDraft, type ComposerSubmission, type ComposerConversation, type InputAcceptance } from '../composer/draft';
-import { isOutcomeUncertain, RpcFailure } from '../../client/app-server';
+import { isOutcomeUncertain, RpcFailure } from '../../client/errors';
 import type { FirstSubmission } from '../new-conversation/first-submit';
 import { message } from '../../locale/translation';
-import { useTranslation, useNotice } from '../../locale/react';
+import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Presentation extracted from DeepSeek Harness ui-conversation/AgentComposer.
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
-import { useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { AttachmentTarget, UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v52';
+import type { AttachmentTarget, UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v73';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { ModelPicker, type ModelPickerState } from '../composer/ModelPicker';
@@ -19,12 +21,14 @@ import { editableContent } from '../composer/editor-content';
 import { composerSubmissionPolicy, type SubmitGesture } from '../composer/submission-policy';
 import { useBusyEnter } from '../composer/preferences';
 import { StopSequence, type StopScope } from '../composer/stop-sequence';
-import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
+import { ComposerAttachments } from '../composer/ComposerAttachments';
+import { Toast } from '../../presentation/primitives/Toast';
+import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false }: {
+export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false, separateStop = false }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
   modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
@@ -34,6 +38,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[], submission?: ComposerSubmission) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
   /** Exact live Root attachment permits cancellation while observation is unavailable. */
   cancellationOnly?: boolean;
+  separateStop?: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer', acknowledged?: (acceptance?: InputAcceptance, conversation?: ComposerConversation) => void) => Promise<boolean>;
   onUpload: (files: readonly File[], operation?: string) => Promise<UploadedFile[]>; onCancel: () => void;
   onCommand?: (id: CommandId) => void; commandAvailable?: (id: CommandId) => boolean; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
@@ -61,14 +66,16 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const retained = firstSubmission && !['rejected', 'discarded', 'admitted'].includes(firstSubmission.phase) ? firstSubmission : undefined;
   const inTranscript = !!retained && !!(retained.session || retained.existingSessionId) && ['attaching', 'uploading', 'admitting'].includes(retained.phase);
   const shownText = inTranscript ? '' : retained?.draft.text;
-  const files: readonly Pick<IntakeFile, "id" | "file" | "name" | "receipt" | "status" | "reason" | "error">[] = inTranscript ? [] : retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], name: file.name, file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', reason: undefined, error: undefined })) : selections;
-  const [error, setError] = useNotice();
-  const [dragging, setDragging] = useState(false);
+  const files: readonly Pick<IntakeFile, "id" | "file" | "name" | "receipt" | "status" | "error">[] = inTranscript ? [] : retained ? retained.draft.files.map((file, index) => ({ id: retained.attachmentIds[index], name: file.name, file, receipt: retained.receipts[index], status: retained.receipts[index] ? 'ready' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'uncertain' ? 'uncertain' : index === retained.uploadIndex && retained.failedPhase === 'uploading' && retained.phase === 'failed' ? 'failed' : index === retained.uploadIndex && retained.phase === 'uploading' ? 'uploading' : 'draft', error: undefined })) : selections;
+  const [notice, setError] = useToastNotice();
   const pending = files.some(file => file.status !== 'ready' && !(onDraftSend && file.status === 'draft'));
   const port: UploadPort = { upload: onUpload, status: onReconcile ?? (async () => ({ state: 'unresolved' })) };
-  const pick = (picked: IntakeInput[]) => {
-    if (!disabled && !busy && editor) { intake.add(picked, uploadPolicy, onDraftSend ? undefined : port); owner.attachmentsEdited(editor.incarnation); }
-  };
+  const pick = useCallback((picked: IntakeInput[]) => {
+    if (disabled || busy || !editor) return;
+    const rejection = intake.add(picked, uploadPolicy, onDraftSend ? undefined : { upload: onUpload, status: onReconcile ?? (async () => ({ state: 'unresolved' })) });
+    if (rejection) { setError(message(`agent:upload.${rejection}`)); }
+    else if (picked.length) owner.attachmentsEdited(editor.incarnation);
+  }, [disabled, busy, editor, intake, uploadPolicy, onDraftSend, onUpload, onReconcile, owner]);
   const draft = retained ? shownText ?? '' : editor?.text ?? '';
   const setDraft = (text: string) => { if (editor) owner.edit(editor.incarnation, text); };
   const invocation = useRef<{ id: CommandId; incarnation: number; revision: number } | undefined>(undefined);
@@ -93,7 +100,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     const selection = owner.snapshot()?.selection;
     if (selection) input.current?.setSelectionRange(selection.start, selection.end, selection.direction);
   }, [owner, editor?.incarnation]);
-  useEffect(() => { setError(''); setDragging(false); invocation.current = undefined; if (!intakeOwner) intake.clear(); }, [editorIdentity]);
+  useEffect(() => { setError(''); invocation.current = undefined; if (!intakeOwner) intake.clear(); }, [editorIdentity]);
   const query = trigger.state?.query;
   const modelInvocation = useRef<{ incarnation: number; revision: number } | undefined>(undefined);
   const [modelRequested, setModelRequested] = useState(false);
@@ -113,8 +120,11 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const selectedCommand = selected && selected !== 'file' ? selected : parsed.type === 'command' ? parsed.id : undefined;
   const facts = { running: active, busyEnter, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
-    blocked: disabled || submitDisabled, acknowledging: busy || owner.blocked(editor), uploadsPending: pending, cancellationAvailable };
+    blocked: disabled || submitDisabled, acknowledging: busy || owner.blocked(editor), uploadsPending: pending, cancellationAvailable, separateStop };
   const primary = composerSubmissionPolicy(facts);
+  // A retained uncertain/unsent draft is blocked, but no longer sending.
+  const sending = primary.kind === 'message' && (busy || owner.blocked(editor))
+    && (!editor?.submission || editor.submission.outcome === 'pending');
   useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu]);
   useEffect(() => {
     // Window blur only resets; keyboard recognition stays on the focused editor.
@@ -149,7 +159,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     if (action.disabled || action.kind === 'stop') return;
     if (action.kind === 'command') {
       if (selectedCommand) invoke(selectedCommand);
-      else setError(message('agent:copy.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prompt'));
+      else { trigger.dismiss(); setError(message('agent:copy.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prompt')); }
       return;
     }
     if (!editor) return;
@@ -160,26 +170,22 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
       if (accepted) ticket.accepted(); else ticket.failed('unsent');
     } catch (cause) {
       ticket.failed(isOutcomeUncertain(cause) ? 'uncertain' : cause instanceof RpcFailure ? 'rejected' : 'unsent');
-      if (owner.snapshot()?.incarnation === ticket.incarnation) setError(String(cause));
+      if (owner.snapshot()?.incarnation === ticket.incarnation) setError(actionError(cause));
     }
   };
-  return <div ref={root} className={css.root} onDragOver={event => { if (!disabled && !busy && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
-    onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
-    onDrop={event => { event.preventDefault(); setDragging(false); if (!disabled && !busy) pick(transferInputs(event.dataTransfer)); }}>
-    {dragging && <div className="attachment-drop" role="status">{tx('agent:upload.drop')}</div>}
-    {error && <p role="alert">{error}</p>}
+  return <div ref={root} className={css.root} data-file-drop-owner="">
+    {notice && <Toast key={notice.sequence} text={notice.text} holdMs={6000} icon={<IconWarningOutline16/>} anchor={root.current} onDone={() => setError('')}/>}
     {!restoreSupported && <p role="alert">{tx('agent:agent-composer.cannot-restore-this-ordered-native-input-in-the-flat-web-editor')}</p>}
-    <div className={css.card} data-composer-card data-editor-incarnation={editor?.incarnation} data-editor-revision={editor?.revision} data-submission-outcome={editor?.submission?.outcome} aria-busy={busy}>
+    <div className={css.card} data-composer-card data-editor-incarnation={editor?.incarnation} data-editor-revision={editor?.revision} data-submission-outcome={editor?.submission?.outcome} aria-busy={busy}
+      onClick={event => { if (event.target === event.currentTarget) input.current?.focus({ preventScroll: true }); }}>
       {modelMenu && <ModelPicker state={modelPicker!} close={() => { modelInvocation.current = undefined; setModelRequested(false); trigger.dismiss(); trigger.restore(); }} chosen={() => { if (modelRevision) owner.consumeRevision(modelRevision.incarnation, modelRevision.revision); setModelRequested(false); trigger.dismiss(); modelInvocation.current = undefined; trigger.restore(); }}/>}
       {menu && <CommandMenu rows={rows} active={highlight} select={selectMenu} highlight={trigger.highlight}
-        fileDescription={uploadPolicy ? tx('agent:upload.limits', { count: uploadPolicy.max_uploads_per_user_input, file: uploadPolicy.max_file_bytes, batch: uploadPolicy.max_upload_bytes_per_user_input }) : tx('agent:upload.policy')} />}
+        fileDescription={uploadPolicy ? undefined : tx('agent:upload.policy')} />}
       {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>{tx('agent:agent-composer.native-restored-upload-batch')}{' '}{receipt.batch_id}</span><Button disabled={disabled || busy} onClick={() => editor && owner.removeRestored(editor.incarnation, index)}>{tx('agent:agent-composer.remove-draft-upload')}</Button></div>)}
-      <div className={css.attachments} aria-label={tx('agent:agent-composer.draft-attachments')}>{files.map(item => <div key={item.id}>
-        <DraftAttachment name={item.name} file={item.file} remove={firstSubmission && onRetainedRemove ? () => onRetainedRemove(item.id) : disabled || busy ? undefined : () => { intake.remove(item.id); if (editor) owner.attachmentsEdited(editor.incarnation); }} />
-        <small role="status">{item.reason ? tx(`agent:upload.${item.reason}`) : tx(`agent:upload.${item.status}`)}</small>
-        {item.status === 'failed' && <Button disabled={!onRetainedRecover && (disabled || busy)} onClick={() => onRetainedRecover ? onRetainedRecover(true) : void intake.upload(item.id, port)}>{tx('agent:upload.retry')}</Button>}
-        {item.status === 'uncertain' && <Button disabled={!onRetainedRecover && (disabled || busy)} onClick={() => onRetainedRecover ? onRetainedRecover(false) : void intake.reconcile(item.id, port)}>{tx('agent:upload.reconcile')}</Button>}
-      </div>)}</div>
+      <ComposerAttachments dropOwner={root} files={files} canAcceptDrop={!disabled && !busy && !!editor && !!uploadPolicy} onAddFiles={pick}
+        onRemove={firstSubmission && onRetainedRemove ? onRetainedRemove : disabled || busy ? undefined : id => { intake.remove(id); if (editor) owner.attachmentsEdited(editor.incarnation); }}
+        onRetry={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(true); else void intake.upload(id, port); }}
+        onReconcile={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(false); else void intake.reconcile(id, port); }}/>
       <div className={css.editor}>
         <textarea ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholder ?? (onDraftSend ? tx('agent:agent-composer.describe-what-you-want-to-do') : tx('agent:agent-composer.give-this-session-a-task'))}
           aria-controls={menu ? 'composer-commands' : undefined} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
@@ -229,28 +235,23 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
         </div>
         <div className={css.trailing}>
           {model}
-          <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={tx(primary.label)} title={tx(primary.title)}
+          {separateStop && active && <button type="button" className={css.primary} data-composer-stop aria-label={tx('agent:submission.stop')} title={tx('agent:submission.stop-double-escape')}
+            disabled={!cancellationAvailable} onMouseDown={event => event.preventDefault()} onClick={onCancel}>
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
+          </button>}
+          <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={tx(sending ? 'agent:submission.sending' : primary.label)} title={tx(sending ? 'agent:submission.sending' : primary.title)}
+            aria-busy={sending || undefined} data-sending={sending || undefined}
             disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
             {primary.kind === 'stop'
               ? <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
-              : <span aria-hidden="true"><IconSendOutline14 /></span>}
+              : sending ? <svg className={css.sendingSpinner} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="2"/>
+                <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg> : <span aria-hidden="true"><IconSendOutline14 /></span>}
           </button>
         </div>
       </div>
 
     </div>
   </div>;
-}
-
-function DraftAttachment({ file, name, remove }: { file: File | null; name: string; remove?: () => void }) {
-  const tx = useTranslation();
-  const [url, setUrl] = useState<string>();
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    setFailed(false);
-    if (!file?.type.startsWith('image/')) return;
-    const value = URL.createObjectURL(file); setUrl(value);
-    return () => URL.revokeObjectURL(value);
-  }, [file]);
-  return <AttachmentCard name={name} image={!!file?.type.startsWith('image/')} url={url} error={failed ? tx('agent:copy.image-preview-unavailable') : undefined} onDecodeError={() => setFailed(true)} onRemove={remove} />;
 }

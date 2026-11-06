@@ -435,7 +435,7 @@ pub fn invocation(
         protocol,
         max_output_tokens: 512,
         request_params: rustx::model::RequestParams::new(),
-        capabilities: rustx::model::ModelCapabilities::text_only(true, true),
+        capabilities: rustx::model::ModelCapabilities::text_only(),
         compat: rustx::model::ModelCompat {
             chat_reasoning_replay,
             ..rustx::model::ModelCompat::default()
@@ -453,6 +453,8 @@ pub fn simple_request(
     use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
     use rustx::runtime::identity::MessageId;
     rustx::model::ModelRequest {
+        response_schema: None,
+        response_byte_limit: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: invocation(protocol, model),
@@ -825,7 +827,7 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
         &self,
         _attempt_id: &AttemptId,
         block: &MessageBlock,
-        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
+        _receipt: &rustx::durable::TranscriptCommitReceipt,
     ) {
         self.committed
             .lock()
@@ -836,7 +838,7 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
     fn observe_status(
         &self,
         _observation: &AgentStatusObservation,
-        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+        _source: Option<&rustx::durable::StatusObservationSource>,
     ) {
     }
 
@@ -868,7 +870,7 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
         &self,
         _attempt_id: &AttemptId,
         audit: &PublicationAudit,
-        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
+        _receipt: &rustx::durable::PublicationAuditReceipt,
     ) {
         self.audits
             .lock()
@@ -1410,6 +1412,17 @@ pub fn assert_compiled_execution_mode_schema(
 pub fn replay_execution_states(events: &[RuntimeEvent]) -> Result<Vec<ExecutionState>, String> {
     let mut phases = vec![ExecutionState::Idle];
     for event in events {
+        // This fold is primary-Agent evidence. Auxiliary requests and Calls
+        // share the physical Journal but have no Agent phase.
+        if event.is_auxiliary_model_request()
+            || matches!(
+                event,
+                RuntimeEvent::AuxiliaryCallStarted { .. }
+                    | RuntimeEvent::AuxiliaryCallSettled { .. }
+            )
+        {
+            continue;
+        }
         let current = *phases.last().expect("at least the idle phase");
         if !current.is_active() {
             return Err(format!("event after the terminal phase: {event:?}"));
@@ -1432,7 +1445,10 @@ pub fn replay_execution_states(events: &[RuntimeEvent]) -> Result<Vec<ExecutionS
             RuntimeEvent::AttemptFailed { .. } | RuntimeEvent::AttemptCancelled { .. } => {
                 ExecutionState::Failed
             }
-            RuntimeEvent::ModelRequestStarted { .. } => ExecutionState::RunningModel,
+            RuntimeEvent::ModelRequestStarted {
+                owner: rustx::model::ModelRequestOwner::Agent { .. },
+                ..
+            } => ExecutionState::RunningModel,
             RuntimeEvent::ToolExecutionStarted { .. }
             | RuntimeEvent::ToolExecutionCompleted { .. }
             | RuntimeEvent::ToolExecutionFailed { .. } => ExecutionState::WaitingForTool,
@@ -1901,10 +1917,8 @@ pub fn native_domain_single<T: serde::de::DeserializeOwned + schemars::JsonSchem
     );
     let item = page.items.remove(0);
     assert!(!item.deferred, "small fixture must materialize inline");
-    rustx::runtime_client::checkpoint::decode_domain_value(
-        item.value.expect("inline typed native row"),
-    )
-    .expect("valid native structural value")
+    rustx::observation::bounded::decode_domain_value(item.value.expect("inline typed native row"))
+        .expect("valid native structural value")
 }
 
 /// Current finite model header; additional profile facts are checked explicitly.
@@ -1920,6 +1934,8 @@ struct NativeCatalogModelHeader {
     effective_capabilities: rustx::model::catalog::ModelCapabilities,
     profiles: Vec<rustx::model::catalog::ModelProfileView>,
     default_profile: Option<rustx::model::catalog::ModelProfileId>,
+    #[serde(default)]
+    reasoning_profile_order: Option<Vec<rustx::model::catalog::ModelProfileId>>,
     credential_source: rustx::model::catalog::CredentialSourceView,
     profile_count: u64,
     profiles_deferred: bool,
@@ -1943,7 +1959,7 @@ pub fn native_catalog_page(
             assert_eq!(item.offset, u64::try_from(ordinal).unwrap());
             assert!(!item.deferred, "fixture model header is inline");
             let header: NativeCatalogModelHeader =
-                rustx::runtime_client::checkpoint::decode_domain_value(
+                rustx::observation::bounded::decode_domain_value(
                     item.value.expect("finite model header value"),
                 )
                 .expect("current typed native model header");
@@ -1977,6 +1993,7 @@ pub fn native_catalog_page(
                 effective_capabilities: header.effective_capabilities,
                 profiles: header.profiles,
                 default_profile: header.default_profile,
+                reasoning_profile_order: header.reasoning_profile_order,
                 credential_source: header.credential_source,
             }
         })

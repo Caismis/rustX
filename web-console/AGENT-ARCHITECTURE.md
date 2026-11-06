@@ -59,7 +59,9 @@ turn folding or inferred subcall nesting is supported.
 
 `App` owns an explicit New Conversation / Session center route. The shared
 Harness-derived composer accepts browser File drafts before Session creation;
-`AppServerClient.firstSubmissions` owns creation and the Session-scoped continuation.
+The application-layer `firstSubmissions(client)` owner (`app/new-conversation/first-submit.ts`)
+owns creation and the Session-scoped continuation for one client lifetime; the
+client only announces authority retirement and disposal and never imports it.
 Native create ACK transfers intent before immediate navigation; component remounts
 only observe. Attach/readiness gates upload/admission. Admission consumes the draft.
 Catalog refresh is independent; initial model intent is native creation state.
@@ -68,7 +70,7 @@ See [startup ownership](../docs/issue-419/ownership.md) for fences and failure l
 navigation and the exact native attachment. Settings target actors are shared
 with the permission seat; no configuration coordinator lives in the composer.
 
-App Server v52 / Runtime Client v71 publishes one native `turn_process` summary
+App Server v50 / Runtime Client v74 publishes one native `turn_process` summary
 on exact Assistant/Tool members for running, completed and unsuccessful Attempts.
 Control identity, cursor, counts and clock come from native evidence; failed and
 stopped Turns always remain open. CompletedResponseView still owns successful

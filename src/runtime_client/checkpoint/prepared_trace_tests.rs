@@ -1,5 +1,7 @@
 use super::*;
-use crate::runtime_client::trace::{
+use crate::observation::bounded::prepare_capture_item;
+use crate::observation::capture::Capture;
+use crate::observation::trace::{
     TraceFieldKind, TraceFieldSource, TraceKind, TraceLocation, TracePreview, TraceRecord,
     TraceState, TraceTiming,
 };
@@ -37,6 +39,9 @@ fn record() -> TraceRecord {
         request: None,
         tool: None,
         calls: Vec::new(),
+        configuration: None,
+        configuration_instructions: None,
+        configuration_catalog: None,
         native_id: None,
         agent_id: None,
         activation_id: None,
@@ -115,7 +120,7 @@ fn prepared_trace_preserves_original_count_and_invalid_head_frontiers() {
 
 #[test]
 fn prepared_trace_keeps_original_dto_normalization_before_cloning() {
-    use crate::runtime_client::trace::{
+    use crate::observation::trace::{
         TraceGeneration, TraceRequestPredecessor, TraceRequestSummary,
         TraceSystemPromptPresentation, TraceSystemPromptState, TraceToolCatalogState,
     };

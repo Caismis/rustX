@@ -26,6 +26,7 @@
 //! `src/runtime/conversation_runtime.rs`, and the real-provider proof that a
 //! recovered runtime resends nothing lives in `tests/conformance/agent_loop.rs`.
 
+use rustx::durable::{CanonicalStore, InboxStore, JournalStore, ProjectionStore, RequestStore};
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -43,8 +44,8 @@ use rustx::message::types::{
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
-    ModelFinishReason, ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestParams,
-    RequestSnapshot,
+    ModelFinishReason, ModelInvocationConfig, ModelProtocol, ModelRequestOwner, RequestIdentity,
+    RequestParams, RequestSnapshot,
 };
 use rustx::runtime::identity::{
     AgentId, AttemptId, CapabilityRevision, ConversationId, EventId, MessageId, SubagentId,
@@ -231,7 +232,7 @@ fn invocation(model: &str) -> ModelInvocationConfig {
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true, true),
+        capabilities: ModelCapabilities::text_only(),
         compat: ModelCompat::default(),
     }
 }
@@ -257,7 +258,6 @@ fn snapshot_at(
         invocation(model),
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -767,6 +767,9 @@ fn a_known_outcome_terminal_transfers_the_obligation_of_a_later_adopted_turn() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestCompleted {
+                    owner: ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id,
                     finish_reason: ModelFinishReason::Stop,
                     usage: None,
@@ -981,6 +984,9 @@ fn completed_model_request_before_assistant_commit_is_not_class_b() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestCompleted {
+                    owner: ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id: snapshot.request_id.clone(),
                     finish_reason: rustx::model::ModelFinishReason::Stop,
                     usage: None,
@@ -1106,6 +1112,9 @@ fn failed_model_request_before_terminal_is_not_retried() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestFailed {
+                    owner: ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id: snapshot.request_id.clone(),
                     error: rustx::model::error::ModelError {
                         kind: rustx::model::error::ModelErrorKind::ProviderError,
@@ -1448,6 +1457,9 @@ fn known_request_with_unknown_tool_outcome_stays_indeterminate() {
                 Some(attempt.clone()),
                 Some(TurnId::new("0")),
                 RuntimeEvent::ModelRequestCompleted {
+                    owner: ModelRequestOwner::Agent {
+                        identity: snapshot.identity.clone(),
+                    },
                     request_id: snapshot.request_id.clone(),
                     finish_reason: rustx::model::ModelFinishReason::ToolCalls,
                     usage: None,
@@ -2750,6 +2762,9 @@ fn the_recovery_fold_retains_only_unresolved_work() {
                     Some(attempt.clone()),
                     Some(TurnId::new("0")),
                     RuntimeEvent::ModelRequestCompleted {
+                        owner: ModelRequestOwner::Agent {
+                            identity: snapshot.identity.clone(),
+                        },
                         request_id: snapshot.request_id.clone(),
                         finish_reason: rustx::model::ModelFinishReason::Stop,
                         usage: None,
@@ -3307,7 +3322,8 @@ fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &Subagen
                         block: rustx::runtime::workflow::WorkflowBlockInstance {
                             run: rustx::runtime::workflow::WorkflowRunId {
                                 conversation_id: store.conversation_id().clone(),
-                                attempt_id: AttemptId::for_conversation(store.conversation_id(), 1),
+                                origin: (AttemptId::for_conversation(store.conversation_id(), 1))
+                                    .into(),
                                 invocation: 1,
                             },
                             definition: rustx::runtime::workflow::WorkflowDefinitionPath {

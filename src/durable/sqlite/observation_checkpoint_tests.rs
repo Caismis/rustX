@@ -4,7 +4,7 @@ fn checkpoint_head_oracle(
     through: u64,
     limit: usize,
 ) -> Result<crate::durable::observation::CheckpointHead, ConversationStoreError> {
-    let mut transcript = crate::runtime_client::snapshot::transcript_header_view(
+    let mut transcript = crate::observation::transcript::transcript_header_view(
         store.transcript_header_page(cut, None, limit)?,
     );
     crate::runtime_client::response::decorate_through(store, &mut transcript, through)?;
@@ -12,7 +12,7 @@ fn checkpoint_head_oracle(
     let trace_total = store.observation_trace_total(through)?;
     let projection_head = store.observation_projection_head(through)?;
     Ok(crate::durable::observation::CheckpointHead {
-        transcript_rows: transcript.entries.iter().cloned().map(|entry| crate::runtime_client::checkpoint::PreparedTranscriptRow::new(cut.read.conversation_id.clone(), entry)).collect(),
+        transcript_rows: transcript.entries.iter().cloned().map(|entry| crate::observation::transcript::PreparedTranscriptRow::new(cut.read.conversation_id.clone(), entry)).collect(),
         transcript,
         occupancy,
         trace_total,
@@ -348,7 +348,7 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
     foreign.read.conversation_id = ConversationId::generate();
     let connection = store.lock().unwrap();
     let error = super::super::observation_tools::page(&connection, store.conversation_id(), &foreign,
-        &crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 1 }, 0, 32).unwrap_err();
+        &crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 1 }, 0, 32).unwrap_err();
     assert!(matches!(error, ConversationStoreError::ObservationCutExpired));
 }
 

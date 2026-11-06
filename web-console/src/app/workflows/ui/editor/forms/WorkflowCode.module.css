@@ -1,0 +1,41 @@
+.panel { min-width: 0; }
+.panel h3 { font-size: 13px; font-weight: 600; }
+.panel > section { padding-block: 16px; border-bottom: 1px solid var(--dsw-alias-border-l3); margin: 0; }
+.panel > section:first-child { padding-top: 0; }
+.panel > div { padding-block: 16px; border-bottom: 1px solid var(--dsw-alias-border-l3); }
+.variables { display: grid; gap: 6px; }
+.operations { display: inline-flex; align-items: center; gap: 4px; }
+.row { display: grid; grid-template-columns: minmax(64px, .7fr) minmax(0, 1.3fr) 24px; gap: 4px; align-items: start; min-width: 0; }
+.row > * { min-width: 0; }
+.row input, .row select { height: 32px; min-height: 32px; border: 0; border-radius: 8px; padding: 6px 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.row input { width: 100%; }
+.row > button { margin-top: 2px; width: 24px; }
+.output { grid-template-columns: minmax(64px, 1fr) minmax(0, 110px) 24px; }
+.reference > div > button { box-sizing: border-box; width: 100%; height: 32px; min-height: 32px; padding: 4px 10px; border: 0; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.reference[data-empty] > div > button { display: flex; gap: 6px; color: var(--dsw-alias-label-tertiary); }
+.reference[data-empty] > div > button::before { content: '{x}'; font-family: var(--ds-font-family-code); }
+.help { margin: 8px 0 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.editor { padding: 6px 8px 8px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover-solid); }
+.editor > header { display: flex; align-items: center; justify-content: space-between; min-height: 24px; padding-left: 2px; color: var(--dsw-alias-label-secondary); font-size: 12px; font-weight: 600; }
+.editor > header > div { display: flex; gap: 2px; }
+.editor > header > select { max-width: 160px; height: 24px; padding: 0 2px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-transform: uppercase; cursor: pointer; }
+.editor > header > select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
+.editor > header > select option { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); }
+.codeArea { height: 200px; min-height: 100px; max-height: 60vh; resize: vertical; overflow: auto; }
+.codeArea > :global(.cm-theme) { height: 100%; }
+.editor :global(.cm-editor), .editor :global(.cm-gutters) { background: transparent; color: var(--dsw-alias-label-secondary); border: 0; }
+.editor :global(.cm-scroller) { font-family: var(--ds-font-family-code); font-size: 12px; line-height: 20px; }
+.editor :global(.cm-content) { caret-color: var(--dsw-alias-label-primary); color: var(--dsw-alias-label-primary); }
+.editor :global(.cm-focused) { outline: 0; }
+.editor :global(.cm-gutterElement) { padding-right: 8px; }
+.editor :global(.cm-cursor) { border-left-color: var(--dsw-alias-label-primary); }
+.editor :global(.cm-selectionBackground), .editor :global(.cm-activeLineGutter) { background: var(--dsw-alias-interactive-bg-hover) !important; }
+.editor :global(.tok-keyword), .editor :global(.tok-operator) { color: #8c42c1; }
+.editor :global(.tok-string) { color: #a31515; }
+.editor :global(.tok-variableName), .editor :global(.tok-number), .editor :global(.tok-bool) { color: #005cc5; }
+.editor :global(.tok-comment) { color: var(--dsw-alias-label-tertiary); }
+:global([data-ds-dark-theme]) .editor :global(.tok-keyword), :global([data-ds-dark-theme]) .editor :global(.tok-operator) { color: #c792ea; }
+:global([data-ds-dark-theme]) .editor :global(.tok-string) { color: #f28b82; }
+:global([data-ds-dark-theme]) .editor :global(.tok-variableName), :global([data-ds-dark-theme]) .editor :global(.tok-number), :global([data-ds-dark-theme]) .editor :global(.tok-bool) { color: #99c8ff; }
+.expanded { position: fixed; z-index: 80; box-sizing: border-box; display: flex; flex-direction: column; padding: 12px; border-radius: 10px; background: var(--dsw-alias-bg-layer-1); box-shadow: 0 0 12px -4px rgb(16 24 40 / 12%); overscroll-behavior: contain; }
+.expanded .codeArea { flex: 1; min-height: 0; max-height: none; resize: none; }

@@ -6,6 +6,7 @@
 //! the direct endpoint and the stdio/JSONL framing; byte-level framing
 //! regressions live in [`stdio_transport`].
 
+mod auxiliary;
 mod binding;
 mod conformance;
 mod endpoint;

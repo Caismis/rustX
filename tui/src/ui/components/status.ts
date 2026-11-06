@@ -26,13 +26,13 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 
 import type { PresentationState } from "../../presentation/state.ts";
 import type {
+  ConfigurationApplication,
   ModelInvocationView,
   SessionView,
 } from "../../protocol/app-server.ts";
 import { correlateTools, runningTools } from "../../presentation/tools.ts";
 import {
   approvalLabel,
-  describeReasoning,
   sessionLabel,
   unavailableCapabilities,
 } from "../../presentation/selectors.ts";
@@ -211,8 +211,9 @@ export function renderFooter(
   width = 120,
   session?: SessionView,
   conversation?: ConversationContext,
+  application?: ConfigurationApplication,
 ): string {
-  const segments = footerSegments(state, connectionState, session, conversation);
+  const segments = footerSegments(state, connectionState, session, conversation, application);
   return layout(segments, width).join("\n");
 }
 
@@ -221,6 +222,7 @@ interface FooterFacts {
   connection: string;
   session?: SessionView;
   conversation?: ConversationContext;
+  application?: ConfigurationApplication;
 }
 
 /** The shell asks for layout on every render, including terminal-only resizes. */
@@ -232,7 +234,7 @@ export class FooterView {
     const facts = this.#facts();
     if (!facts.state) return [];
     const pad = width > 2 ? " " : "";
-    return renderFooter(facts.state, facts.connection, Math.max(1, width - pad.length * 2), facts.session, facts.conversation)
+    return renderFooter(facts.state, facts.connection, Math.max(1, width - pad.length * 2), facts.session, facts.conversation, facts.application)
       .split("\n").map((line) => `${pad}${line}${pad}`);
   }
 }
@@ -243,6 +245,7 @@ export function footerSegments(
   connectionState: string,
   session?: SessionView,
   conversation?: ConversationContext,
+  application?: ConfigurationApplication,
 ): Segment[] {
   const models = modelSegments(state);
   const segments = models.slice(0, 1);
@@ -259,19 +262,43 @@ export function footerSegments(
   if (connectionState && connectionState !== "connected") {
     segments.push({ text: role.warning(connectionState), priority: 0 });
   }
+  const configuration = configurationSegment(application);
+  if (configuration) segments.push(configuration);
   const context = contextLabel(state);
   if (context) segments.push({ text: role.meta(context), priority: 1 });
   const unavailable = unavailableCapabilities(state).length;
   if (unavailable) segments.push({ text: role.warning(`${unavailable} optional ${unavailable === 1 ? "capability" : "capabilities"} unavailable`), priority: 2 });
-  if (typeof session?.name === "string" && session.name.trim()) {
-    segments.push({ text: role.meta(`session ${session.name}`), priority: 3 });
+  if (session && (session.name ?? session.generated_title?.text)?.trim()) {
+    segments.push({ text: role.meta(`session ${sessionLabel(session)}`), priority: 3 });
   }
   const usage = state.statistics?.reported_usage;
-  if (usage) segments.push({ text: role.meta(`reported ↑${compact(usage.input_tokens)} ↓${compact(usage.output_tokens)}`), priority: 4 });
+  if (usage) segments.push({ text: role.meta(`reported ↑${usage.input_tokens == null ? '?' : compact(usage.input_tokens)} ↓${usage.output_tokens == null ? '?' : compact(usage.output_tokens)}`), priority: 4 });
   if (state.statistics && state.statistics.requests_with_usage !== state.statistics.model_requests) {
     segments.push({ text: role.meta(`usage coverage ${state.statistics.requests_with_usage}/${state.statistics.model_requests} requests`), priority: 4 });
   }
   return segments;
+}
+
+/**
+ * The Session configuration status, in Pi's transient-status manner: absent
+ * once everything is applied, a quiet note while a saved change is prepared or
+ * waits for current work, and a warning when native kept the previous
+ * configuration. An uncertain commit published its configuration but could
+ * not record it, so nothing claims the previous one was kept; it outranks a
+ * failure. `/session settings` inspects the details.
+ */
+export function configurationSegment(application?: ConfigurationApplication): Segment | undefined {
+  const states = Object.values(application?.units ?? {}).map(unit => unit?.status);
+  if (states.includes("uncertain")) {
+    return { text: role.warning("config applied, not recorded · new work waits · /session settings"), priority: 0, compact: role.warning("config uncertain") };
+  }
+  if (states.includes("failed")) {
+    return { text: role.warning("config failed · previous kept · /session settings"), priority: 0, compact: role.warning("config failed") };
+  }
+  if (states.includes("process_restart")) return { text: role.warning("config needs restart"), priority: 1 };
+  if (states.includes("ready")) return { text: role.meta("config applies after current work"), priority: 1, compact: role.meta("config waiting") };
+  if (states.includes("preparing")) return { text: role.meta("config preparing"), priority: 1 };
+  return undefined;
 }
 
 /**
@@ -396,7 +423,7 @@ export function renderStartup(
     : [
         role.strong("rustX"),
         `${role.meta("model")} ${role.accent(model.model)}`,
-        `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))} · ${role.meta(`${model.profile == null ? "" : `profile ${model.profile} · `}reasoning ${describeReasoning(model)}`)}`,
+        `${role.meta(`provider ${providerLabel(model)} · ${protocolLabel(model.protocol)}`)} · ${role.meta(contextLabel(state))}${model.profile == null ? "" : ` · ${role.meta(`profile ${model.profile}`)}`}`,
       ];
   if (session !== undefined) {
     lines.push(

@@ -120,7 +120,7 @@
 //!   to the model exactly once.
 //!   Foreground output at or below the bound creates no file at all, and
 //!   a spill write failure is an explicit invocation failure.
-//! - **Background**: the live-output file (`tasks/exec_N.output`) is
+//! - **Background**: the live-output file (`e-<16 hex>.output`) is
 //!   allocated by the background registry at the dispatch commit point and
 //!   advertised in the accepted result; this executor appends every
 //!   decoded fragment to it from the first byte on, so the model can
@@ -201,6 +201,22 @@ pub const NAME: &str = "bash";
 
 /// The tool-owned registration of the native Bash tool.
 #[must_use]
+/// The one JSON object a settled foreground command returns (see the
+/// executor's result content).
+pub(super) fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "exit_code": {"type": "integer"},
+            "stdout": {"type": "string"},
+            "stderr": {"type": "string"},
+            "combined": {"type": "string"},
+        },
+        "required": ["exit_code", "stdout", "stderr", "combined"],
+        "additionalProperties": false,
+    })
+}
+
 pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::ToolDefinition {
     native_definition::<BashInput>(
         "tool-bash",

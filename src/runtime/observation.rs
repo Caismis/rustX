@@ -110,11 +110,11 @@ pub(crate) enum ConversationObservation {
         observation: Box<ConversationObservation>,
     },
     /// A native Workflow cut published after its corresponding durable receipt.
-    Workflow(Vec<crate::runtime_client::workflow_source::WorkflowReadSource>),
+    Workflow(Vec<crate::observation::workflow_source::WorkflowReadSource>),
     /// Bounded authoritative durable replacement, ordered under the Goal
     /// publication boundary. Every Goal change is a durable phase/revision
     /// change; there is no activation-only Goal observation.
-    GoalChanged(crate::runtime_client::goal::RuntimeClientGoalView),
+    GoalChanged(crate::observation::goal::RuntimeClientGoalView),
     /// One finite witness from the native Journal publication-ready prefix.
     JournalFact(crate::durable::observation::ObservationEventWitness),
     /// Scalar native publication release; body remains solely in the Journal source.
@@ -146,12 +146,12 @@ pub(crate) enum ConversationObservation {
     /// Finite native C evidence; canonical body bytes remain at their source.
     CanonicalCommitted {
         attempt_id: Option<AttemptId>,
-        receipt: crate::durable::inbox::TranscriptCommitReceipt,
+        receipt: crate::durable::TranscriptCommitReceipt,
     },
     /// Finite audit settlement captured in the native publication transaction.
     AuditSettled {
         attempt_id: AttemptId,
-        receipt: crate::durable::inbox::PublicationAuditReceipt,
+        receipt: crate::durable::PublicationAuditReceipt,
     },
     /// One canonical message commit (the loop's commit observation seam;
     /// the internal committed-message events reference identity only).
@@ -165,7 +165,7 @@ pub(crate) enum ConversationObservation {
         transcript_cursor: Option<TranscriptCursor>,
     },
     /// One composed Agent Status observation.
-    Status(crate::runtime_client::snapshot::AgentStatusView),
+    Status(crate::observation::status::AgentStatusView),
     /// One publication stream opened (Issue #108). The frozen identity pins
     /// the stream to the exact request generation that started it.
     PublicationOpened {
@@ -183,7 +183,7 @@ pub(crate) enum ConversationObservation {
         frame: PublicationFrame,
     },
     /// Complete finite pending head from its native transaction.
-    PendingReceipt(Arc<crate::durable::inbox::PendingObservationReceipt>),
+    PendingReceipt(Arc<crate::durable::PendingObservationReceipt>),
     /// Test fixture for a native enqueue.
     #[cfg(test)]
     InboundEnqueued(InboundItem),
@@ -242,7 +242,7 @@ pub(crate) enum ConversationObservation {
     /// no consumer can fold half a generation.
     Capability {
         /// The activated immutable capability snapshot.
-        source: crate::runtime_client::capability_source::CapabilityReadSource,
+        source: crate::observation::capability_source::CapabilityReadSource,
     },
     /// One published immutable runtime resource generation, **including the
     /// capability generation it was built against**.
@@ -270,8 +270,8 @@ pub(crate) enum ConversationObservation {
         snapshot: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
         /// The authoritative availability of every evaluated optional
         /// capability source at that same commit.
-        capability: crate::runtime_client::capability_source::CapabilityReadSource,
-        display: crate::runtime_client::resource_source::ResourceReadSource,
+        capability: crate::observation::capability_source::CapabilityReadSource,
+        display: crate::observation::resource_source::ResourceReadSource,
     },
 
     /// One complete frozen admission fact, under the coordinator lock.
@@ -286,7 +286,7 @@ pub(crate) enum ConversationObservation {
     SessionModelChanged {
         /// The redacted session model state after the update.
         model: crate::model::session::SessionModelReadSource,
-        capability: Option<crate::runtime_client::capability_source::CapabilityReadSource>,
+        capability: Option<crate::observation::capability_source::CapabilityReadSource>,
     },
     /// Runtime drain began and new semantic admission closed.
     Shutdown,
@@ -294,13 +294,13 @@ pub(crate) enum ConversationObservation {
     PendingHead {
         owner: &'static str,
         cut: crate::runtime::identity::ObservationCollectionCut,
-        head: Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>,
+        head: Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
     },
     /// One native interaction became pending.
     InteractionPending {
         /// The root-facing routed request. The originating coordinator still
         /// owns the pending waiter and settlement.
-        interaction: crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+        interaction: crate::observation::interaction::RuntimeClientInteractionHeader,
         /// The originating conversation's requested audit and cursor, when
         /// this is the primary conversation. Child audits stay child-local.
         audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
@@ -314,6 +314,12 @@ pub(crate) enum ConversationObservation {
         /// The originating conversation's settled audit, when this is the
         /// primary conversation and its commit succeeded.
         audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
+    },
+    /// A Session configuration commit was recorded at its own transcript
+    /// position. Published inside its Journal sequence's `Published` wrapper.
+    ConfigurationApplied {
+        event: Box<RuntimeEventEnvelope>,
+        cursor: TranscriptCursor,
     },
     /// A child process died while owning one or more live interactions.
     ///
@@ -351,16 +357,6 @@ pub(crate) enum ConversationObservation {
         /// The human-readable failure diagnostic.
         diagnostic: String,
     },
-    /// The runtime's current configuration-adoption eligibility changed.
-    ///
-    /// Runtime-domain advisory state, never configuration application state:
-    /// it answers whether this live runtime could adopt a prepared
-    /// configuration now, derived by the adoption gate's idle rule over its
-    /// in-memory owners. The runtime publishes it only when the derived value
-    /// differs from its previous publication, so ordinary streaming never
-    /// emits it. `session/adoptConfiguration` still revalidates the real gate
-    /// at its commit boundary.
-    AdoptionEligibility(crate::local_runtime::configuration::application::AdoptionEligibility),
 }
 
 /// Streaming traversal of the complete native transition. No payload or
@@ -588,16 +584,12 @@ pub(crate) trait PublicationProjectionCommit: Send + Sync {
     ) -> NativeReceiptInstallation;
     fn native_goal(
         &self,
-        receipt: &crate::durable::inbox::GoalObservationReceipt,
+        receipt: &crate::durable::GoalObservationReceipt,
     ) -> NativeReceiptInstallation;
-    fn native_audit(
-        &self,
-        attempt: &AttemptId,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
-    );
+    fn native_audit(&self, attempt: &AttemptId, receipt: &crate::durable::PublicationAuditReceipt);
     fn native_pending(
         &self,
-        receipt: Option<&crate::durable::inbox::PendingObservationReceipt>,
+        receipt: Option<&crate::durable::PendingObservationReceipt>,
         cut: &crate::durable::reading::ConversationReadCut,
     );
     fn opened(&self, attempt: &AttemptId, start: &PublicationStreamStart);
@@ -625,10 +617,15 @@ pub(crate) enum OpeningUserPreview {
 pub(crate) struct SessionObservationMetadata {
     pub(crate) human_activity_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) opening_preview: OpeningUserPreview,
+    pub(crate) first_human_position: Option<u64>,
+    pub(crate) model_generation: u64,
     pub(crate) closed: bool,
 }
 impl SessionObservationMetadata {
-    fn fold_canonical(&mut self, batch: &crate::durable::inbox::CanonicalObservationBatch) {
+    fn fold_canonical(&mut self, batch: &crate::durable::CanonicalObservationBatch) {
+        if self.first_human_position.is_none() {
+            self.first_human_position = batch.first_human_position;
+        }
         self.fold(
             batch.human_activity_at,
             batch.has_opening_user,
@@ -696,7 +693,7 @@ impl ObservationFanout {
         self.session_metadata.subscribe()
     }
 
-    fn canonical_metadata(&self, batch: &crate::durable::inbox::CanonicalObservationBatch) {
+    fn canonical_metadata(&self, batch: &crate::durable::CanonicalObservationBatch) {
         self.session_metadata.send_if_modified(|metadata| {
             let previous = metadata.clone();
             metadata.fold_canonical(batch);
@@ -758,6 +755,15 @@ impl ObservationFanout {
             .lock()
             .expect("observation fan-out dispatch lock poisoned");
         for fact in observation.facts() {
+            if matches!(
+                fact,
+                ConversationObservation::SessionModelChanged { .. }
+                    | ConversationObservation::Resources { .. }
+            ) {
+                self.session_metadata.send_modify(|metadata| {
+                    metadata.model_generation = metadata.model_generation.saturating_add(1);
+                });
+            }
             if let ConversationObservation::CanonicalCommitted { receipt, .. } = fact
                 && receipt.ordinal.checked_add(1) == Some(receipt.observation.count)
             {
@@ -816,7 +822,7 @@ impl ObservationFanout {
 
     pub(crate) fn native_pending(
         &self,
-        receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+        receipt: Option<&Arc<crate::durable::PendingObservationReceipt>>,
         cut: &crate::durable::reading::ConversationReadCut,
     ) {
         if let Some(projection) = self.publication_projection.get() {
@@ -832,7 +838,7 @@ impl ObservationFanout {
 
     pub(crate) fn native_goal(
         &self,
-        receipt: &crate::durable::inbox::GoalObservationReceipt,
+        receipt: &crate::durable::GoalObservationReceipt,
     ) -> NativeReceiptInstallation {
         if let Some(projection) = self.publication_projection.get() {
             projection.native_goal(receipt)
@@ -844,7 +850,7 @@ impl ObservationFanout {
     pub(crate) fn native_audit(
         &self,
         attempt: &AttemptId,
-        receipt: &crate::durable::inbox::PublicationAuditReceipt,
+        receipt: &crate::durable::PublicationAuditReceipt,
     ) {
         if let Some(projection) = self.publication_projection.get() {
             projection.native_audit(attempt, receipt);
@@ -944,7 +950,7 @@ struct PendingState {
     /// The reliable lane: ordered, non-lossy semantic/lifecycle
     /// observations.
     reliable: VecDeque<ConversationObservation>,
-    pending_head: Option<Arc<crate::durable::inbox::PendingObservationReceipt>>,
+    pending_head: Option<Arc<crate::durable::PendingObservationReceipt>>,
     /// The disposable subagent-activity lane: the latest unpublished
     /// activity snapshot of each subagent that reported one, keyed by
     /// subagent identity.
@@ -1835,19 +1841,15 @@ impl PendingObservations {
         state.latest_activity.len() + usize::from(state.latest_offhead_activity.is_some())
     }
 
-    /// Test-only: separate runtime adoption authority from the child activity
-    /// backpressure lane. A child admission can publish Busy asynchronously.
+    /// Test-only: every queued observation across the reliable and
+    /// coalescing lanes.
     #[cfg(test)]
-    pub(crate) fn queued_without_adoption(&self) -> usize {
+    pub(crate) fn queued_total(&self) -> usize {
         let state = self
             .state
             .lock()
             .expect("pending observation queue lock poisoned");
-        state
-            .reliable
-            .iter()
-            .filter(|entry| !matches!(entry, ConversationObservation::AdoptionEligibility(_)))
-            .count()
+        state.reliable.len()
             + state.latest_activity.len()
             + usize::from(state.latest_offhead_activity.is_some())
             + state.latest_progress.len()
@@ -2120,11 +2122,10 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::AttemptFailed { .. }
         | RuntimeEvent::TurnStarted
         | RuntimeEvent::TurnCompleted
-        | RuntimeEvent::ModelRequestStarted { .. }
         | RuntimeEvent::ContextContributionEmitted { .. }
-        | RuntimeEvent::ModelRequestCompleted { .. }
-        | RuntimeEvent::ModelRequestFailed { .. }
         | RuntimeEvent::ModelRetryScheduled { .. }
+        // A Session configuration commit is its own between-Attempt record.
+        | RuntimeEvent::ConfigurationApplied { .. }
         // Adoption is the canonical linearization point at which inbound
         // became a turn this conversation owes an answer for. Trace projects
         // it as the ledger's User record, so its receipt must be published
@@ -2151,8 +2152,26 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::WorkflowCancelled { .. }
         | RuntimeEvent::InteractionRequested { .. }
         | RuntimeEvent::InteractionSettled { .. }
-        | RuntimeEvent::Goal { .. } => true,
-        RuntimeEvent::NativeToolInvocation { .. }
+        | RuntimeEvent::Goal { .. }
+        | RuntimeEvent::ModelRequestStarted {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        }
+        | RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        }
+        | RuntimeEvent::ModelRequestFailed {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+            ..
+        } => true,
+        RuntimeEvent::ModelRequestStarted { .. }
+        | RuntimeEvent::ModelRequestCompleted { .. }
+        | RuntimeEvent::ModelRequestFailed { .. }
+        | RuntimeEvent::AuxiliaryCallStarted { .. }
+        | RuntimeEvent::AuxiliaryCallSettled { .. }
+        | RuntimeEvent::AuxiliaryRetryScheduled { .. }
+        | RuntimeEvent::NativeToolInvocation { .. }
         | RuntimeEvent::ToolExecutionProgress { .. }
         | RuntimeEvent::ToolExecutionDeadlineFired { .. }
         | RuntimeEvent::ToolExecutionCancellationRequested { .. }
@@ -2164,17 +2183,64 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::WorkflowLoopExited { .. }
         | RuntimeEvent::WorkflowBlockSettled { .. }
         | RuntimeEvent::WorkflowNodeStarted { .. }
+        | RuntimeEvent::WorkflowNodeInputRecorded { .. }
+        | RuntimeEvent::WorkflowNodeOutputRecorded { .. }
+        | RuntimeEvent::WorkflowNodeWaiting { .. }
         | RuntimeEvent::WorkflowNodeSettled { .. }
         | RuntimeEvent::WorkflowAgentAdmitted { .. }
         | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
         | RuntimeEvent::WorkflowBranchSelected { .. }
-        | RuntimeEvent::WorkflowParallelAdmitted { .. }
-        | RuntimeEvent::WorkflowParallelSettled { .. } => false,
+        => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn first_timestamp_less_human_wakes_after_runtime_preview_has_settled() {
+        use crate::durable::CanonicalStore;
+        use crate::message::{MessageBlock, UserSource};
+        let store = crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .unwrap();
+        store.initialize(&[]).unwrap();
+        let fanout = ObservationFanout::new(Arc::new(PendingObservations::new()));
+        let mut watch = fanout.session_metadata();
+        let message = |id: &str, source: UserSource| {
+            MessageBlock::User(crate::message::UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new(id),
+                content: vec![crate::message::UserContentBlock::Text(
+                    crate::message::TextBlock { text: id.into() },
+                )],
+                source,
+                kind: crate::message::InboundKind::Message,
+                timestamp: None,
+            })
+        };
+        let runtime = store
+            .append_canonical(&message("runtime", UserSource::Runtime))
+            .unwrap();
+        fanout.push(&ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt: runtime,
+        });
+        let previous = watch.borrow_and_update().clone();
+        assert!(previous.first_human_position.is_none());
+        let human = store
+            .append_canonical(&message("human", UserSource::Human))
+            .unwrap();
+        fanout.push(&ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt: human,
+        });
+        assert!(watch.has_changed().unwrap());
+        let changed = watch.borrow_and_update().clone();
+        assert_eq!(changed.first_human_position, Some(2));
+        assert_eq!(changed.opening_preview, previous.opening_preview);
+        assert_eq!(changed.human_activity_at, previous.human_activity_at);
+    }
+
     #[test]
     fn t20_session_metadata_keeps_first_boundary_and_maximum_activity_without_fifo() {
         let first = chrono::DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
@@ -2309,7 +2375,7 @@ mod tests {
                     panic!("finite source witness");
                 };
                 assert_eq!(witness.sequence, sequence);
-                assert!(crate::runtime_client::checkpoint::bounded_bytes(witness, 16384).is_some());
+                assert!(crate::observation::bounded::bounded_bytes(witness, 16384).is_some());
                 sequences.push(sequence);
             }
         }

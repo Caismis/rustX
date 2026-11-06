@@ -35,7 +35,7 @@ impl Versions {
         let read = |sql| {
             connection
                 .query_row_cached(sql, [], |row| row.get(0))
-                .map_err(|error| storage(error.to_string()))
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))
         };
         Ok(Self {
             data: read("PRAGMA main.data_version")?,
@@ -58,7 +58,7 @@ pub(super) struct Hit {
 struct Row {
     header: super::super::observation::TranscriptRowProof,
     response: Option<Arc<ResponsePageItem>>,
-    prepared: crate::runtime_client::checkpoint::PreparedTranscriptRow,
+    prepared: crate::observation::transcript::PreparedTranscriptRow,
 }
 #[derive(Default)]
 struct State {
@@ -131,12 +131,12 @@ impl Owner {
             // xinfo preserves SQLite's logical column ordinals across virtual columns.
             let mut statement = connection
                 .prepare(&format!("PRAGMA main.table_xinfo({table})"))
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             let actual = statement
                 .query_map([], |row| {
                     Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
                 })
-                .map_err(|error| storage(error.to_string()))?
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| storage(error.to_string()))?;
             let selected = wanted
@@ -320,7 +320,7 @@ impl Owner {
         if !snapshot.admit
             || cut.read.conversation_id.as_str().len() > 512
             || !bounded_selection(selection)
-            || crate::runtime_client::preflight::bounded_fit(
+            || crate::observation::preflight::bounded_fit(
                 &(&item.process, &item.response, &item.identity_fields),
                 ITEM_BUDGET,
             ) != Some(true)
@@ -379,7 +379,7 @@ impl Owner {
     ) -> Result<
         Option<(
             Arc<super::super::observation::TranscriptDescriptor>,
-            crate::runtime_client::checkpoint::PreparedTranscriptRow,
+            crate::observation::transcript::PreparedTranscriptRow,
         )>,
         ConversationStoreError,
     > {
@@ -399,12 +399,11 @@ impl Owner {
     pub(in crate::durable::sqlite) fn transcript_row(
         &self,
         conversation: &crate::runtime::identity::ConversationId,
-        value: &Arc<crate::runtime_client::snapshot::RuntimeClientTranscriptEntry>,
+        value: &Arc<crate::observation::transcript::RuntimeClientTranscriptEntry>,
         header: Option<super::super::observation::TranscriptRowProof>,
         response: Option<&Arc<ResponsePageItem>>,
-    ) -> Result<crate::runtime_client::checkpoint::PreparedTranscriptRow, ConversationStoreError>
-    {
-        use crate::runtime_client::checkpoint::PreparedTranscriptRow;
+    ) -> Result<crate::observation::transcript::PreparedTranscriptRow, ConversationStoreError> {
+        use crate::observation::transcript::PreparedTranscriptRow;
         let Some(header) = header else {
             #[cfg(test)]
             super::record_row_work(false);
@@ -507,7 +506,7 @@ fn bounded_selection(selection: &ResponsePageSelection) -> bool {
         ResponsePageSelectionKind::Process => true,
         ResponsePageSelectionKind::Message(id) => id.as_str().len() <= 256,
         ResponsePageSelectionKind::Deferred(value) => {
-            crate::runtime_client::preflight::bounded_fit(value, 512) == Some(true)
+            crate::observation::preflight::bounded_fit(value, 512) == Some(true)
         }
     }
 }

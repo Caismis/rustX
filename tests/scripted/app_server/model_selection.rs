@@ -5,7 +5,7 @@
 use super::*;
 use crate::local_runtime::configuration::settings::SourceTarget;
 use crate::model::catalog::{ModelProfileId, ModelRef};
-use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
 use crate::runtime::conversation_runtime::{Gate, ModelUpdateError};
 use crate::runtime_client::{EventDelivery, RuntimeClientEvent};
 
@@ -49,7 +49,7 @@ impl Drop for SelectionGate {
     }
 }
 
-fn selection(model: &str) -> SessionModelConfig {
+pub(super) fn selection(model: &str) -> SessionModelConfig {
     SessionModelConfig::of(ModelRef::parse(model).unwrap())
 }
 
@@ -87,7 +87,7 @@ async fn fixture() -> Fixture {
     fixture
 }
 
-async fn assert_authority(fixture: &Fixture, expected: &SessionModelConfig) {
+pub(super) async fn assert_authority(fixture: &Fixture, expected: &SessionModelConfig) {
     let id = &fixture.sessions[0].id;
     let (_, durable) = fixture.manager.sessions.read_settings(id).await.unwrap();
     assert_eq!(durable.model.as_ref(), Some(expected));
@@ -110,7 +110,9 @@ async fn assert_authority(fixture: &Fixture, expected: &SessionModelConfig) {
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     assert_eq!(runtime.model_view().configured, *expected);
     assert_eq!(
-        runtime.configuration_view().unwrap().adopted_binding,
+        crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+            .unwrap()
+            .adopted_binding,
         retained.binding_revision
     );
     let projected = fixture
@@ -133,13 +135,6 @@ fn assert_conflict(result: &Result<crate::model::session::SessionModelView, Mode
     );
 }
 
-async fn gate_entered(gate: &Arc<Gate>) {
-    let gate = gate.clone();
-    tokio::task::spawn_blocking(move || gate.wait_entered())
-        .await
-        .unwrap();
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_generation() {
     bounded(async {
@@ -147,15 +142,22 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         let id = &f.sessions[0].id;
         let runtime = f.manager.configuration_runtime(id).unwrap();
         let mut original = selection("local/a");
-        let summary = SummaryModelPolicy::Explicit {
+        let summary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("local/b").unwrap(),
             profile: None,
             request_params: serde_json::Map::default(),
             max_output_tokens: Some(128),
         };
         original.summary_model = summary.clone();
+        let title = summary.clone();
+        original.title_model = title.clone();
         f.manager.set_model(id, original).await.unwrap();
-        let before = runtime.configuration_view().unwrap().adopted_binding;
+        let before =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         let source = f
             .manager
             .source_settings(&SourceTarget::User)
@@ -202,7 +204,7 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         // The independent Summary may select the same large catalog entry.
         // Its configuration fits admission; the complete resolved primary +
         // Summary view is genuinely larger than a transport record.
-        let summary = SummaryModelPolicy::Explicit {
+        let summary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(&enormous_model).unwrap(),
             profile: Some(ModelProfileId::parse(&enormous_profile).unwrap()),
             request_params: serde_json::Map::default(),
@@ -211,7 +213,12 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         let mut retained = runtime.model_view().configured;
         retained.summary_model = summary.clone();
         f.manager.set_model(id, retained).await.unwrap();
-        let binding = runtime.configuration_view().unwrap().adopted_binding;
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         assert_ne!(
             before,
             binding,
@@ -249,11 +256,12 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
             "resolved native identities and independent Summary exceed one complete record"
         );
         assert!(
-            crate::runtime_client::checkpoint::bounded_bytes(&model_view, 1_048_576).is_none(),
+            crate::observation::bounded::bounded_bytes(&model_view, 1_048_576).is_none(),
             "native model body exceeds the complete transport record budget"
         );
         let configured = model_view.configured;
         assert_eq!(configured.summary_model, summary);
+        assert_eq!(configured.title_model, title);
         assert_eq!(configured.model.as_str(), enormous_model);
         assert_eq!(configured.profile.unwrap().as_str(), enormous_profile);
         let (_, durable) = f.manager.sessions.read_settings(id).await.unwrap();
@@ -273,10 +281,16 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
             Some(crate::runtime_client::snapshot::RuntimeClientModelStatus {
                 available: true,
                 body_deferred: true,
-                binding_revision: Some(runtime.configuration_view().unwrap().adopted_binding)
+                binding_revision: Some(
+                    crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                        &runtime
+                    )
+                    .unwrap()
+                    .adopted_binding
+                )
             })
         );
-        assert!(crate::runtime_client::checkpoint::bounded_bytes(&checkpoint, 786_432).is_some());
+        assert!(crate::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
     })
     .await;
 }
@@ -318,7 +332,8 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 )
                 .unwrap(),
                 max_output_tokens: Some(333),
-                summary_model: SummaryModelPolicy::Explicit {
+                title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+                summary_model: AuxiliaryModelPolicy::Explicit {
                     model: ModelRef::parse("local/a").unwrap(),
                     profile: None,
                     request_params: serde_json::from_value(serde_json::json!({"temperature": 0.2}))
@@ -334,7 +349,8 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 profile: Some(ModelProfileId::new("low")),
                 request_params: serde_json::from_value(serde_json::json!({"seed": 17})).unwrap(),
                 max_output_tokens: Some(888),
-                summary_model: SummaryModelPolicy::Explicit {
+                title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+                summary_model: AuxiliaryModelPolicy::Explicit {
                     model: ModelRef::parse("local/a").unwrap(),
                     profile: None,
                     request_params: serde_json::from_value(serde_json::json!({"temperature": 0.6}))
@@ -344,7 +360,12 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 ..selection("local/b")
             };
             let resources = runtime.runtime_resources();
-            let binding = runtime.configuration_view().unwrap().adopted_binding;
+            let binding =
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime,
+                )
+                .unwrap()
+                .adopted_binding;
             let settings_revision = f.manager.sessions.read_settings(id).await.unwrap().0;
             let (attachment, _) = host
                 .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -411,7 +432,11 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 settings_revision + 1
             );
             assert_eq!(
-                runtime.configuration_view().unwrap().adopted_binding,
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime
+                )
+                .unwrap()
+                .adopted_binding,
                 binding + 1
             );
             assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));
@@ -543,7 +568,7 @@ async fn r05_concurrent_prepared_selection_cannot_overwrite_the_winning_commit()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn r06_catalog_publication_rejects_prepared_selection_without_adopting_context() {
+async fn r06_catalog_publication_rejects_prepared_selection_and_commits_unrelated_context() {
     bounded(async {
         let f = fixture().await;
         let id = &f.sessions[0].id;
@@ -582,8 +607,7 @@ async fn r06_catalog_publication_rejects_prepared_selection_without_adopting_con
             .reconcile_configuration(&SourceTarget::User)
             .await
             .unwrap();
-        let applied = super::configuration::settled(&f, 0).await;
-        assert!(applied.candidate.is_some());
+        super::configuration::applied(&f, 0).await;
         assert!(
             runtime
                 .model_catalog()
@@ -599,25 +623,20 @@ async fn r06_catalog_publication_rejects_prepared_selection_without_adopting_con
         );
         let selected = selection("local/c");
         f.manager.set_model(id, selected.clone()).await.unwrap();
-        super::configuration::settled(&f, 0).await;
+        super::configuration::applied(&f, 0).await;
         assert_authority(&f, &selected).await;
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
-            original_instructions
-        );
-        assert!(
-            f.manager
-                .configuration_application(id)
-                .unwrap()
-                .candidate
-                .is_some()
-        );
+        // The unrelated instructions committed automatically; the rejected
+        // selection fence never decided it, and nothing invoked a model.
+        let instructions = runtime
+            .runtime_resources()
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions
+            .clone();
+        assert_ne!(instructions, original_instructions);
+        assert_eq!(instructions, "pending unrelated instructions");
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     })
@@ -632,7 +651,7 @@ async fn r06_policy_publication_at_same_binding_fences_prepared_selection_resour
             let id = &f.sessions[0].id;
             let runtime = f.manager.configuration_runtime(id).unwrap();
             let before = runtime.runtime_resources();
-            let binding = runtime.configuration_view().unwrap().adopted_binding;
+            let binding = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap().adopted_binding;
             let settings = f.manager.sessions.read_settings(id).await.unwrap();
             let mut policy_gate = SelectionGate::at(&f, "configuration_policy_prepared");
             let probe = f.manager.probe(&f.id(0).await);
@@ -654,13 +673,13 @@ async fn r06_policy_publication_at_same_binding_fences_prepared_selection_resour
             drop(policy_gate);
             probe.before_catalog_publication.entered().await;
             assert_eq!(f.manager.configuration_application(id).unwrap().desired, identity);
-            assert_eq!(runtime.configuration_view().unwrap().adopted_binding, binding);
+            assert_eq!(crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap().adopted_binding, binding);
             assert!(!Arc::ptr_eq(&runtime.runtime_resources(), &before));
             if shared_capacity {
                 assert_eq!(runtime.runtime_resources().revision(), before.revision());
-                assert_eq!(runtime.configuration_view().unwrap().child_capacity.max_concurrent, 3);
+                assert_eq!(crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap().child_capacity.max_concurrent, 3);
             } else {
-                assert_eq!(runtime.configuration_view().unwrap().model_timeout.response_start_timeout_ms, 12345);
+                assert_eq!(crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime).unwrap().model_timeout.response_start_timeout_ms, 12345);
             }
             drop(selection_gate);
             let result = pending.await.unwrap();
@@ -708,7 +727,12 @@ async fn r07_catalog_failure_before_and_after_visibility_preserves_coherent_auth
             let id = &f.sessions[0].id;
             let runtime = f.manager.configuration_runtime(id).unwrap();
             let resources = runtime.runtime_resources();
-            let binding = runtime.configuration_view().unwrap().adopted_binding;
+            let binding =
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime,
+                )
+                .unwrap()
+                .adopted_binding;
             let (revision, _) = f.manager.sessions.read_settings(id).await.unwrap();
             let host = f.manager.configuration_host(id).unwrap();
             let checkpoint = host.checkpoint().unwrap();
@@ -740,7 +764,11 @@ async fn r07_catalog_failure_before_and_after_visibility_preserves_coherent_auth
                 revision + u64::from(after_visibility)
             );
             assert_eq!(
-                runtime.configuration_view().unwrap().adopted_binding,
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime
+                )
+                .unwrap()
+                .adopted_binding,
                 binding + u64::from(after_visibility)
             );
             assert!(Arc::ptr_eq(&resources, &runtime.runtime_resources()));

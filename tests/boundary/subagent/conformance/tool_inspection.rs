@@ -1,9 +1,9 @@
 // Real Child inspection uses the same finite Tool heads on live IPC and cold Store routes.
 use super::*;
-use crate::runtime_client::checkpoint::decode_domain_value;
+use crate::observation::bounded::decode_domain_value;
+use crate::observation::trace::{TraceFieldSource, TraceKind};
 use crate::runtime_client::trace::{
-    TraceFieldSource, TraceInspectionContent, TraceInspectionHead, TraceKind,
-    TraceToolDefinitionSelection,
+    TraceInspectionContent, TraceInspectionHead, TraceToolDefinitionSelection,
 };
 use crate::runtime_client::{RuntimeClientError, RuntimeClientResult};
 use base64::Engine as _;
@@ -73,7 +73,7 @@ async fn selected_tool_head(
 async fn assert_child_definition(
     host: &crate::runtime_client::RuntimeClientHost,
     agent: &AgentId,
-    cut: &crate::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     head: &TraceInspectionHead,
 ) {
     let TraceInspectionContent::Tool {

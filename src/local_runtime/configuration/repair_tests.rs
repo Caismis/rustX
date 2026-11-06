@@ -22,9 +22,6 @@ request_params = '{"vendor_x":{"secret_mode":true},"temperature":0.25}'
 [models."local/a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [agent.model]
 model = "local/a"
 "#;
@@ -107,20 +104,15 @@ impl Fixture {
     }
 }
 
-/// The writer lock beside `document`.
+/// The writer lock of `document`.
 fn lock_of(document: &Path) -> PathBuf {
-    document.with_file_name(super::super::super::settings::lock_name(
-        document.file_name().unwrap(),
-    ))
+    super::super::super::settings::lock_path_of(document)
 }
 
-/// The directory entries of a written `rustx.toml`: the document and its
-/// writer lock, no staged candidate.
+/// The directory entries of a written `rustx.toml`: the lock directory and
+/// the document, no staged candidate.
 fn document_entries() -> [String; 2] {
-    [
-        super::super::super::settings::lock_name(std::ffi::OsStr::new("rustx.toml")),
-        "rustx.toml".into(),
-    ]
+    [".rustx-locks".into(), "rustx.toml".into()]
 }
 
 fn changes(text: &str) -> Vec<ConfigRepairChange> {
@@ -262,7 +254,6 @@ fn dynamic_identities_and_opaque_request_params_are_never_fields() {
     let text = format!(
         r#"{USER}
 [models."local/a".profiles."fast-🚀"]
-reasoning_enabled = false
 request_params = '{{"unknown_vendor_key":{{"nested":[1,2]}},"x-api-key":"SECRET_PARAM"}}'
 
 [agent.tools.sources]
@@ -875,8 +866,6 @@ max_output_tokens = 8192
 [models."workspace-provider/model-a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
 "#;
 
 const USER_SELECTING_WORKSPACE_MODEL: &str =
@@ -897,7 +886,7 @@ fn semantic_diagnostics_never_echo_authored_values_or_identities() {
     };
     let model = |key: &str, extra: &str| {
         format!(
-            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\nprotocol = \"openai_responses\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\ntool_calls = true\nreasoning = false\n"
+            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\nprotocol = \"openai_responses\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\n"
         )
     };
     let local = provider("local", "https://example.com/v1");
@@ -1678,7 +1667,7 @@ fn assert_basename_writable(name: &std::ffi::OsStr) {
         names.sort();
         names
     };
-    let mut expected = vec![lock_of(&path), path.clone()];
+    let mut expected = vec![path.with_file_name(".rustx-locks"), path.clone()];
     expected.sort();
     assert_eq!(entries(), expected);
     let revision = super::super::super::settings::revision(Some(USER.as_bytes()));
@@ -1774,11 +1763,7 @@ fn a_non_utf8_user_source_keeps_its_exact_name_through_every_transaction() {
         names.sort();
         names
     };
-    let mut expected = vec![
-        name.clone(),
-        other.clone(),
-        lock_of(&path).file_name().unwrap().to_os_string(),
-    ];
+    let mut expected = vec![name.clone(), other.clone(), ".rustx-locks".into()];
     expected.sort();
     assert_eq!(entries(), expected);
     // Ordinary authoring reads the exact revision and is fenced by it.
@@ -1874,7 +1859,14 @@ fn every_writer_takes_one_bounded_lock_per_document() {
             "{name:?}"
         );
     }
-    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), names.len());
+    // Every lock lives in the one lock directory, the directory's only entry.
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_dir(directory.join(".rustx-locks"))
+            .unwrap()
+            .count(),
+        names.len()
+    );
 }
 
 #[test]
@@ -1944,8 +1936,9 @@ fn an_unsupported_user_version_is_invalid_in_projection_and_resolution_alike() {
         "manual repair preserves the input's implicit current schema version"
     );
     let path = fixture.path(&SourceTarget::User);
-    let original = super::super::parse_layer(&path, USER.as_bytes(), false).unwrap();
-    let repaired_layer = super::super::parse_layer(&path, committed.as_bytes(), false).unwrap();
+    let original = super::super::capture::parse_layer(&path, USER.as_bytes(), false).unwrap();
+    let repaired_layer =
+        super::super::capture::parse_layer(&path, committed.as_bytes(), false).unwrap();
     assert_eq!(
         repaired_layer, original,
         "manual repair preserves every authored semantic field through native encoding"
@@ -2290,47 +2283,59 @@ fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
     let malformed = fixture.receipt(&target).unwrap();
     assert_eq!(malformed.status, ConfigRepairStatus::Unresolved);
 
-    // Manual repair to a parsable document that is still intrinsically
-    // invalid: no success is claimed, the source stays unresolved, now with
-    // its current diagnostic.
+    // Invalid replacements cannot publish or withdraw the unresolved receipt.
     let revision = super::super::super::settings::revision(Some(b"[agent\n"));
-    let manual = fixture
-        .manager
-        .write_source_settings(
+    assert!(matches!(
+        fixture.manager.write_source_settings(
             &target,
             &revision,
             SourceMutation::RepairConfig {
-                document: INTRINSICALLY_INVALID.into(),
+                document: INTRINSICALLY_INVALID.into()
             },
-        )
-        .unwrap();
-    let still = fixture.receipt(&target).unwrap();
-    assert_eq!(still.status, ConfigRepairStatus::Unresolved);
-    assert_ne!(still.id, malformed.id);
-    assert_eq!(still.before_revision, manual);
-    assert!(
-        still
-            .diagnostic
-            .as_deref()
-            .unwrap()
-            .contains("subagents.max_concurrent")
-    );
-    // A semantically invalid but parsable source stays editable.
+        ),
+        Err(SettingsError::Invalid)
+    ));
+    assert_eq!(fixture.read(&target), "[agent\n");
+    assert_eq!(fixture.receipt(&target).unwrap().id, malformed.id);
+
+    // External authoring may leave a parsable but intrinsically invalid source.
+    fixture.write(&target, INTRINSICALLY_INVALID);
+    fixture.manager.refresh_repair_observation(&target);
+    let invalid = fixture.receipt(&target).unwrap();
+    assert_eq!(invalid.status, ConfigRepairStatus::Unresolved);
+    assert_ne!(invalid.id, malformed.id);
     let workspace = fixture
         .manager
         .read_source_settings(&target)
         .unwrap()
         .workspace
         .unwrap();
-    assert_eq!(workspace.revision, manual);
-    assert!(workspace.authored.is_some());
-    assert!(workspace.diagnostic.is_none());
+    assert_eq!(workspace.revision, invalid.before_revision);
+    assert!(workspace.authored.is_none());
+    assert!(
+        workspace
+            .diagnostic
+            .unwrap()
+            .contains("subagents.max_concurrent")
+    );
+    assert!(matches!(
+        fixture
+            .manager
+            .write_source_settings(&target, &workspace.revision, capacity(2)),
+        Err(SettingsError::Invalid)
+    ));
 
-    // Ordinary editing corrects it: exactly one withdrawal.
+    // A complete valid replacement proves recovery: exactly one withdrawal.
     let sequence = fixture.sequence();
     fixture
         .manager
-        .write_source_settings(&target, &manual, capacity(2))
+        .write_source_settings(
+            &target,
+            &workspace.revision,
+            SourceMutation::RepairConfig {
+                document: "[subagents]\nmax_concurrent = 2\n".into(),
+            },
+        )
         .unwrap();
     assert!(fixture.receipt(&target).is_none());
     assert_eq!(fixture.sequence(), sequence + 1);
@@ -2348,16 +2353,19 @@ fn an_unresolved_receipt_is_withdrawn_only_on_proven_recovery() {
 }
 
 #[test]
-fn an_ordinary_edit_of_a_source_without_a_receipt_records_none() {
+fn an_invalid_ordinary_edit_preserves_a_healthy_source_without_a_receipt() {
     let fixture = Fixture::new();
     let target = fixture.workspace.clone();
     fixture.write(&target, "[subagents]\nmax_concurrent = 2\n");
     let revision =
         super::super::super::settings::revision(Some(b"[subagents]\nmax_concurrent = 2\n"));
-    fixture
-        .manager
-        .write_source_settings(&target, &revision, capacity(0))
-        .unwrap();
+    assert!(matches!(
+        fixture
+            .manager
+            .write_source_settings(&target, &revision, capacity(0)),
+        Err(SettingsError::Invalid)
+    ));
+    assert_eq!(fixture.read(&target), "[subagents]\nmax_concurrent = 2\n");
     assert!(fixture.receipt(&target).is_none());
     assert_eq!(fixture.sequence(), 0);
 }
@@ -2365,13 +2373,43 @@ fn an_ordinary_edit_of_a_source_without_a_receipt_records_none() {
 #[test]
 fn a_valid_partial_source_is_healthy_without_composition_facts() {
     let fixture = Fixture::new();
-    // No Provider, no Model, no default selection: facts another scope may
-    // supply. Nothing here is intrinsically invalid.
-    let partial = "[subagents]\nmax_concurrent = 2\n[agent]\ndescription = \"partial\"\n";
+    // No Provider or default selection: facts another scope may supply.
+    // The authored Model entry is intrinsically valid without them.
+    let partial = r#"
+[subagents]
+max_concurrent = 2
+[agent]
+description = "partial"
+[models.partial]
+provider = "provided-by-other-scope"
+id = "partial"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
+"#;
     for target in [SourceTarget::User, fixture.workspace.clone()] {
         fixture.write(&target, partial);
         assert_eq!(fixture.repair(&target, &target), RepairOutcome::Unchanged);
         assert!(fixture.receipt(&target).is_none());
+        let source = fixture.manager.read_source_settings(&target).unwrap();
+        let source = source.workspace.as_ref().unwrap_or(&source.user);
+        assert!(source.authored.is_some());
+        assert!(source.diagnostic.is_none());
+        assert!(matches!(
+            fixture.manager.write_source_settings(
+                &target,
+                &source.revision,
+                super::super::settings::SourceMutation::RepairConfig {
+                    document: partial.into()
+                },
+            ),
+            Err(SettingsError::Invalid)
+        ));
+        fixture
+            .manager
+            .write_source_settings(&target, &source.revision, capacity(3))
+            .unwrap();
     }
     assert_eq!(fixture.sequence(), 0);
 }
@@ -3190,8 +3228,9 @@ fn a_repair_shrinking_an_at_limit_source_is_published() {
 #[test]
 fn ordinary_writes_never_publish_beyond_the_bound() {
     let fixture = Fixture::new();
-    let instructions = |length: usize| super::super::settings::SourceMutation::Config {
-        mutation: super::super::settings::ConfigMutation::Instructions {
+    let environment = |length: usize| super::super::settings::SourceMutation::Config {
+        mutation: super::super::settings::ConfigMutation::Environment {
+            name: "LARGE_VALUE".into(),
             authored: Some("i".repeat(length)),
         },
     };
@@ -3202,16 +3241,16 @@ fn ordinary_writes_never_publish_beyond_the_bound() {
                 .as_deref(),
         )
     };
-    // The encoded document grows by exactly one byte per instruction byte.
+    // The encoded document grows by exactly one byte per environment value byte.
     fixture
         .manager
-        .write_source_settings(&SourceTarget::User, &current(), instructions(1))
+        .write_source_settings(&SourceTarget::User, &current(), environment(1))
         .unwrap();
     let base = fixture.read(&SourceTarget::User).len() - 1;
     let at_bound = bound() - base;
     fixture
         .manager
-        .write_source_settings(&SourceTarget::User, &current(), instructions(at_bound))
+        .write_source_settings(&SourceTarget::User, &current(), environment(at_bound))
         .unwrap();
     assert_eq!(fixture.read(&SourceTarget::User).len(), bound());
     let before = fixture.read(&SourceTarget::User);
@@ -3219,7 +3258,7 @@ fn ordinary_writes_never_publish_beyond_the_bound() {
         fixture.manager.write_source_settings(
             &SourceTarget::User,
             &current(),
-            instructions(at_bound + 1)
+            environment(at_bound + 1)
         ),
         Err(SettingsError::Invalid)
     ));
@@ -3308,11 +3347,7 @@ zsecretz_model_key = 1
 [models."zsecretz-provider/zsecretz-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."zsecretz-provider/zsecretz-model".profiles."zsecretz-profile"]
-reasoning_enabled = false
 request_params = '{"zsecretz_param":"zsecretz-value"}'
 zsecretz_profile_key = true
 
@@ -3943,6 +3978,20 @@ fn a_redirected_lock_or_document_is_never_followed_by_a_reader() {
     let fixture = Fixture::new();
     let elsewhere = fixture.root.path().join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
+    // A redirected lock directory is never followed either.
+    let locks = fixture
+        .path(&fixture.workspace)
+        .with_file_name(".rustx-locks");
+    std::os::unix::fs::symlink(&elsewhere, &locks).unwrap();
+    assert!(
+        fixture
+            .manager
+            .read_source_settings(&fixture.workspace)
+            .is_err()
+    );
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    std::fs::remove_file(&locks).unwrap();
+    std::fs::create_dir(&locks).unwrap();
     let lock = lock_of(&fixture.path(&fixture.workspace));
     std::os::unix::fs::symlink(elsewhere.join("planted.lock"), &lock).unwrap();
     assert!(

@@ -21,6 +21,8 @@ pub mod openai;
 #[cfg(feature = "issue-387-profile")]
 pub(crate) mod profile;
 pub(crate) mod proposal;
+pub(crate) mod retry;
+pub(crate) mod structured;
 pub mod traits;
 mod transport;
 pub mod validation;
@@ -45,3 +47,5 @@ pub(crate) fn provider_request(value: serde_json::Value) -> ProviderRequest {
         value
     }
 }
+
+pub(crate) mod response_budget;

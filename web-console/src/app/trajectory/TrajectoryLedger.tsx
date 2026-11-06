@@ -21,7 +21,10 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   const tx = useTranslation();
   const targets = useMemo(() => ledgerFocusTargets(rows), [rows]);
   // As in Harness, only the Turn that owns the current selection draws its rail.
-  const activeTurn = useMemo(() => activeKey === undefined ? undefined : rows.find(row => rowOwnsKey(row, activeKey))?.turn?.ownerKey, [rows, activeKey]);
+  const activeTurn = useMemo(() => {
+    const row = activeKey === undefined ? undefined : rows.find(row => rowOwnsKey(row, activeKey));
+    return row?.betweenTurns ? undefined : row?.turn?.ownerKey;
+  }, [rows, activeKey]);
   const viewport = useRef<HTMLDivElement>(null);
   const followsTail = useRef(true);
   const prepend = useRef<{ first?: string; key: string; offset: number } | null>(null);
@@ -29,6 +32,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   const virtualizer = useVirtualizer({ count: virtualized ? rows.length : 0, enabled: virtualized,
     getScrollElement: () => viewport.current, estimateSize: index => rows[index]!.height,
     getItemKey: index => rows[index]!.display_key, overscan: 12, initialRect: { width: 800, height: 500 },
+    initialOffset: () => viewport.current?.scrollTop ?? 0,
     anchorTo: 'end', followOnAppend: 'auto', scrollEndThreshold: 2,
   });
   const reveal = (key: string) => {
@@ -107,7 +111,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
             <span aria-hidden="true">{loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')}</span>
           </button>
         </div>;
-        return <TrajectoryRow key={row.display_key} {...{ row, index, style, activeKey, activeTurn, folded, focusedIds, actions }} onKeyDown={(event, key) => {
+        return <TrajectoryRow key={row.display_key} {...{ row, index, style, activeKey, activeTurn, folded, focusedIds }} actions={{ ...actions, toggleWorkflow: id => { followsTail.current = false; actions.toggleWorkflow?.(id); } }} onKeyDown={(event, key) => {
           if (event.key === 'Escape') { event.stopPropagation(); close(); return; }
           const current = targets.findIndex(target => target.display_key === key);
           if (current < 0) return;

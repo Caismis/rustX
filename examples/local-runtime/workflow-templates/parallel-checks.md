@@ -14,11 +14,11 @@ max_concurrent = 2
 workflows = ["parallel_checks"]
 ```
 
-`rustx workflow explain parallel_checks` shows the fixed `brevity` and `clarity`
-branch identities, their explicit input projections, Agent output contracts,
-Return bindings, and the edge from `check_text` to `return_checks`. Both branches
-must settle before the join commits. Their keys are independent of completion
-order. Each private block only sees its own `args` and local results.
+`rustx workflow explain parallel_checks` shows the real Start, two sibling
+Agent nodes, their input bindings and output contracts, and the connections to
+`return_checks`. Start connects to both Agents. The Return join waits for both
+and constructs the named `brevity` and `clarity` fields from their direct node
+references. Completion order never determines those output keys.
 
 Tool input: `{"text":"Use explicit inputs and return a typed result."}`.
 Output shape: `{"brevity":{"passed":true},"clarity":{"passed":true}}`.

@@ -130,10 +130,6 @@ pub struct FixtureModel {
     pub profiles: Option<(String, serde_json::Value)>,
     /// The compat block, as a JSON object.
     pub compat: serde_json::Value,
-    /// Whether the model claims tool-call support.
-    pub tool_calls: bool,
-    /// Whether the model claims reasoning support.
-    pub reasoning_capable: bool,
     /// Extra claimed input modalities beyond text.
     pub extra_input_modalities: Vec<&'static str>,
 }
@@ -158,8 +154,6 @@ impl FixtureModel {
             request_params: None,
             profiles: None,
             compat,
-            tool_calls: true,
-            reasoning_capable: false,
             extra_input_modalities: Vec::new(),
         }
     }
@@ -193,25 +187,10 @@ impl FixtureModel {
         self
     }
 
-    /// Claims reasoning capability. Without profiles this is provider-default
-    /// reasoning that is always enabled without a selectable profile.
-    #[must_use]
-    pub const fn claiming_reasoning(mut self) -> Self {
-        self.reasoning_capable = true;
-        self
-    }
-
     /// Sets the compat block.
     #[must_use]
     pub fn with_compat(mut self, compat: serde_json::Value) -> Self {
         self.compat = compat;
-        self
-    }
-
-    /// Sets whether the model claims tool-call support.
-    #[must_use]
-    pub const fn with_tool_calls(mut self, tool_calls: bool) -> Self {
-        self.tool_calls = tool_calls;
         self
     }
 
@@ -241,8 +220,6 @@ impl FixtureModel {
             "capabilities": {
                 "inputModalities": inputs,
                 "outputModalities": ["text"],
-                "toolCalls": self.tool_calls,
-                "reasoning": self.reasoning_capable,
             },
             "compat": self.compat,
         });

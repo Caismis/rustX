@@ -16,7 +16,8 @@ test('another loopback port cannot capture and replay browser authentication to 
   const directory = mkdtempSync(join(tmpdir(), 'rustx-origin-auth-'));
   const launch = randomBytes(32).toString('base64url'), token = randomBytes(32).toString('base64url');
   const transportTokenFile = join(directory, 'token'); writeFileSync(transportTokenFile, token, { mode: 0o600 });
-  const config = { appServerEndpoint: 'ws://127.0.0.1:1/', browserLaunchToken: launch, transportTokenFile };
+  const deliveryTokenFile = join(directory, 'delivery'); writeFileSync(deliveryTokenFile, 'D'.repeat(43), { mode: 0o600 });
+  const config = { deliveryTokenFile, appServerEndpoint: 'ws://127.0.0.1:1/', browserLaunchToken: launch, transportTokenFile };
   let auth = browserAuth(config);
   const a = createServer((req, res) => auth(req, res, () => res.writeHead(200, { 'Content-Type': 'text/html' }).end('<!doctype html><title>rustX auth boundary</title><h1>Carrier shell</h1>')));
   let capture!: (headers: string[]) => void;

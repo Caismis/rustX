@@ -1,5 +1,6 @@
 //! CFG-01 filesystem and real native composition regressions (Linux and macOS CI).
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
+use super::configuration::capture::workspace_identity;
 use super::configuration::*;
 use super::launch::*;
 use super::{LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError};
@@ -45,6 +46,8 @@ async fn compose_admitted_with_controller(
             .expect("allocation path")
             .to_path_buf(),
         access.allocation,
+        super::composition::McpInitialSubmission::default(),
+        &crate::runtime::cancellation::CancellationSignal::new(),
     )
     .await?
     .into_interactive()
@@ -167,6 +170,9 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
     );
     let config = json!({"subagents": {}, "agent": {"workflows": []}});
     let original = template_source("typed_agent");
+    let mut invalid_reference: serde_json::Value = serde_yaml::from_str(&original).unwrap();
+    invalid_reference["block"]["nodes"]["summarize"]["task"][2]["path"] =
+        json!(["args", "missing"]);
     let scenarios = [
         (original.clone(), config.clone(), Validity::Valid, None),
         (original.clone(), json!({}), Validity::Valid, None),
@@ -177,10 +183,10 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
             None,
         ),
         (
-            original.replace("[args, topic]", "[args, missing]"),
+            serde_yaml::to_string(&invalid_reference).unwrap(),
             config.clone(),
             Validity::Invalid,
-            Some("block.nodes.summarize.input.topic"),
+            Some("block.nodes.summarize.task.2"),
         ),
         (
             original.replace("timeout_ms: 60000", "timeout_ms: 0"),
@@ -276,11 +282,7 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
         ),
         ("/block/edges/0/to", json!("missing"), "block.edges.0.to"),
         ("/block/edges/0/port", json!("true"), "block.edges.0.port"),
-        (
-            "/block/nodes/check_text/branches/clarity/block/edges/0/to",
-            json!("missing"),
-            "block.nodes.check_text.branches.clarity.block.edges.0.to",
-        ),
+        ("/block/edges/2/to", json!("missing"), "block.edges.2.to"),
     ] {
         let mut shape = original.clone();
         *shape.pointer_mut(pointer).unwrap() = value;
@@ -315,18 +317,18 @@ fn cfg237_online_schema_unresolved_and_disabled_source_are_distinct() {
     let text = r"description: Inspect a declared external capability.
 block:
   input: {type: object, properties: {}, additionalProperties: false}
-  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}
-  entry: inspect
   nodes:
+    workflow_start:
+      type: start
     inspect:
       type: tool
       selector: {origin: source, source_id: external, name: inspect}
       arguments: {type: literal, value: {secret: SECRET_LITERAL}}
-      result: {type: text, part: 0}
+      result: {type: text}
     done:
       type: return
-      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}
-  edges: [{from: inspect, to: done}]
+      outputs: [{variable: text, value_selector: [inspect, text]}]
+  edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]
 ";
     install_workflow(&f, text);
     f.mcp(false, json!({"external":{"command":"must-never-spawn"}}));
@@ -372,22 +374,24 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
     f.project(json!({"subagents": {}}));
     let definition: crate::runtime::workflow::WorkflowDefinition =
         serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
-    let original = serde_json::to_value(definition).unwrap();
+    let root = serde_json::to_value(definition.block).unwrap();
+    let original = json!({"description":"Nested checks", "block":{
+        "input":root["input"], "nodes":{
+            "start":{"type":"start"},
+            "repeat":{"type":"loop", "loop_count":1, "body":crate::runtime::workflow::test_body(&root)},
+            "done":{"type":"return","outputs":[]}
+        },"edges":[{"from":"start","to":"repeat"},{"from":"repeat","to":"done"}]
+    }});
     for (pointer, value, expected) in [
         (
-            "/block/nodes/check_text/branches/clarity/block/nodes/assess_clarity/input/text/path",
-            json!(["assess_brevity", "passed"]),
-            "block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.input.text",
+            "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/task/2/path",
+            json!(["check_text_brevity_assess_brevity", "passed"]),
+            "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.task.2",
         ),
         (
-            "/block/nodes/check_text/branches/clarity/block/nodes/assess_clarity/output/properties/passed",
+            "/block/nodes/repeat/body/nodes/check_text_clarity_assess_clarity/output/schema/properties/passed",
             json!({"type":"boolean","pattern":"SECRET_SCHEMA"}),
-            "block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.output.properties.passed",
-        ),
-        (
-            "/block/nodes/check_text/branches/clarity/block/nodes/return_clarity/output/path",
-            json!(["args"]),
-            "block.nodes.check_text.branches.clarity.block.nodes.return_clarity.output",
+            "block.nodes.repeat.body.nodes.check_text_clarity_assess_clarity.output.schema.properties.passed",
         ),
     ] {
         let mut shape = original.clone();
@@ -839,8 +843,7 @@ fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
     f.user(json!({}));
     f.project(json!({"models":{"ws/x":{"provider":"missing","id":"x",
         "protocol":"openai_responses","context_window":128_000,"max_output_tokens":4096,
-        "capabilities":{"input_modalities":["text"],"output_modalities":["text"],
-        "tool_calls":true,"reasoning":false}}}}));
+        "capabilities":{"input_modalities":["text"],"output_modalities":["text"]}}}}));
     let failure = analyzed_failure(&f);
     assert!(!failure.incomplete);
     assert_eq!(failure.diagnostic.category, "invalid");
@@ -1010,7 +1013,7 @@ fn cfg235_all_example_layers_use_real_resolver_and_workflow_compiler() {
         ("minimal", 0),
         ("workflow-basic", 1),
         ("", 2),
-        ("workflow-templates", 4),
+        ("workflow-templates", 6),
     ] {
         let f = Fixture::new();
         let mut host = f.host.clone();
@@ -1252,7 +1255,10 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
     assert_eq!(counts, [0; 11]);
-    assert_eq!(report.exit_code(), 2);
+    // An enabled Workflow that fails its check stays off: a warning, never
+    // a configuration error.
+    assert_eq!(report.exit_code(), 3);
+    assert_eq!(report.diagnostics[0].classification, "warning");
     assert_eq!(report.diagnostics[0].file, Some(workflow));
     assert!(
         !report
@@ -1269,7 +1275,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         f.host
             .launch_directory
             .join(".agents/workflows/broken.yaml"),
-        valid.replace("entry: read", "entry: missing_node"),
+        valid.replace("to: read", "to: missing_node"),
     )
     .unwrap();
     f.project(json!({"agent": {"workflows": ["broken"]}}));
@@ -1277,12 +1283,9 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
     assert_eq!(counts, [0; 11]);
-    assert_eq!(
-        report.exit_code(),
-        2,
-        "native compiler rejects the missing entry node"
-    );
-    assert_eq!(report.diagnostics[0].path, "block.entry");
+    assert_eq!(report.exit_code(), 3, "the rejected Workflow stays off");
+    assert_eq!(report.diagnostics[0].classification, "warning");
+    assert_eq!(report.diagnostics[0].path, "block.edges.0.to");
     f.project(json!({}));
     std::fs::write(&model_path, "").unwrap();
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
@@ -1436,7 +1439,7 @@ impl Fixture {
                     json!({"provider":"host", "id":name,
                 "protocol":"openai_chat_completions", "context_window":128_000,
                 "max_output_tokens":4096, "capabilities":{"input_modalities":["text"],
-                "output_modalities":["text"],"tool_calls":true,"reasoning":false},
+                "output_modalities":["text"]},
                 "compat":{"chat_reasoning_replay":"omit"}})
                 ))
                 .collect::<std::collections::BTreeMap<_, _>>()
@@ -1495,6 +1498,121 @@ impl Fixture {
     fn resolve_locations_only(&self) -> SessionLocations {
         session_locations(&self.request, &self.host).unwrap().0
     }
+}
+
+#[tokio::test]
+async fn global_instruction_capture_uses_fixed_home_and_freezes_sources() {
+    let mut f = Fixture::new();
+    let global_root = f.host.home_directory.join("rustx/.agents");
+    std::fs::create_dir_all(&global_root).unwrap();
+    let global = global_root.join("AGENTS.md");
+    std::fs::write(&global, "Global guidance A").unwrap();
+    let alternate = f.root.path().join("alternate-config");
+    std::fs::create_dir_all(alternate.join(".agents")).unwrap();
+    let config = alternate.join("rustx.toml");
+    std::fs::copy(f.host.config_directory.join("rustx.toml"), &config).unwrap();
+    std::fs::write(
+        alternate.join(".agents/AGENTS.md"),
+        "Wrong config-relative global",
+    )
+    .unwrap();
+    f.request.config = Some(config);
+    let (manager, input) = f.request.session_input(&f.host).unwrap();
+    let global_only = manager.resolve_session(&input).unwrap();
+    assert_eq!(global_only.project_context_files.len(), 1);
+    assert_eq!(
+        global_only.project_context_files[0].content,
+        "Global guidance A"
+    );
+    std::fs::write(
+        f.host.launch_directory.join("AGENTS.md"),
+        "Workspace guidance",
+    )
+    .unwrap();
+    let first = manager.resolve_session(&input).unwrap();
+    assert_eq!(first.project_context_files.len(), 2);
+    assert_eq!(first.project_context_files[0].path, global);
+    assert_eq!(first.project_context_files[0].content, "Global guidance A");
+    assert_eq!(first.project_context_files[1].content, "Workspace guidance");
+    assert!(first.source_revisions.contains_key(&global));
+
+    std::fs::write(&global, "Global guidance B").unwrap();
+    let second = manager.resolve_session(&input).unwrap();
+    assert_ne!(
+        first.source_revisions[&global],
+        second.source_revisions[&global]
+    );
+    assert_eq!(second.project_context_files[0].content, "Global guidance B");
+    std::fs::write(global_root.join("AGENTS.override.md"), "Global override").unwrap();
+    let third = manager.resolve_session(&input).unwrap();
+    assert_eq!(third.project_context_files[0].content, "Global override");
+    assert_ne!(second.component_revisions, third.component_revisions);
+
+    let admitted = first.admit(|| f.credentials.clone()).unwrap();
+    let product = compose_admitted(&admitted).await.unwrap();
+    let resources = product.runtime().runtime_resources();
+    let prompt = resources.project_instructions().unwrap();
+    assert!(prompt.contains("Global guidance A"));
+    assert!(!prompt.contains("Global guidance B"));
+    assert!(!prompt.contains("Global override"));
+    assert!(!prompt.contains("Wrong config-relative global"));
+    product.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn bom_instructions_are_valid_for_root_and_named_agents_with_inheritance_disabled() {
+    let f = Fixture::new();
+    let global_root = f.host.home_directory.join("rustx/.agents");
+    std::fs::create_dir_all(&global_root).unwrap();
+    std::fs::write(global_root.join("AGENTS.md"), "\u{feff}Global guidance").unwrap();
+    std::fs::write(
+        f.host.launch_directory.join("AGENTS.md"),
+        "\u{feff}Workspace guidance",
+    )
+    .unwrap();
+    std::fs::write(
+        f.host.launch_directory.join("root.md"),
+        "\u{feff}Root guidance",
+    )
+    .unwrap();
+    // A second BOM is content, not another optional file encoding marker.
+    std::fs::write(
+        f.host.launch_directory.join("named.md"),
+        "\u{feff}\u{feff}Named guidance",
+    )
+    .unwrap();
+    f.project(json!({"agent":{"agents_md":{"inherit":false,"files":["root.md"]}}}));
+    f.role(
+        false,
+        "reader",
+        json!({"description":"Reader", "agents_md":{"files":["named.md"]}}),
+        "Read carefully",
+    );
+    let launch = f.resolve();
+    assert_eq!(launch.project_context_files[0].content, "Global guidance");
+    assert_eq!(
+        launch.project_context_files[1].content,
+        "Workspace guidance"
+    );
+    assert_eq!(launch.root_agent_project_files[0].content, "Root guidance");
+    let product = compose_admitted(&launch).await.unwrap();
+    let resources = product.runtime().runtime_resources();
+    assert_eq!(
+        resources.project_instructions(),
+        Some(format!(
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nRoot guidance\n</project_instructions>",
+            f.host.launch_directory.join("root.md").display()
+        ).as_str())
+    );
+    let reader = resources
+        .subagents()
+        .get(&crate::runtime::subagent::SubagentName::parse("reader").unwrap())
+        .unwrap();
+    assert_eq!(
+        reader.project_instructions().files[0].content,
+        "\u{feff}Named guidance"
+    );
+    product.shutdown().await.unwrap();
 }
 
 #[test]
@@ -1581,7 +1699,7 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
 }
 
 #[tokio::test]
-async fn cfg3_selected_missing_credentials_and_connection_failures_reject_root_admission() {
+async fn cfg3_optional_root_failures_publish_unavailable_without_evaluating_unused_sources() {
     for source in ["credential", "connection"] {
         let f = Fixture::new();
         f.mcp(true, json!({
@@ -1590,9 +1708,31 @@ async fn cfg3_selected_missing_credentials_and_connection_failures_reject_root_a
             "unused":{"command":"must-never-spawn","sensitive_env":{"TOKEN":"$IGNORED_KEY"}}
         }));
         f.project(json!({"agent":{"tools":{"sources":{source:"all"}}}}));
-        let error = compose_admitted(&f.resolve()).await.unwrap_err();
-        assert!(error.to_string().contains("cannot be admitted"));
-        assert!(!error.to_string().contains("IGNORED_KEY"));
+        let product = compose_admitted(&f.resolve()).await.unwrap();
+        let availability = product.capability().availability();
+        let selected = ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new(source));
+        let CapabilitySourceState::Unavailable { reason } = &availability[&selected] else {
+            panic!("failed optional source must report unavailable: {availability:?}");
+        };
+        assert!(!reason.is_empty());
+        if source == "credential" {
+            assert!(reason.contains("REQUIRED_KEY"));
+        }
+        assert!(!format!("{availability:?}").contains("IGNORED_KEY"));
+        assert_eq!(
+            availability[&ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new("unused"))],
+            CapabilitySourceState::Unprepared
+        );
+        assert!(
+            product
+                .capability()
+                .current_snapshot()
+                .available_tools()
+                .tools()
+                .iter()
+                .all(|tool| tool.definition.origin.source().as_ref() != Some(&selected))
+        );
+        product.shutdown().await.unwrap();
     }
 }
 
@@ -1684,15 +1824,20 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
     f.mcp(true, json!({"authenticated":{"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}));
     f.user(json!({ "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"authenticated":"all"}}}}));
     let launch = f.resolve();
-    let error = compose_admitted(&launch).await.unwrap_err();
+    let product = compose_admitted(&launch).await.unwrap();
     peer.await.unwrap();
-    assert!(error.to_string().contains("cannot be admitted"));
-    assert!(!format!("{error:?} {launch:?}").contains(SENTINEL));
+    let availability = product.capability().availability();
+    assert!(matches!(
+        &availability[&ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new("authenticated"))],
+        CapabilitySourceState::Unavailable { reason } if !reason.is_empty()
+    ));
+    assert!(!format!("{availability:?} {product:?} {launch:?}").contains(SENTINEL));
     assert!(
         !serde_json::to_string(launch.config())
             .unwrap()
             .contains(SENTINEL)
     );
+    product.shutdown().await.unwrap();
 }
 
 #[test]
@@ -2253,10 +2398,13 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     )
     .unwrap();
     assert!(
-        crate::runtime::load_project_context_files(&f.host.launch_directory)
-            .unwrap_err()
-            .to_string()
-            .contains("outside workspace boundary")
+        crate::runtime::load_project_context_files(
+            &f.host.launch_directory,
+            &f.host.home_directory.join("rustx/.agents"),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("outside workspace boundary")
     );
     std::fs::remove_file(f.host.launch_directory.join(".agents")).unwrap();
     std::fs::remove_file(f.host.launch_directory.join("AGENTS.md")).unwrap();
@@ -2345,7 +2493,7 @@ fn cfg270_every_checked_in_toml_example_uses_its_production_authoring_owner() {
                             crate::toml_authoring::parse(&bytes).unwrap();
                     }
                     "rustx.toml" => {
-                        super::configuration::parse_layer(
+                        super::configuration::capture::parse_layer(
                             &path,
                             &bytes,
                             path.file_name().unwrap() == "rustx.toml",
@@ -2448,7 +2596,7 @@ fn cfg275_offline_generation_projects_native_facts_once_without_effects_or_secre
     .unwrap();
     install_workflow(
         &f,
-        "description: Missing tool\nblock:\n  input: {type: object}\n  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}\n  entry: inspect\n  nodes:\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text, part: 0}\n    done:\n      type: return\n      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}\n  edges: [{from: inspect, to: done}]\n",
+        "description: Missing tool\nblock:\n  input: {type: object}\n  nodes:\n    workflow_start:\n      type: start\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text}\n    done:\n      type: return\n      outputs: [{variable: text, value_selector: [inspect, text]}]\n  edges: [{from: workflow_start, to: inspect}, {from: inspect, to: done}]\n",
     );
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
@@ -2907,15 +3055,15 @@ mod session_resolution {
     #[test]
     fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice() {
         use crate::model::catalog::ModelProfileId;
-        use crate::model::session::SummaryModelPolicy;
+        use crate::model::session::AuxiliaryModelPolicy;
         let f = Fixture::new();
         let path = f.host.config_directory.join("rustx.toml");
         let mut catalog: serde_json::Value =
             toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let entry = &mut catalog["models"]["host/one"];
-        entry["capabilities"]["reasoning"] = json!(true);
         entry["default_profile"] = json!("off");
-        entry["profiles"] = json!({"off":{"reasoning_enabled":false},"on":{"reasoning_enabled":true,"request_params":"{\"reasoning_effort\":\"high\"}"}});
+        entry["profiles"] =
+            json!({"off":{},"on":{"request_params":"{\"reasoning_effort\":\"high\"}"}});
         std::fs::write(path, toml::to_string_pretty(&catalog).unwrap()).unwrap();
         let (manager, mut input) = f.request.session_input(&f.host).unwrap();
         let mut model = SessionModelConfig::of(ModelRef::parse("host/one").unwrap());
@@ -2924,7 +3072,7 @@ mod session_resolution {
             .request_params
             .insert("custom".into(), json!("secret-model-parameter"));
         model.max_output_tokens = Some(1024);
-        model.summary_model = SummaryModelPolicy::Explicit {
+        model.summary_model = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("host/two").unwrap(),
             profile: None,
             request_params: serde_json::Map::default(),
@@ -3070,4 +3218,237 @@ async fn composition_shutdown_retry_joins_physical_read_before_immediate_recompo
     drop(replacement);
     crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
         .expect("final owner released the physical filesystem lock");
+}
+
+/// A User source named like rustX's writer metadata is refused where it is
+/// selected, with a specific diagnostic, before anything reads, locks or
+/// creates metadata beside it; the same document under an ordinary name is
+/// read and written through its own lock.
+#[test]
+fn an_explicit_config_named_like_writer_metadata_is_refused_at_selection() {
+    const DOCUMENT: &str = "[subagents]\nmax_concurrent = 2\n";
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let workspace = base.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let host = HostEnvironment::from_paths(workspace.clone(), base.join("home")).unwrap();
+    let index = std::cell::Cell::new(0);
+    let select = |name: &str| {
+        index.set(index.get() + 1);
+        let directory = base.join(format!("selected-{}", index.get()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(&path, DOCUMENT).unwrap();
+        let request = LaunchRequest {
+            workspace: Some(workspace.clone()),
+            config: Some(path.clone()),
+            ..LaunchRequest::default()
+        };
+        (
+            path,
+            request.session_input(&host).map(|(manager, _)| manager),
+        )
+    };
+
+    for reserved in [
+        ".rustx-locks",
+        ".RUSTX-LOCKS",
+        ".RuStX-LoCkS",
+        ".rustx-stage-0.tmp",
+        ".RUSTX-STAGE-0.tmp",
+        ".RuStX-StAgE-0.tmp",
+        ".rustx-loc\u{212a}s",
+        ".ruſtx-locks",
+        ".ruﬆx-locks",
+        ".ruﬅx-locks",
+        ".ruſtx-ﬆage-0.tmp",
+    ] {
+        let (path, selected) = select(reserved);
+        let Err(failure) = selected else {
+            panic!("a reserved basename is refused");
+        };
+        assert!(
+            failure.to_string().contains("reserves for writer metadata"),
+            "{failure}"
+        );
+        // The requested source is untouched: still the same regular file,
+        // and nothing was created beside it.
+        assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), DOCUMENT);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+    }
+
+    // The same reservation applies before create-only initialization, with
+    // no file or ancestor created just to discover the volume's case rules.
+    for name in [
+        ".RUSTX-LOCKS",
+        ".rustx-loc\u{212a}s",
+        ".ruſtx-locks",
+        ".ruﬆx-ﬅage-0.tmp",
+    ] {
+        let missing_parent = base.join("missing");
+        let Err(failure) = (LaunchRequest {
+            config: Some(missing_parent.join(name)),
+            ..LaunchRequest::default()
+        })
+        .session_input(&host) else {
+            panic!("a missing reserved source must not be initialized");
+        };
+        assert!(failure.to_string().contains("reserves for writer metadata"));
+        assert!(!missing_parent.exists());
+    }
+    assert!(!base.join("home").exists());
+    let limit = nix::unistd::pathconf(&base, nix::unistd::PathconfVar::NAME_MAX)
+        .unwrap()
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap();
+    for name in [
+        "user.toml".to_owned(),
+        ".rustx-locks-user.toml".to_owned(),
+        format!("{}.toml", "n".repeat(limit - ".toml".len())),
+    ] {
+        // Keep the fixture directory short even for a NAME_MAX source.
+        let directory = base.join(format!("accepted-{}", name.len()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(&path, DOCUMENT).unwrap();
+        let (manager, _) = LaunchRequest {
+            workspace: Some(workspace.clone()),
+            config: Some(path.clone()),
+            ..LaunchRequest::default()
+        }
+        .session_input(&host)
+        .unwrap();
+        assert_selected_source_writable(&manager, &path, DOCUMENT);
+    }
+}
+
+fn assert_selected_source_writable(
+    manager: &super::configuration::UserConfigManager,
+    path: &std::path::Path,
+    document: &str,
+) {
+    use super::configuration::settings::{ConfigMutation, SourceMutation, SourceTarget};
+    let read = manager.read_source_settings(&SourceTarget::User).unwrap();
+    assert_eq!(read.user.path, path);
+    let expected = crate::local_runtime::settings::revision(Some(document.as_bytes()));
+    assert_eq!(read.user.revision, expected);
+    assert_eq!(std::fs::read(path).unwrap(), document.as_bytes());
+    assert!(!path.with_file_name(".rustx-locks").exists());
+    let written = manager
+        .write_source_settings(
+            &SourceTarget::User,
+            &expected,
+            SourceMutation::Config {
+                mutation: ConfigMutation::Capacity {
+                    authored: Some(crate::local_runtime::authoring::SubagentsLayer {
+                        max_concurrent: Some(3),
+                    }),
+                },
+            },
+        )
+        .unwrap();
+    assert!(std::fs::symlink_metadata(path).unwrap().is_file());
+    let bytes = std::fs::read(path).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("max_concurrent = 3"));
+    assert_eq!(
+        written,
+        crate::local_runtime::settings::revision(Some(bytes.as_slice()))
+    );
+    assert_eq!(
+        manager
+            .read_source_settings(&SourceTarget::User)
+            .unwrap()
+            .user
+            .revision,
+        written
+    );
+    // Its lock is in the directory's lock directory, beside the source.
+    assert!(path.with_file_name(".rustx-locks").is_dir());
+}
+
+#[test]
+fn source_reservation_follows_the_canonical_document_and_physical_aliases() {
+    use std::os::unix::fs::symlink;
+    const DOCUMENT: &str = "[subagents]\nmax_concurrent = 2\n";
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    let workspace = base.join("workspace");
+    let documents = base.join("documents");
+    let aliases = base.join("aliases");
+    for directory in [&workspace, &documents, &aliases] {
+        std::fs::create_dir(directory).unwrap();
+    }
+    let host = HostEnvironment::from_paths(workspace.clone(), base.join("home")).unwrap();
+    let select = |path: &std::path::Path| {
+        LaunchRequest {
+            workspace: Some(workspace.clone()),
+            config: Some(path.to_owned()),
+            ..LaunchRequest::default()
+        }
+        .session_input(&host)
+    };
+    let reserved = documents.join(".RuStX-LoCkS");
+    std::fs::write(&reserved, DOCUMENT).unwrap();
+    let ordinary_alias = aliases.join("ordinary.toml");
+    symlink(&reserved, &ordinary_alias).unwrap();
+    let Err(failure) = select(&ordinary_alias) else {
+        panic!("an ordinary alias cannot admit a reserved canonical document");
+    };
+    assert!(failure.to_string().contains("reserves for writer metadata"));
+    assert_eq!(std::fs::read_to_string(&reserved).unwrap(), DOCUMENT);
+    assert!(std::fs::symlink_metadata(&reserved).unwrap().is_file());
+    assert_eq!(std::fs::read_dir(&documents).unwrap().count(), 1);
+    assert!(!base.join("home").exists());
+
+    // A hard link proves the physical check independently of ASCII matching.
+    // Its ordinary canonical basename is not lexically reserved.
+    let collision = base.join("collision");
+    std::fs::create_dir(&collision).unwrap();
+    let canonical = collision.join("user.toml");
+    std::fs::write(&canonical, DOCUMENT).unwrap();
+    std::fs::hard_link(&canonical, collision.join(".rustx-locks")).unwrap();
+    let Err(failure) = select(&canonical) else {
+        panic!("a source sharing the fixed metadata file must be refused");
+    };
+    assert!(failure.to_string().contains("reserves for writer metadata"));
+    assert_eq!(std::fs::read_to_string(&canonical).unwrap(), DOCUMENT);
+    assert!(std::fs::symlink_metadata(&canonical).unwrap().is_file());
+    assert_eq!(std::fs::read_dir(&collision).unwrap().count(), 2);
+
+    // A reserved alias in the document's own directory also occupies the
+    // metadata path, which the writer must never follow as a directory.
+    let metadata_alias = collision.join(".rustx-locks");
+    std::fs::remove_file(&metadata_alias).unwrap();
+    symlink(&canonical, &metadata_alias).unwrap();
+    let Err(failure) = select(&metadata_alias) else {
+        panic!("a canonical document cannot occupy its own metadata path via an alias");
+    };
+    assert!(failure.to_string().contains("reserves for writer metadata"));
+    assert_eq!(std::fs::read_to_string(&canonical).unwrap(), DOCUMENT);
+    assert!(std::fs::symlink_metadata(&canonical).unwrap().is_file());
+    assert!(
+        std::fs::symlink_metadata(&metadata_alias)
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_dir(&collision).unwrap().count(), 2);
+
+    // Selection resolves symlinks before applying the reservation. A reserved
+    // alias elsewhere must not prevent authoring the ordinary canonical file.
+    let ordinary = base.join("user.toml");
+    std::fs::write(&ordinary, DOCUMENT).unwrap();
+    let reserved_alias = aliases.join(".RUSTX-LOCKS");
+    symlink(&ordinary, &reserved_alias).unwrap();
+    let (manager, _) = select(&reserved_alias).unwrap();
+    assert_selected_source_writable(&manager, &ordinary, DOCUMENT);
+    assert!(
+        std::fs::symlink_metadata(&reserved_alias)
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_dir(&aliases).unwrap().count(), 2);
 }

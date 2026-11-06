@@ -105,6 +105,8 @@ pub struct HttpFixtureControl {
     task_gets: watch::Sender<u32>,
     /// How many cooperative `tasks/cancel` requests arrived.
     task_cancels: watch::Sender<u32>,
+    catalog_reads: watch::Sender<u32>,
+    catalog_released: watch::Sender<bool>,
 }
 
 impl Default for HttpFixtureControl {
@@ -126,7 +128,37 @@ impl HttpFixtureControl {
             release: watch::channel(false).0,
             task_gets: watch::channel(0).0,
             task_cancels: watch::channel(0).0,
+            catalog_reads: watch::channel(0).0,
+            catalog_released: watch::channel(true).0,
         }
+    }
+
+    /// Hold real tools/list responses until the parent releases this server.
+    pub fn hold_catalog(&self) {
+        self.catalog_released.send_replace(false);
+    }
+
+    /// Release every tools/list response held by this fixture.
+    pub fn release_catalog(&self) {
+        self.catalog_released.send_replace(true);
+    }
+
+    /// How many real tools/list handlers have started.
+    #[must_use]
+    pub fn catalog_reads(&self) -> u32 {
+        *self.catalog_reads.borrow()
+    }
+
+    /// Await a tools/list handler, independently of whether it may answer.
+    ///
+    /// # Panics
+    /// Panics if the fixture observation channel closes.
+    pub async fn wait_catalog(&self) {
+        self.catalog_reads
+            .subscribe()
+            .wait_for(|count| *count > 0)
+            .await
+            .expect("catalog observation");
     }
 
     /// This fixture instance's own name for one catalog tool.
@@ -337,10 +369,21 @@ impl ServerHandler for HttpFixtureServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, rmcp::ErrorData>> + Send {
-        std::future::ready(Ok(ListToolsResult {
-            tools: self.catalog(),
-            ..Default::default()
-        }))
+        let control = self.control.clone();
+        let tools = self.catalog();
+        async move {
+            control.catalog_reads.send_modify(|count| *count += 1);
+            control
+                .catalog_released
+                .subscribe()
+                .wait_for(|released| *released)
+                .await
+                .map_err(|_| rmcp::ErrorData::internal_error("catalog gate closed", None))?;
+            Ok(ListToolsResult {
+                tools,
+                ..Default::default()
+            })
+        }
     }
 
     fn call_tool(

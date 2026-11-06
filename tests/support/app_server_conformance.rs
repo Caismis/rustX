@@ -199,8 +199,8 @@ pub async fn representative_scenario(
             target: a.clone(),
             agent_id: child_id.clone(),
             locator: rustx::runtime_client::trace::TraceToolLocator {
-                occurrence: rustx::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                    locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                occurrence: rustx::observation::tool::RuntimeClientToolOccurrence {
+                    locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: rustx::runtime::identity::MessageId::new("missing-assistant"),
                     },
                     block_index: rustx::message::types::ContentBlockIndex::new(0),
@@ -262,10 +262,15 @@ pub async fn representative_scenario(
                     .inline
                     .as_deref()
                     .expect("bounded fixture application");
-                if application.units.values().all(|unit| !matches!(unit,rustx::local_runtime::configuration::application::UnitApplication::Preparing)) {
-                        assert!(application.candidate.is_none());
-                        break;
-                    }
+                if application.units.values().all(|unit| {
+                    !matches!(
+                        unit,
+                        rustx::local_runtime::configuration::application::UnitApplication::Preparing
+                            | rustx::local_runtime::configuration::application::UnitApplication::Ready
+                    )
+                }) {
+                    break;
+                }
             }
         }
     }

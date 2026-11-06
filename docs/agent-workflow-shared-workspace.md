@@ -22,11 +22,11 @@ automatically composed Root-only capability group.
   no worktree, branch or copy. A missing or unusable binding fails before any
   allocation, with no fallback directory and no replacement directory.
 - **Workflows.** A Workflow owns no workspace resource. Agent and Tool nodes act
-  in the shared workspace; a successful run returns exactly its declared output.
+  in the shared workspace; a successful run returns exactly the object its Return outputs build.
   See [the Workflow contract](workflow-programs.md#shared-session-workspace-issue-462).
-- **Review.** The subject is a Plan only. The result `{accepted, feedback}` gates
-  later work only through an explicit Branch on `accepted`; Review takes no
-  filesystem lease and a rejection never rolls back an earlier write.
+- **Human Input.** The person chooses one of the node's actions, and the run
+  continues through that action's exit; the node takes no filesystem lease and
+  no choice rolls back an earlier write.
 
 ## Ownership map
 
@@ -107,7 +107,6 @@ unchanged. The current generated App Server pair is `v48.*`.
 | Deletion revision token | `rustx/session-deletion-ownership` tag | v1 | v2 | v2 | No disposable workspace ownership; old tokens are stale | `deletion_never_removes_the_shared_session_workspace` |
 | Agent profile TOML | `agent.schema.json` | `[worktree]` | absent | absent | Unknown field rejected | `retired_agent_worktree_authoring_is_refused` |
 | Workflow YAML | `workflow.schema.json` | `workspace:` | absent | absent | Unknown field rejected | `retired_workspace_authoring_and_projection_fields_are_gone` |
-| Review subject | `ReviewSubject` | `plan`/`candidate` | `plan` | `plan` | Unknown variant/field rejected | `retired_candidate_review_vocabulary_is_refused` |
 | Agent wire workspace | `RuntimeClientAgent.workspace` | object | path | path | Old object does not decode as the new path | `the_runtime_client_projection_carries_the_named_identity` |
 
 Event envelope 1, Session catalog 15 and `CURRENT_RUNTIME_SCHEMA_VERSION`
@@ -183,7 +182,7 @@ boundary_suites::`, `--test contracts --test provider`), **B** = `rust-boundarie
 | C10, C18 | `pending_review_does_not_block_an_independent_parallel_branch` | C |
 | C11 | `workflow_output_latch_is_exactly_once_and_cancel_is_terminal`, `projection_rejects_oversized_or_missing_parts_without_parsing_text` | C |
 | C14 | `review_response_is_bound_to_exact_visit_and_presented_subject`, `review_wrong_instance_subject_and_kind_leave_original_pending_detach_resync_is_live_only` | C |
-| C15 | `sub258_override_selections_are_canonically_normalized`, specialized-agent template tests | C |
+| C15 | `sub258_override_selections_are_canonically_normalized` | C |
 | C16 | `published_initialization_error_retains_live_registry_obligation_until_exact_proof`, Session deletion barrier tests above | C |
 | C19 | `a_workflow_child_cannot_be_resumed_through_agent_controls`, `workflow_activations_do_not_become_continuable_agent_rows` | C |
 | C20 | `a_workflow_child_closes_native_lifecycle_without_parent_inbound` | C |

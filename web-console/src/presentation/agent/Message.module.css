@@ -2,6 +2,11 @@
 /* User bubble: right-aligned column (bubble + IconActions). Figma
    User_Bubble/message_container 659:38813 — r22 fill, actions gap 6 below. */
 
+.assistant { display: flex; flex-direction: column; min-width: 0; }
+.assistant > :where(:not([hidden])) ~ :where(:not([hidden])) { margin-top: 4px; }
+.assistant > [data-markdown-variant="normal"]:not(:first-child),
+.assistant > [data-markdown-variant="normal"] + :not([hidden]) { margin-top: 12px; }
+
 .userRow {
   display: flex;
   flex-direction: column;
@@ -27,7 +32,7 @@
      keeps narrow windows sane. */
   max-width: 100%;
   background: var(--dsw-specific-bubble);
-  border-radius: 20px;
+  border-radius: var(--dsw-radius-xl);
   /* 42px single-line bubble at the default size: 22 line + 10 vertical
      padding each side; the Settings font-size preference moves size and line
      height together through the body-published axis. */
@@ -48,6 +53,22 @@
 }
 .contextRow {
   padding: 2px 0;
+}
+
+/* Harness AssistantMarkdown's interruption marker, after frozen content. */
+.stopped {
+  align-self: flex-start;
+  width: fit-content;
+  padding: 0 6px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+:global([data-assistant-message]) > .stopped[data-assistant-stopped]:not([hidden]) {
+  margin-top: 16px;
 }
 
 /* Compaction marker: one dim 24px row with a context icon at rest and a
@@ -131,7 +152,7 @@
   width: calc(16px + var(--dsh-content-font-delta, 0px));
   height: calc(16px + var(--dsh-content-font-delta, 0px));
   margin-right: 6px;
-  color: var(--dsw-alias-label-secondary);
+  color: inherit;
 }
 
 /* Same glyph-scaling rule as DisclosureRow's leading: the CSS edge overrides
@@ -198,10 +219,7 @@
   line-height: calc(24px + var(--dsh-content-font-delta, 0px));
 }
 
-.compactionDescription {
-  margin: 0 0 12px;
-  color: var(--dsw-alias-label-tertiary);
-}
+.compactionSummary[data-error] { color: var(--dsw-alias-state-error-primary); }
 
 .retryRow {
   color: var(--dsw-alias-label-tertiary);
@@ -360,10 +378,13 @@
   min-height: 64px;
   padding: 8px 12px;
   border: 0.5px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.12));
-  border-radius: 16px;
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-specific-input-major, transparent);
   box-sizing: border-box;
+  text-align: left;
 }
+.fileCard:is(button) { cursor: pointer; }
+.fileCard:is(button):hover { background: var(--dsw-alias-interactive-bg-hover); }
 
 .fileIcon {
   flex: none;

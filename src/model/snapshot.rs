@@ -21,12 +21,14 @@ use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
-    AttemptId, CapabilityRevision, MessageId, PublicationStreamId, RequestId, TurnId,
+    AttemptId, AuxiliaryCallId, CapabilityRevision, MessageId, PublicationStreamId, RequestId,
+    TurnId,
 };
 use crate::tools::types::ModelToolDefinition;
 
 /// The identity of one actual primary request attempt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RequestIdentity {
     /// The attempt that owns this request.
     pub attempt_id: AttemptId,
@@ -36,6 +38,21 @@ pub struct RequestIdentity {
     /// logical model step. Zero is the initial request; transient and
     /// context-overflow recovery requests share the same sequence.
     pub retry_number: u32,
+}
+
+/// Ownership of one actual model request; identity grants no execution permission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ModelRequestOwner {
+    /// A primary request owned by an Agent attempt.
+    Agent { identity: RequestIdentity },
+    /// One physical request within a logical auxiliary call.
+    Auxiliary {
+        call_id: AuxiliaryCallId,
+        /// Zero is the initial request. Physical retries have distinct request
+        /// identities and advance this ordinal within the same auxiliary call.
+        ordinal: u32,
+    },
 }
 
 impl RequestIdentity {
@@ -76,6 +93,8 @@ pub use crate::context::contribution::ContributionStart;
 /// A provider-independent frozen request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
+    /// Exact prepared structured output, omitted from routine observations.
+    pub response_schema: Option<super::structured::PreparedResponseSchema>,
     /// Associations in actual-request coordinates, distinct from checkpoint and physical call coordinates.
     pub tool_associations: crate::model::occurrence::FrozenToolAssociations,
     pub history_cut: crate::durable::projection::RequestHistoryCut,
@@ -108,8 +127,6 @@ pub struct RequestSnapshot {
     pub context_window_tokens: u64,
     /// The selected Model Profile identity, when any.
     pub profile: Option<crate::model::catalog::ModelProfileId>,
-    /// The effective semantic reasoning state.
-    pub reasoning_enabled: bool,
     /// The exact effective tool definitions/capability view used by this
     /// request. The capability revision is retained for audit, while the
     /// definitions are frozen by value because capability revision metadata
@@ -241,7 +258,6 @@ impl RequestSnapshot {
         invocation: ModelInvocationConfig,
         context_window_tokens: u64,
         profile: Option<crate::model::catalog::ModelProfileId>,
-        reasoning_enabled: bool,
         tool_definitions: Vec<ModelToolDefinition>,
         capability_revision: CapabilityRevision,
         context_generation: ContextGeneration,
@@ -250,6 +266,8 @@ impl RequestSnapshot {
     ) -> Self {
         let provisional_message_id = identity.provisional_message_id();
         let semantic_input_fingerprint = ModelRequest {
+            response_schema: None,
+            response_byte_limit: None,
             images: crate::model::images::ResolvedImages::new(),
             invocation: invocation.clone(),
             messages: crate::model::SelectedModelInput::default(),
@@ -260,6 +278,7 @@ impl RequestSnapshot {
         }
         .semantic_input_fingerprint();
         Self {
+            response_schema: None,
             tool_associations: Vec::new().into(),
             history_cut: crate::durable::projection::RequestHistoryCut {
                 ledger: crate::context::resources::LedgerFrontier(
@@ -284,7 +303,6 @@ impl RequestSnapshot {
             invocation,
             context_window_tokens,
             profile,
-            reasoning_enabled,
             tool_definitions,
             capability_revision,
             context_generation,
@@ -367,6 +385,7 @@ impl RequestSnapshot {
         }
         self.input = selected.clone();
         self.images.clone_from(&request.images);
+        self.response_schema.clone_from(&request.response_schema);
         self.continuation_source
             .clone_from(&request.continuation_source);
         self.semantic_input_fingerprint = selected.semantic_digest().map_or_else(
@@ -409,6 +428,8 @@ impl RequestSnapshot {
             })
             .collect::<Result<Vec<_>, RequestReconstructionError>>()?;
         let request = ModelRequest {
+            response_schema: self.response_schema.clone(),
+            response_byte_limit: None,
             images: self.images.clone(),
             invocation: self.invocation.clone(),
             messages: messages.into(),
@@ -447,6 +468,7 @@ impl RequestSnapshot {
             &self.tool_definitions,
             &self.invocation,
             &self.continuation,
+            &self.response_schema,
         ))
         .expect("native request metadata serializes");
         format!("{:x}", Sha256::digest(bytes)) == self.semantic_input_fingerprint
@@ -494,7 +516,6 @@ mod tests {
             request.invocation.clone(),
             128_000,
             None,
-            false,
             request.tools.clone(),
             CapabilityRevision::new(1),
             ContextGeneration {
@@ -511,6 +532,65 @@ mod tests {
             )
             .unwrap();
         snapshot
+    }
+
+    #[test]
+    fn structured_contract_survives_snapshot_reconstruction() {
+        use crate::model::structured::{
+            PreparedResponseSchema, ResponseSchema, StructuredOutputStrategy,
+        };
+        let mut request = crate::scripted_suites::common::simple_request(
+            crate::model::ModelProtocol::OpenAiChatCompletions,
+            "test",
+            "source",
+        );
+        request.response_schema = Some(PreparedResponseSchema {
+            schema: ResponseSchema::new("answer".into(), serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false}), 128).unwrap(),
+            strategy: StructuredOutputStrategy::Native,
+        });
+        request.invocation.capabilities.json_schema_output = true;
+        let snapshot = frozen(&request);
+        let decoded: RequestSnapshot =
+            serde_json::from_value(serde_json::to_value(&snapshot).unwrap()).unwrap();
+        let reconstructed = decoded
+            .reconstruct_with(|source| {
+                request
+                    .messages
+                    .iter()
+                    .find_map(|input| match input {
+                        ModelInputMessage::Canonical(message) if source.matches(message) => {
+                            Some(Ok(message.clone()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            })
+            .unwrap();
+        assert_eq!(reconstructed, request);
+        assert_eq!(
+            reconstructed.semantic_input_fingerprint(),
+            snapshot.semantic_input_fingerprint
+        );
+    }
+
+    #[test]
+    fn primary_snapshot_retains_request_identity_serialization() {
+        let request = crate::scripted_suites::common::simple_request(
+            crate::model::ModelProtocol::OpenAiChatCompletions,
+            "test",
+            "input",
+        );
+        let snapshot = frozen(&request);
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            value["identity"],
+            serde_json::json!({"attempt_id": "attempt-frozen", "turn": "1", "retry_number": 0})
+        );
+        assert!(value.get("owner").is_none());
+        assert_eq!(value["request_id"], "request:14:attempt-frozen:1:1:0");
+        let decoded: RequestSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, snapshot);
+        assert_eq!(decoded.request_id, decoded.identity.request_id());
     }
 
     #[test]

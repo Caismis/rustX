@@ -1,8 +1,30 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v52. It does not parse
+The TUI is a projection/control client of App Server protocol v72. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v52.ts`](../protocol/app-server/v52.ts).
+[`protocol/app-server/v72.ts`](../protocol/app-server/v72.ts).
+
+Initial MCP preparation is native-owned. Early attachment remains asynchronous
+and the editor stays usable. On the first nonempty submission, the TUI sends
+`session/submissionIntent` with the exact selected node before waiting for a
+pending attachment, then forwards the queued content only after attachment and
+intent acknowledgement. Missing node metadata is read without MCP initialization;
+the same node is used for intent and attachment. Native captures and registers the
+receipt synchronously at host admission, before asynchronous catalog lookup, and
+arms the shared initial wait (15,000 ms by default). Without already accepted
+executable recovery, preparation before Enter consumes none of that budget.
+Existing durable recovery uses its earlier native entry receipt. Withdrawal does
+not reset the clock. Ready sources add no delay; terminal optional-source failures use the
+existing error/status surfaces. Successful runtime MCP updates publish at the
+native safe boundary, and so do authored configuration changes; there is no
+adoption command. See [MCP startup policy](configuration.md#runtime-policies).
+
+Cold reconnection retains the same logical draft and editor, including pasted
+command-token provenance. It captures complete input blocks and an explicit Tab
+Queue choice together; the fresh attachment and intent acknowledgement gate one
+dispatch. A running Attempt receives Tab via `turn/start`, while Enter uses its
+current native projection to choose Send or Steer. Later typing remains local,
+and transport recovery never replays an unanswered mutation.
 
 `/settings` reads User configuration even with zero Sessions. `/settings workspace
 "/canonical/path"` selects a native Workspace source; `rescan` and `approval
@@ -77,7 +99,9 @@ replacement process, or another server, retires the previous line — a warning
 never carries into a process that does not hold it — and its sequences start a
 new ordering domain; its receipts are its own, even with equal ids.
 
-One retention policy bounds every per-source repair map (`retainSource`: at
+One retention policy, shared with the Web client, bounds every per-source repair map
+(`retainSourceRepair` in `protocol/app-server/source-repair.ts`, which also holds the
+apply/ignore/recover ordering decision: at
 most 64 Workspaces, the ledger's own bound, whether or not the User has an
 entry, plus the User in its own slot; the least recently observed Workspace is
 forgotten first, the User never, and re-observing a Workspace makes it the most
@@ -110,15 +134,20 @@ the host admitted, which is never older for a source than what it already
 delivered — and a later connection to the same authority observes each source
 no older than its predecessor delivered it — so the line forgetting a source of
 its own lets nothing stale back in.
-`/session settings` inspects Session selections, binding, pending candidate and
-the runtime's published adoption eligibility (Runtime Client state, never part of
-the application). `/session adopt` sends only the last inspected candidate and
-expected binding to `session/adoptConfiguration`. `/model` uses `session/setModel`;
+`/session settings` inspects Session selections, binding and the native
+configuration application. Native commits saved configuration at the Session's
+safe boundary; the TUI never confirms it. Following Pi's transient status, the
+footer shows `config preparing`, `config applies after current work`, `config
+failed · previous kept`, `config applied, not recorded · new work waits` (an
+uncertain commit: published but not recorded, so it never claims the previous
+configuration was kept) or `config needs restart` only while that is true, and is
+silent once applied. Following Codex's info events, each committed
+`configuration_applied` fact is one dim transcript notice naming the changed
+domains and bounded Tool and Skill names. `/model` uses `session/setModel`;
 it never writes a configuration source. `/debug` owns low-level diagnostics.
 The obsolete `/configuration` and `/permissions` commands have no aliases.
 Ordinary Save transfers work to the existing native coordinator. Clients do not
-classify cache impact or resource closures, retry refused adoption, or replay an
-uncertain mutation.
+classify resource closures or replay an uncertain mutation.
 
 `/model` also works while an Attempt, child or background Tool is running. Native
 confirmation commits the selected Model/Profile for future independent Attempts;
@@ -141,7 +170,7 @@ report current selection success.
 A spawned App Server receives process-only `--config` and `--runtime-root` bindings.
 User resources remain `~/rustx/.agents`. Remote connections use the server's bindings,
 not client-local configuration. Reconnect reconstructs current authoritative state;
-it does not replay Save, adoption or other prior side effects.
+it does not replay Save or other prior side effects.
 
 See [configuration](configuration.md) and [development](../DEVELOPMENT.md) for launch
 commands, and [the protocol](app-server-protocol.md) for transport/attachment semantics.
@@ -156,7 +185,7 @@ control submission until authoritative settlement. Success focuses an existing
 Session or opens the empty selector, without automatically creating a Session.
 Lost deletion responses are never replayed; reconnection inspects native state.
 
-`session/summaryInvalidated` is part of the mandatory v35 vocabulary and is
+`session/summaryInvalidated` is part of the mandatory v72 vocabulary and is
 decoded with its mandatory `catalog_changed` scope and routed by Session identity. The TUI
 holds no cached Session summary — `/resume` reads the catalog afresh every time
 it opens — so the notification is accepted and declined: it is never folded into
@@ -229,3 +258,10 @@ TUI rewrite or generic package was introduced.
 See [the image and Bash contract](image-reading.md) for effective capability
 intersection, Attempt-frozen publication, managed image ownership, provider
 transport, text-only history projection, and presentation-only Bash descriptions.
+
+The read-only `/workflow-recovery <start-id> [node-id] [after-effect-ordinal]`
+command inspects one exact native scheduled run without attaching or activating
+it. It reports durable state, cancellation intent, missing physical proofs,
+capacity/deletion blockers, committed Return data and a lossless next-page command.
+Workflow displays use native Tool/Scheduled origins; a Scheduled run has no outer
+canonical ToolCall or Human Attempt.

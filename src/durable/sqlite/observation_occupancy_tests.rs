@@ -25,9 +25,9 @@ fn t08_t14_t19_occupancy_reads_fixed_original_request_scalars_and_model_ranges()
         .unwrap();
     let mut snapshot = occupancy_original_snapshot(&store);
     let usage = crate::model::types::ModelUsage {
-        input_tokens: 3_000_000,
-        output_tokens: 1,
-        total_tokens: 3_000_001,
+        input_tokens: Some(3_000_000),
+        output_tokens: Some(1),
+        total_tokens: Some(3_000_001),
         details: None,
     };
     let expected = crate::context::occupancy::measure(&usage, &snapshot)
@@ -42,6 +42,7 @@ fn t08_t14_t19_occupancy_reads_fixed_original_request_scalars_and_model_ranges()
         "occupancy-terminal",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent { identity: snapshot.identity.clone() },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(usage),
@@ -210,12 +211,13 @@ fn t10_t14_occupancy_derived_header_failure_preserves_original_provider_terminal
         "occupancy-fault-terminal",
         Some(snapshot.identity.attempt_id.clone()),
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent { identity: snapshot.identity.clone() },
             request_id: snapshot.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(crate::model::types::ModelUsage {
-                input_tokens: 10,
-                output_tokens: 1,
-                total_tokens: 11,
+                input_tokens: Some(10),
+                output_tokens: Some(1),
+                total_tokens: Some(11),
                 details: None,
             }),
             generation: None,

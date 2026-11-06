@@ -1,0 +1,428 @@
+use super::*;
+
+// The currently published Trace cache owns its original issued read evidence.
+use crate::durable::ConversationStore;
+use crate::runtime_client::RuntimeClientError;
+
+#[test]
+fn native_terminal_keeps_trace_invalidation_before_its_final_settlement() {
+    let (mut projection, store) = initialized_source_projection();
+    let started = append_source_attempt_start(&store, "terminal-trace-start");
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply_native_batch(started.observation.as_deref().unwrap());
+    });
+    let before = projection.checkpoint_candidate().unwrap();
+    let terminal = store
+        .append_event(source_tool_event(
+            &store,
+            RuntimeEvent::AttemptCompleted {
+                attempt_id: attempt(),
+                finish_reason: ModelFinishReason::Stop,
+            },
+            "terminal-trace-completed",
+        ))
+        .unwrap();
+    crate::runtime_client::trace::take_page_read_work();
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply_native_batch(terminal.observation.as_deref().unwrap());
+    });
+    let after = projection.checkpoint_candidate().unwrap();
+    assert_eq!(after.cursor.get(), before.cursor.get() + 1);
+    assert_eq!(after.read_cut.through, terminal.sequence);
+    assert_eq!(after.snapshot.trace, before.snapshot.trace);
+    assert_eq!(crate::runtime_client::trace::take_page_read_work(), 0);
+    let publications = collect(&mut projection, before.cursor);
+    assert_eq!(publications.len(), 1, "same native publication and cursor");
+    let facts = publications[0].event.facts();
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, RuntimeClientEvent::TraceChanged))
+            .count(),
+        1
+    );
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        facts.last(),
+        Some(RuntimeClientEvent::AttemptSettled { .. })
+    ));
+}
+
+// Local takeover probe, independently reconstructed from published 672eccb8.
+// This proves the producer boundary only; the real native-to-browser workflow
+// remains required before accepting a correction.
+#[test]
+fn native_receipt_invalidates_trace_inside_its_existing_publication() {
+    let (mut projection, store) = initialized_source_projection();
+    let initial = projection.checkpoint_candidate().unwrap();
+    let started = append_source_attempt_start(&store, "recovery-native-start");
+    let receipt = started.observation.as_deref().unwrap();
+    crate::runtime_client::trace::take_page_read_work();
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply_native_batch(receipt);
+    });
+    let current = projection.checkpoint_candidate().unwrap();
+    assert_eq!(current.cursor.get(), initial.cursor.get() + 1);
+    assert_eq!(current.read_cut.through, started.sequence);
+    assert_eq!(
+        current.read_cut.source_cut,
+        Some(store.observation_read_cut().unwrap())
+    );
+    assert_eq!(current.snapshot.trace, initial.snapshot.trace);
+    assert_eq!(crate::runtime_client::trace::take_page_read_work(), 0);
+    let events = collect(&mut projection, initial.cursor);
+    assert_eq!(events.len(), 1, "native receipt keeps its one publication");
+    assert!(
+        events[0]
+            .event
+            .facts()
+            .iter()
+            .any(|fact| { matches!(fact, RuntimeClientEvent::AttemptStarted { .. }) })
+    );
+    assert_eq!(
+        events[0]
+            .event
+            .facts()
+            .iter()
+            .filter(|fact| { matches!(fact, RuntimeClientEvent::TraceChanged) })
+            .count(),
+        1,
+        "already-open Trace readers need invalidation in the native publication"
+    );
+}
+
+#[test]
+fn native_trace_only_duplicate_and_delayed_receipts_do_not_add_publications() {
+    let (mut projection, store) = initialized_source_projection();
+    let initial = projection.checkpoint_candidate().unwrap();
+    let mut receipts = Vec::new();
+    for (index, identity) in ["native-trace-first", "native-trace-second"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut envelope = source_tool_event(&store, RuntimeEvent::TurnCompleted, identity);
+        envelope.turn_id = Some(TurnId::new((index + 1).to_string()));
+        let event = store.append_event(envelope).unwrap();
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(event.observation.as_deref().unwrap());
+        });
+        store
+            .mark_observation_direct(event.sequence, event.sequence)
+            .unwrap();
+        receipts.push(event);
+    }
+    let current = projection.checkpoint_candidate().unwrap();
+    assert_eq!(current.cursor.get(), initial.cursor.get() + 2);
+    assert_eq!(current.read_cut.through, receipts[1].sequence);
+    for event in &receipts {
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply_native_batch(event.observation.as_deref().unwrap());
+        });
+        let witness = store
+            .observation_event_witness(event.sequence, receipts[1].sequence)
+            .unwrap()
+            .unwrap();
+        assert!(witness.native_direct);
+        publish_source_fact(&mut projection, |projection| {
+            projection.apply(ConversationObservation::JournalBatch {
+                through: Some(event.sequence),
+                observations: vec![ConversationObservation::JournalFact(witness)],
+            });
+        });
+        assert_eq!(projection.checkpoint_candidate().unwrap(), current);
+    }
+    let publications = collect(&mut projection, initial.cursor);
+    assert_eq!(publications.len(), 2);
+    for (index, event) in publications.iter().enumerate() {
+        assert_eq!(event.cursor.get(), initial.cursor.get() + index as u64 + 1);
+        assert_eq!(
+            event
+                .event
+                .facts()
+                .iter()
+                .filter(|fact| { matches!(fact, RuntimeClientEvent::TraceChanged) })
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn canonical_only_cut_invalidates_trace_without_retagging_its_cached_cut() {
+    let (mut projection, store, call, witness) = native_running_tool_fixture();
+    install_current_trace(&mut projection, &store);
+    let initial = projection.checkpoint_candidate().unwrap();
+    let issued = initial.snapshot.trace.read_cut.as_ref().unwrap().clone();
+    crate::runtime_client::trace::take_page_read_work();
+    commit_result_without_terminal_j(&mut projection, &store, call);
+    let current = projection.checkpoint_candidate().unwrap();
+    assert_eq!(current.cursor.get(), initial.cursor.get() + 1);
+    assert_eq!(current.read_cut.through, initial.read_cut.through);
+    assert!(
+        current.read_cut.source_cut.as_ref().unwrap().ledger_through
+            > initial.read_cut.source_cut.as_ref().unwrap().ledger_through
+    );
+    assert_eq!(current.snapshot.trace, initial.snapshot.trace);
+    assert_eq!(crate::runtime_client::trace::take_page_read_work(), 0);
+    let publications = collect(&mut projection, initial.cursor);
+    assert_eq!(publications.len(), 1);
+    assert_eq!(
+        publications[0]
+            .event
+            .facts()
+            .iter()
+            .filter(|fact| { matches!(fact, RuntimeClientEvent::TraceChanged) })
+            .count(),
+        1
+    );
+    projection.validate_checkpoint_cut(&issued).unwrap();
+    assert_frozen_tool_result_absent(&store, &issued, &witness.tool_occurrence.unwrap());
+}
+
+fn install_current_trace(projection: &mut RuntimeClientProjection, store: &dyn ConversationStore) {
+    let fence = projection.read_domain_cut().unwrap();
+    let read = fence.read(store).unwrap();
+    publish_source_fact(projection, |projection| {
+        assert!(projection.install_read_domains(&fence, Ok(read), true));
+    });
+}
+
+fn commit_result_without_terminal_j(
+    projection: &mut RuntimeClientProjection,
+    store: &dyn ConversationStore,
+    call: ToolCall,
+) {
+    let receipt = store
+        .append_canonical(&MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("cached-trace-result"),
+            occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                MessageId::new("progress-proposal"),
+                ContentBlockIndex::new(0),
+            ),
+            tool_call_id: call.id,
+            tool_id: call.tool_id,
+            result: success_result(),
+        }))
+        .unwrap();
+    let cursor = receipt.transcript_cursor.unwrap().get();
+    publish_source_fact(projection, |projection| {
+        projection.apply(ConversationObservation::CanonicalCommitted {
+            attempt_id: Some(attempt()),
+            receipt,
+        });
+    });
+    store
+        .mark_canonical_transcript_ready(cursor, cursor)
+        .unwrap();
+    publish_source_fact(projection, |projection| {
+        projection.apply(ConversationObservation::TranscriptSourceReady(
+            store.transcript_source_ready().unwrap(),
+        ));
+    });
+}
+
+fn assert_frozen_tool_result_absent(
+    store: &dyn ConversationStore,
+    cut: &crate::observation::cut::CheckpointReadCut,
+    occurrence: &crate::events::types::ToolObservationOccurrence,
+) {
+    let frozen = super::super::super::trace::TraceProjection::at_cut(
+        store,
+        cut.source_cut.as_ref().unwrap(),
+    )
+    .unwrap()
+    .page(None, 32)
+    .unwrap();
+    assert!(
+        frozen
+            .records
+            .iter()
+            .find(|row| row.kind == crate::observation::trace::TraceKind::Tool)
+            .unwrap()
+            .tool
+            .as_ref()
+            .unwrap()
+            .outcome
+            .is_none()
+    );
+    assert!(
+        store
+            .observation_trace_tool_result(cut.source_cut.as_ref().unwrap(), occurrence)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn live_domain_refresh_defers_trace_and_keeps_issued_pins_while_checkpoint_reads_its_cut() {
+    let (mut projection, store, call, witness) = native_running_tool_fixture();
+    install_current_trace(&mut projection, &store);
+    let cached = projection.checkpoint_candidate().unwrap().snapshot.trace;
+    let issued = cached.read_cut.clone().unwrap();
+    let occurrence = witness.tool_occurrence.unwrap();
+    commit_result_without_terminal_j(&mut projection, &store, call);
+    let fence = projection.read_domain_cut().unwrap();
+    crate::runtime_client::trace::take_page_read_work();
+    let live = fence.read_live(&store).unwrap();
+    assert!(live.trace.is_none());
+    assert_eq!(crate::runtime_client::trace::take_page_read_work(), 0);
+    publish_source_fact(&mut projection, |projection| {
+        assert!(projection.install_read_domains(&fence, Ok(live), true));
+    });
+    assert_eq!(
+        projection.checkpoint_candidate().unwrap().snapshot.trace,
+        cached
+    );
+    projection.validate_checkpoint_cut(&issued).unwrap();
+    assert_frozen_tool_result_absent(&store, &issued, &occurrence);
+    let cursor = projection.cursor;
+    crate::runtime_client::trace::take_page_read_work();
+    let complete = projection
+        .checkpoint_seed()
+        .checkpoint_with_read_domains(&store)
+        .unwrap();
+    assert_eq!(crate::runtime_client::trace::take_page_read_work(), 1);
+    assert_eq!(
+        complete.snapshot.trace.read_cut.as_ref(),
+        Some(&complete.read_cut)
+    );
+    assert!(
+        store
+            .observation_trace_tool_result(
+                complete.read_cut.source_cut.as_ref().unwrap(),
+                &occurrence
+            )
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        projection.cursor, cursor,
+        "inspection publishes no replacement"
+    );
+    assert_eq!(
+        projection.checkpoint_candidate().unwrap().snapshot.trace,
+        cached
+    );
+    projection.validate_checkpoint_cut(&issued).unwrap();
+}
+
+/// Capacity suite: this test's value comes from its scale, so FAST skips
+/// `::scale::` and FULL runs it (tests/README.md, "Capacity tests").
+mod scale {
+    use super::*;
+    use crate::durable::ObservationStore;
+
+    #[test]
+    fn t08_t14_t19_cached_trace_cut_survives_c_without_j_and_4097_unrelated_publications() {
+        let (mut projection, store, call, witness) = native_running_tool_fixture();
+        install_current_trace(&mut projection, &store);
+        let initial = projection.checkpoint_candidate().unwrap();
+        let cached = initial.snapshot.trace.clone();
+        let issued = cached.read_cut.as_ref().unwrap().clone();
+        assert_eq!(issued, initial.read_cut);
+        assert!(projection.replay.back().unwrap().1.facts().iter().any(|event| {
+            matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace.as_ref() == &cached)
+        }));
+        let held_fence = projection.read_domain_fence();
+        let held_read = held_fence.read(&store).unwrap();
+        let occurrence = witness.tool_occurrence.unwrap();
+        assert!(
+            store
+                .observation_trace_tool_result(issued.source_cut.as_ref().unwrap(), &occurrence)
+                .unwrap()
+                .is_none()
+        );
+
+        commit_result_without_terminal_j(&mut projection, &store, call);
+        let later = projection.checkpoint_candidate().unwrap();
+        assert_eq!(later.read_cut.through, issued.through);
+        assert!(
+            later.read_cut.source_cut.as_ref().unwrap().ledger_through
+                > issued.source_cut.as_ref().unwrap().ledger_through
+        );
+        assert_eq!(later.snapshot.trace, cached);
+        assert!(
+            !projection.install_read_domains(&held_fence, Ok(held_read), true),
+            "a gated old worker result cannot install after C advances"
+        );
+        assert!(
+            store
+                .observation_trace_tool_result(
+                    later.read_cut.source_cut.as_ref().unwrap(),
+                    &occurrence
+                )
+                .unwrap()
+                .is_some()
+        );
+
+        for _ in 0..4_097 {
+            publish_source_fact(&mut projection, |projection| {
+                projection.publish(RuntimeClientEvent::TraceChanged);
+            });
+        }
+        assert!(projection.earliest_serviceable() > initial.cursor);
+        assert!(!projection.replay_cut_cursors.contains_key(&issued.revision));
+        assert_eq!(
+            projection.checkpoint_candidate().unwrap().snapshot.trace,
+            cached
+        );
+        projection.validate_checkpoint_cut(&issued).unwrap();
+        assert_frozen_tool_result_absent(&store, &issued, &occurrence);
+        let mut tampered = issued.clone();
+        tampered.through += 1;
+        assert!(matches!(
+            projection.validate_checkpoint_cut(&tampered),
+            Err(RuntimeClientError::ReadCutExpired)
+        ));
+
+        install_current_trace(&mut projection, &store);
+        let refreshed = projection.checkpoint_candidate().unwrap();
+        assert_eq!(
+            refreshed.snapshot.trace.read_cut.as_ref(),
+            Some(&refreshed.read_cut)
+        );
+        assert!(
+            matches!(
+                projection.validate_checkpoint_cut(&issued),
+                Err(RuntimeClientError::ReadCutExpired)
+            ),
+            "retiring the published cache retires its cut pin"
+        );
+    }
+}
+
+#[test]
+fn t08_t14_cached_trace_cut_is_not_retagged_by_todo_or_unchanged_installation() {
+    let (mut projection, store, _, _) = native_running_tool_fixture();
+    install_current_trace(&mut projection, &store);
+    let cached = projection.checkpoint_candidate().unwrap().snapshot.trace;
+    let cursor = projection.cursor;
+    projection.read_domains_dirty = true;
+    install_current_trace(&mut projection, &store);
+    assert_eq!(
+        projection.cursor, cursor,
+        "an identical source installation creates no publication"
+    );
+    publish_source_fact(&mut projection, |projection| {
+        projection.publish(RuntimeClientEvent::ReadDomainsUpdated {
+            projection_head: projection.snapshot.context.projection_head.clone(),
+            transcript: Box::new(projection.snapshot.transcript.owned()),
+            trace: Some(Box::new(projection.snapshot.trace.owned())),
+            occupancy: projection.snapshot.context.occupancy.clone(),
+            todos: projection.snapshot.todos.owned(),
+        });
+    });
+    assert_eq!(
+        projection.checkpoint_candidate().unwrap().snapshot.trace,
+        cached
+    );
+    assert!(projection.replay.back().unwrap().1.facts().iter().any(|event| {
+        matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace.as_ref() == &cached)
+    }));
+}

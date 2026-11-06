@@ -122,11 +122,12 @@ impl PreparedCaptures {
     pub(super) fn capture<'a, T: Clone + Serialize + Send + Sync + 'static>(
         &'a self,
         key: &'static str,
-        capture: &mut checkpoint::Capture,
-        build: impl Fn(&mut checkpoint::Capture) -> T,
+        capture: &mut crate::observation::capture::Capture,
+        build: impl Fn(&mut crate::observation::capture::Capture) -> T,
     ) -> (std::borrow::Cow<'a, T>, Option<usize>) {
-        let owner =
-            self.0[key].get_or_init(|| Arc::new(OnceLock::<checkpoint::PreparedCapture<T>>::new()));
+        let owner = self.0[key].get_or_init(|| {
+            Arc::new(OnceLock::<crate::observation::capture::PreparedCapture<T>>::new())
+        });
         capture.prepared(
             owner.downcast_ref().expect("one capture type per domain"),
             build,
@@ -146,7 +147,7 @@ enum BindingPrefix {
 }
 type BindingFragments = checkpoint::metadata_fragment::BindingFragments;
 struct BindingHead {
-    values: checkpoint::MetadataFragment<Vec<checkpoint::ContentBinding>>,
+    values: checkpoint::MetadataFragment<Vec<crate::observation::cut::ContentBinding>>,
     budget: OnceLock<Option<usize>>,
     prefixed: std::sync::Mutex<Option<(BindingPrefix, BindingFragments)>>,
 }
@@ -159,13 +160,17 @@ impl Default for PreparedBindingHead {
         Vec::new().into()
     }
 }
-impl From<Vec<checkpoint::ContentBinding>> for PreparedBindingHead {
-    fn from(values: Vec<checkpoint::ContentBinding>) -> Self {
+impl From<Vec<crate::observation::cut::ContentBinding>> for PreparedBindingHead {
+    fn from(values: Vec<crate::observation::cut::ContentBinding>) -> Self {
         Self::from(checkpoint::MetadataFragment::from(values))
     }
 }
-impl From<checkpoint::MetadataFragment<Vec<checkpoint::ContentBinding>>> for PreparedBindingHead {
-    fn from(values: checkpoint::MetadataFragment<Vec<checkpoint::ContentBinding>>) -> Self {
+impl From<checkpoint::MetadataFragment<Vec<crate::observation::cut::ContentBinding>>>
+    for PreparedBindingHead
+{
+    fn from(
+        values: checkpoint::MetadataFragment<Vec<crate::observation::cut::ContentBinding>>,
+    ) -> Self {
         Self(Arc::new(BindingHead {
             values,
             budget: OnceLock::new(),
@@ -174,14 +179,14 @@ impl From<checkpoint::MetadataFragment<Vec<checkpoint::ContentBinding>>> for Pre
     }
 }
 impl PreparedBindingHead {
-    pub(super) fn values(&self) -> &[checkpoint::ContentBinding] {
+    pub(super) fn values(&self) -> &[crate::observation::cut::ContentBinding] {
         &self.0.values
     }
     pub(super) fn budget(&self) -> Option<usize> {
         *self.0.budget.get_or_init(|| {
-            crate::runtime_client::preflight::required_safe_integer_budget(
+            crate::observation::preflight::required_safe_integer_budget(
                 &self.0.values,
-                checkpoint::CHECKPOINT_TARGET_BYTES,
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
             )
         })
     }
@@ -242,13 +247,17 @@ pub(super) fn take_binding_work() -> usize {
 /// ownership never grants authority to an older cut. Issued owners stay frozen.
 #[derive(Clone, Default)]
 pub(super) struct PreparedAttemptBindings(
-    Arc<std::sync::Mutex<Vec<checkpoint::MetadataFragment<checkpoint::ContentBinding>>>>,
+    Arc<
+        std::sync::Mutex<
+            Vec<checkpoint::MetadataFragment<crate::observation::cut::ContentBinding>>,
+        >,
+    >,
 );
 impl PreparedAttemptBindings {
     pub(super) fn append(
         &self,
-        values: Vec<checkpoint::ContentBinding>,
-        output: &mut Vec<checkpoint::MetadataFragment<checkpoint::ContentBinding>>,
+        values: Vec<crate::observation::cut::ContentBinding>,
+        output: &mut Vec<checkpoint::MetadataFragment<crate::observation::cut::ContentBinding>>,
     ) {
         let mut current = self.0.lock().expect("immutable attempt binding cache");
         current.truncate(values.len());
@@ -266,7 +275,7 @@ impl PreparedAttemptBindings {
 }
 
 type FrontierOwners =
-    BTreeMap<String, checkpoint::MetadataFragment<checkpoint::CollectionFrontier>>;
+    BTreeMap<String, checkpoint::MetadataFragment<crate::observation::cut::CollectionFrontier>>;
 /// The most recently issued finite frontier set. Comparison touches only a
 /// short domain name and four scalars; unchanged values keep their exact wire
 /// certificate. No previous seed or unbounded history is retained.
@@ -290,8 +299,8 @@ impl MetadataFrontiers {
     }
     pub(super) fn prepare(
         &self,
-        values: Vec<checkpoint::CollectionFrontier>,
-    ) -> Vec<checkpoint::MetadataFragment<checkpoint::CollectionFrontier>> {
+        values: Vec<crate::observation::cut::CollectionFrontier>,
+    ) -> Vec<checkpoint::MetadataFragment<crate::observation::cut::CollectionFrontier>> {
         let owners = self.current.get().unwrap_or(&self.previous);
         // Collecting owned 64-byte frontiers into 8-byte owners can reuse the
         // source allocation and retain its much larger byte capacity. This is
@@ -338,9 +347,9 @@ impl FitBudget {
     pub(super) fn value(&mut self, name: &str, value: &impl Serialize) {
         self.field(
             name,
-            crate::runtime_client::preflight::required_safe_integer_budget(
+            crate::observation::preflight::required_safe_integer_budget(
                 value,
-                checkpoint::CHECKPOINT_TARGET_BYTES,
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
             ),
         );
     }
@@ -399,7 +408,7 @@ mod tests {
     #[test]
     fn metadata_frontier_owners_reuse_only_identical_fixed_fields() {
         let owners = MetadataFrontiers::default();
-        let original = checkpoint::CollectionFrontier {
+        let original = crate::observation::cut::CollectionFrontier {
             domain: "transcript.entries".into(),
             revision: 9,
             total: 12,
@@ -429,7 +438,7 @@ mod tests {
     fn frontier_pointer_array_does_not_retain_larger_value_allocation() {
         let mut values = Vec::with_capacity(128);
         for index in 0..37 {
-            values.push(checkpoint::CollectionFrontier {
+            values.push(crate::observation::cut::CollectionFrontier {
                 domain: format!("domain-{index}"),
                 revision: 9,
                 total: 1,

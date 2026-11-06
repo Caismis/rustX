@@ -72,4 +72,7 @@ pub use selected::{SelectedCapabilityPlan, SelectedMaterializationError, Selecte
 pub use snapshot::CapabilitySnapshot;
 pub use tools::{AgentActivation, AvailableTool, AvailableToolCatalog, extension_provided_tool};
 
-pub(crate) use coordinator::RuntimeCapabilityPublication;
+pub(crate) use coordinator::{
+    McpPreparation, McpPreparationState, McpStartupDeadline, RuntimeCapabilityPublication,
+    RuntimeRefreshAuthority,
+};

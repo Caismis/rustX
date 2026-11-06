@@ -60,9 +60,14 @@ LOW_RISK = DOCUMENTATION + PRESENTATION + LEAF_TESTS
 STATUSES = ("added", "modified", "removed", "renamed", "copied", "changed", "unchanged")
 # The statuses that keep every existing test where it was.
 TEST_PRESERVING = ("added", "modified")
-# Which suites a changed path affects. Documentation selects only the
-# always-on jobs; any other path in no surface affects every suite.
+# Which suites a changed path affects. Documentation is low risk but not
+# inert: the `contracts` test target (tests/contracts/documentation.rs and
+# runtime_examples.rs) reads the top-level, docs/, Web and TUI Markdown, so a
+# change there selects the documentation contracts. Other documentation
+# selects only the always-on jobs; any other path in no surface affects every
+# suite.
 SURFACES = {
+    "documentation": ("*.md", "docs/**", "web-console/*.md", "tui/*.md"),
     "rust": ("src/**", "tests/**", "examples/**", "benches/**", "build.rs", "Cargo.toml",
              "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**"),
     "protocol": ("protocol/**",),
@@ -91,7 +96,7 @@ def risk_of(path):
 
 def surfaces_of(path):
     if matches(path, DOCUMENTATION):
-        return set()
+        return {"documentation"} if matches(path, SURFACES["documentation"]) else set()
     # CI definitions and unknown paths affect every suite.
     return {name for name, patterns in SURFACES.items() if matches(path, patterns)} or set(SURFACES)
 
@@ -136,6 +141,8 @@ def selected_jobs(profile, surfaces):
     return {
         "quality": full or rust,
         "rust-fast": not full and rust,
+        # FULL's rust-contracts lane already runs the `contracts` target.
+        "documentation-contracts": not full and "documentation" in s,
         "rust-contracts": full,
         "rust-boundaries": full,
         "rust-platform-core": not full and rust,

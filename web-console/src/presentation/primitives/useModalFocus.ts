@@ -19,7 +19,7 @@ export function useModalFocus(open: boolean, ref: RefObject<HTMLElement | null>,
     layers.push(dialog);
     exposeTopLayer();
     const controls = () => Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]')).filter(node => !node.hidden && !node.closest('[inert]'));
-    (dialog.querySelector<HTMLElement>('[autofocus]') ?? controls()[0] ?? dialog).focus();
+    (dialog.querySelector<HTMLElement>('[data-modal-autofocus], [autofocus]') ?? controls()[0] ?? dialog).focus();
     const trap = (event: KeyboardEvent) => {
       if (layers.at(-1) !== dialog || event.defaultPrevented) return;
       if (event.key === 'Escape') { event.preventDefault(); close.current(); return; }

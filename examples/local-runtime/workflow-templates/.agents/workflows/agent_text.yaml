@@ -1,0 +1,32 @@
+description: Answer a question with one Agent's final reply as text.
+timeout_ms: 60000
+block:
+  input:
+    type: object
+    properties:
+      question:
+        type: string
+    required:
+    - question
+    additionalProperties: false
+  nodes:
+    start:
+      type: start
+    answer:
+      type: agent
+      profile: reviewer
+      task:
+      - type: literal
+        value: "Answer the question from what the repository shows.\n\nquestion: "
+      - type: reference
+        path: [args, question]
+      output: {type: text}
+    return_answer:
+      type: return
+      outputs:
+      - {variable: answer, value_selector: [answer, text]}
+  edges:
+  - from: start
+    to: answer
+  - from: answer
+    to: return_answer

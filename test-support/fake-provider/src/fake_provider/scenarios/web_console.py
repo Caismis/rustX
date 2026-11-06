@@ -70,6 +70,45 @@ def web_commands() -> Scenario:
 SCENARIOS["web_commands"] = web_commands
 
 
+def web_response_retry() -> Scenario:
+    """Keep an earlier turn while a native sibling replay replaces this response."""
+    def expected(prompt: str, **kwargs) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
+    return Scenario("web_response_retry",
+                    Step(expected("Earlier question"), Stream(Text("Earlier answer stays."), Finish())),
+                    Step(expected("Retry this question"), Stream(Text("## Original response\n\nOld reply to replace."), Finish())),
+                    Step(expected("Retry this question", body_excludes=("Original response", "Old reply to replace.")),
+                         Stream(Gate("replay-request"), Text("## New response\n\nGenerating the replacement."),
+                                Gate("replay-streaming"), Text("\n\nReplacement complete."), Finish())))
+
+
+SCENARIOS["web_response_retry"] = web_response_retry
+
+
+def web_fork_feedback() -> Scenario:
+    """One completed native turn, followed by browser-owned lineage navigation."""
+    return Scenario("web_fork_feedback",
+                    Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Fork source",)),
+                         Stream(Text("Completed fork answer."), Finish())))
+
+
+SCENARIOS["web_fork_feedback"] = web_fork_feedback
+
+
+def web_sidebar_actions() -> Scenario:
+    """Sidebar fork retains a native completion while its source keeps running."""
+    def expected(prompt: str, **kwargs) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,), **kwargs)
+    return Scenario("web_sidebar_actions",
+                    Step(expected("Sidebar source"), Stream(Text("Completed sidebar answer."), Finish())),
+                    Step(expected("Keep source running"), Stream(Text("Unfinished source output."), Gate("sidebar-source-running"), Text(" Source finished."), Finish()), allow_disconnect=True),
+                    Step(expected("Fork follow-up", body_excludes=("Keep source running", "Unfinished source output.")),
+                         Stream(Text("Fork kept the completed answer."), Finish())))
+
+
+SCENARIOS["web_sidebar_actions"] = web_sidebar_actions
+
+
 def web_composer_context() -> Scenario:
     """Native Todo and Goal owners feed the composer docks; one Human input waits in the mailbox.
 
@@ -138,7 +177,51 @@ def web_workflow_conformance() -> Scenario:
     ))
 
 
+def web_workflow_observation() -> Scenario:
+    # Ordinary child Tool execution, then a separate reserved result commit.
+    return Scenario(
+        "web_workflow_observation",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("workflow conformance request",), tools_include=("review_pr",)),
+             Stream(ToolCall("call-review-pr", "review_pr", '{"task":"workflow conformance request"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Review the request",), tools_include=("read", "workflow_output")),
+             Stream(Gate("workflow-child-admitted"), Text("Inspecting the review profile."),
+                    ToolCall("call-child-read", "read", '{"path":".agents/agents/reviewer.toml"}', pieces=2), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Workflow-only reviewer", "call-child-read"), tools_include=("workflow_output",)),
+             Stream(Gate("workflow-child-read"), ToolCall("call-workflow-output", "workflow_output",
+                    '{"passed":true,"summary":"native workflow child committed"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("native workflow child committed",), body_excludes=("workflow_output",)),
+             Stream(Text("workflow conformance complete"), Finish())),
+    )
+
+SCENARIOS["web_workflow_observation"] = web_workflow_observation
+
 SCENARIOS["web_workflow_conformance"] = web_workflow_conformance
+
+
+def web_removed_capability_history() -> Scenario:
+    """Only model responses are scripted; rustX executes and records both tools."""
+    return Scenario(
+        "web_removed_capability_history",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Execute capabilities before removal",), tools_include=("read", "history_flow")),
+             Stream(ToolCall("history-read", "read", '{"path":"history-evidence.txt"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("HISTORY_TOOL_RESULT_v1",), tools_include=("history_flow",)),
+             Stream(ToolCall("history-workflow", "history_flow", '{"message":"HISTORY_WORKFLOW_INPUT_v1"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Saved HISTORY_WORKFLOW_INPUT_v1",)),
+             Stream(Text("Original capabilities executed."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                    body_contains=("Continue after capability removal",), no_direct_tools=True),
+             Stream(Text("Removed capabilities are absent from this request."), Finish())),
+    )
+
+
+SCENARIOS["web_removed_capability_history"] = web_removed_capability_history
 
 
 def web_session_archive() -> Scenario:
@@ -153,13 +236,13 @@ SCENARIOS["web_session_archive"] = web_session_archive
 
 
 def web_trace_convergence() -> Scenario:
-    """Request input is frozen before the save/adoption gates in the browser suite."""
+    """Request input is frozen before the save and the automatic commit in the browser suite."""
     return Scenario(
         "web_trace_convergence",
-        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Before adoption",)),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Before automatic commit",)),
              Stream(Text("Frozen before configuration."), Gate("trace-before"), Finish())),
-        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("After adoption", "TRACE_NEW_INSTRUCTIONS")),
-             Stream(Text("Frozen after explicit adoption."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("After automatic commit", "TRACE_NEW_INSTRUCTIONS")),
+             Stream(Text("Frozen after the automatic commit."), Finish())),
     )
 
 
@@ -323,12 +406,40 @@ def web_compaction() -> Scenario:
 SCENARIOS["web_compaction"] = web_compaction
 
 
+def web_stop() -> Scenario:
+    """Provider gates cover real cancellation before/during output and Tools."""
+    import hashlib
+    from fake_provider.scenario import Reasoning
+
+    long_body = "\n".join(f"Record {index:04d}: {hashlib.sha256(str(index).encode()).hexdigest()}" for index in range(512))
+
+    def expected(prompt: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(prompt,))
+
+    return Scenario("web_stop",
+        Step(expected("Stop before output"), Stream(Gate("stop-empty"), Text("Abandoned empty response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during reasoning"), Stream(Reasoning("Preserved reasoning before Stop."), Gate("stop-reasoning"), Text("Abandoned reasoning response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during text"), Stream(Reasoning("Preserved reasoning beside text."), Text("## Preserved partial answer\n\nAlready delivered text.\n\n```rust\nfn unfinished() {"), Gate("stop-text"), Text("Abandoned text response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during long text"), Stream(Text("## Long partial answer\n\n"), Text(long_body + "\n\nPreserved long tail.", pieces=16), Gate("stop-long"), Text("Abandoned long response."), Finish()), allow_disconnect=True),
+        Step(expected("Stop during proposal"), Stream(Text("Preparing a file without executing it."),
+            Raw(b'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"stopped-write","type":"function","function":{"name":"write","arguments":"{\\\"path\\\":"}}]},"finish_reason":null}]}\n\n'),
+            Gate("stop-proposal"), Finish("tool_calls")), allow_disconnect=True),
+        Step(expected("Stop running tool"), Stream(ToolCall("stopped-bash", "bash", json.dumps({"command": "sleep 30; printf must-not-run", "execution_mode": "foreground"})), Finish("tool_calls"))),
+        Step(expected("Continue after all stops"), Stream(Text("The conversation continued after all stops."), Finish())))
+
+
+SCENARIOS["web_stop"] = web_stop
+
+
 def web_advanced_documents() -> Scenario:
     expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Preview advanced files',))
     files = [{'path': name} for name in ['sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'hostile.html', 'malformed.pdf', 'encrypted.pdf']]
+    history = '\n\n'.join(f'Document reading paragraph {i}. ' + 'Keep the original document preview open. ' * 8 for i in range(12))
     return Scenario('web_advanced_documents',
         Step(expected, Stream(ToolCall('documents-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
-        Step(expected, Stream(Text('Documents delivered.'), Gate('document-stream'), Text(' Streaming continues.'), Finish())),
+        Step(expected, Stream(Text('Documents delivered.'), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Keep document previews active',)),
+             Stream(Text(history + '\n\nDocument preview remains active.'), Gate('document-stream'), Text(' Streaming continues.'), Finish())),
     )
 
 SCENARIOS['web_advanced_documents'] = web_advanced_documents
@@ -340,8 +451,10 @@ def web_preview_workspace() -> Scenario:
     files = [{'path': name} for name in ['a/sample.pdf', 'b/sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'notes.txt', 'second.txt']]
     history = '\n\n'.join(f'Workspace reading paragraph {i}. ' + 'Preserve this detached reading position. ' * 8 for i in range(18))
     return Scenario('web_preview_workspace',
-        Step(expected, Stream(Text(history), ToolCall('workspace-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
-        Step(expected, Stream(Text('Workspace files delivered.'), Gate('workspace-stream'), Text(' New streamed workspace content.'), Finish())),
+        Step(expected, Stream(ToolCall('workspace-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
+        Step(expected, Stream(Text('Workspace files delivered.'), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Keep workspace previews active',)),
+             Stream(Text(history + '\n\nWorkspace preview remains active.'), Gate('workspace-stream'), Text(' New streamed workspace content.'), Finish())),
     )
 
 
@@ -435,3 +548,89 @@ def web_fork_source_reading() -> Scenario:
 
 
 SCENARIOS["web_fork_source_reading"] = web_fork_source_reading
+
+
+def web_large_write() -> Scenario:
+    """A real write with deferred arguments followed by native file delivery."""
+    content = "# Native write report\n\n" + "\n".join(
+        f"Row {i}: preserve original content 水 and native tool identity." for i in range(300)
+    )
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
+    return Scenario("web_large_write",
+        Step(expected, Stream(ToolCall("large-write", "write", json.dumps({
+            "path": "large-write.md", "content": content,
+        }, ensure_ascii=False)), Finish("tool_calls"))),
+        Step(expected, Stream(ToolCall("large-write-present", "present", json.dumps({
+            "files": [{"path": "large-write.md", "description": "Native write report"}],
+        })), Finish("tool_calls"))),
+        Step(expected, Stream(Text("Large write finished."), Finish())),
+    )
+
+
+SCENARIOS["web_large_write"] = web_large_write
+
+
+def web_workflow_review() -> Scenario:
+    from dataclasses import replace
+    original = web_workflow_conformance()
+    steps = list(original.steps)
+    report = {"overview": "## Review report\n\nThe workflow read the request and completed its analysis.",
+              "issues": ["Check the release version before publishing."], "candidate": None}
+    steps[0] = replace(steps[0], respond=Stream(ToolCall("call-review-pr", "review_pr", json.dumps({"task": "workflow conformance request", "report": report})), Finish("tool_calls")))
+    steps[-1] = replace(steps[-1], expect=replace(steps[-1].expect, body_contains=("workflow conformance request",)))
+    return Scenario("web_workflow_review", *steps)
+
+
+SCENARIOS["web_workflow_review"] = web_workflow_review
+
+
+def web_session_title_primary() -> Scenario:
+    """Primary execution is independent of the title provider's physical order."""
+    return Scenario("web_session_title_primary", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+               body_contains=("Investigate the cache invalidation bug",)),
+        Stream(Text("Primary task completed."), Finish(), Usage(40, 8)),
+    ))
+
+
+def web_session_title_auxiliary() -> Scenario:
+    """Assert native Title semantics at the real HTTP provider boundary."""
+    return Scenario("web_session_title_auxiliary", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="title-model", no_direct_tools=True,
+               body_contains=("Investigate the cache invalidation bug", "Write a concise title"),
+               json_subset={"max_completion_tokens": 128, "title_tag": "explicit-native"}),
+        Stream(Gate("title-dispatched"), Text("Cache invalidation investigation"), Finish(), Usage(30, 5)),
+    ))
+
+
+SCENARIOS["web_session_title_primary"] = web_session_title_primary
+SCENARIOS["web_session_title_auxiliary"] = web_session_title_auxiliary
+
+
+def web_auxiliary() -> Scenario:
+    """A real concurrent Agent plus one ephemeral question and one cancellation."""
+    def expected(text: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(text,))
+    return Scenario("web_auxiliary",
+        Step(expected("Primary remains running"), Stream(Text("Primary provisional text."), Gate("primary"), Text(" Primary complete."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", no_direct_tools=True, body_contains=("What has been committed?", "Answer the temporary question"), body_excludes=("Primary provisional text.",)), Stream(Text("Temporary answer: "), Gate("btw"), Text("committed snapshot only."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", no_direct_tools=True, body_contains=("Cancel this side question",), body_excludes=("Temporary answer:", "Primary provisional text.")), Stream(Text("Provisional to cancel."), Gate("cancel-btw"), Finish()), allow_disconnect=True),
+    )
+
+
+SCENARIOS["web_auxiliary"] = web_auxiliary
+
+
+def auxiliary_classification_transport() -> Scenario:
+    """Real named RPC, concurrent primary work and strict domain acceptance."""
+    def expected(text: str, auxiliary: bool = False) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="integration-model",
+                      body_contains=(text,), no_direct_tools=auxiliary)
+    return Scenario("auxiliary_classification_transport",
+        Step(expected("Primary classification control"), Stream(Text("Primary control"), Gate("primary"), Text(" complete."), Finish())),
+        Step(expected("classify valid input", True), Stream(Text('{"label":"yes"}'), Finish())),
+        Step(expected("classify invalid input", True), Stream(Text('{"label":"yes","extra":true}'), Finish())),
+    )
+
+
+SCENARIOS["auxiliary_classification_transport"] = auxiliary_classification_transport

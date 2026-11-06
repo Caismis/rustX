@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { App } from '../src/app/App';
 import { AppServerClient } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v52';
+import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v73';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 import { Server, TOKEN, endpoint } from './fixture';
 import { ConnectionController } from '../src/connection/controller';
@@ -31,7 +31,7 @@ function catalog(): WorkspaceCatalog {
 }
 function failing(sources: SourceTarget[]): ConfigurationApplication {
   return { scope: 'ses', version: '1', desired: { input_revision: 'i', attempt: '1' },
-    sources, units: { capabilities: { status: 'failed', diagnostic: 'boom' } }, candidate: null };
+    sources, units: { capabilities: { status: 'failed', diagnostic: 'boom' } } };
 }
 function hostWith(list: () => Promise<WorkspaceCatalog>): ProductHostWorkspaces {
   return {
@@ -53,7 +53,7 @@ async function mountOwnerFailure() {
   render(<App client={server.client} workspaceHost={host} />);
   await screen.findByRole('button', { name: 'Open Session A' });
   fireEvent.click(screen.getByRole('button', { name: 'Open Session A' }));
-  await screen.findByText(/Some configuration preparation failed/);
+  await screen.findByText(/could not be applied/);
   return {
     startLookup() {
       hold = true; held = deferred<WorkspaceCatalog>();
@@ -120,7 +120,7 @@ it('navigation D: an authority replacement fences a stale owner-lookup failure',
   render(<App client={client} workspaceHost={host} />);
   await screen.findByRole('button', { name: 'Open Session A' });
   fireEvent.click(screen.getByRole('button', { name: 'Open Session A' }));
-  await screen.findByText(/Some configuration preparation failed/);
+  await screen.findByText(/could not be applied/);
   hold = true; held = deferred<WorkspaceCatalog>();
   fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' }));
   await act(async () => { await client.connect('wss://remote.example/', TOKEN, 'replace-authority'); });
@@ -299,12 +299,12 @@ it('N11 a Workspace navigation state cannot be forced into Connection, with the 
   expect(connectionShown()).toBe(true);
 });
 
-it('a current owner lookup failure stays beside Session configuration, not in App notices', async () => {
+it('a current owner lookup failure announces one dismissible floating notice', async () => {
   const { startLookup } = await mountOwnerFailure();
   await release(startLookup());
   const error = screen.getByRole('alert', { name: 'Settings navigation error' });
   expect(error.textContent).toContain('stale owner lookup failed');
-  expect(error.closest('header')).toBeTruthy();
+  expect(error.parentElement).toBe(document.body);
   expect(screen.queryByRole('button', { name: 'Dismiss notice' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Dismiss settings error' }));
   expect(screen.queryByRole('alert', { name: 'Settings navigation error' })).toBeNull();

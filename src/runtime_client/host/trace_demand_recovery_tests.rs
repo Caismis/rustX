@@ -14,7 +14,7 @@ async fn completed_trace_fixture() -> (HostFixture, RuntimeClientCheckpoint, Che
     )
     .await;
     let original = "original held Trace content ".repeat(700);
-    assert!(original.len() > crate::runtime_client::checkpoint::CHECKPOINT_ITEM_BYTES);
+    assert!(original.len() > crate::observation::bounded::CHECKPOINT_ITEM_BYTES);
     {
         let settled = fixture.runtime.settlement_signal().notified();
         tokio::pin!(settled);
@@ -34,7 +34,7 @@ async fn completed_trace_fixture() -> (HostFixture, RuntimeClientCheckpoint, Che
         .trace
         .records
         .iter()
-        .find(|record| record.kind == crate::runtime_client::trace::TraceKind::Request)
+        .find(|record| record.kind == crate::observation::trace::TraceKind::Request)
         .expect("actual native request record");
     let RuntimeClientResult::DomainPage { page } =
         fixture.host.inner.trace_detail(record.id.clone()).unwrap()
@@ -47,7 +47,7 @@ async fn completed_trace_fixture() -> (HostFixture, RuntimeClientCheckpoint, Che
 fn original_content_reference(
     checkpoint: &RuntimeClientCheckpoint,
     original: &str,
-) -> crate::runtime_client::content::ContentRef {
+) -> crate::observation::content::ContentRef {
     checkpoint
         .content
         .iter()
@@ -62,7 +62,7 @@ fn original_content_reference(
         .chain(checkpoint.snapshot.transcript.content.iter())
         .find(|binding| {
             binding.content_ref.representation
-                == crate::runtime_client::content::ContentRepresentation::Utf8Text
+                == crate::observation::content::ContentRepresentation::Utf8Text
                 && binding.content_ref.readable_end == original.len() as u64
         })
         .expect("advertised original canonical content reader")
@@ -72,7 +72,7 @@ fn original_content_reference(
 
 fn assert_original_content(
     inner: &ClientInner,
-    reference: &crate::runtime_client::content::ContentRef,
+    reference: &crate::observation::content::ContentRef,
     original: &str,
 ) {
     let chunk = inner.content_read(reference, 0, 65_536).unwrap();

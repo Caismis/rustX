@@ -2,6 +2,7 @@ import { message, displayText, type DisplayText } from '../../../locale/translat
 import { useTranslation, useNotice } from '../../../locale/react';
 import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '../../../presentation/primitives/Button';
+import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import { Choice, Toggle } from '../primitives/aria';
 import { UnitReset, type TypedUnitForm } from './bridge';
 import { formatRequestParams, parseRequestParams, sameJson, type RequestParams } from './request-params';
@@ -194,12 +195,11 @@ export function RequestParameters<T>({ form, name, label, optional = true }: {
   form: TypedUnitForm<T>; name: FieldPath<T>; label: string; optional?: boolean;
 }) {
   return <Bound<T, RequestParams | null | undefined> form={form} name={name}>{(raw, change) =>
-    <RequestParamsEditor label={label} value={raw ?? undefined} optional={optional} change={change} />}</Bound>;
+    <JsonObjectEditor label={label} value={raw ?? undefined} optional={optional} change={change} />}</Bound>;
 }
 
-/** One provider-native request-parameter object, edited as a whole JSON
- * object: paste or type nested objects, arrays and `null` as the provider
- * expects them.
+/** One native configuration or request-parameter object, edited as whole JSON:
+ * paste or type nested objects, arrays and `null` without losing their shape.
  *
  * The parsed object belongs to the unit's transaction actor, through the
  * form. The text is a transient buffer for exactly what the actor cannot
@@ -217,14 +217,14 @@ export function RequestParameters<T>({ form, name, label, optional = true }: {
  * `optional` distinguishes an absent object (blank text) from an authored
  * `{}`. Native Rust remains the authority on protected keys, profile
  * ownership and every other semantic. */
-export function RequestParamsEditor({ label, value, change, optional = true }: {
+export function JsonObjectEditor({ label, value, change, optional = true, hint }: {
   label: string; value: RequestParams | undefined; change: (value: RequestParams | undefined) => void; optional?: boolean;
+  hint?: string;
 }) {
   const tx = useTranslation();
   const display = (current: RequestParams | undefined) => current === undefined ? '' : formatRequestParams(current);
   const [text, setText] = useState(() => display(value));
   const [error, setError] = useNotice();
-  const input = useRef<HTMLTextAreaElement>(null);
   const reflected = useRef(value);
   // Unparsed text is editor-local and never a draft, so the transaction owner
   // cannot reset it through the value alone: a discard or reviewed revision
@@ -240,7 +240,6 @@ export function RequestParamsEditor({ label, value, change, optional = true }: {
     setText(display(value));
     setError('');
   }, [value, resets]);
-  useLayoutEffect(() => { input.current?.setCustomValidity(error); }, [error]);
   const accept = (next: RequestParams | undefined) => {
     setError('');
     if (sameJson(next, reflected.current)) return;
@@ -248,10 +247,9 @@ export function RequestParamsEditor({ label, value, change, optional = true }: {
     change(next);
   };
   return <div>
-    <label>{label}<textarea ref={input} value={text} data-request-params="" style={{ fontFamily: 'var(--ds-font-family-code), monospace' }} rows={Math.min(12, Math.max(3, text.split('\n').length))} spellCheck={false}
+    <JsonCodeEditor label={label} value={text} error={error}
       placeholder={tx(optional ? 'settings:fields.request-params-placeholder-optional' : 'settings:fields.request-params-placeholder-required')}
-      aria-invalid={!!error || undefined} onChange={event => {
-        const next = event.target.value;
+      onChange={next => {
         setText(next);
         if (next.trim() === '') { accept(optional ? undefined : {}); return; }
         const parsed = parseRequestParams(next);
@@ -261,8 +259,7 @@ export function RequestParamsEditor({ label, value, change, optional = true }: {
           : failure.kind === 'not_object' ? message('settings:fields.request-params-not-object')
             : message(failure.kind === 'duplicate_key' ? 'settings:fields.request-params-duplicate-key' : 'settings:fields.request-params-inexact-number',
               { p0: failure.line, p1: failure.column }));
-      }} /></label>
-    {error && <span role="alert" className={css.error}>{error}</span>}
-    <p className={css.hint}>{tx('settings:fields.request-params-hint')}</p>
+      }} />
+    <p className={css.hint}>{hint ?? tx('settings:fields.request-params-hint')}</p>
   </div>;
 }

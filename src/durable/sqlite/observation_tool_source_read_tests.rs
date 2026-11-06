@@ -3,15 +3,15 @@ fn native_tool_page_resolves_once_without_argument_base64_round_trip() {
     let store = store();
     complete_tool_row_fixture(&store);
     let cut = store.observation_read_cut().unwrap();
-    let locator = crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+    let locator = crate::observation::content::CanonicalContentLocator::ByMessageId {
         message_id: MessageId::new("derived-native-proposal"),
     };
-    super::super::content::take_source_work();
+    crate::durable::sqlite::content::take_source_work();
     let first = store
         .transcript_tool_headers(&cut, &locator, 0, 32)
         .unwrap();
     assert_eq!(
-        super::super::content::take_source_work(),
+        crate::durable::sqlite::content::take_source_work(),
         (1, 0),
         "one source resolution serves association, raw/canonical descriptors and argument bytes"
     );
@@ -28,7 +28,7 @@ fn native_tool_page_resolves_once_without_argument_base64_round_trip() {
         .unwrap();
     assert_eq!(second, first);
     assert_eq!(
-        super::super::content::take_source_work(),
+        crate::durable::sqlite::content::take_source_work(),
         (1, 0),
         "a later call revalidates its own source"
     );
@@ -44,7 +44,7 @@ fn native_tool_page_keeps_one_snapshot_and_rechecks_after_external_changes() {
     let reader = SqliteConversationStore::open_existing(conversation, &path).unwrap();
     let cut = reader.observation_read_cut().unwrap();
     let locator =
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 1 };
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 1 };
     let original = reader
         .transcript_tool_headers(&cut, &locator, 0, 32)
         .unwrap();
@@ -96,7 +96,7 @@ fn native_tool_page_retains_raw_priority_missing_frontier_and_cut_errors() {
     complete_tool_row_fixture(&store);
     let cut = store.observation_read_cut().unwrap();
     let locator =
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 1 };
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 1 };
     let raw = br#"{ "b":2, "a":1 }"#;
     {
         let connection = store.lock().unwrap();

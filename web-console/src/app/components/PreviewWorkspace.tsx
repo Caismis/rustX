@@ -11,6 +11,13 @@ import { FullscreenGlyph, ExitFullscreenGlyph } from './WorkbenchIcons';
 import dockCss from '../../presentation/dockkit/components/dockkit.module.css';
 import { SplitGlyph } from '../../presentation/dockkit/components/TabPanel';
 import css from '../../presentation/right-panel/PreviewWorkspace.module.css';
+import { Button } from '../../presentation/primitives/Button';
+
+export function PreviewWorkspaceNotice({ snapshot, dismiss }: { snapshot: Pick<PreviewWorkspaceSnapshot, 'problem' | 'downloadError'>; dismiss: () => void }) {
+  const tx = useTranslation();
+  if (!snapshot.problem && !snapshot.downloadError) return null;
+  return <div className="notice error" role="alert">{snapshot.problem ? tx(`artifacts:workspace.limit-${snapshot.problem}`) : tx(snapshot.downloadError === 'capacity' ? 'artifacts:workspace.download-capacity' : 'artifacts:workspace.download-failed')}<Button size="sm" onClick={dismiss}>{tx('common:app.dismiss-notice')}</Button></div>;
+}
 
 /** Reveal keyboard focus inside the bounded strip without scrolling ancestors. */
 function focusTab(tab: HTMLElement | null | undefined) {

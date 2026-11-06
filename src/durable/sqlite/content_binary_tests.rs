@@ -1,5 +1,6 @@
 use super::*;
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
+use crate::durable::{CanonicalStore, ObservationStore};
 use crate::message::content::FileReference;
 use crate::message::types::{
     ContentBlockIndex, InboundKind, UserContentBlock, UserMessageBlock, UserSource,

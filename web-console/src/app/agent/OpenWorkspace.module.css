@@ -4,16 +4,7 @@
 .action {
   display: flex;
   align-items: center;
-  gap: 8px;
   min-width: 0;
-  max-width: 22rem;
-}
-
-.action p,
-.action details {
-  margin: 0;
-  font-size: 12px;
-  overflow-wrap: anywhere;
 }
 
 .menuAnchor {
@@ -75,8 +66,4 @@
 .split[data-state='busy'] .main,
 .split[data-state='busy'] .chevron {
   cursor: default;
-}
-
-@media (max-width: 600px) {
-  .action { max-width: 12rem; }
 }

@@ -1,0 +1,397 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { createActor } from 'xstate';
+import type { WorkflowLibrary } from '../../protocol/app-server/v73';
+import type { WorkflowEdit } from '../../protocol/app-server/workflow-documents.ts';
+import type { WorkflowCommit } from '../src/workspaces/host';
+import type { WorkspaceAuthority } from '../src/workspaces/authority';
+import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
+import { WorkflowOperationError, type WorkflowScope, type WorkflowScopePort } from '../src/app/workflows/port';
+import { WorkflowLibrary as Library } from '../src/app/workflows/ui/library/Library';
+
+/** Every ordering below is established by a deferred promise the test
+ * releases itself: no sleeps, timers or scheduling assumptions. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  promise.catch(() => {});
+  return { promise, resolve, reject };
+}
+const flush = () => act(async () => { for (let turn = 0; turn < 16; turn++) await Promise.resolve(); });
+
+/** The Global scope served by one Product Host/App Server authority. Once
+ * replaced, its ports refuse every operation, as the real port does. */
+interface Authority {
+  readonly name: string;
+  replaced: boolean;
+  lists: ReturnType<typeof deferred<WorkflowLibrary>>[];
+  writes: { id: string; expected: string; edit: WorkflowEdit; result: ReturnType<typeof deferred<WorkflowCommit>> }[];
+  enables: { id: string; expected: string; enabled: boolean; result: ReturnType<typeof deferred<void>> }[];
+  /** What `read` returns; reads stay pending without it. */
+  source?: Awaited<ReturnType<WorkflowScopePort['read']>>;
+}
+function authorityNamed(name: string): Authority {
+  return { name, replaced: false, lists: [], writes: [], enables: [] };
+}
+function portOf(authority: Authority, scope: WorkflowScope): WorkflowScopePort {
+  const refuse = () => Promise.reject(new WorkflowOperationError({ kind: 'unavailable', message: 'product_host_replaced' }));
+  return {
+    endpoint: `ws://${authority.name}/`, scope,
+    enable: (id, expected, enabled) => { const result = deferred<void>(); authority.enables.push({ id, expected, enabled, result }); return result.promise; },
+    analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => { if (authority.replaced) return refuse(); const result = deferred<WorkflowLibrary>(); authority.lists.push(result); return result.promise; },
+    read: () => authority.source ? Promise.resolve(authority.source) : new Promise(() => {}),
+    check: () => new Promise(() => {}),
+    write: (id, expected, edit) => {
+      if (authority.replaced) return refuse();
+      const result = deferred<WorkflowCommit>();
+      authority.writes.push({ id, expected, edit, result });
+      return result.promise;
+    },
+  };
+}
+const listing = (authority: Authority): WorkflowLibrary => ({
+  target: { kind: 'user' }, directory: `/home/${authority.name}/.agents/workflows`, absent_revision: `missing-${authority.name}`, diagnostic: null,
+  files: [{ file_name: 'flow.yaml', id: 'flow', relative_path: '.agents/workflows/flow.yaml', revision: `sha256:${authority.name}`, byte_length: '1', modified_ms: null, description: `${authority.name} flow`, nodes: 1, diagnostic: null, shadows_global: false, enabled: false }],
+});
+const host = { subscribe: () => () => {}, getCatalog: () => undefined, observe: () => new Promise(() => {}) } as unknown as WorkspaceAuthority;
+
+it('keeps retained presentation warnings distinct from invalid executables and permits exact-revision copy', async () => {
+  const { a, show } = mount(); show();
+  const observed = listing(a);
+  observed.files[0].diagnostic = { path: 'editor.notes.0', category: 'presentation_reference', reason: 'Retained orphan note', correction: null, detail: null, line: null, column: null };
+  a.lists[0].resolve(observed); await flush();
+  expect(screen.getByText('Presentation needs repair')).toBeTruthy();
+  expect(screen.queryByText('Invalid file')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for flow.yaml' }));
+  await flush();
+  const copy = screen.getByRole('menuitem', { name: 'Copy File' });
+  expect(copy.getAttribute('aria-disabled')).not.toBe('true');
+  fireEvent.click(copy); await flush();
+  const dialog = screen.getByRole('dialog', { name: 'Copy Workflow file' });
+  fireEvent.change(within(dialog).getByLabelText(/^Workflow ID/), { target: { value: 'copied' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: /^Copy$/ }));
+  expect(a.writes[0]).toMatchObject({ id: 'copied', edit: { operation: 'copy', source: 'flow', source_revision: 'sha256:a' } });
+});
+
+describe('enabling in Sessions', () => {
+  const sessions = () => screen.getByRole('switch', { name: 'Enable flow in Sessions' }) as HTMLButtonElement;
+  it('switches a file on against its scope configuration revision, then lists again', async () => {
+    const { a, show } = mount(); show();
+    a.lists[0].resolve({ ...listing(a), configuration_revision: 'cfg-1' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('false');
+    expect(sessions().title).toBe('Enabled in the Sessions of every Workspace');
+    fireEvent.click(sessions());
+    expect(a.enables.map(({ id, expected, enabled }) => ({ id, expected, enabled }))).toEqual([{ id: 'flow', expected: 'cfg-1', enabled: true }]);
+    expect(sessions().disabled).toBe(true);
+    a.enables[0].result.resolve(); await flush();
+    const after = listing(a);
+    after.files[0].enabled = true;
+    a.lists[1].resolve({ ...after, configuration_revision: 'cfg-2' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('true');
+    expect(sessions().disabled).toBe(false);
+  });
+
+  it('forces a file that fails its check off and gray, even when its scope enables it', async () => {
+    const { a, show } = mount(); show();
+    const observed = listing(a);
+    observed.files[0] = { ...observed.files[0], enabled: true, diagnostic: { path: 'block.edges.0.to', category: 'compile', reason: 'unknown node', correction: null, detail: null, line: null, column: null } };
+    a.lists[0].resolve({ ...observed, configuration_revision: 'cfg-1' }); await flush();
+    expect(sessions().getAttribute('aria-checked')).toBe('false');
+    expect(sessions().disabled).toBe(true);
+    expect(sessions().title).toMatch(/fails its check/);
+  });
+
+  it('cannot switch while the scope configuration does not parse', async () => {
+    const { a, show } = mount(); show();
+    a.lists[0].resolve({ ...listing(a), configuration_revision: null }); await flush();
+    expect(sessions().disabled).toBe(true);
+    expect(sessions().title).toMatch(/rustx\.toml cannot be read/);
+  });
+});
+
+function mount() {
+  const a = authorityNamed('a'), b = authorityNamed('b');
+  let current = a;
+  const surface = createActor(workflowSurfaceMachine, { input: { ports: scope => portOf(current, scope) } }).start();
+  const library = () => surface.getSnapshot().context.library;
+  const show = () => render(<Library surface={surface} authority={host} />);
+  /** Authority B replaces A behind the same address. */
+  const replace = () => { a.replaced = true; current = b; };
+  return { a, b, surface, library, show, replace };
+}
+afterEach(cleanup);
+
+const dialog = () => within(screen.getByRole('dialog'));
+const newButton = () => screen.getByRole('button', { name: 'New Workflow' }) as HTMLButtonElement;
+function fill(id: string, description: string) {
+  fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: `${id} name` } });
+  fireEvent.change(dialog().getByLabelText(/^Workflow ID/), { target: { value: id } });
+  fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: description } });
+}
+
+describe('new Workflow display', () => {
+  it('names the Workflow for people, suggests its ID, and sends the display with the model description', async () => {
+    const { a, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    const create = dialog().getByRole('button', { name: 'Create' }) as HTMLButtonElement;
+    fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: 'Weekly Report' } });
+    expect((dialog().getByLabelText(/^Workflow ID/) as HTMLInputElement).value).toBe('weekly-report');
+    fireEvent.change(dialog().getByLabelText(/^Description \(optional\)/), { target: { value: 'Collects the week into a report' } });
+    // The model description stays required and separate.
+    expect(create.disabled).toBe(true);
+    fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: 'Summarize weekly notes' } });
+    fireEvent.click(create);
+    expect(a.writes[0]).toMatchObject({ id: 'weekly-report', edit: { operation: 'create', description: 'Summarize weekly notes',
+      display: { title: 'Weekly Report', description: 'Collects the week into a report', icon: 'lucide:workflow' } } });
+  });
+
+  it('chooses the icon from a floating, categorized panel that Escape closes before the dialog', async () => {
+    const { a, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    fireEvent.click(dialog().getByRole('button', { name: 'Choose icon' }));
+    await screen.findAllByRole('option');
+    fireEvent.click(dialog().getByRole('button', { name: 'Security' }));
+    expect(dialog().getByRole('option', { name: 'shield-check' })).toBeTruthy();
+    fireEvent.keyDown(dialog().getByLabelText('Search icons'), { key: 'Escape' });
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.click(dialog().getByRole('button', { name: 'Choose icon' }));
+    fireEvent.click(await dialog().findByRole('option', { name: 'shield-check' }));
+    expect(screen.queryByRole('listbox')).toBeNull();
+    fireEvent.change(dialog().getByLabelText(/^Name/), { target: { value: 'Audit' } });
+    fireEvent.change(dialog().getByLabelText(/^Model description/), { target: { value: 'Audit the repository' } });
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    expect(a.writes[0]).toMatchObject({ edit: { display: { title: 'Audit', icon: 'lucide:shield-check' } } });
+  });
+});
+
+describe('Workflow cards', () => {
+  it('opens the editor from anywhere on the card', async () => {
+    const { a, surface, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    const card = screen.getByRole('button', { name: 'flow' }).closest('li')!;
+    expect(card.textContent).toContain('a flow');
+    fireEvent.click(screen.getByRole('button', { name: 'flow' }));
+    await flush();
+    expect(surface.getSnapshot().context.editor).toBeTruthy();
+  });
+
+  it('edits a file\'s info from its full document and replaces it at the revision it read', async () => {
+    const { a, show } = mount();
+    const long = 'x'.repeat(600);
+    a.source = { revision: 'sha256:read', document: { description: long, block: { input: { type: 'object' }, nodes: {workflow_start:{type:'start'}, ...{}}, edges: [{from:'workflow_start',to:'done'}, ...[]] },
+      editor: { display: { title: 'Flow', icon: 'lucide:rocket' }, nodes: [], entries: [], branches: [], notes: [], orders: [] } } } as never;
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for flow.yaml' }));
+    await flush();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit info' }));
+    await flush();
+    const edit = within(screen.getByRole('dialog', { name: 'Edit Workflow info' }));
+    // The full description, not the listing's bounded one.
+    expect((edit.getByLabelText(/^Model description/) as HTMLTextAreaElement).value).toBe(long);
+    expect((edit.getByLabelText(/^Workflow ID/) as HTMLInputElement).readOnly).toBe(true);
+    fireEvent.change(edit.getByLabelText(/^Name/), { target: { value: 'Weekly flow' } });
+    fireEvent.change(edit.getByLabelText(/^Description \(optional\)/), { target: { value: 'For Fridays' } });
+    fireEvent.click(edit.getByRole('button', { name: 'Save' }));
+    expect(a.writes).toHaveLength(1);
+    expect(a.writes[0]).toMatchObject({ id: 'flow', expected: 'sha256:read', edit: { operation: 'replace', document: { description: long,
+      editor: { display: { title: 'Weekly flow', description: 'For Fridays', icon: 'lucide:rocket' } } } } });
+  });
+});
+
+describe('accepted listing observations (F2)', () => {
+  it('keeps a confirmation opened before a refresh bound to its own observation, and never writes to the replacement', async () => {
+    const { a, b, library, show, replace } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    expect(dialog().getByText('/home/a/.agents/workflows')).toBeTruthy();
+    // A refresh starts after authority B replaced A, and completes.
+    replace();
+    act(() => library().send({ type: 'REFRESH' }));
+    expect(newButton().disabled).toBe(true);
+    b.lists[0].resolve(listing(b));
+    await flush();
+    expect(screen.getByText('b flow')).toBeTruthy();
+    // The open confirmation still shows and targets A.
+    expect(dialog().getByText('/home/a/.agents/workflows')).toBeTruthy();
+    fill('fresh', 'Fresh');
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    await flush();
+    // A's port refuses; nothing reaches B, and the dialog reports it.
+    expect(b.writes).toHaveLength(0);
+    expect(a.writes).toHaveLength(0);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(dialog().getByRole('alert').textContent).toBeTruthy();
+    expect(library().getSnapshot().context.operationFailure?.failure).toEqual({ kind: 'unavailable', message: 'product_host_replaced' });
+  });
+
+  it('starts no confirmation from an old listing while its replacement read is pending', async () => {
+    const { a, b, library, show, replace } = mount();
+    const view = show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    // Leave the library, B replaces A, and return: B's listing is pending
+    // while A's is still shown.
+    view.unmount();
+    replace();
+    show();
+    expect(b.lists).toHaveLength(1);
+    expect(screen.getByText('a flow')).toBeTruthy();
+    expect(newButton().disabled).toBe(true);
+    fireEvent.click(newButton());
+    // The machine enforces it too, for any sender.
+    act(() => library().send({ type: 'CONFIRM', kind: 'create' }));
+    act(() => library().send({ type: 'CONFIRM', kind: 'delete', file: 'flow.yaml' }));
+    act(() => library().send({ type: 'OPEN', file: 'flow.yaml' }));
+    expect(library().getSnapshot().context.confirmation).toBeUndefined();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    b.lists[0].resolve(listing(b));
+    await flush();
+    fireEvent.click(newButton());
+    expect(dialog().getByText('/home/b/.agents/workflows')).toBeTruthy();
+    fill('fresh', 'Fresh');
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    expect(b.writes).toMatchObject([{ id: 'fresh', expected: 'missing-b', edit: { operation: 'create', description: 'Fresh' } }]);
+  });
+
+  it('copies and deletes the file and revision of the confirmation\'s own observation', async () => {
+    const { a, b, library, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    act(() => library().send({ type: 'CONFIRM', kind: 'delete', file: 'flow.yaml' }));
+    // A refresh lists a newer revision of the same file meanwhile.
+    act(() => library().send({ type: 'REFRESH' }));
+    a.lists[1].resolve({ ...listing(a), files: [{ ...listing(a).files[0], revision: 'sha256:newer' }] });
+    await flush();
+    fireEvent.click(dialog().getByRole('button', { name: 'Delete' }));
+    expect(a.writes).toMatchObject([{ id: 'flow', expected: 'sha256:a', edit: { operation: 'delete' } }]);
+    expect(b.writes).toHaveLength(0);
+  });
+
+  it('keeps a dispatched write and its outcome through refresh and scope navigation, and never resends it', async () => {
+    const { a, surface, library, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    fill('fresh', 'Fresh');
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    expect(a.writes).toHaveLength(1);
+    const port = library().getSnapshot().context.pending!.port;
+    act(() => {
+      library().send({ type: 'REFRESH' });
+      library().send({ type: 'SCOPE', scope: { kind: 'workspace', workspaceId: 'w' } });
+      library().send({ type: 'ACTIVATE' });
+    });
+    expect(library().getSnapshot().matches('operating')).toBe(true);
+    expect(library().getSnapshot().context.pending?.port).toBe(port);
+    expect(a.writes).toHaveLength(1);
+    a.writes[0].result.resolve({ acknowledgement: { revision: 'sha256:fresh', configuration_revision: null }, reread: { status: 'failed', error: 'x' } });
+    await flush();
+    // The acknowledged create opens exactly the created file through its port.
+    const editor = surface.getSnapshot().context.editor!;
+    expect(editor.getSnapshot().context.target).toEqual({ endpoint: 'ws://a/', scope: { kind: 'user' }, id: 'fresh' });
+    expect(editor.getSnapshot().context.port).toBe(port);
+    // The scope chosen meanwhile is selected after the outcome.
+    expect(library().getSnapshot().context.scope).toEqual({ kind: 'workspace', workspaceId: 'w' });
+    expect(a.writes).toHaveLength(1);
+  });
+
+  it('observes an uncertain write with the next listing, without claiming success', async () => {
+    const { a, library, show } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    fireEvent.click(newButton());
+    fill('fresh', 'Fresh');
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    a.writes[0].result.reject(new WorkflowOperationError({ kind: 'uncertain', message: 'outcome_unknown' }));
+    await flush();
+    expect(library().getSnapshot().context.operationFailure?.failure.kind).toBe('uncertain');
+    expect(a.lists).toHaveLength(2);
+    expect(a.writes).toHaveLength(1);
+    // The dialog stays open with the failure; it never reads as success.
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it.each(['create', 'copy', 'delete'] as const)('requires an explicit new transaction after an uncertain %s, before and after observation', async kind => {
+    const { a, library, show, surface } = mount();
+    show();
+    a.lists[0].resolve(listing(a));
+    await flush();
+    act(() => library().send({ type: 'CONFIRM', kind, file: kind === 'create' ? undefined : 'flow.yaml' }));
+    if (kind === 'create') fill('fresh', 'Fresh');
+    else if (kind === 'copy') fireEvent.change(dialog().getByLabelText(/^Workflow ID/), { target: { value: 'fresh' } });
+    const label = { create: 'Create', copy: 'Copy', delete: 'Delete' }[kind];
+    fireEvent.click(dialog().getByRole('button', { name: label }));
+    const pending = library().getSnapshot().context.pending!;
+    a.writes[0].result.reject(new WorkflowOperationError({ kind: 'uncertain', message: 'outcome_unknown' }));
+    await flush();
+    expect(library().getSnapshot().context.pending).toBeUndefined();
+    expect(library().getSnapshot().context.confirmation?.uncertain).toBe(pending);
+    const cannotReplay = () => {
+      const button = dialog().getByRole('button', { name: label }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      fireEvent.click(button);
+      const form = screen.getByRole('dialog').querySelector('form');
+      if (form) fireEvent.submit(form);
+      act(() => library().send({ type: 'SUBMIT', seq: pending.confirmation, id: 'fresh', description: 'Fresh' }));
+      expect(a.writes).toHaveLength(1);
+    };
+    // The observation is held pending, then released with the write's apparent
+    // effect. Neither phase authorizes replay or proves who changed the file.
+    expect(library().getSnapshot().matches('loading')).toBe(true);
+    cannotReplay();
+    const observed = listing(a);
+    observed.files = kind === 'delete' ? [] : [...observed.files, { ...observed.files[0], id: 'fresh', file_name: 'fresh.yaml' }];
+    a.lists[1].resolve(observed);
+    await flush();
+    expect(library().getSnapshot().matches('ready')).toBe(true);
+    cannotReplay();
+    expect(library().getSnapshot().context.confirmation?.uncertain).toBe(pending);
+    expect(surface.getSnapshot().context.editor).toBeUndefined();
+    // A failed read is no stronger evidence than a successful one. The same
+    // confirmation remains blocked through failure and another refresh.
+    act(() => library().send({ type: 'REFRESH' }));
+    a.lists[2].reject(new Error('observation unavailable'));
+    await flush();
+    expect(library().getSnapshot().matches('failed')).toBe(true);
+    cannotReplay();
+    act(() => library().send({ type: 'REFRESH' }));
+    a.lists[3].resolve(observed);
+    await flush();
+    cannotReplay();
+    fireEvent.click(dialog().getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(newButton());
+    fill('another', 'Another transaction');
+    expect(library().getSnapshot().context.confirmation!.seq).toBeGreaterThan(pending.confirmation);
+    fireEvent.click(dialog().getByRole('button', { name: 'Create' }));
+    expect(a.writes).toHaveLength(2);
+    expect(a.writes[1]).toMatchObject({ id: 'another', expected: 'missing-a', edit: { operation: 'create', description: 'Another transaction' } });
+  });
+
+  it('never lets a superseded listing overwrite a newer accepted read', async () => {
+    const { a, library, show } = mount();
+    show();
+    const older = a.lists[0];
+    act(() => library().send({ type: 'REFRESH' }));
+    a.lists[1].resolve({ ...listing(a), directory: '/newer' });
+    await flush();
+    older.resolve({ ...listing(a), directory: '/older' });
+    await flush();
+    expect(library().getSnapshot().context.observation?.listing.directory).toBe('/newer');
+  });
+});

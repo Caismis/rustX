@@ -9,3 +9,8 @@ it('resolves only a selected native origin or explicitly owned loopback descript
   expect(() => uploadUrl({ ...descriptor, loopback_port: 2345 }, 'wss://native.example/')).toThrow();
   for (const port of [null, 0, -1, 65536, 1.5]) expect(() => uploadUrl({ ...descriptor, loopback_port: port })).toThrow();
 });
+
+it('the shared Web/TUI carrier refuses multiple files without opening a capability socket',async()=>{
+ const {transferUpload}=await import('../../protocol/app-server/upload');
+ await expect(transferUpload(descriptor,[new Blob(),new Blob()],{max_chunk_bytes:65536,max_concurrent_transfers:2},'wss://native.example/')).rejects.toThrow('One file');
+});

@@ -4,6 +4,7 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openSettingsPage } from './shell-actions';
+import { readSource } from './source-reading';
 
 /** Observe the real socket and hold selected server responses until the test
  * releases them explicitly. Nothing is manufactured: every delivered byte is
@@ -126,10 +127,13 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     await expect(settings.getByText(/Revision:/)).toBeVisible();
 
     // The write commits natively, but its acknowledgement is held on the wire.
+    await expect(settings.getByLabel('max_connections', { exact: true })).toBeEnabled();
     probe.armWrites();
+    probe.armReads();
     await settings.getByLabel('max_connections', { exact: true }).fill('19');
     await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
     await expect.poll(() => probe.heldWrites.length).toBe(1);
+    await expect.poll(() => probe.heldReads.length).toBeGreaterThan(0);
 
     // A later authored change lands outside this client and is observed
     // through native publication and an authoritative read before the
@@ -138,10 +142,15 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     expect(authored).toContain('stream_idle_timeout_ms = 600000');
     writeFileSync(f.settings, authored.replace('stream_idle_timeout_ms = 600000', 'stream_idle_timeout_ms = 600001'));
     const revision = settings.getByText(/Revision:/);
-    const before = (await revision.textContent()) ?? '';
     await remote.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_receipt');
-    await expect(revision).not.toHaveText(before);
-    const observed = (await revision.textContent()) ?? '';
+    const latest = await readSource(remote, { kind: 'user' });
+    expect(latest.user.authored?.model_timeout_policy?.stream_idle_timeout_ms).toBe('600001');
+    const observed = `${f.settings} · Revision: ${latest.user.revision}`;
+    // The held convergence read predates the external edit. Its delivery can
+    // change the revision once before the newer publication is observed, so
+    // wait for the exact external revision rather than any revision change.
+    probe.releaseReads();
+    await expect(revision).toHaveText(observed);
 
     // The delayed acknowledgement settles only the save outcome. The visible
     // whole projection stays the authoritative one and nothing is replayed.

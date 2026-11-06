@@ -979,9 +979,9 @@ mod tests {
             ModelStreamItem::Event(ModelEvent::Started),
             ModelStreamItem::Event(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
-                    input_tokens: 1,
-                    output_tokens: 1,
-                    total_tokens: 2,
+                    input_tokens: Some(1),
+                    output_tokens: Some(1),
+                    total_tokens: Some(2),
                     details: None,
                 },
             }),

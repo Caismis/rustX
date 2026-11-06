@@ -1,10 +1,13 @@
 import type { DesktopTarget } from './desktop.ts';
+/** Before first submission, tools belong to the selected Host registration. */
+export type WorkbenchTarget = DesktopTarget | { workspace_id: string };
 export type WorkbenchRequest =
   | { kind: 'files'; path: string }
   | { kind: 'resolve'; path: string }
   | { kind: 'read'; path: string }
   | { kind: 'bytes'; path: string }
   | { kind: 'office'; path: string }
+  | { kind: 'preview'; path: string; read: import('../../shared/file-preview.ts').FileReadOptions }
   | { kind: 'applications' }
   | { kind: 'open'; path: string; directory: boolean; application: 'files' | 'code' }
   | { kind: 'terminals' }
@@ -15,13 +18,14 @@ export type WorkbenchRequest =
   | { kind: 'close'; id: string };
 export interface WorkbenchTerminal { id: string; shell: string; exited: boolean }
 export interface WorkbenchResult {
+  preview?: import('../../shared/file-preview.ts').FileBytes;
   /** Host-admitted, normalized workspace-relative file reference. */
   path?: string;
   applications?: import('./desktop.ts').DesktopCatalog;
   entries?: { name: string; directory: boolean; link: boolean }[];
   text?: string;
   base64?: string;
-  /** Canonical directory resolved by the Host from the admitted native Session. */
+  /** Canonical directory resolved by the Host from the admitted target. */
   cwd?: string;
   terminals?: WorkbenchTerminal[];
   shells?: string[];
@@ -30,4 +34,4 @@ export interface WorkbenchResult {
   reset?: boolean;
   exited?: boolean;
 }
-export interface WorkbenchCall { target: DesktopTarget; request: WorkbenchRequest }
+export interface WorkbenchCall { target: WorkbenchTarget; request: WorkbenchRequest }

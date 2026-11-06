@@ -1,4 +1,4 @@
-description: Ask a human to review a bounded plan and return their decision.
+description: Ask a person to approve or reject a bounded plan, and return the action they chose.
 timeout_ms: 120000
 block:
   input:
@@ -6,27 +6,51 @@ block:
     properties:
       plan:
         type: object
-        properties: {summary: {type: string}}
-        required: [summary]
+        properties:
+          summary:
+            type: string
+        required:
+        - summary
         additionalProperties: false
-    required: [plan]
+    required:
+    - plan
     additionalProperties: false
-  output:
-    type: object
-    properties:
-      accepted: {type: boolean}
-      feedback: {type: string}
-    required: [accepted, feedback]
-    additionalProperties: false
-  entry: review_plan
   nodes:
+    start:
+      type: start
     review_plan:
       type: review
-      subject:
-        type: plan
-        value: {type: reference, path: [args, plan]}
-      context: []
+      content:
+      - type: literal
+        value: 'Approve this plan?
+
+
+          '
+      - type: reference
+        path:
+        - args
+        - plan
+        - summary
+      actions:
+      - id: approve
+        title: Approve
+      - id: reject
+        title: Reject
+      timeout_ms: 60000
     return_decision:
       type: return
-      output: {type: reference, path: [review_plan]}
-  edges: [{from: review_plan, to: return_decision}]
+      outputs:
+      - {variable: action, value_selector: [review_plan, action]}
+      - {variable: content, value_selector: [review_plan, content]}
+  edges:
+  - from: start
+    to: review_plan
+  - from: review_plan
+    to: return_decision
+    port: approve
+  - from: review_plan
+    to: return_decision
+    port: reject
+  - from: review_plan
+    to: return_decision
+    port: timeout

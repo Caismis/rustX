@@ -10,6 +10,7 @@
 .scroll {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-x: clip;
   overflow-y: auto;
   /* Sides = composer clearance + 16px: on narrow viewports the transcript
      stays exactly 32px narrower than the input card (the shared width rule). */
@@ -28,7 +29,8 @@
 }
 
 :global([data-conversation-scroll]) .scroll {
-  overflow: visible;
+  overflow-x: clip;
+  overflow-y: visible;
   flex: 0 0 auto;
   min-height: auto;
 }
@@ -37,6 +39,8 @@
    centered on the same axis as the input box (which caps at chat + 16px); the
    scroller itself stays full-bleed. */
 .column {
+  position: relative;
+  min-width: 0;
   max-width: var(--dsh-chat-content-width);
   width: 100%;
   margin: 0 auto;
@@ -44,10 +48,10 @@
   flex-direction: column;
 }
 
-/* Harness flow rhythm: process rows 6px, replies 12px, Turn boundaries 16px.
+/* Harness flow rhythm: process rows 4px, replies 12px, Turn boundaries 16px.
    Apply it both between native entries and inside their anchored seats. */
 .column > :where(:not([hidden]):not(:empty)) ~ :where(:not([hidden]):not(:empty)) {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .flowItem { min-width: 0; }
@@ -61,11 +65,11 @@
 
 .flow > :where(:not([hidden]):not(:empty):not([role="status"]))
   ~ :where(:not([hidden]):not(:empty):not([role="status"])) {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
-.column > [data-chat-group-part="response"]:not([hidden]),
-.column > [data-chat-group-part="response"]:not([hidden])
+:is(.column, .flow) > [data-chat-group-part="response"]:not([hidden]),
+:is(.column, .flow) > [data-chat-group-part="response"]:not([hidden])
   + :not([hidden]):not(:empty),
 .flow > [data-assistant-message]:not([hidden]),
 .flow > [data-assistant-message]:not([hidden]) + :not([hidden]):not(:empty) {
@@ -75,13 +79,15 @@
 .column > [data-chat-flow-kind="turn-process"],
 .column > [data-chat-flow-kind="user"]:not(:first-child),
 .column > .flowItem:has([data-turn-process]),
-.column > [data-chat-flow-kind="turn-process"] + :not([hidden]):not(:empty),
-.flow > [data-turn-process] ~ :not([hidden]):not(:empty):not([role="status"]) {
+.column > [data-chat-after-process]:not([hidden]):not(:empty),
+.flow > [data-turn-process] + :not([hidden]):not(:empty):not([role="status"]),
+/* A collapsed header is the trailing content; expanded process rows use 4px. */
+.flow > .flow:has(> [data-turn-process]:not([data-open])) + :not([hidden]):not(:empty) {
   margin-top: 16px;
 }
 
 /* A first reply inside a seat has its spacing supplied by the outer flow. */
-.flow > [data-assistant-message]:nth-child(1 of :not([hidden]):not(:empty)) { margin-top: 0; }
+.flow > :is([data-assistant-message], [data-chat-group-part="response"]):nth-child(1 of :not([hidden]):not(:empty)) { margin-top: 0; }
 
 .callRow {
   border-radius: 6px;
@@ -91,6 +97,7 @@
    tool rows match Think chrome (no selected ring). */
 
 .running {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -103,15 +110,18 @@
 
 .column > .running { margin-top: 12px; }
 .column > :nth-last-child(2 of :not([hidden]):not(:empty)):is(.flowItem:not([data-chat-flow-kind="user"])) ~ .running > .runningDivider {
-  display: block;
+  opacity: 1;
 }
 
 .runningDivider {
-  display: none;
-  width: 100%;
+  /* Painting this line never changes the running/tail slot's height. */
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
   height: 0.5px;
-  margin: 8px 0 10px;
   background: color-mix(in srgb, var(--dsw-alias-border-l1) 75%, var(--dsw-alias-border-l2));
+  opacity: 0;
   pointer-events: none;
 }
 
@@ -120,6 +130,8 @@
   align-items: center;
   min-width: 0;
   gap: 6px;
+  margin-top: 4px;
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
 }
 
 .runningText {
@@ -195,7 +207,7 @@
 
 .older button {
   border: none;
-  border-radius: 14px;
+  border-radius: var(--dsw-radius-sm);
   padding: 4px 12px;
   font-size: 12px;
   color: var(--dsw-alias-label-secondary);
@@ -261,3 +273,6 @@
 .modalAction {
   min-width: 72px;
 }
+
+/* Invisible native-window continuation; it contributes no paging controls or flow spacing. */
+.column > .continuation { height: 1px; margin-top: 0; overflow: hidden; }

@@ -124,10 +124,10 @@ pub(crate) fn add_usage(total: &mut Option<ModelUsage>, usage: &ModelUsage) {
         *total = Some(usage.clone());
         return;
     };
-    total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
-    total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
-    total.total_tokens = total.total_tokens.saturating_add(usage.total_tokens);
     let sum = |a: Option<u64>, b: Option<u64>| a.zip(b).map(|(a, b)| a.saturating_add(b));
+    total.input_tokens = sum(total.input_tokens, usage.input_tokens);
+    total.output_tokens = sum(total.output_tokens, usage.output_tokens);
+    total.total_tokens = sum(total.total_tokens, usage.total_tokens);
     total.details = total
         .details
         .as_ref()

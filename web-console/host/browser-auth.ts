@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { BROWSER_SESSION_HEADER, BROWSER_SESSION_STORAGE, BROWSER_SESSION_PATTERN } from '../browser-session.ts';
 
-export interface WebBootstrapConfig { appServerEndpoint: string; transportTokenFile: string; browserLaunchToken: string }
+export interface WebBootstrapConfig { appServerEndpoint: string; transportTokenFile: string; deliveryTokenFile: string; browserLaunchToken: string }
 const secretPattern = BROWSER_SESSION_PATTERN;
 function matches(actual: string | undefined, expected: string) {
   return actual !== undefined && secretPattern.test(actual) && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
@@ -14,6 +14,8 @@ export function browserAuth(config: WebBootstrapConfig) {
   if (!secretPattern.test(config.browserLaunchToken)) throw new Error('Invalid browser launch credential');
   const token = readFileSync(config.transportTokenFile, 'utf8');
   if (!/^[A-Za-z0-9_-]{43,128}$/.test(token) || token === config.browserLaunchToken) throw new Error('Invalid separated transport credential');
+  const deliveryToken = readFileSync(config.deliveryTokenFile, 'utf8');
+  if (!/^[A-Za-z0-9_-]{43,128}$/.test(deliveryToken) || [token, config.browserLaunchToken].includes(deliveryToken)) throw new Error('Invalid separated delivery credential');
   const sessions = new Map<string, string>();
   return (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     response.setHeader('Cache-Control', 'no-store');
@@ -28,7 +30,7 @@ export function browserAuth(config: WebBootstrapConfig) {
       if (request.method !== 'GET' || url.pathname !== '/' || [...url.searchParams].length !== 1 || !matches(url.searchParams.get('token') ?? undefined, config.browserLaunchToken)) return deny();
       if (sessions.size >= 128) return deny(429);
       let proof: string;
-      do { proof = randomBytes(32).toString('base64url'); } while (proof === config.browserLaunchToken || proof === token || sessions.has(proof));
+      do { proof = randomBytes(32).toString('base64url'); } while (proof === config.browserLaunchToken || proof === token || proof === deliveryToken || sessions.has(proof));
       sessions.set(proof, origin);
       const script = `try{sessionStorage.setItem(${JSON.stringify(BROWSER_SESSION_STORAGE)},${JSON.stringify(proof)});location.replace('/');}catch{document.getElementById('status').textContent='Browser session storage is required. Enable it and reopen the startup URL.';}`;
       const hash = createHash('sha256').update(script).digest('base64');
@@ -46,7 +48,7 @@ export function browserAuth(config: WebBootstrapConfig) {
     if (url.pathname === '/__rustx/bootstrap') {
       if (request.method !== 'GET' || url.search) return deny(405);
       response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
-        connectionMode: 'local', appServerEndpoint: config.appServerEndpoint, appServerTransportToken: token,
+        connectionMode: 'local', appServerEndpoint: config.appServerEndpoint, appServerTransportToken: token, appServerDeliveryToken: deliveryToken,
       }));
       return;
     }

@@ -7,13 +7,15 @@ import { useTranslation, useNotice } from '../../locale/react';
 // All Remote, plan-intent, slot-store, countdown, answer-lifetime and
 // label-identity semantics replaced by rustX's generated question shapes and
 // index-based submissions; dismissing the set is the native decline.
-import { useState } from 'react';
+import { useId, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import clsx from 'clsx';
-import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v52';
+import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v73';
+import { finiteNumberFromWire } from '../../../../protocol/app-server/number';
 import { emptyDraft, submission, QuestionnaireValidationError, type QuestionDraft } from '../../bindings/questionnaire';
 import { message } from '../../locale/translation';
 import { Button } from '../../presentation/primitives/Button';
+import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { IconCheckOutline14, IconChevronDownOutline14, IconChevronLeftOutline14, IconChevronRightOutline14, IconChevronUpOutline14, IconCloseOutline16, IconEditOutline16 } from '../../presentation/primitives/icons';
 import css from '../../presentation/agent/Question.module.css';
 
@@ -45,16 +47,38 @@ function AnswerField({ variant, value, disabled, autoFocus, onChange, onKeyDown,
   </div>;
 }
 /** Composer takeover for one pending native questionnaire. `status` is shown
- * only when the response lifecycle has something to say beyond waiting. */
-export function Questionnaire({ questions, disabled, status, submitting = false, onSubmit, onDecline }: {
-  questions: QuestionSpecification[]; disabled: boolean; status?: string; submitting?: boolean;
-  onSubmit: (value: QuestionnaireSubmission) => void; onDecline: () => void;
-}) {
+ * only when the response lifecycle has something to say beyond waiting.
+ * A Workflow Human Input passes its `form` heading: its question is then
+ * Markdown shown above the actions, and it cannot be skipped. */
+export type QuestionnaireProps = {
+  questions: QuestionSpecification[]; form?: { eyebrow: string; title: string }; status?: string; submitting?: boolean;
+  ref?: Ref<{ reveal: () => void }>;
+} & ({ record?: undefined; disabled: boolean; onSubmit: (value: QuestionnaireSubmission) => void; onDecline: () => void }
+  | { record: QuestionnaireSubmission; onClose: () => void });
+
+function recordedDrafts(questions: QuestionSpecification[], record: QuestionnaireSubmission): QuestionDraft[] {
+  return questions.map((_, index) => {
+    const answer = record.answers.find(entry => entry.question_index === index)?.answer;
+    if (!answer) return { ...emptyDraft(), skipped: true };
+    if (answer.type === 'option') return { ...emptyDraft(), selected: [answer.value.option_index] };
+    if (answer.type === 'options') return { ...emptyDraft(), selected: answer.value.option_indices };
+    if (answer.type === 'boolean') return { ...emptyDraft(), boolean: answer.value.value };
+    return { selected: [], text: answer.type === 'custom' ? answer.value.answer
+      : answer.type === 'number' ? String(finiteNumberFromWire(answer.value.value)) : String(answer.value.value) };
+  });
+}
+
+export function Questionnaire(props: QuestionnaireProps) {
+  const { questions, form, status, submitting = false, record } = props;
+  const disabled = record !== undefined || ('disabled' in props && props.disabled);
   const tx = useTranslation();
+  const id = useId();
+  const surface = useRef<HTMLDivElement>(null);
   const [index, setIndex] = useState(0);
-  const [drafts, setDrafts] = useState<QuestionDraft[]>(() => questions.map(initialDraft));
+  const [drafts, setDrafts] = useState<QuestionDraft[]>(() => record === undefined ? questions.map(initialDraft) : recordedDrafts(questions, record));
   // Collapsed to the header strip so the conversation above stays readable while the user decides.
   const [minimized, setMinimized] = useState(false);
+  useImperativeHandle(props.ref, () => ({ reveal: () => { setMinimized(false); surface.current?.scrollIntoView({ block: 'nearest' }); } }), []);
   const [error, setError] = useNotice();
   const question = questions[index];
   if (!question) return <p>{tx('interactions:questionnaire.invalid-empty-questionnaire-from-server')}</p>;
@@ -63,7 +87,7 @@ export function Questionnaire({ questions, disabled, status, submitting = false,
   const hasOptions = shape.type === 'single_choice' || shape.type === 'multi_choice';
   const multi = shape.type === 'multi_choice';
   const last = index === questions.length - 1;
-  const titleId = `questionnaire-title-${index}`;
+  const titleId = `${id}-${index}`;
   const move = (next: number) => { setIndex(next); setError(''); };
   const updateDraft = (update: (current: QuestionDraft) => QuestionDraft, next = index) => {
     const values = drafts.map((item, i) => i === index ? update(item) : item);
@@ -73,7 +97,8 @@ export function Questionnaire({ questions, disabled, status, submitting = false,
   const submitDrafts = (values: QuestionDraft[]) => {
     const missing = values.findIndex(item => !answered(item) && !item.skipped);
     if (missing >= 0) { setIndex(missing); setError(message('interactions:questionnaire.incomplete')); return; }
-    try { onSubmit(submission(tx, questions, values)); } catch (cause) { setError(cause instanceof QuestionnaireValidationError ? cause.notice : String(cause)); }
+    if (props.record !== undefined) return;
+    try { props.onSubmit(submission(tx, questions, values)); } catch (cause) { setError(cause instanceof QuestionnaireValidationError ? cause.notice : String(cause)); }
   };
   // The native custom answer replaces any selection, so choosing and typing are exclusive.
   const choose = (optionIndex: number) => updateDraft(current => ({
@@ -95,29 +120,32 @@ export function Questionnaire({ questions, disabled, status, submitting = false,
     const values = updateDraft(() => ({ ...emptyDraft(), skipped: true }), last ? index : index + 1);
     if (last) submitDrafts(values);
   };
-  return <div className={css.frame}>
+  return <div className={css.frame} ref={surface} data-question-record={record !== undefined || undefined}>
     <section className={clsx(css.card, minimized && css.cardMinimized)} aria-label={tx('interactions:questionnaire.questionnaire')}>
       <header className={css.header}>
         <div className={css.headingBlock}>
-          <div className={css.eyebrow}>{question.header}</div>
-          <h2 className={css.title} id={titleId}>{question.question}</h2>
+          <div className={css.eyebrow}>{form?.eyebrow ?? question.header}</div>
+          {minimized && <h2 className={css.title} id={titleId}>{form?.title ?? question.question}</h2>}
         </div>
         <div className={css.headerActions}>
-          {status && <span className={css.waitStatus}>{status}</span>}
+          {(status || record !== undefined) && <span className={css.waitStatus}>{record !== undefined ? tx('interactions:questionnaire.recorded') : status}</span>}
           <button type="button" className={css.iconButton} aria-expanded={!minimized}
             aria-label={tx(minimized ? 'interactions:questionnaire.maximize' : 'interactions:questionnaire.minimize')}
             title={tx(minimized ? 'interactions:questionnaire.maximize' : 'interactions:questionnaire.minimize')}
             onClick={() => setMinimized(current => !current)}>
             {minimized ? <IconChevronUpOutline14/> : <IconChevronDownOutline14/>}
           </button>
-          <button type="button" className={css.iconButton} disabled={disabled}
-            aria-label={tx('interactions:questionnaire.dismiss')} title={tx('interactions:questionnaire.dismiss')} onClick={onDecline}>
+          <button type="button" className={css.iconButton} disabled={record === undefined && disabled}
+            aria-label={tx(record === undefined ? 'interactions:questionnaire.dismiss' : 'interactions:questionnaire.close-record')} title={tx(record === undefined ? 'interactions:questionnaire.dismiss' : 'interactions:questionnaire.close-record')}
+            onClick={() => props.record === undefined ? props.onDecline() : props.onClose()}>
             <IconCloseOutline16/>
           </button>
         </div>
       </header>
       {!minimized && <>
         <div className={css.body} data-question-scroll>
+          <div className={css.questionTitle}><h2 className={css.title} id={titleId}>{form?.title ?? question.question}</h2></div>
+          {form && <div className={css.detail}><MarkdownText text={question.question}/></div>}
           <div className={css.options} role={shape.type === 'single_choice' ? 'radiogroup' : 'group'} aria-labelledby={titleId}>
             {hasOptions && shape.options.map((option, optionIndex) => {
               const selected = draft.selected.includes(optionIndex);
@@ -133,18 +161,19 @@ export function Questionnaire({ questions, disabled, status, submitting = false,
                     <span className={css.description}>{option.description}</span>
                   </span></span>
                 </button>
-                {option.preview && selected && <pre>{option.preview}</pre>}
+                {option.preview && selected && <div className={css.detail}><MarkdownText text={option.preview}/></div>}
               </div>;
             })}
             {shape.type === 'boolean' ? <div className="row">
               <Button variant={draft.boolean === true ? 'primary' : 'outline'} disabled={disabled} onClick={() => updateDraft(() => ({ ...emptyDraft(), boolean: true }))}>{tx('interactions:questionnaire.true')}</Button>
               <Button variant={draft.boolean === false ? 'primary' : 'outline'} disabled={disabled} onClick={() => updateDraft(() => ({ ...emptyDraft(), boolean: false }))}>{tx('interactions:questionnaire.false')}</Button>
-            </div> : hasOptions ? shape.allow_custom && <div className={clsx(css.customRow, draft.text !== '' && css.customRowActive)}>
+            </div> : hasOptions ? shape.allow_custom && (record === undefined || draft.text !== '') && <div className={clsx(css.customRow, draft.text !== '' && css.customRowActive)}>
               {multi ? <span className={clsx(css.checkbox, draft.text !== '' && css.checkboxChecked)} aria-hidden>{draft.text !== '' && <IconCheckOutline14 size={12} />}</span>
                 : <span className={css.number} aria-hidden><IconEditOutline16 size={12}/></span>}
               <AnswerField variant="inline" value={draft.text} disabled={disabled} placeholder={tx('interactions:questionnaire.placeholder')} onChange={draftText} onKeyDown={continueFromText}/>
-            </div> : <AnswerField key={index} variant="block" autoFocus={!disabled} value={draft.text} disabled={disabled} placeholder={tx('interactions:questionnaire.placeholder')} onChange={draftText} onKeyDown={continueFromText}/>}
+            </div> : (record === undefined || draft.text !== '') && <AnswerField key={index} variant="block" autoFocus={!disabled} value={draft.text} disabled={disabled} placeholder={tx('interactions:questionnaire.placeholder')} onChange={draftText} onKeyDown={continueFromText}/>}
           </div>
+          {record !== undefined && draft.skipped && <p className={css.reviewNote}>{tx('tools:ask.skipped')}</p>}
         </div>
         <footer className={css.footer}>
           <div className={css.pager}>
@@ -153,12 +182,12 @@ export function Questionnaire({ questions, disabled, status, submitting = false,
             <button type="button" className={css.iconButton} aria-label={tx('interactions:questionnaire.next-question')} disabled={last} onClick={() => move(index + 1)}><IconChevronRightOutline14 /></button>
           </div>
           <div className={css.feedback} role="status">{error}</div>
-          <div className={css.footerActions}>
-            <Button variant="outline" disabled={disabled} onClick={skip}>{tx('interactions:questionnaire.skip')}</Button>
+          {record === undefined && <div className={css.footerActions}>
+            {!form && <Button variant="outline" disabled={disabled} onClick={skip}>{tx('interactions:questionnaire.skip')}</Button>}
             <Button variant="primary" disabled={disabled || !answered(draft)} onClick={continueFlow}>
               {submitting ? tx('interactions:questionnaire.submitting') : last ? tx('interactions:questionnaire.submit') : tx('interactions:questionnaire.next')}
             </Button>
-          </div>
+          </div>}
         </footer>
       </>}
     </section>

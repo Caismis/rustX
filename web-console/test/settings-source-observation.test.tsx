@@ -5,9 +5,9 @@ import { boundedSettings } from "./fixture";
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v52';
+import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v73';
 import { findOnAdvanced, openSettingsPage, queryOnAdvanced, settingsReady, SettingsSurface } from './settings-harness';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../src/workspaces/host';
 import { cfg3Source, cfg3SourceApplication } from './cfg3-data';
@@ -34,7 +34,7 @@ class Native {
   }
   applied(version: string, status: 'preparing' | 'applied'): ConfigurationApplication {
     return { scope: 'source:user', sources: [{ kind: 'user' }], version, desired: { input_revision: 'input-1', attempt: '1' },
-      units: { process_bindings: { status } }, candidate: null };
+      units: { process_bindings: { status } } };
   }
 }
 

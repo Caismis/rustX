@@ -21,7 +21,7 @@ pub(super) fn bind(
 
 pub(super) async fn body(
     attachment: &crate::runtime_client::RuntimeAttachment,
-    header: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader,
+    header: &crate::observation::interaction::RuntimeClientInteractionHeader,
 ) -> Arc<crate::runtime::InteractionRequest> {
     use crate::runtime_client::{RequestId, RuntimeClientRequest, RuntimeClientResult};
     assert!(header.body.is_none());
@@ -74,22 +74,21 @@ pub(super) async fn body(
         }
     }
     let request: crate::runtime::InteractionRequest =
-        crate::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
+        crate::observation::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
             .unwrap();
     assert_eq!(request.interaction_ref(), header.interaction);
     assert_eq!(request.id, header.request_id);
     assert_eq!(request.conversation_id, header.conversation_id);
-    assert_eq!(request.attempt_id, header.attempt_id);
-    assert_eq!(request.turn, header.turn);
+    assert_eq!(request.execution, header.execution);
     let kind = match &request.kind {
         crate::runtime::interaction::InteractionKind::Approval { .. } => {
-            crate::runtime_client::snapshot::RuntimeClientInteractionKind::Approval
+            crate::observation::interaction::RuntimeClientInteractionKind::Approval
         }
         crate::runtime::interaction::InteractionKind::Questionnaire { .. } => {
-            crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
+            crate::observation::interaction::RuntimeClientInteractionKind::Questionnaire
         }
         crate::runtime::interaction::InteractionKind::Review { .. } => {
-            crate::runtime_client::snapshot::RuntimeClientInteractionKind::Review
+            crate::observation::interaction::RuntimeClientInteractionKind::Review
         }
     };
     assert_eq!(kind, header.kind);

@@ -233,9 +233,9 @@ mod tests {
         timing.observe(
             &ModelEvent::UsageUpdate {
                 usage: crate::model::types::ModelUsage {
-                    input_tokens: 1,
-                    output_tokens: 0,
-                    total_tokens: 1,
+                    input_tokens: Some(1),
+                    output_tokens: Some(0),
+                    total_tokens: Some(1),
                     details: None,
                 },
             },

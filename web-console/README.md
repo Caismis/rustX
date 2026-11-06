@@ -3,8 +3,8 @@
 Harness owns the presentation baseline; rustX owns all runtime/product semantics.
 The ordinary Session surface follows the [WEB-12 product audit](PRODUCT-SURFACE.md):
 one identity/view header, contextual product status, and a Session actions menu.
-Exact runtime facts live in the read-only Developer Inspector. Normal opening and
-restoration use the existing native client attachment path without lifecycle buttons.
+Normal opening and restoration use the existing native client attachment path
+without lifecycle buttons. Advanced connection recovery lives in Settings.
 The normal Agent path uses the integrated Conversation, Composer, specialized
 Tool cards, interaction takeover and model/permission controls. See
 [Agent architecture](AGENT-ARCHITECTURE.md) and [#346 validation](RESET-346-VALIDATION.md).
@@ -73,7 +73,7 @@ an independently managed runtime/Host. The [Host contract](WORKSPACES.md) descri
 that operator-owned integration. Use the launcher for complete local composition.
 
 Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v52` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v73` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -98,9 +98,8 @@ does not grant Product Host Workspace authority. See [CONNECTION.md](CONNECTION.
 
 See [App Server transport/protocol](../docs/app-server-protocol.md) for supported
 bind/authentication semantics and deployment boundaries. No browser UI can redact
-secrets a developer intentionally includes in a prompt/Tool result; the inspector
-shows that actual application traffic. It never records handshake credentials or
-requests provider/MCP configuration. A `configuration/sourceWrite` acknowledgement
+secrets a developer intentionally includes in a prompt/Tool result. The client
+does not retain a raw protocol log. A `configuration/sourceWrite` acknowledgement
 is authoring evidence, not application completion: Settings keeps target/lifetime
 fencing, read ordering and mutation acknowledgement as three separate facts. Only
 `configuration/sourcesRead` results are adopted as the whole `SourceSettings`
@@ -135,7 +134,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v52.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v73.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -166,7 +165,7 @@ coalesce an authoritative read, then subscribe after its cursor. Native bounded
 replay owns checkpoint overlap; no browser event log exists. See [CHAT.md](CHAT.md).
 
 Session selection lives only in the Sidebar. The center header identifies the
-current Session and offers bounded actions, Inspector, and Chat/Trajectory views;
+current Session and offers bounded actions and Chat/Trajectory views;
 there is no top Session tab strip or alternate picker. Close view is in each open
 Session's Sidebar row menu; the 32-view bound is actionable there. Internal
 `openViews` represents actual browser controller ownership, never a hidden tab UI.
@@ -175,7 +174,7 @@ missing catalog entries cannot strand capacity. This is explicit, never eviction
 server-owned work continues exactly as for closing one view.
 
 Every ordinary Session label uses `sessionDisplayTitle`: explicit native name >
-native `SessionSummary.preview` > **New session**. Session IDs stay in Inspector.
+native `SessionSummary.generated_title.text` > native `SessionSummary.preview` > exact Session identity. Before a Session exists, the shell shows **New session**.
 The server owns a persisted display projection: `preview` is computed from the
 canonical root user message after its commit and stored in the session catalog,
 never derived by the client or at list time. Canonical commitment and projection
@@ -266,7 +265,7 @@ releasing an attachment. Stale cleanup cannot retire a newer intent. Overlay
 user dismissal retires sidebar preparation; successful programmatic closure
 does not cancel the committed route. Settings, connection Settings and
 owning-Workspace Settings synchronously retire preparation from every
-conversation entry point (including Fork source) before dispatching to the
+conversation entry point before dispatching to the
 independent Settings machine. Idle Settings and overlay dismissal preserve
 committed controls and continuation fences. A current authoritative attachment permits
 immediate presentation navigation without an
@@ -274,22 +273,31 @@ attachment refresh. Cold navigation commits only after lifecycle admission and
 the final gesture, generation and attachment-control checks. Dismissal or a newer
 gesture retires presentation authority; an already dispatched native operation
 still settles in the Session lifecycle actor. Successful publication closes the
-overlay programmatically without revoking its own commit. Navigation from an existing executable route preserves that route until admission.
-Startup from an empty draft may project a non-executable Session draft for local
-input staging; it never grants runtime controls before attachment proof. Saved
+overlay programmatically without revoking its own commit. Selecting a cold
+Session immediately projects that target's non-executable Session draft for
+local input staging, including selection from another Session or Workflows.
+It never grants runtime controls before attachment proof. On same-authority
+reconnection, the selected draft keeps its logical editor and local files. Navigation
+only observes an already-admitted current-generation Lifecycle Open or current
+control proof; it cannot create another Open. The Lifecycle alone decides whether
+recovery is allowed: unresolved Attach outcomes, released intent and known attachment
+failure do not automatically retry. A legitimate fresh Attach permits explicit Send
+while MCP is still preparing; fresh attachment/control evidence promotes that exact
+target to an executable route. Reconnection alone never sends its draft or replays
+an unanswered mutation. A
+new selection, cancellation or authority change retires the old publication
+interest. Saved
 route restoration starts after connection setup and Settings handoff complete,
-only while the initial draft has not been replaced. Fork View Source uses exact,
-authorized `session/node` and cut-bound `session/history` reads to publish a
-read-only route. It has bounded paging, exact ChatViewport Message landing and a
-return action, without source attachment, Node switching or model execution.
+only while the initial draft has not been replaced. Forked Sessions display
+inherited and new messages in one continuous transcript, matching Harness.
+There is no fork-source notice or source-navigation screen; origin metadata
+remains a native Session tree fact.
 The browser-lifetime `ComposerDraft` owns editor incarnation, authored content
 revision, selection and revision-correlated submission tickets. React subscribes;
-it never mirrors stale component-local text back into that owner. Entering history
-and returning to its originating Session preserve the logical editor destination,
-including sidebar selection and cold attachment admission. Fast and prepared
-navigation use the same editor-destination comparison through history `returnTo`.
-Returning establishes fresh route controls even when the draft binding stays
-unchanged; selecting another Session or an explicit executable Node/Branch/Retry
+it never mirrors stale component-local text back into that owner. Refocusing
+the same Session preserves the logical editor destination, including sidebar
+selection and cold attachment admission. Fast and prepared navigation share that
+comparison. Selecting another Session or an explicit executable Node/Branch/Retry
 transition establishes a separate editor. Native receipt and Conversation checks
 remain independent of this local draft continuity.
 Known native `inbound_accepted` settlement consumes only the submitted revision
@@ -339,12 +347,12 @@ side-effect with no acknowledgement is **outcome uncertain**, including create,
 delete, turn/cancellation, interaction and lifecycle operations. Unsent calls are
 discarded. Reconnect reads authority first; no mutation is automatically replayed.
 Non-interaction uncertainty remains a diagnostic even when a snapshot is suggestive:
-the protocol cannot prove request identity. The product warning and Inspector
+the protocol cannot prove request identity. The product warning and Connection Settings
 retain that unresolved evidence. Up to 64 unresolved mutations can be retained; new mutations are
 refused before diagnostics would be silently dropped. After inspecting evidence and
 verifying affected work, Connection → Review uncertain operations permits explicit
 browser-local acknowledgement of non-interaction notices. This sends no RPC,
-asserts no outcome, and never retries; Inspector remains read-only.
+asserts no outcome, and never retries.
 
 Pending interactions come from native snapshots and exact interaction events, including routed
 Subagent interactions. Approval, Questionnaire (all six native answer shapes and
@@ -356,33 +364,16 @@ remains disabled; this client does not infer retry safety from a snapshot. A fre
 page has no saved request/Promise to replay: it only offers the interactions rustX
 still publishes. Exactly-one settlement remains runtime-owned.
 
-## Inspector and supported presentation
+## Supported presentation
 
-The inspector exposes Session/Conversation identity, attachment/runtime incarnation,
-connection generation, cwd, observed residency, safe model/settings generation,
-active attempt, pending interactions, Agents, Workflows and Job counts.
 Native Tool calls/results use extracted disclosure cards. Current Todo, Goal and
 pending inbound state render as the composer context docks ([COMPOSER.md](COMPOSER.md)).
 Workflow, child Agent and Job activity keep named progress cards. Child Agents
 retain one stable row through sequential activations, with canonical transcript,
 message/resume, wait and interrupt controls. Jobs expose finite status, wait,
-cancel and retained output. Raw runtime diagnostics remain in Inspector. Live versus last-observed values are labelled. Unknown residency is not
-inferred as unloaded.
-
-The raw log observes actual incoming/outgoing JSON-RPC text **before adaptation**.
-Responses retain their correlated method and Session where known. Filters match
-method/Session substrings and message kind. **Copy JSON** copies the visible entries
-with metadata and original text. **Pause log** freezes presentation only; protocol
-processing and the bounded live ring continue. Resume shows the latest ring;
-clear resets retention/counts and respects pause. Pause is not backpressure.
-
-Limits: 300 entries, 1 MiB of retained UTF-16 text and 32 KiB per entry. A paused
-view can retain one additional bounded snapshot of that ring. Dropped and truncated
-counts are exposed (while paused the displayed counts are frozen until resume).
-Truncated entries are explicitly labelled raw prefixes and need not parse as full
-JSON; the copy envelope itself is valid JSON. Metadata is bounded by entry count.
-The log is disposable diagnostics, never durable history. No fetch or remote
-telemetry is used by it.
+cancel and retained output. Chat, child conversations, history and command panels
+have no generic collection browser. The developer inspector and its protocol log
+have been removed; Trajectory retains execution-event details.
 
 Supported native gestures: list/create/open, delete preview and revision-checked
 delete, Send/Queue/Steer and cancel, Goal pause/resume/edit, typed slash commands,
@@ -426,7 +417,7 @@ frontend from the current source (including the artifact provenance check), then
 runs Playwright against its production output on port 5173 (which must be free).
 Chromium runs only in the digest-pinned Playwright container started by
 `browser-tests.sh`; no host browser is installed or used. The shared Playwright acceptance suite drives concurrent Sessions, streaming, browser loss,
-interactions, detached publication, cold settings resolution and the wire inspector.
+interactions, detached publication, cold settings resolution and native protocol evidence.
 Named provider gates and explicit observations establish ordering; there are no
 race-proof sleeps. The provider scenario's final report **and exit status** must
 succeed. Missing browser, Rust binary or emulator is a failure, never a silent skip.
@@ -459,7 +450,7 @@ from `presentation/` form one Harness-derived foundation. AppFrame accepts Sideb
 main, right-panel and overlay seats. Its measured columns retain the upstream
 280px Sidebar, 56px rail, 1024px responsive collapse and right-panel constraints.
 The Sidebar Settings entry opens **Overview** in the shared modal/navigation frame; existing CFG3
-editors supply its content. Inspector uses the right panel and is closed initially.
+editors supply its content. File previews and the workbench use the right panel.
 Connection is an explicit Settings section. Connection recovery **Show details**
 opens that section directly without changing the ordinary Settings default.
 
@@ -522,8 +513,8 @@ The [Settings/native auxiliary architecture](SETTINGS-ARCHITECTURE.md) documents
 Reset #347 validation and browser evidence: [acceptance record](RESET-347-VALIDATION.md).
 
 Session lists show durable facts, with no residency field or permanent residency
-badges. The Developer Inspector retains exact attachment/incarnation observations;
-server diagnostics retain process residency. Branch switching is semantic, not
+badges. Native server diagnostics retain exact attachment/incarnation observations
+and process residency. Branch switching is semantic, not
 a manual unload sequence. Deletion disables controls, closes the deleted view,
 and focuses another existing view or the New Conversation draft route.
 
@@ -542,9 +533,17 @@ managed artifact service, never browser access to a local path.
 
 ## Conversation reading
 
-Chat has a bounded native Turn rail. A distant jump reads one native window
-at the selected Turn, retaining at most 256 historical entries / 8 MiB alongside
-the independently current live tail. Return to latest releases the historical
+Chat has a bounded native Turn rail. Initial reading and older-history actions
+assemble a Harness-style window of at least 50 conversational messages and two
+Turns, or at most 500 messages, from native pages. Loaded pages accumulate without
+evicting previously read messages or imposing a total history cap. Pending native
+responses and Tools outside the latest head are reread automatically by identity.
+Scrolling back to the latest message retains the loaded history.
+Reply and reasoning grouping consult native content bindings before discarding
+empty inline text. Deferred or evicted content keeps its place and is read from
+its original live, Child or historical owner.
+A distant jump reads one native window at the selected Turn alongside the
+independently current live tail. Return to latest releases that historical
 window. Navigation intent retires obsolete reads. See
 [the reading contract](../docs/conversation-reading.md) for ownership, limits,
 lineage mapping and deterministic intent rules.
@@ -638,3 +637,40 @@ permission (upstream microsoft/node-pty#850), without runtime permission repair.
 never imports these addons. The
 workbench HTTP route uses the same authenticated carrier and native Session/node
 admission as the existing desktop workspace action.
+
+### Temporary questions
+
+Use **Ask a side question** in the Conversation header while Agent work continues. It reads a committed snapshot, which may exclude streaming work. Closing the panel keeps execution running; **Cancel question** explicitly cancels that Call. **Check status** recovers an uncertain receipt or incomplete display without submitting again. Temporary answers expire after five minutes and are never canonical conversation messages. Settings → Models exposes independent Classification and BTW model policies. See [native semantics and limits](../docs/auxiliary-consumers.md).
+
+
+## Visual Workflow editing
+
+Open **Workflows**, choose Global or an authorized Workspace, then create or open
+one native YAML file. Select **Start** to declare arguments and the entry node.
+The inspector has one scrolling Settings surface: configure the operation,
+choose typed input variables, declare output, then connect successors. A display
+title is independent of **Native identity and rename**. Advanced JSON edits the
+same schema as visual fields without discarding constraints.
+
+Parallel branches and Loop bodies stay on the main canvas. Select a private Start
+or Return to edit its Block contract. Collapse changes only the view; Find or a
+diagnostic expands the addressed child. Loop `until` and `carry` use committed
+`result`; downstream nodes see the Loop aggregate. Text Model output is the whole
+string, selected as the node itself.
+
+Use the canvas toolbar for pan/select, Add, notes, Find, Organize, Fit and minimap.
+Add-after and legal edge insertion are atomic. Ctrl/Cmd+A selects the focused
+Block, Ctrl/Cmd+C/V copies/pastes typed fragments, Ctrl/Cmd+D duplicates, Delete
+removes selection, Ctrl/Cmd+Z / Shift+Z undo/redo, and N opens Add. Text fields,
+IME, dialogs and popovers retain their keys. Copy/Duplicate waits for owned
+pending input to be resolved. Save and Check show every remaining field and can
+return focus to it. Invalid external files remain preserved.
+
+Resize the inspector from its divider, including with arrow keys. Narrow editor
+widths use a bottom sheet. Markdown notes, geometry, titles and field order save
+in the file and survive a clean browser profile and native Copy File. Viewport
+and inspector width remain personal preferences. **Save File** is one revision
+checked write; a conflict keeps local changes for explicit reconciliation.
+
+See [the authoring contract](../docs/workflow-authoring.md) and [design, evidence
+and test traceability](../docs/workflow-visual-editor.md).

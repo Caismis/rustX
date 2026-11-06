@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { it } from "node:test";
-import { renderSettings } from "../src/commands/dispatcher.ts";
+import { renderSettings } from "../src/commands/presentation.ts";
 import { emptyPresentationState, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import { agentStatus, attemptModel, attemptView, runtimeCursor, sessionModel, snapshot, temporalSection } from "./support/fixtures.ts";
 

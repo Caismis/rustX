@@ -1,0 +1,328 @@
+# Auxiliary request facts and inspection
+
+Auxiliary execution shares the physical model-request Journal with Agent execution. Native Runtime owns supervised execution and physical cleanup; Store supplies synchronous transitions and bounded inspection. Durable audit does not retain generated auxiliary output or make historical Calls runnable after restart.
+
+## Identity and authority
+
+ModelRequestStarted owns the request-to-owner relation. The closed owner is either an Agent RequestIdentity or an AuxiliaryCallId plus physical request ordinal. Completed and Failed repeat that owner as checked evidence: the Store rejects a terminal that differs from its authoritative start. A RequestId can have at most one start and one physical terminal. Identifiers, purpose, trigger and fingerprints grant no authority.
+
+Agent requests retain their native Snapshot, selected-input root/digest/count, Context transaction and P/U/C rules. Auxiliary requests require an admitted Call and never create an Agent Attempt, Turn, Assistant identity or primary Snapshot. Only an Agent completion can establish the primary P marker.
+
+A Call records bounded purpose, trigger, business source, input-selection evidence and fingerprints. Purpose and trigger are consumer-defined attribution strings, each limited to 512 UTF-8 bytes, nonempty and without control characters. Trigger describes the activation cause, not a transport category. The Store has no business-purpose dispatch or consumer allowlist. Business sources may be native Compaction/Human references or opaque consumer-owned namespace/reference pairs with the same text bounds. Opaque references grant no storage, inheritance or execution authority.
+
+Suggested-input generation uses the same contract with consumer-defined attribution and frozen historical context or temporary draft input. Candidate presentation and expiry belong to the consumer. An explicit user submission follows the normal Human input path; generating or displaying candidates leaves canonical history and primary Agent obligations unchanged.
+
+Business source and input selection have independent coordinates: native source references must exist when the Call starts, but may be newer than its frozen input cut. Only selected historical input references must be visible at that input cut. A historical selection records the complete native ResourceReadCut, including canonical and projection coordinates; a Journal sequence alone does not identify canonical history. Temporary input has no implied historical cut or retained copy. Explicit selected message references are independently bounded. These facts describe what was selected, not how to reconstruct absent temporary bytes.
+
+## Semantic writes and confirmation
+
+Call start, physical request start, final request/Call settlement and Call-only settlement are specialized synchronous Store operations. The final physical outcome and Call outcome commit atomically. Zero-request cancellation creates only a Call terminal. Raw event insertion cannot bypass these transitions. Consumers construct terminal envelopes through `durable::auxiliary::auxiliary_settlement_envelope`, which shares canonical event identity construction with Store validation. The returned timestamp and payload are retained unchanged for retry and confirmation; the constructor itself neither authorizes work nor commits facts.
+
+Mandatory request-owner, Call, request and audit indexes are derived in the same transaction as the original Journal facts. Reads and confirmations validate their complete identities and relationships. Exact primary-start replay validates the mandatory owner row against its original Started fact before returning the original receipt; missing or mismatched ownership is rejected without repairing indexes. Missing mandatory index evidence is corruption; missing optional Source, Trace or display material is not proof that execution did not commit.
+
+`ConversationStore::read_auxiliary_call_requests` returns up to 32 local request audit projections for one Call at a captured Journal cut. Requests are ordered by their original start sequence; the last returned `started_sequence` advances the next query, and an empty result ends iteration. Each supplied cursor must name a visible request start in that same local Call. Selection uses the Call/sequence index within one SQLite read transaction and validates the original owner and mandatory audit evidence. The query excludes unrelated Calls and inherited source audit without materializing their history. Global audit pages bound both ends of the dense-offset interval at the captured total, so old final and exhausted pages do not scan later execution history.
+
+An exact replay returns the original receipt and does not republish events or allocate another Journal sequence. Unsupported envelope metadata and conflicting caller semantics fail explicitly. Local write failure distinguishes a confirmed rollback/no-write path from an unknown commit or rollback outcome. Read-only confirmation returns a known matching commit, a conflict/error, or Unknown when absence cannot prove noncommit. It never creates work. Only actual completed-write evidence can establish noncommit; there is no caller-supplied boolean or fabricated writer-exit token.
+
+Commit certainty and required-write failure cause are independent. Known
+noncommit refunds a start allowance, while a genuine required Store failure
+still closes native durability admission. A confirmed Call can settle Failed
+after its RequestStarted transaction rolls back; successful cleanup does not
+erase the storage failure. Typed Store cancellation and benign start validation
+refusals remain distinct. Historical resource-cut and projection-activation
+validation, shared request-start probes and Journal frontier lookups preserve
+the raw SQLite interrupt cause before formatting diagnostics. An independent
+required Storage failure remains authoritative under coincident cancellation.
+Optional observation writes remain inside that same transaction. Their failure
+may degrade only after successful savepoint cleanup with the outer transaction
+intact. Cancellation, automatic rollback and failed cleanup stop the append
+through every nested optional helper before later SQL can independently commit
+a Journal head, index or transcript coordinate. Serialization adapters preserve
+the original SQLite interruption cause. SQLite-proven automatic rollback before
+any COMMIT, with no subsequent SQL escaping the transaction,
+is direct noncommit evidence ([SQLite transaction state](https://www.sqlite.org/c3ref/get_autocommit.html));
+absence observed later is not. Failed COMMIT or unproven rollback starts as
+Unknown; exact confirmation may establish the matching committed intent.
+
+Local outcome is separate from observed provider terminal. A locally failed stream may have observed provider completion before rejecting an illegal tail. A locally completed request must agree with a known observed completion kind. Request evidence retains only the closed `stop`, `tool_calls`, `length`, `content_filter`, `refusal` or `other` completion kind; unknown provider prose remains in the physical diagnostic and is not duplicated into audit. Observed usage, completeness and remote-execution uncertainty remain independent. Missing usage is not zero, and a known subtotal is not a complete bill. Results and domain acceptance are separate consumer responsibilities.
+
+## Bounded reads and ownership isolation
+
+Auxiliary audit uses a Journal-only cut because it reads execution facts without resolving canonical content. Historical input and primary request detail retain their complete native cuts. Later settlement cannot fill an earlier audit view.
+
+Audit pages contain at most 32 records. Call-start metadata is limited to 8 KiB, and each typed audit record is limited to 12 KiB before structural JSON allocation. The Runtime Client checks each complete encoded page item against 16 KiB after adding identity and envelope fields. The 4 KiB headroom covers complete page identity/envelope and exact-u64 decimal expansion: JSON escaping expands a 512-byte request identity by at most 6x, leaving enough room for the repeated request identity, model name, fixed fields and finite integer fields. Physical terminal envelopes retain their 16 KiB limit. A transactionally derived dense audit ordinal supplies real collection counts and advancing offsets. The Journal sequence remains a separate source coordinate. A long unrelated Journal does not manufacture audit items or force a history-wide count for a small page.
+
+The Runtime Client exposes auxiliary.audit through the existing checkpoint page path and current read authority. Cold checkpoints discover retained audit without requiring a new live event. Live auxiliary facts advance their audit domain without changing primary Attempt, Context or Trace state. Optional Source unavailability does not erase mandatory Journal evidence.
+
+Primary occupancy, statistics, recovery answer obligations, request predecessors, retry context, subagent activity and Trace remain owner-scoped. SQL ownership predicates are applied before LIMIT and aggregation, with indexes supporting that scope. Auxiliary Usage cannot hide the latest primary occupancy reading. Pure folds use the explicit owner rather than guessing from absent Attempt fields or an ID prefix.
+
+## Lifetime, lineage and export
+
+Local Call/request facts and their confirmation basis live for the Conversation lifetime. Title source consumption and submission correlation remain tied to those facts; output expiry will not erase them. Active-capacity limits and bounded pages do not bound lifetime disk growth.
+
+A completed one-request Call appends four Journal facts and four audit-offset rows,
+plus one row each in `auxiliary_calls`, `auxiliary_requests` and `request_owners`.
+Its three write receipts are reconstructed from these facts and indexes; there is
+no additional serialized receipt table. The thirteen explicit ownership/audit indexes
+retain 27 entries per completed Call, in addition to uniqueness indexes and the
+shared Journal/Source/observation indexes. Call-start metadata is capped at 8 KiB,
+request identity and model at 512 UTF-8 bytes each, terminal envelopes at 16 KiB
+including reserved sequence digits, and derived audit records at 12 KiB. Generation
+offsets retain the common observation limit of 9,007,199,254,740,991 milliseconds;
+Usage retains exact `u64` values.
+
+In the pre-#484 layout, the real SQLite fixture
+`aux_01_representative_storage_growth_of_completed_one_request_calls` measured
+100 completed Calls with fixed UUID-sized identities, a short model name and small
+Usage values on Ubuntu 24.04 with 4,096-byte pages. After WAL checkpoints, Journal
+JSON grew by 216,292 bytes (2,162.92 bytes per Call) and database pages by 3,698,688
+bytes (36,986.88 bytes per Call), from a 901,120-byte empty-store baseline. The
+physical delta includes the existing Source and observation layouts, all indexes
+and page allocation; it is not solely auxiliary metadata overhead. This is a
+reproducible representative workload, not a maximum or a retention budget. Larger
+bounded metadata, different page packing and inherited dependencies change the
+cost. These measurements are not a schema-75 cost baseline. No history is pruned to meet them.
+
+Clone/Fork canonical overlap never creates target-local auxiliary execution or reserves a local correlation. Only an explicitly retained Summary-generation dependency may carry source audit, with original source identity and the exact eligible prerequisite closure. Source audit remains distinct from target-local request ownership, quota and admission. Independent retained dependencies must survive source deletion.
+
+A new local checkpoint naming a Summary-generation dependency requires the successful physical request and completed local Call to be visible at the dependency's declared Journal cut. A later settlement cannot authorize a dependency captured before that settlement. Historical inspection and inherited source audit preserve open or failed execution evidence at their captured cuts; that evidence grants no new checkpoint commit authority.
+
+Inspection archives keep requests.jsonl for actual primary Snapshots. Auxiliary facts have a separate auxiliary_audit.jsonl projection at the captured Journal cut; generation rows identify their owner. Complete audit does not imply reconstructed prompts or generated output. Archive dependency validation walks the captured native Journal/activation prefix one checkpoint at a time. Each local Summary audit closure has its own bounded materialization budget; released history does not consume a lifetime archive allowance. Later checkpoints cannot enter an older captured archive. Archive projections explicitly exclude private diagnostics and execution bindings instead of serializing newly added native fields indiscriminately.
+
+## Verification boundary
+
+Real SQLite tests cover transaction atomicity, owner/index consistency, rollback and receipt-loss evidence, immutable cuts, pagination and corruption refusal. Mixed-history regressions compare primary behavior with auxiliary facts interleaved. Native execution tests exercise the production executor with a private second consumer, actual starts before adapter entry, panic after trusted usage, waiter loss and parent close. Writer boundary tests retain capacity through actual confirmation and joins after a real COMMIT. Consumed production-executor barriers cover cancellation/parent-close on both sides of the single-use dispatch grant. Real child-process kills cover confirmed RequestStarted, granted dispatch and adapter entry; quiescent cold reopening preserves unresolved Call/Request facts and never redispatches their RequestId. A completed, parked manual-compaction reply permits manager deletion and then delivers the exact original receipt. These are separate from Context deciding whether generated text is a usable Summary.
+
+## Native execution
+
+Automatic and manual Summary and independent automatic Title use the same Runtime-owned bounded-retry executor.
+Native preparation reserves process total/general, Conversation total/general
+and write responsibility without waiting. Limits are 32/24 and 4/3; only
+native Compaction authority may omit the general reservations. A purpose or
+trigger string grants no execution or protected-capacity authority. Both
+capacity and lifecycle-lock Busy refusals arbitrate under cancellation; an
+earlier cancellation remains cancellation, and active callers never wait for
+either resource.
+
+Each Call confirms CallStarted and RequestStarted before consuming a single-use
+dispatch grant for that physical request. Unknown start never enters the adapter. The owner retains
+execution state outside the polled future, so panic cannot discard trusted
+usage or cause reentry. Required terminal Request and Call facts settle
+atomically. Already-owned settlement and exact confirmation remain available
+after admission closes.
+
+Success requires a valid completion and EOF under current native authority;
+the absolute deadline continues through EOF. Valid provider observations and
+usage survive a later local refusal. Context separately rejects empty/refused
+Summary content and commits its checkpoint only with an accepted parent grant.
+The checkpoint names the confirmed local Call at its exact settlement Journal
+cut. No input body, generated output, credentials or logical budget is copied
+into auxiliary audit metadata.
+
+Each live Call owns at most one owner thread and one serialized write thread.
+Before the first physical owner starts, 32 process-owned retirement workers
+are installed, independently joining up to the existing 32 admitted Calls.
+The global bound is 96 auxiliary threads; queued retirement records remain
+bounded at 32 and cleanup reserves no new execution permit. A record handed
+off before its owner physically exits retains its real join and permits;
+that join cannot prevent another Conversation from delivering confirmed work
+and releasing its own allocation. Actual write/confirmation and owner joins
+precede resource release. The reaper then clears the Call's resource slot and
+drops its own resources before releasing admission, removing the Call or
+sending its result. A completed record retained by a descheduled reaper owns
+no Store allocation. Unresolved exact intent moves to the native failed-durability
+owner only after physical exit; historical uncertainty does not pin global
+capacity indefinitely. Live/unproven cleanup retains its old allocation.
+
+Compaction shares twelve confirmed/unresolved starts, three total input
+shrinks and a five-minute absolute deadline across carryover, input replans and
+technical retries. Automatic Compactions in one logical Agent step share that
+allowance from the first Compaction admission, including later entries into
+`perform_compaction`; each checkpoint still has its own operation identity and
+exact receipt. An independent manual Compaction gets a new business allowance.
+The model and resources remain frozen. Manual compaction transfers its native
+business tail before the manager lease is released, and a lost observer or
+later checkpoint cannot replace the exact result of the original invocation.
+The transferred reply owns only its native completion handle and receipt
+conversion inputs, never the Runtime Client, Runtime or Store allocation.
+A completed reply awaiting delivery cannot prevent manager deletion.
+Classification and BTW use the same ordinary admission and shared parent
+capabilities. Their bounded external submission and retained-result contract is
+described in [Auxiliary consumers](auxiliary-consumers.md). Synthetic repair and
+fan-out consumers exercise this ownership without a scheduler or another
+lifecycle owner.
+
+Changes to stored facts or read layouts advance the affected development-format gates. Unsupported or falsely current layouts are rejected without migrations, fallback readers, data deletion or database reconstruction.
+
+## Technical retries and observed usage
+
+A Call may start at most three physical requests, with fresh RequestId, timing,
+stream fold, usage accumulator and generation guard each time. A typed transient
+service/rate-limit/timeout/connection error may retry after local execution stops;
+remote inference or billing may remain unknown. Authentication, permanent quota,
+invalid parameters, stream-integrity failures and domain rejection do not retry.
+The provider adapters never retry or reconnect internally. Agent retry policy is
+unchanged.
+
+The local delays are two then four seconds. The absolute next eligibility time is
+`failure_observed_at + max(local_delay, valid_provider_retry_after)`. The maximum
+acceptable single wait is 60 seconds; a larger Retry-After is refused, never
+shortened. Settlement latency consumes this delay. A next start must precede the
+original five-minute Call/parent deadline. Cancellation during backoff settles
+only the Call; it neither repeats the failed request terminal nor creates a start.
+
+The failed request and AuxiliaryRetryScheduled commit in one Store transaction.
+Only exact confirmed settlement permits another RequestStarted. Every start
+reserves the original shared allowance first; confirmed noncommit refunds it,
+unknown retains it and exact replay cannot charge twice. The per-Call three-start
+bound is also enforced transactionally. Backoff retains ordinary/protected
+capacity already reserved at Call admission. All retries retain frozen selected
+input/media and invocation; changed semantic input requires a new Call.
+
+Observed usage aggregates once per RequestId across explicitly associated Calls.
+Unknown fields remain unknown, incomplete observations remain incomplete, and a
+final success cannot erase an earlier remote-execution uncertainty. This is an
+observed subtotal, never a complete Operation or Session bill.
+
+`ModelUsage` input/output/total token fields are independently optional. Adapters
+retain partial fields and distinguish a reported zero from absence; a derived
+total requires both input and output. A request retains the latest observed
+cumulative snapshot rather than summing snapshots or filling its missing fields
+from older reports. A successful
+terminal with incomplete core metrics still has Partial usage evidence.
+Cross-request aggregation deduplicates RequestId and marks mixed missing detail
+metrics or arithmetic overflow incomplete. Primary occupancy and throughput
+require observed input and output respectively; absent metrics cannot create a
+zero occupancy or throughput measurement.
+
+## Automatic Title ownership
+
+`local_runtime/session_title.rs` installs one root-local task before activation.
+It subscribes before reading the native finite first-Human/model metadata and
+process capacity release signals. No body queue, periodic polling or primary
+Agent permit is involved. `runtime/conversation_runtime/title.rs` freezes the
+current Title invocation and resource generation at the coordinator boundary;
+Title reserves ordinary capacity and cannot claim Compaction reserves. Native
+shutdown joins the owner through execution settlement and its Catalog tail.
+Lifecycle contention is distinct from capacity exhaustion: admission obtains
+the native commit boundary before reserving capacity, and the Title owner waits
+for that boundary to unlock before another authoritative check. Other capacity
+releases remain coalesced while the boundary is held; unlock authorizes the check
+without requiring a new capacity release.
+
+The indexed first ordinary Human selector includes absent timestamps, preserves
+exact Conversation/message identity, and records an unusable first-text outcome.
+Earlier Runtime messages do not qualify; pending input and inherited history do
+not grant local permission. Input is at most 4,096 UTF-8 bytes; larger or empty
+first text keeps the preview instead of selecting a later Human. Title preserves
+the resolved model output budget and provider parameters, including thinking;
+the invocation's generation safety bounds cover the whole generation. These
+bounds are separate from title acceptance, which requires one nonempty line,
+at most 120 characters and 480 UTF-8 bytes; rejected
+output does not trigger a corrective generation. Diagnostics do not retain input
+or generated output.
+
+Title source admission is a native typed Store operation, independent of purpose
+strings. It atomically associates one current Call with the exact local source.
+Zero-request terminal settlement releases only that association; first committed
+RequestStarted permanently consumes eligibility and only that live Call may use
+its remaining three-start allowance. Restart never replays a Call. With the old
+owner excluded, startup may settle and release a stranded zero-request association.
+Unknown writes cannot grant eligibility. No separate Title quota table/counter is
+needed in addition to these source facts and the Call start bound.
+
+After confirmed execution settlement, the native business owner validates the
+candidate and conditionally publishes separate generated-title metadata. Catalog
+publication verifies the root and absence of saved names; it never invokes manual
+rename. A manual rename before dispatch suppresses optional inference, and one
+after dispatch wins publication without erasing start cost. A visible Catalog
+commit followed by a durability error keeps the exact title and sends summary
+invalidation. Settings revision and latest-Human activity do not change. Clone
+and independent Fork copy saved labels with inherited provenance independently
+of the history cut, without copying execution facts or quota.
+
+## Structured Auxiliary output
+
+An internal consumer prepares `AuxiliaryOutputFormat::Text` or
+`AuxiliaryOutputFormat::JsonSchema(ResponseSchema)` before computing the Call
+fingerprints and submitting its existing `FrozenCall`. This uses the same
+Runtime executor, capacity classes, start grants, deadlines, write confirmations
+and physical joins as Title and Summary. There is no public model-execution RPC
+or separate runner. Text preparation changes no provider-visible fields.
+
+The response schema is immutable and bounded: 16,384 encoded schema bytes,
+schema depth at most eight edges below the root, a 1–64 character ASCII schema
+name (letters, digits, underscore or hyphen), and 1–1,048,576 output UTF-8 bytes.
+The invocation's existing token and generation safeguards also apply. The root
+is an object. Every object declares `properties`, all property names exactly
+once in `required`, and `additionalProperties: false`. Arrays declare one
+`items` schema. Explicit scalar types and unique, type-matching scalar `enum`
+values are supported, with at most 1,000 enum values across the whole schema.
+String enums with more than 250 values are limited to 15,000 total UTF-8 bytes.
+`title` and `description` are string annotations. This
+reuses Workflow's closed type/object/array vocabulary while narrowing it to
+the common strict output contract. `const`, unions, references, numeric/length
+constraints and unknown keywords are rejected at their owning schema path;
+no constraint is stripped. Schema construction and frozen deserialization both
+validate the contract using the existing `jsonschema` dependency. A bounded
+size/depth pass and exact encoded-byte check precede semantic traversal, enum
+comparisons and field-path diagnostics.
+
+`ModelRequest.response_schema` stores the schema and Native/Prompt strategy.
+Only the frozen effective `json_schema_output` decides the strategy. Prompt
+preparation appends a trusted system instruction requiring exactly one JSON
+object, includes the full schema and output byte budget, and sends no native
+format parameter. Native preparation uses these exact fields:
+
+| Protocol | Runtime-owned output field |
+| --- | --- |
+| OpenAI Chat Completions | `response_format: {type: "json_schema", json_schema: {name, strict: true, schema}}` |
+| OpenAI Responses | `text.format: {type: "json_schema", name, strict: true, schema}` |
+| Anthropic Messages | `output_config.format: {type: "json_schema", schema}` |
+
+Configured parameters colliding with these effective fields fail before
+dispatch, in either strategy. Siblings such as `text.verbosity` and
+`output_config.effort` survive unchanged. Ordinary requests synthesize none of
+these fields. Protocol contracts follow the official
+[OpenAI structured output guide](https://developers.openai.com/api/docs/guides/structured-outputs)
+and [Anthropic structured output guide](https://platform.claude.com/docs/en/build-with-claude/structured-outputs);
+the explicit capability follows the
+[ZCode capability precedent](https://github.com/zai-org/ZCode/blob/3c5b227649371507ddc4eb46ac5133afe6db1cab/packages/shared/src/model-config.ts).
+
+The semantic fingerprint and frozen reconstruction include the entire prepared
+contract. Prompt bytes are charged as system input; native schema and envelope
+bytes add to the frozen request estimate. Structured preflight verifies fit
+against the frozen invocation window. Schema text is absent from routine
+observation headers; Debug and acceptance errors omit schema content and model
+output. The existing Call fingerprint remains bounded audit evidence, with no
+new durable output journal.
+
+After the stream has completed and the required physical settlement has joined,
+the executor parses the entire final Text value and validates it against the
+same schema. Success returns `AuxiliaryOutput::JsonSchema(Value)`. It does not
+extract braces, remove Markdown fences, repair JSON, or produce a Canonical
+Assistant message. Local validation failures are terminal domain failures;
+the physical completion facts remain truthful and no business value is exposed.
+Refusal, reasoning-only output, tool proposals, truncation and byte exhaustion
+also fail acceptance. Native provider rejection never changes strategy or adds
+a hidden request. Technical retries reuse the frozen shape and existing budget.
+
+Structured calls do not publish provisional Text through the external consumer
+callback. Attempt, stopped and settled callbacks retain their existing lifecycle
+meaning; only the settled typed result can expose the validated JSON value.
+Text consumers keep their attempt-scoped ephemeral text stream. Classification
+retains its existing Text contract and strict domain parser, including duplicate
+property rejection; BTW, Title and Summary also retain their existing formats.
+The adapter transport response-byte ceiling and consumer visible/generation
+limits remain separate from the schema's final Text-byte budget.
+
+Production HTTP tests in `tests/provider/structured_output.rs` verify each wire
+envelope, sibling preservation, prompt-only requests, text equivalence and
+pre-network collision rejection. `runtime/auxiliary/executor_tests/structured.rs`
+uses a separate internal consumer with real SQLite settlement and deterministic
+gates to verify acceptance, rejection, frozen retries, cancellation, output and
+context limits. Existing required-write, uncertain receipt, deadline and capacity
+tests continue to exercise the same executor ownership path.
+## External consumer integration
+
+Classification and BTW use the native consumer callback and preparation path; they do not add executor purpose branches. See [the consumer integration template](auxiliary-consumers.md#consumer-integration-template) for exact ownership/commit points, model selection, semantic fingerprints, result reservations and delivery bounds.

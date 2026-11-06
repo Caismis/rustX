@@ -1,7 +1,7 @@
-use crate::durable::ConversationStore;
-use crate::runtime_client::capability_source::CapabilityReadSource;
-use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientTool};
-use crate::runtime_client::{checkpoint, preflight};
+use crate::observation::capability_source::CapabilityReadSource;
+use crate::observation::capability_source::{CapabilityView, RuntimeClientTool};
+use crate::runtime_client::checkpoint;
+use crate::observation::preflight;
 use crate::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
@@ -93,7 +93,7 @@ fn compare_original(seed: &super::super::CheckpointSeed) {
     );
     if let Some(budget) = budget {
         assert!(
-            preflight::required_safe_integer_budget(&actual, checkpoint::CHECKPOINT_TARGET_BYTES)
+            preflight::required_safe_integer_budget(&actual, crate::observation::bounded::CHECKPOINT_TARGET_BYTES)
                 .is_some_and(|direct| direct <= budget)
         );
     }
@@ -115,7 +115,7 @@ fn immutable_capability_owner_is_shared_across_unrelated_publications() {
     first.checkpoint_candidate().unwrap();
     let mut retained = vec![first.clone()];
     for _ in 0..32 {
-        checkpoint::take_capture_work();
+        crate::observation::capture::take_capture_work();
         publish_source_fact(&mut projection, |projection| {
             projection.publish(RuntimeClientEvent::TraceChanged);
         });
@@ -128,7 +128,7 @@ fn immutable_capability_owner_is_shared_across_unrelated_publications() {
             &projection.snapshot.capabilities,
             &current.snapshot.capabilities
         ));
-        let work = checkpoint::take_capture_work();
+        let work = crate::observation::capture::take_capture_work();
         assert_eq!(
             work[0], 0,
             "unchanged capability rows are never normalized: {work:?}"
@@ -184,7 +184,7 @@ fn compare_raw_capability_pages(retained: &super::super::CheckpointSeed, raw: &C
 #[test]
 fn immutable_capability_owner_preserves_raw_pages_and_historical_cut_on_replacement() {
     let mut oversized = tool(1);
-    oversized.description = "x".repeat(checkpoint::CHECKPOINT_ITEM_BYTES);
+    oversized.description = "x".repeat(crate::observation::bounded::CHECKPOINT_ITEM_BYTES);
     let mut overwide = tool(2);
     overwide.input_schema = serde_json::json!({"enum": vec![0; 33]}).into();
     let mut opaque_integer = tool(3);

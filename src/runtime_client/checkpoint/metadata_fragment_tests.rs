@@ -1,6 +1,8 @@
 use super::*;
+use crate::observation::bounded::bounded_structural_len_with_budget;
+use crate::observation::{content::*, preflight, structural_json};
 use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
-use crate::runtime_client::{content::*, event::RuntimeClientEvent, preflight, structural_json};
+use crate::runtime_client::event::RuntimeClientEvent;
 
 fn binding() -> ContentBinding {
     ContentBinding {
@@ -33,8 +35,8 @@ fn metadata() -> ProjectionMetadata {
             revision: 9,
             through: 99,
             source_cut: None,
-            domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
-            collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
+            domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+            collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         },
         collections: Vec::new(),
         content: Vec::new(),
@@ -256,9 +258,9 @@ fn metadata_sort_permutation_preserves_long_cycles_and_stable_duplicates_without
             let counts = owner_counts(&original);
             let content_buffer = value.content.as_ptr();
             let collection_buffer = value.collections.as_ptr();
-            metadata_fragment::take_clone_work();
+            crate::observation::metadata::take_clone_work();
             prepared.sort_into(&mut value);
-            assert_eq!(metadata_fragment::take_clone_work(), 0);
+            assert_eq!(crate::observation::metadata::take_clone_work(), 0);
             assert_eq!(owner_counts(&original), counts);
             assert_eq!(value.content.as_ptr(), content_buffer);
             assert_eq!(value.collections.as_ptr(), collection_buffer);
@@ -285,9 +287,9 @@ fn metadata_sort_identity_and_cache_hits_leave_owners_and_output_buffers_unchang
             metadata_fragment::take_array_work();
             let prepared = cache.prepare(&value);
             assert!(owner_counts(&value).iter().all(|count| *count == 2));
-            metadata_fragment::take_clone_work();
+            crate::observation::metadata::take_clone_work();
             prepared.sort_into(&mut value);
-            assert_eq!(metadata_fragment::take_clone_work(), 0);
+            assert_eq!(crate::observation::metadata::take_clone_work(), 0);
             assert!(owner_counts(&value).iter().all(|count| *count == 2));
             assert_eq!(value.content.as_ptr(), content_buffer);
             assert_eq!(value.collections.as_ptr(), collection_buffer);
@@ -332,9 +334,9 @@ fn metadata_sort_live_binding_misses_keep_only_one_cached_owner_array() {
             assert!(owner_counts(old).iter().all(|count| *count == 1));
         }
         assert!(owner_counts(&value).iter().all(|count| *count == 2));
-        metadata_fragment::take_clone_work();
+        crate::observation::metadata::take_clone_work();
         prepared.sort_into(&mut value);
-        assert_eq!(metadata_fragment::take_clone_work(), 0);
+        assert_eq!(crate::observation::metadata::take_clone_work(), 0);
         assert!(owner_counts(&value).iter().all(|count| *count == 2));
         assert_eq!(metadata_fragment::take_array_work(), [2, 2, 0]);
         assert_eq!(
@@ -415,10 +417,10 @@ fn immutable_metadata_fragments_preserve_invalid_and_oversized_admission() {
 #[test]
 fn immutable_metadata_resolution_keeps_old_owner_and_measures_each_value_once() {
     let base: MetadataFragment<_> = binding().into();
-    metadata_fragment::take_work();
+    crate::observation::metadata::take_work();
     let initial = base.size();
     let initial_bytes = encoded(&base).unwrap();
-    assert_eq!(metadata_fragment::take_work(), 1);
+    assert_eq!(crate::observation::metadata::take_work(), 1);
     let mut reference = base.content_ref.clone();
     reference.content_revision = 10;
     reference.readable_end = 1024;
@@ -432,7 +434,7 @@ fn immutable_metadata_resolution_keeps_old_owner_and_measures_each_value_once() 
         assert_eq!(replay.size().exact, Some(resolved_bytes.len()));
     }
     assert_eq!(
-        metadata_fragment::take_work(),
+        crate::observation::metadata::take_work(),
         1,
         "only the first resolved owner is measured"
     );
@@ -447,7 +449,7 @@ fn immutable_metadata_resolution_keeps_old_owner_and_measures_each_value_once() 
 fn prepared_capture_reuses_metadata_value_and_exact_length_without_deep_copy() {
     let owner = std::sync::OnceLock::new();
     let mut previous = None;
-    metadata_fragment::take_work();
+    crate::observation::metadata::take_work();
     for revision in 1..33 {
         let mut capture = Capture::new(revision);
         capture.prepared(&owner, |capture| {
@@ -465,7 +467,7 @@ fn prepared_capture_reuses_metadata_value_and_exact_length_without_deep_copy() {
         previous = Some(fragment.clone());
     }
     assert_eq!(
-        metadata_fragment::take_work(),
+        crate::observation::metadata::take_work(),
         1,
         "capture replay neither clones nor remeasures metadata"
     );

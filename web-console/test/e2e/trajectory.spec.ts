@@ -314,9 +314,16 @@ for (const dimension of ['prompt', 'tools']) {
     await expect(cell).toContainText(dimension === 'prompt' ? 'Previous Tool catalog unavailable' : 'Previous System Prompt unavailable');
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '0');
     await cell.click();
-    await expect(page.getByRole('tab', { name: dimension === 'prompt' ? 'Diff' : 'Tools', exact: true })).toHaveAttribute('aria-selected', 'true');
+    // Harness opens a changed request header on Diff for either dimension.
+    // An unavailable prompt predecessor does not remove the Tools diff tab.
+    await expect(page.getByRole('tab', { name: 'Diff', exact: true })).toHaveAttribute('aria-selected', 'true');
     if (dimension === 'prompt') await expect(page.getByRole('tabpanel')).toContainText('-Previous prompt.');
-    else await expect(page.getByRole('tab', { name: 'Diff', exact: true })).toHaveCount(0);
+    else {
+      // This finite fixture has no previous catalog body: report that gap,
+      // rather than fabricating a diff from the available current catalog.
+      await expect(page.getByRole('tabpanel')).toContainText('Previous Tool catalog unavailable');
+      await expect(page.getByRole('tabpanel')).not.toContainText('-Previous prompt.');
+    }
     await page.getByRole('tab', { name: 'Tools', exact: true }).click();
     await expect(page.getByRole('tabpanel')).toContainText('Run one command.');
     await expect(page.locator('[data-detail-reads]')).toHaveAttribute('data-detail-reads', '1');

@@ -30,7 +30,9 @@
 //! line is written at exactly one deterministic phase selected by
 //! [`RAW_INVALID_PHASE_ENV`]: [`INVALID_PHASE_INITIALIZE`] (before the
 //! `initialize` result, while the handshake is pending) or
-//! [`INVALID_PHASE_CALL`] (before the `tools/call` reply, mid-exchange).
+//! [`INVALID_PHASE_CALL`] (before the `tools/call` reply, mid-exchange), or
+//! [`INVALID_PHASE_VALIDATION`] (after a healthy catalog, released by the
+//! parent while final invocation validation is held).
 //!
 //! **This is a test fixture, not an MCP server implementation, and must not
 //! grow into one.**
@@ -57,6 +59,15 @@ pub const RAW_INVALID_PHASE_ENV: &str = "RUSTX_M7_RAW_FIXTURE_INVALID_PHASE";
 /// line per observed inbound message to (the cross-process observation
 /// seam).
 pub const RAW_JOURNAL_ENV: &str = "RUSTX_M7_RAW_FIXTURE_JOURNAL";
+/// Releases a corrupt frame after a healthy catalog response, while the
+/// parent holds the invocation's final validation boundary.
+pub const RAW_INVALID_RELEASE_FILE_ENV: &str = "RUSTX_M7_RAW_FIXTURE_INVALID_RELEASE_FILE";
+/// A captured source credential deliberately echoed by the corrupt peer.
+pub const RAW_CREDENTIAL_ENV: &str = "RUSTX_M7_RAW_FIXTURE_CREDENTIAL";
+/// Keeps the fixture alive after business stdin EOF, with an owned child.
+pub const RAW_STUBBORN_EOF_ENV: &str = "RUSTX_M7_RAW_FIXTURE_STUBBORN_EOF";
+/// The pid of the background child retained by the stubborn fixture.
+pub const JOURNAL_CHILD_PID_PREFIX: &str = "child-pid:";
 /// The `RAW_CORRUPTION_ENV` value writing a plain non-JSON line.
 pub const CORRUPTION_NOISE: &str = "noise";
 /// The `RAW_CORRUPTION_ENV` value writing a well-formed-JSON wrong-shape
@@ -68,6 +79,8 @@ pub const INVALID_PHASE_INITIALIZE: &str = "initialize";
 /// The `RAW_INVALID_PHASE_ENV` value emitting the invalid message before
 /// the `tools/call` reply, mid-exchange.
 pub const INVALID_PHASE_CALL: &str = "call";
+/// Emits the invalid frame after listing, once the parent releases it.
+pub const INVALID_PHASE_VALIDATION: &str = "validation";
 
 /// The journal entry prefix written for every inbound line the fixture
 /// observes; the suffix is the truncated raw line.
@@ -117,21 +130,45 @@ fn catalog() -> Vec<Tool> {
 /// <- tools/call echo                 -> [corrupt line], success
 /// ```
 ///
-/// The `invalid` corrupt line appears at exactly one of the two bracketed
-/// points, selected by [`RAW_INVALID_PHASE_ENV`]; the `noise` line appears
-/// at both.
+/// The `invalid` corrupt line appears at the selected lifecycle point, or
+/// after listing once the validation release marker exists. The `noise`
+/// line appears at both bracketed points.
 async fn serve(journal: Option<&PathBuf>) {
     let corruption =
         std::env::var(RAW_CORRUPTION_ENV).unwrap_or_else(|_| CORRUPTION_NOISE.to_owned());
     let invalid_phase = std::env::var(RAW_INVALID_PHASE_ENV)
         .unwrap_or_else(|_| INVALID_PHASE_INITIALIZE.to_owned());
+    let stubborn = std::env::var_os(RAW_STUBBORN_EOF_ENV).is_some();
+    if stubborn {
+        let mut child = tokio::process::Command::new("/bin/sleep")
+            .arg("600")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn the supervised fixture descendant");
+        record(
+            journal,
+            &format!("{JOURNAL_CHILD_PID_PREFIX}{}", child.id().unwrap()),
+        );
+        tokio::spawn(async move {
+            let _ = child.wait().await;
+        });
+    }
     let mut input = BufReader::new(tokio::io::stdin());
     let mut output = tokio::io::stdout();
     let mut line = String::new();
     loop {
         line.clear();
         match input.read_line(&mut line).await {
-            Ok(0) | Err(_) => return,
+            Ok(0) | Err(_) => {
+                if stubborn {
+                    // Only the interactive supervisor control lane may retire
+                    // this deliberately stubborn fixture and its descendant.
+                    std::future::pending::<()>().await;
+                }
+                return;
+            }
             Ok(_) => {}
         }
         let trimmed = line.trim_end();
@@ -151,10 +188,21 @@ async fn serve(journal: Option<&PathBuf>) {
         match message {
             ClientJsonRpcMessage::Request(request) => {
                 let id = request.id.clone();
+                let listed = matches!(&request.request, ClientRequest::ListToolsRequest(_));
                 for output_line in
                     handle_request(request.request, id, journal, &corruption, &invalid_phase)
                 {
                     write_line(&mut output, output_line).await;
+                }
+                if listed && invalid_phase == INVALID_PHASE_VALIDATION {
+                    let release = PathBuf::from(
+                        std::env::var_os(RAW_INVALID_RELEASE_FILE_ENV)
+                            .expect("validation corruption requires a release marker"),
+                    );
+                    while !release.exists() {
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    }
+                    write_line(&mut output, WireOutput::Raw(corrupt_line(&corruption))).await;
                 }
             }
             ClientJsonRpcMessage::Notification(_)
@@ -259,7 +307,12 @@ fn handle_request(
 /// `method` field).
 fn corrupt_line(corruption: &str) -> String {
     match corruption {
-        CORRUPTION_INVALID => "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":123}".to_owned(),
+        CORRUPTION_INVALID => match std::env::var(RAW_CREDENTIAL_ENV) {
+            Ok(token) => {
+                serde_json::json!({"jsonrpc":"2.0","id":1,"method":123,"token":token}).to_string()
+            }
+            Err(_) => "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":123}".to_owned(),
+        },
         _ => "plain non-protocol noise on the wire".to_owned(),
     }
 }

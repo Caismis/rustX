@@ -147,12 +147,7 @@ fn admit_block(
             }
             WorkflowNodeProgram::Agent(agent) => {
                 if let Some(definition) = agents.get(&agent.profile) {
-                    let effective = agent
-                        .invocation_override
-                        .clone()
-                        .unwrap_or_default()
-                        .effective_profile(definition);
-                    let resolved = resolve_agent_profile(&effective, authority);
+                    let resolved = resolve_agent_profile(definition.profile(), authority);
                     diagnostics.extend(resolved.diagnostics.iter().cloned().map(|reason| {
                         WorkflowAdmissionDiagnostic {
                             path: path.clone(),
@@ -186,7 +181,8 @@ fn admit_block(
                     });
                 }
             }
-            WorkflowNodeProgram::Loop { body, .. } => admit_block(
+            WorkflowNodeProgram::Loop { body, .. }
+            | WorkflowNodeProgram::Iteration { body, .. } => admit_block(
                 body,
                 &format!("{path}.body"),
                 agents,
@@ -196,20 +192,6 @@ fn admit_block(
                 servers,
                 leaf,
             ),
-            WorkflowNodeProgram::Parallel { branches, .. } => {
-                for (key, branch) in branches {
-                    admit_block(
-                        &mut branch.block,
-                        &format!("{path}.branches.{key}.block"),
-                        agents,
-                        authority,
-                        tools,
-                        diagnostics,
-                        servers,
-                        leaf,
-                    );
-                }
-            }
             _ => {}
         }
     }

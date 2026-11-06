@@ -1,0 +1,123 @@
+    Finished `release` profile [optimized] target(s) in 0.25s
+     Running unittests src/lib.rs (target/release/deps/rustx-726309453d4aeb4a)
+
+running 1 test
+Benchmark Session preparation 100/9999
+Benchmark Session preparation 200/9999
+Benchmark Session preparation 300/9999
+Benchmark Session preparation 400/9999
+Benchmark Session preparation 500/9999
+Benchmark Session preparation 600/9999
+Benchmark Session preparation 700/9999
+Benchmark Session preparation 800/9999
+Benchmark Session preparation 900/9999
+Benchmark Session preparation 1000/9999
+Benchmark Session preparation 1100/9999
+Benchmark Session preparation 1200/9999
+Benchmark Session preparation 1300/9999
+Benchmark Session preparation 1400/9999
+Benchmark Session preparation 1500/9999
+Benchmark Session preparation 1600/9999
+Benchmark Session preparation 1700/9999
+test local_runtime::session_runtime_manager::tests::schedule_benchmark::measure_native_scheduler_reconciliation has been running for over 60 seconds
+Benchmark Session preparation 1800/9999
+Benchmark Session preparation 1900/9999
+Benchmark Session preparation 2000/9999
+Benchmark Session preparation 2100/9999
+Benchmark Session preparation 2200/9999
+Benchmark Session preparation 2300/9999
+Benchmark Session preparation 2400/9999
+Benchmark Session preparation 2500/9999
+Benchmark Session preparation 2600/9999
+Benchmark Session preparation 2700/9999
+Benchmark Session preparation 2800/9999
+Benchmark Session preparation 2900/9999
+Benchmark Session preparation 3000/9999
+Benchmark Session preparation 3100/9999
+Benchmark Session preparation 3200/9999
+Benchmark Session preparation 3300/9999
+Benchmark Session preparation 3400/9999
+Benchmark Session preparation 3500/9999
+Benchmark Session preparation 3600/9999
+Benchmark Session preparation 3700/9999
+Benchmark Session preparation 3800/9999
+Benchmark Session preparation 3900/9999
+Benchmark Session preparation 4000/9999
+Benchmark Session preparation 4100/9999
+Benchmark Session preparation 4200/9999
+Benchmark Session preparation 4300/9999
+Benchmark Session preparation 4400/9999
+Benchmark Session preparation 4500/9999
+Benchmark Session preparation 4600/9999
+Benchmark Session preparation 4700/9999
+Benchmark Session preparation 4800/9999
+Benchmark Session preparation 4900/9999
+Benchmark Session preparation 5000/9999
+Benchmark Session preparation 5100/9999
+Benchmark Session preparation 5200/9999
+Benchmark Session preparation 5300/9999
+Benchmark Session preparation 5400/9999
+Benchmark Session preparation 5500/9999
+Benchmark Session preparation 5600/9999
+Benchmark Session preparation 5700/9999
+Benchmark Session preparation 5800/9999
+Benchmark Session preparation 5900/9999
+Benchmark Session preparation 6000/9999
+Benchmark Session preparation 6100/9999
+Benchmark Session preparation 6200/9999
+Benchmark Session preparation 6300/9999
+Benchmark Session preparation 6400/9999
+Benchmark Session preparation 6500/9999
+Benchmark Session preparation 6600/9999
+Benchmark Session preparation 6700/9999
+Benchmark Session preparation 6800/9999
+Benchmark Session preparation 6900/9999
+Benchmark Session preparation 7000/9999
+Benchmark Session preparation 7100/9999
+Benchmark Session preparation 7200/9999
+Benchmark Session preparation 7300/9999
+Benchmark Session preparation 7400/9999
+Benchmark Session preparation 7500/9999
+Benchmark Session preparation 7600/9999
+Benchmark Session preparation 7700/9999
+Benchmark Session preparation 7800/9999
+Benchmark Session preparation 7900/9999
+Benchmark Session preparation 8000/9999
+Benchmark Session preparation 8100/9999
+Benchmark Session preparation 8200/9999
+Benchmark Session preparation 8300/9999
+Benchmark Session preparation 8400/9999
+Benchmark Session preparation 8500/9999
+Benchmark Session preparation 8600/9999
+Benchmark Session preparation 8700/9999
+Benchmark Session preparation 8800/9999
+Benchmark Session preparation 8900/9999
+Benchmark Session preparation 9000/9999
+Benchmark Session preparation 9100/9999
+Benchmark Session preparation 9200/9999
+Benchmark Session preparation 9300/9999
+Benchmark Session preparation 9400/9999
+Benchmark Session preparation 9500/9999
+Benchmark Session preparation 9600/9999
+Benchmark Session preparation 9700/9999
+Benchmark Session preparation 9800/9999
+Benchmark Session preparation 9900/9999
+Scheduler historical fixture ready: 10000 conversations
+Scheduler measurement starting: 10000 conversations
+Scheduler pass 1, ms=70194, sources=10000
+Scheduler pass 2, ms=25917, sources=10000
+Scheduler pass 3, ms=26080, sources=10000
+
+thread 'local_runtime::session_runtime_manager::tests::schedule_benchmark::measure_native_scheduler_reconciliation' (23549) panicked at src/local_runtime/../../tests/scripted/app_server/schedule_benchmark.rs:251:113:
+called `Result::unwrap()` on an `Err` value: TransitionFailed("durable ConversationStore failed: read journal mode: database is locked")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test local_runtime::session_runtime_manager::tests::schedule_benchmark::measure_native_scheduler_reconciliation ... FAILED
+
+failures:
+
+failures:
+    local_runtime::session_runtime_manager::tests::schedule_benchmark::measure_native_scheduler_reconciliation
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4759 filtered out; finished in 558.82s
+
+error: test failed, to rerun pass `--lib`

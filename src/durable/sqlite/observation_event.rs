@@ -1,5 +1,5 @@
 //! Finite witnesses and exact field ranges derived in the existing native J transaction.
-use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension, params, sqlite_error, storage};
 use crate::durable::observation::{
     ObservationEventField, ObservationEventWitness, ObservationValueChunk, RequestObservationPage,
 };
@@ -73,9 +73,25 @@ fn selected_paths(event: &crate::events::types::RuntimeEvent) -> Option<&'static
         | Event::AssistantMessageCommitted { .. }
         | Event::ModelRetryScheduled { .. } => Some(&["type"]),
         Event::AttemptCompleted { .. } => Some(&["type", "finish_reason"]),
+        // Owner, identity and usage come from the committing typed fact below;
+        // probing their indexed previews again adds no evidence.
         Event::ModelRequestCompleted { .. } => Some(&["type", "finish_reason", "generation"]),
         Event::ModelRequestFailed { .. } => Some(&["type", "error", "generation"]),
         Event::AttemptFailed { .. } => Some(&["type", "error"]),
+        Event::AuxiliaryCallStarted { .. } => Some(&[
+            "type",
+            "call_id",
+            "purpose",
+            "trigger",
+            "business_source",
+            "input",
+            "semantic_input_fingerprint",
+            "invocation_fingerprint",
+            "selected_message_ids",
+        ]),
+        Event::AuxiliaryCallSettled { .. } => {
+            Some(&["type", "call_id", "outcome", "request_evidence"])
+        }
         Event::ToolExecutionProgress { .. } => {
             Some(&["type", "tool_call_id", "tool_id", "progress"])
         }
@@ -171,7 +187,7 @@ fn result_position(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))
+        .map_err(|error| sqlite_error(&error, error.to_string()))
 }
 fn prefix(text: &str) -> &str {
     let mut end = text.len().min(256);
@@ -225,7 +241,7 @@ fn tool_status(status: &crate::tools::types::ToolExecutionStatus) -> serde_json:
     }
 }
 fn model_error(error: &crate::model::error::ModelError) -> serde_json::Value {
-    serde_json::json!({"kind":error.kind,"message":prefix(&error.message),"retry_disposition":error.retry_disposition,"retry_after_ms":error.retry_after_ms.map(|value|value.to_string()),"provider_code":error.provider_code.as_deref().map(prefix),"context_overflow":crate::runtime_client::checkpoint::structural_value(&error.context_overflow),"malformed_tool_proposal":crate::runtime_client::checkpoint::structural_value(&error.malformed_tool_proposal),"timeout_phase":error.timeout_phase,"generation":crate::runtime_client::checkpoint::structural_value(&error.generation)})
+    serde_json::json!({"kind":error.kind,"message":prefix(&error.message),"retry_disposition":error.retry_disposition,"retry_after_ms":error.retry_after_ms.map(|value|value.to_string()),"provider_code":error.provider_code.as_deref().map(prefix),"context_overflow":crate::observation::bounded::structural_value(&error.context_overflow),"malformed_tool_proposal":crate::observation::bounded::structural_value(&error.malformed_tool_proposal),"timeout_phase":error.timeout_phase,"generation":crate::observation::bounded::structural_value(&error.generation)})
 }
 fn terminal_fields(
     connection: &Connection,
@@ -264,7 +280,7 @@ fn terminal_fields(
                         execution,
                     )?
                 };
-                if let Some(crate::runtime_client::event::RuntimeClientAttemptFailure::Runtime {
+                if let Some(crate::observation::failure::RuntimeClientAttemptFailure::Runtime {
                     error,
                 }) = summary.failure
                 {
@@ -274,7 +290,7 @@ fn terminal_fields(
         }
         Event::ModelRequestFailed { error, .. } => value["error"] = model_error(error),
         Event::ToolExecutionCompleted { result, .. } => {
-            value["result"] = serde_json::json!({"status":tool_status(&result.status),"duration_ms":result.duration_ms.to_string(),"exit_code":result.exit_code,"truncation":crate::runtime_client::checkpoint::structural_value(&result.truncation),"content":[],"artifacts":[],"deliveries":[]});
+            value["result"] = serde_json::json!({"status":tool_status(&result.status),"duration_ms":result.duration_ms.to_string(),"exit_code":result.exit_code,"truncation":crate::observation::bounded::structural_value(&result.truncation),"content":[],"artifacts":[],"deliveries":[]});
         }
         Event::ToolExecutionFailed { error, .. } | Event::CompactionFailed { error, .. } => {
             value["error"] = serde_json::json!(prefix(error));
@@ -313,11 +329,10 @@ fn terminal_fields(
             value["generation"] = serde_json::json!(generation.to_string());
             value["checkpoint_id"] = serde_json::json!(checkpoint_id);
             value["activation_id"] = serde_json::json!(activation_id.0.to_string());
-            value["tokens_before"] =
-                crate::runtime_client::checkpoint::structural_value(tokens_before)
-                    .unwrap_or(serde_json::Value::Null);
+            value["tokens_before"] = crate::observation::bounded::structural_value(tokens_before)
+                .unwrap_or(serde_json::Value::Null);
             value["estimated_tokens_after"] = serde_json::json!(estimated_tokens_after.to_string());
-            value["occupancy"] = crate::runtime_client::checkpoint::structural_value(occupancy)
+            value["occupancy"] = crate::observation::bounded::structural_value(occupancy)
                 .unwrap_or(serde_json::Value::Null);
         }
         _ => {}
@@ -334,7 +349,7 @@ fn mandatory_capture(
     let mut value = serde_json::json!({"type":event_kind});
     terminal_fields(connection, event, &mut value, execution, pending.is_some())?;
     let occupancy =
-        super::observation_occupancy::witness_with_pending(connection, event, pending.is_some());
+        super::observation_occupancy::witness_with_pending(connection, event, pending.is_some())?;
     let missing = matches!(
         event.event,
         crate::events::types::RuntimeEvent::CompactionCompleted { .. }
@@ -343,9 +358,12 @@ fn mandatory_capture(
         occupancy,
         native_direct: false,
         trace_total: if let Some(pending) = pending {
-            pending_trace_total(connection, event, pending)
+            pending_trace_total(connection, event, pending)?
         } else {
-            super::observation_statistics::trace_total(connection, event.sequence).ok()
+            super::optional_display_value(super::observation_statistics::trace_total(
+                connection,
+                event.sequence,
+            ))?
         },
         // The committing row starts unavailable. Its final marker is ORed
         // into this witness by the reader after all auxiliary writes finish.
@@ -363,6 +381,11 @@ fn mandatory_capture(
             .as_ref()
             .filter(|id| id.as_str().len() <= 256)
             .cloned(),
+        owner: event
+            .event
+            .model_request_owner()
+            .map(crate::durable::observation::RequestOwnerKind::from),
+        auxiliary_call_id: event.event.auxiliary_call_id().cloned(),
         timestamp: event.timestamp,
         event_kind,
         tool_occurrence: event.tool_occurrence.clone(),
@@ -390,7 +413,7 @@ fn mandatory_witness(
     connection
         .prepare_cached("UPDATE events SET observation_witness=?2 WHERE sequence=?1")
         .and_then(|mut statement| statement.execute(params![event.sequence, witness.bytes]))
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok((available, witness))
 }
 
@@ -401,8 +424,11 @@ pub(super) fn index_optional(
     event: &RuntimeEventEnvelope,
     native_json: &[u8],
     execution: Option<&super::observation_execution::Captured>,
-) -> Prepared {
+) -> Result<Prepared, ConversationStoreError> {
     if let Some((available, witness)) = super::optional_display_layout(connection, || {
+        #[cfg(test)]
+        let _probe =
+            super::start_probe::for_event(event, super::AuxiliaryStartProbe::ObservationFields);
         index_with_paths(
             connection,
             event,
@@ -410,21 +436,21 @@ pub(super) fn index_optional(
             Some(native_json),
             execution,
         )
-    }) {
-        return Prepared {
+    })? {
+        return Ok(Prepared {
             available,
             witness: Some(witness),
-        };
+        });
     }
     // Keep finite own terminal facts when full field indexing fails.
     let witness = super::optional_display_layout(connection, || {
         mandatory_witness(connection, event, execution)
-    })
+    })?
     .map(|(_, witness)| witness);
-    Prepared {
+    Ok(Prepared {
         available: false,
         witness,
-    }
+    })
 }
 
 /// The original native T assignment is already committed to this transaction.
@@ -441,7 +467,7 @@ pub(super) fn attach_transcript(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
         .flatten();
     let bytes = bytes.ok_or_else(|| storage("native transcript witness unavailable"))?;
     let mut witness = storage::decode(&bytes)?;
@@ -451,7 +477,7 @@ pub(super) fn attach_transcript(
             "UPDATE events SET observation_witness=?1 WHERE sequence=?2 AND observation_witness=?3",
             params![updated, sequence, bytes],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if rows != 1 {
         return Err(storage("native transcript witness unavailable"));
     }
@@ -497,23 +523,29 @@ fn pending_trace_total(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     pending: &super::append_facts::PendingEvent<'_>,
-) -> Option<u64> {
+) -> Result<Option<u64>, ConversationStoreError> {
     if super::observation_statistics::is_trace_anchor(&event.event) {
-        pending
+        Ok(pending
             .statistics
-            .and_then(|statistics| statistics.trace_total)
+            .and_then(|statistics| statistics.trace_total))
     } else {
-        super::observation_statistics::trace_total(connection, event.sequence.saturating_sub(1))
-            .ok()
+        super::optional_display_value(super::observation_statistics::trace_total(
+            connection,
+            event.sequence.saturating_sub(1),
+        ))
     }
 }
+
 pub(super) fn prepare_pending(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     native_json: &[u8],
     pending: &super::append_facts::PendingEvent<'_>,
-) -> Option<SourceCapture> {
-    super::optional_display_layout(connection, || {
+) -> Result<Option<SourceCapture>, ConversationStoreError> {
+    let captured = super::optional_display_layout(connection, || {
+        #[cfg(test)]
+        let _probe =
+            super::start_probe::for_event(event, super::AuxiliaryStartProbe::ObservationFields);
         capture_with_paths(
             connection,
             event,
@@ -522,16 +554,16 @@ pub(super) fn prepare_pending(
             pending.execution,
             Some(pending),
         )
-    })
-    .or_else(|| {
-        super::optional_display_layout(connection, || {
-            let (_, witness) =
-                mandatory_capture(connection, event, pending.execution, Some(pending))?;
-            Ok(SourceCapture {
-                available: false,
-                inline_source: None,
-                witness,
-            })
+    })?;
+    if captured.is_some() {
+        return Ok(captured);
+    }
+    super::optional_display_layout(connection, || {
+        let (_, witness) = mandatory_capture(connection, event, pending.execution, Some(pending))?;
+        Ok(SourceCapture {
+            available: false,
+            inline_source: None,
+            witness,
         })
     })
 }
@@ -544,10 +576,12 @@ fn index_with_paths(
     execution: Option<&super::observation_execution::Captured>,
 ) -> Result<(bool, Captured), ConversationStoreError> {
     let capture = capture_with_paths(connection, event, selected, native_json, execution, None)?;
+    #[cfg(test)]
+    let _probe = super::start_probe::for_event(event, super::AuxiliaryStartProbe::ObservationJson);
     if let Some(inline_source) = &capture.inline_source {
         let rows = connection.prepare_cached("UPDATE events SET observation_source=?2,observation_witness=?3 WHERE sequence=?1 AND CAST(event_json AS BLOB)=?4")
             .and_then(|mut statement| statement.execute(params![event.sequence, inline_source, capture.witness.bytes, native_json]))
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if rows != 1 {
             return Err(storage("native event bytes changed before source capture"));
         }
@@ -557,7 +591,7 @@ fn index_with_paths(
             .and_then(|mut statement| {
                 statement.execute(params![event.sequence, capture.witness.bytes])
             })
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok((capture.available, capture.witness))
 }
@@ -688,7 +722,7 @@ fn capture_with_paths(
         .cloned()
         .ok_or_else(|| storage("native witness semantic header unavailable"))?;
     let occupancy =
-        super::observation_occupancy::witness_with_pending(connection, event, pending.is_some());
+        super::observation_occupancy::witness_with_pending(connection, event, pending.is_some())?;
     let missing = matches!(
         event.event,
         crate::events::types::RuntimeEvent::CompactionCompleted { .. }
@@ -697,9 +731,12 @@ fn capture_with_paths(
         occupancy,
         native_direct: false,
         trace_total: if let Some(pending) = pending {
-            pending_trace_total(connection, event, pending)
+            pending_trace_total(connection, event, pending)?
         } else {
-            super::observation_statistics::trace_total(connection, event.sequence).ok()
+            super::optional_display_value(super::observation_statistics::trace_total(
+                connection,
+                event.sequence,
+            ))?
         },
         source_unavailable: missing,
         transcript_cursor: pending.and_then(|pending| pending.transcript_cursor),
@@ -715,6 +752,11 @@ fn capture_with_paths(
             .as_ref()
             .filter(|id| id.as_str().len() <= 256)
             .cloned(),
+        owner: event
+            .event
+            .model_request_owner()
+            .map(crate::durable::observation::RequestOwnerKind::from),
+        auxiliary_call_id: event.event.auxiliary_call_id().cloned(),
         timestamp: event.timestamp,
         event_kind,
         tool_occurrence: event.tool_occurrence.clone(),
@@ -754,7 +796,7 @@ fn readable(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
         .ok_or_else(|| ConversationStoreError::InvalidReference("native event source unavailable".into()))
 }
 pub(super) fn kind(
@@ -774,7 +816,7 @@ pub(super) fn kind(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     match kind {
         Some(Some(kind)) => Ok(Some(kind)),
         Some(None) => Err(storage("native event kind header unavailable")),
@@ -802,7 +844,7 @@ pub(super) fn witness_prepared(
     let row: Option<(Option<Vec<u8>>, bool, bool)> = connection
         .prepare_cached("SELECT e.observation_witness,COALESCE(r.direct=1 AND r.ready=1,0),(e.observation_readiness_missing AND e.sequence>(SELECT journal FROM observation_readiness_epoch WHERE id=1)) OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1")
         .and_then(|mut statement| statement.query_row([sequence], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
-        .optional().map_err(|error| storage(error.to_string()))?;
+        .optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let Some((Some(bytes), direct, missing)) = row else {
         return Ok(None);
     };
@@ -858,6 +900,7 @@ pub(super) fn read(
     )
 }
 
+#[allow(clippy::too_many_lines)] // Closed event identity mapping stays exhaustive in one place.
 fn identity_fields(
     event: &RuntimeEventEnvelope,
     value: &mut serde_json::Value,
@@ -872,6 +915,14 @@ fn identity_fields(
             serde_json::Value::Null
         }
     };
+    if let Some(owner) = event.event.model_request_owner() {
+        value["owner"] = serde_json::json!({
+            "type": crate::durable::observation::RequestOwnerKind::from(owner)
+        });
+    }
+    if let Some(call_id) = event.event.auxiliary_call_id() {
+        value["call_id"] = identity(call_id.as_str());
+    }
     match &event.event {
         Event::AttemptStarted { attempt_id }
         | Event::AttemptCompleted { attempt_id, .. }
@@ -881,7 +932,9 @@ fn identity_fields(
         | Event::AttemptLimitExceeded { attempt_id, .. } => {
             value["attempt_id"] = identity(attempt_id.as_str());
         }
-        Event::ModelRequestStarted { request_id, model } => {
+        Event::ModelRequestStarted {
+            request_id, model, ..
+        } => {
             value["request_id"] = identity(request_id.as_str());
             value["model"] = serde_json::json!(prefix(model));
         }
@@ -898,11 +951,43 @@ fn identity_fields(
             ..
         } => {
             value["request_id"] = identity(request_id.as_str());
-            value["usage"] = crate::runtime_client::checkpoint::structural_value(usage)
+            value["usage"] = crate::observation::bounded::structural_value(usage)
                 .ok_or_else(|| storage("usage witness exceeds finite header"))?;
-            value["generation"] =
-                crate::runtime_client::checkpoint::structural_value(generation)
-                    .ok_or_else(|| storage("generation witness exceeds finite header"))?;
+            value["generation"] = crate::observation::bounded::structural_value(generation)
+                .ok_or_else(|| storage("generation witness exceeds finite header"))?;
+        }
+        Event::AuxiliaryCallStarted {
+            purpose,
+            trigger,
+            business_source,
+            input,
+            semantic_input_fingerprint,
+            invocation_fingerprint,
+            selected_message_ids,
+            ..
+        } => {
+            value["purpose"] =
+                serde_json::to_value(purpose).map_err(|error| storage(error.to_string()))?;
+            value["trigger"] =
+                serde_json::to_value(trigger).map_err(|error| storage(error.to_string()))?;
+            value["business_source"] = serde_json::to_value(business_source)
+                .map_err(|error| storage(error.to_string()))?;
+            value["input"] =
+                serde_json::to_value(input).map_err(|error| storage(error.to_string()))?;
+            value["semantic_input_fingerprint"] =
+                serde_json::json!(semantic_input_fingerprint.as_str());
+            value["invocation_fingerprint"] = serde_json::json!(invocation_fingerprint.as_str());
+            value["selected_message_ids"] = serde_json::json!(selected_message_ids);
+        }
+        Event::AuxiliaryCallSettled {
+            outcome,
+            request_evidence,
+            ..
+        } => {
+            value["request_evidence"] = serde_json::to_value(request_evidence)
+                .map_err(|error| storage(error.to_string()))?;
+            value["outcome"] =
+                serde_json::to_value(outcome).map_err(|error| storage(error.to_string()))?;
         }
         Event::ToolExecutionStarted {
             tool_call_id,
@@ -937,18 +1022,18 @@ fn identity_fields(
             emission,
             logical_step_origin,
         } => {
-            value["producer"] = crate::runtime_client::checkpoint::bounded_bytes(producer, 1024)
+            value["producer"] = crate::observation::bounded::bounded_bytes(producer, 1024)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or(serde_json::Value::Null);
             value["request_id"] = identity(request_id.as_str());
             value["message_id"] = identity(message_id.as_str());
             value["logical_step_origin"] = serde_json::json!(logical_step_origin);
-            value["emission"] = crate::runtime_client::checkpoint::bounded_bytes(emission, 2048)
+            value["emission"] = crate::observation::bounded::bounded_bytes(emission, 2048)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or(serde_json::Value::Null);
         }
         Event::Goal { fact } => {
-            value["fact"] = crate::runtime_client::checkpoint::bounded_bytes(fact, 2048)
+            value["fact"] = crate::observation::bounded::bounded_bytes(fact, 2048)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or(serde_json::Value::Null);
         }

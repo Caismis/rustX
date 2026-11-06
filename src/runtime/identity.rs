@@ -181,11 +181,32 @@ id_type! {
     /// Identifies one actual provider-neutral model request.
     ///
     /// A request identity is distinct from an attempt, turn, retry ordinal,
-    /// and Event Journal sequence. It is derived once from the immutable
-    /// [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
-    /// the durable correlation key for the Request Snapshot and its
-    /// request-start fact.
+    /// and Event Journal sequence. Primary requests derive the `request:`
+    /// namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+    /// Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
+    /// [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
+    /// request. Identity alone grants no execution permission.
     RequestId
+}
+
+uuid_id_type! {
+    /// Identifies one logical auxiliary model call across its physical requests.
+    /// Identity alone grants no execution permission.
+    AuxiliaryCallId, "aux_"
+}
+
+impl RequestId {
+    /// Allocates the identity of one actual auxiliary model request.
+    ///
+    /// # Errors
+    /// Rejects a generator result outside the version-7 RFC variant.
+    pub fn generate_auxiliary(generator: &dyn UuidV7Generator) -> Result<Self, String> {
+        let uuid = generator.next_uuid();
+        if !is_uuid_v7(uuid) {
+            return Err("expected UUIDv7 auxiliary request identity".into());
+        }
+        Ok(Self::new(format!("req_{uuid}")))
+    }
 }
 
 id_type! {
@@ -730,10 +751,69 @@ mod tests {
     }
 
     use super::{
-        AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId,
-        EventId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest, SkillId,
-        SkillVersionId, SubagentId, ToolCallId, ToolExecutionId, ToolId, TurnId,
+        AgentId, AgentVersionId, ArtifactId, AttemptId, AuxiliaryCallId, CapabilityRevision,
+        ConversationId, EventId, McpServerId, MessageId, NodeEnvironmentDigest,
+        PythonEnvironmentDigest, RequestId, SkillId, SkillVersionId, SubagentId, ToolCallId,
+        ToolExecutionId, ToolId, TurnId, UuidV7Generator,
     };
+
+    #[test]
+    fn auxiliary_call_ids_require_their_canonical_uuid_v7_domain() {
+        let canonical = "aux_36524fd8-f674-7fc2-8125-06d01fee0e18";
+        assert_eq!(
+            AuxiliaryCallId::parse(canonical).unwrap().as_str(),
+            canonical
+        );
+        for invalid in [
+            "req_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            "aux_36524fd8-f674-4fc2-8125-06d01fee0e18",
+            "aux_36524fd8-f674-7fc2-c125-06d01fee0e18",
+            "aux_36524FD8-F674-7FC2-8125-06D01FEE0E18",
+            "aux_36524fd8f6747fc2812506d01fee0e18",
+        ] {
+            assert!(AuxiliaryCallId::parse(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[derive(Debug)]
+    struct FixedUuid(uuid::Uuid);
+
+    impl UuidV7Generator for FixedUuid {
+        fn next_uuid(&self) -> uuid::Uuid {
+            self.0
+        }
+    }
+
+    #[test]
+    fn auxiliary_request_ids_use_a_distinct_uuid_domain() {
+        let generator =
+            FixedUuid(uuid::Uuid::parse_str("36524fd8-f674-7fc2-8125-06d01fee0e18").unwrap());
+        let request_id = RequestId::generate_auxiliary(&generator).unwrap();
+        assert_eq!(
+            request_id.as_str(),
+            "req_36524fd8-f674-7fc2-8125-06d01fee0e18"
+        );
+        let primary = crate::model::snapshot::RequestIdentity {
+            attempt_id: AttemptId::new("attempt-1"),
+            turn: TurnId::new("turn-1"),
+            retry_number: 0,
+        }
+        .request_id();
+        assert_eq!(primary.as_str(), "request:9:attempt-1:6:turn-1:0");
+        assert_ne!(request_id, primary);
+        assert!(AuxiliaryCallId::parse(request_id.into_string()).is_err());
+    }
+
+    #[test]
+    fn auxiliary_request_ids_reject_invalid_generator_results() {
+        for invalid in [
+            "36524fd8-f674-4fc2-8125-06d01fee0e18",
+            "36524fd8-f674-7fc2-c125-06d01fee0e18",
+        ] {
+            let generator = FixedUuid(uuid::Uuid::parse_str(invalid).unwrap());
+            assert!(RequestId::generate_auxiliary(&generator).is_err());
+        }
+    }
 
     /// Strong identifiers serialize as plain strings, not as structs.
     #[test]

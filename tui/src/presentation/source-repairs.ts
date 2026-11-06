@@ -3,8 +3,7 @@
  *
  * The App Server owns repair: classification, candidate validation, backup,
  * publication and the receipt itself. This module only words those bounded,
- * redacted receipts for the terminal, orders native observations of one
- * source by their native repair-ledger sequence, and remembers which receipts
+ * redacted receipts for the terminal and remembers which receipts
  * were announced by the App Server authority and native receipt identity, so
  * a reconnect, a repeated read, or the same receipt from both a notification
  * and a read never announces one repair twice. A receipt id names one native
@@ -22,58 +21,12 @@ import type {
   SourceTarget,
 } from "../protocol/app-server.ts";
 import { sanitizeField } from "../sanitize.ts";
+import type { SourceRepairLevel } from "../../../protocol/app-server/source-repair.ts";
 
-/**
- * One native observation of a source's latest repair receipt, or of none, at
- * the native repair-ledger `sequence` it is current at: the `sequence` of a
- * `configuration/sourceRepairChanged`, or the `repair_sequence` of a
- * `configuration/sourcesRead`. Within one App Server authority the higher
- * sequence is the newer observation of a source, whichever carried it.
- * Receipt ids identify content, never time, and never order observations.
- */
-export interface SourceRepairObservation {
-  target: SourceTarget;
-  receipt: ConfigRepairReceipt | undefined;
-  sequence: string;
-}
-
-/** Workspaces whose repair observations a client keeps: as many as the
- * native repair ledger retains (`MAX_LEDGER_WORKSPACES`). The User source has
- * its own slot beside them. */
-export const SOURCE_REPAIR_WORKSPACES = 64;
-
-/**
- * The one client retention policy for per-source repair state, applied by
- * each owner to its own map — the client to notices buffered before its first
- * subscriber, the host to its connection's observations, the status line to
- * what it presents: `value` becomes `key`'s entry and its most recently
- * observed one; beyond `SOURCE_REPAIR_WORKSPACES` Workspaces the least
- * recently observed Workspace is forgotten, whether or not the User has an
- * entry, and the User never is. Returns the forgotten entry, whose owner
- * retires whatever it held for that source.
- */
-export function retainSource<V>(sources: Map<string, V>, key: string, value: V): V | undefined {
-  sources.delete(key);
-  sources.set(key, value);
-  if (sources.size - (sources.has("user") ? 1 : 0) <= SOURCE_REPAIR_WORKSPACES) return undefined;
-  for (const [source, entry] of sources) {
-    if (source === "user") continue;
-    sources.delete(source);
-    return entry;
-  }
-  return undefined;
-}
-
-/** Whether observation sequence `a` is older than `b`. Both are exact
- * decimal ledger sequences of one App Server authority. */
-export function olderSequence(a: string, b: string): boolean {
-  return BigInt(a) < BigInt(b);
-}
-
-/** The stable presentation key of one source target. */
-export function sourceKey(target: SourceTarget): string {
-  return target.kind === "user" ? "user" : `workspace:${target.directory}`;
-}
+/** One native observation of a source's latest repair receipt, or of none;
+ * ordered, ambiguity-checked and retained by the shared protocol rules in
+ * `protocol/app-server/source-repair.ts`. */
+export type SourceRepairObservation = SourceRepairLevel;
 
 function sourceLabel(target: SourceTarget): string {
   return target.kind === "user" ? "User" : "Workspace";

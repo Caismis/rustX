@@ -45,6 +45,10 @@ counted as such:
   The separate `t08_t15_t20_layout_construction_buffers_tokens_and_scopes_preview_reader`
   unit test proves exact preview bytes and bounded construction-write / scoped
   reader counts; its correctness result does not depend on elapsed time.
+  The ignored `measure_native_scheduler_reconciliation` records native historical
+  store measurements. Its explicit `RUSTX_SCHEDULER_BENCH_RELEASE_GATE` mode also
+  checks predeclared supported-host resource/latency budgets; ordinary correctness
+  lanes never select it. See [the Scheduler performance gate](../docs/issue-85-scheduler-performance.md).
 - **Fixture generator** — `#[ignore]`d `regenerate_committed_fixture_corpus`
   rewrites a committed corpus; the `generate_schemas` and
   `generate_app_server_protocol` examples regenerate checked-in artifacts
@@ -279,8 +283,18 @@ meaningful domain/boundary/dependency topology:
 | `subagent` | the child-process boundary | named definition admission/resolution, frozen-policy handshake through a real launched child, end-to-end parent/child composition under a real App Server parent, the running child's internal read-only inspection socket |
 | `tools` | OS/tooling boundary | Bash supervision, Read/Write/Edit/Grep/Glob, Skills, MCP config/runtime, uv backend, managed `FastMCP` materialization |
 | `cfg3_catalog` | real configuration source files | CFG3 source resolution, shadowing and replacement, native writers' commit races and stale-write refusal, frozen model/provider invocation identity |
-| `cfg3_managed_output` | managed Tool output storage | execution-identity locators, collision refusal without overwrite, spill reconstruction |
+| `cfg3_managed_output` | durable identity domains | typed Session/Node/Conversation/execution identity validation and serialization; output locators are independent of execution IDs |
 | `contracts` | none (pure) | serialization fixture round-trips, committed configuration examples |
+
+The stdio MCP canonical-executor test holds the fixture's `mutate` response
+behind a parent-created marker until the real `ProgressReporter` has observed
+its fractional progress. rmcp schedules notification handlers independently of
+response delivery: receiving a result does not prove its preceding wire
+notification reached rustX before the caller released progress ownership
+([MCP liveness invariant](../docs/invariants.md#mcp-liveness-connection-generations-and-recovery-issue-205)).
+The marker establishes ordering; its polling interval does not. The existing
+progress deadline, exact fractional values, result, invalidation and physical
+cancellation assertions remain in force.
 
 ## Verification profiles
 
@@ -297,8 +311,11 @@ suites run, never in what a suite asserts:
 The `plan` job (`.github/scripts/verification.py`) owns selection. It reads
 the pull request's changed files — each path with GitHub's change status and,
 for a rename or copy, its original path — and decides the profile, the risk, the
-affected surfaces (`rust`, `protocol`, `web`, `tui`, `dev`) and which jobs
-and affected steps run. Every gated job runs only when the plan's
+affected surfaces (`rust`, `protocol`, `web`, `tui`, `dev`, `documentation`)
+and which jobs and affected steps run. Documentation is low risk but not
+inert: the `contracts` target reads the top-level, `docs/`, Web and TUI
+Markdown, so in FAST such a change selects the `documentation-contracts`
+job, which runs that target alone (FULL runs it in `rust-contracts`). Every gated job runs only when the plan's
 `run[<job id>]` is true, and the script's tests check that `ci.yml` gates
 each job exactly that way.
 
@@ -475,7 +492,8 @@ summarizes them and the lane check below verifies them against Cargo:
   deliberate tradeoff of the FAST profile.
 - **tui** — independent Node/pnpm lane. `pnpm test` includes the real-child
   integration suite, which drives the actual `rustx` binary (built by
-  `cargo build --bin rustx` in that lane) over the real stdio and WebSocket
+  `cargo build --bins` in that lane, including the `interactive-supervisor`
+  sibling required for real stdio MCP) over the real stdio and WebSocket
   transports against the provider emulator, with
   `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. The lane is not an owner of Rust
   semantic validation.
@@ -516,9 +534,10 @@ summarizes them and the lane check below verifies them against Cargo:
   inputs (`RUSTX_BROWSER_PREPARED=1` selects that path instead of
   `cargo build`) and `provenance.ts --artifact` re-checks the installed
   bundle. `browser-report` ("Browser acceptance coverage", the one browser
-  verdict) merges the shards' blob reports into one HTML report with every
-  trace and screenshot, and `browser-shards.ts verify` passes only when every
-  inventoried test of the selection ran exactly once in exactly one shard,
+  verdict) installs only the locked development dependencies with lifecycle
+  scripts disabled. It merges the shards' blob reports into one HTML report
+  with every trace and screenshot. `browser-shards.ts verify` passes only when
+  every inventoried test of the selection ran exactly once in exactly one shard,
   against the inventory's commit and prepared inputs, and passed or skipped
   itself; a missing or empty shard, a duplicate, an unexecuted test, a FULL
   inventory smaller than discovery, a FAST selection without a smoke test or
@@ -566,7 +585,7 @@ fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
 second copy of it. Each Rust test lane ends with
-`cargo run --all-features --example check_test_lanes -- --job <job id>`, which reads the
+`cargo run --profile test --all-features --example check_test_lanes -- --job <job id>`, which reads the
 workflow's executing `cargo test` steps and asks libtest, through `--list`,
 what each one selects — so filters, `--skip`, features and `cfg` are
 Cargo's and libtest's own semantics. Every test job declares its profiles
@@ -652,13 +671,33 @@ cancelled run is diagnostic evidence, not a timing baseline.
 
 ## Prerequisites
 
+Linux CI installs its existing native and Office prerequisites through
+`.github/scripts/install_ubuntu_packages.py`. GitHub's Ubuntu image already
+uses `/etc/apt/apt-mirrors.txt`; the installer selects the official HTTPS
+Ubuntu archive directly, retaining the image's suites, components and signing
+keyrings. Each APT connection/read has a 30-second idle timeout and each file
+has at most two retries. An index or package failure fails the job; stale
+indexes never stand in for a failed refresh. This avoids spending the test
+budget waiting for Azure mirror failover (37 min 43 s in run 39780556818,
+attempt 1). Package requirements, sandbox admission, test selection, assertions
+and job/test deadlines are unchanged. The installer is covered by the existing
+`.github/scripts/test_*.py` checks that execute on every CI run.
+
 Mandatory prerequisites fail closed; only explicitly opt-in tooling may
 skip:
 
 - **Real executables.** Tests that exec `bash-supervisor`,
-  `interactive-supervisor` or `rustx` need `cargo build --bins` first;
+  `interactive-supervisor`, `workflow-renderer` or `rustx` need `cargo build --bins` first;
   integration targets receive `CARGO_BIN_EXE_*` from Cargo. A missing
   executable fails the spawn.
+- **A verified case-insensitive filesystem on macOS.** The `process` target's
+  reserved-configuration-name startup regression probes the temporary
+  volume using file identity. If it is case sensitive, the fixture uses
+  system `hdiutil` to create and mount an isolated case-insensitive APFS
+  image. It verifies that the literal lowercase metadata path resolves to
+  each physically authored alias before testing rejection; unavailable
+  fixtures fail rather than skip. Both macOS external-boundary lanes execute
+  this test, including the no-runtime-storage and unchanged-document checks.
 - **uv and Python 3.12** (the provider emulator and managed `FastMCP`
   children). Every uv-dependent Rust test resolves uv through
   `common::provider_emulator::required_uv`: a local checkout without uv
@@ -760,6 +799,12 @@ For race/cancellation/order tests — in *both* in-crate trees:
 - wall-clock timeouts are outer liveness guards only — their expiry is a
   harness failure, never a verdict.
 
+Provider request arrival does not prove that the runtime has consumed a
+stream item. Before choosing a quiet observation baseline or injecting a
+source fault, synchronize with the scripted producer's relevant boundary,
+then wait for the projection to settle. Projection settlement drains current
+input; it cannot fence an event the producer has not emitted yet.
+
 Boundary suites are not exempt: the process-death harness freezes the child
 at instrumented durable transitions or a control rendezvous before the
 kill; it never infers a race from timing.
@@ -819,8 +864,8 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
 
 # Lane coverage for one CI job on its own platform, or every target here
 # (--all-features reuses the library the test targets already compiled):
-cargo run --all-features --example check_test_lanes -- --job rust-contracts
-cargo run --all-features --example check_test_lanes
+cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
+cargo run --profile test --all-features --example check_test_lanes
 
 # Everything, the safety net (it does not prove the CI lanes' selection):
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
@@ -834,3 +879,21 @@ cargo test --lib --all-features scripted_suites::
 # The App Server contracts under the manager's private test module:
 cargo test --lib --all-features local_runtime::session_runtime_manager::tests::
 ```
+
+## Visual Workflow authoring
+
+`web-console/test/e2e/workflow-visual.spec.ts` drives create, typed bindings,
+structured output, concurrent next steps, real Start reconnection, nested Loop
+copy/paste and one-step layout history against the real App Server and
+Product Host. It records a reproducible trace and full-shell PNG evidence;
+its 256-node fixture records render/layout durations against declared budgets.
+`workflow-editor.spec.ts` retains scope/join/unknown-contract, conflict, keyboard
+and number-fidelity browser regressions. The full browser inventory discovers
+both specs automatically; targeted runs do not replace the FULL profile.
+
+`tests/fixtures/workflow/visual-authoring.json` contains a real Start, concurrent
+one-round Loops, their join, a counting Loop with a Variable Assigner and author metadata. `runtime::workflow::tests::editor_authored_nested_file_executes_keyed_results_and_both_loop_exits`
+executes that shared fixture using native runtime owners and checks actual
+concurrent graph/Loop values and author-metadata isolation. It is a source-module unit
+test, not another runtime API. Existing native file-authoring tests own complete
+revision/CAS/digest and lost-ACK guarantees. See [the invariant/evidence map](../docs/workflow-visual-editor.md#verification).

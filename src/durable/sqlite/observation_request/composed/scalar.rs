@@ -5,8 +5,8 @@ use super::{
     Connection, ConversationStoreError, Fragment, add, bounded, fragments, index, params, storage,
 };
 use crate::model::RequestSnapshot;
+use crate::observation::trace::frozen;
 use crate::runtime::read_layout::SeekableObservationSource;
-use crate::runtime_client::trace::frozen;
 use rusqlite::OptionalExtension as _;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
@@ -43,7 +43,7 @@ fn load(
 ) -> Result<Option<Stable>, ConversationStoreError> {
     type Row = (Option<Vec<u8>>, Option<Vec<u8>>);
     let row: Option<Row> = connection.prepare_cached("SELECT CASE WHEN typeof(metadata)='blob' AND length(metadata)<=16384 THEN metadata END,CASE WHEN typeof(checksum)='blob' AND length(checksum)=32 THEN checksum END FROM request_source_scalars WHERE identity=?1")
-        .map_err(|error| storage(error.to_string()))?.query_row([identity.as_slice()], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([identity.as_slice()], |row| Ok((row.get(0)?, row.get(1)?))).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let (bytes, digest) = match row {
         None => return Ok(None),
         Some((Some(bytes), Some(digest))) => (bytes, digest),
@@ -61,7 +61,7 @@ fn load(
         || stable.messages_start >= stable.messages_end
         || stable.messages_end - stable.messages_start != 2
         || stable.messages_end > stable.fragment.length
-        || stable.children != 24
+        || stable.children != frozen::REQUEST_FIELD_COUNT
     {
         return Err(storage("stable scalar identity or geometry differs"));
     }
@@ -99,7 +99,10 @@ fn capture_geometry(
     else {
         return Err(storage("stable scalar geometry unavailable"));
     };
-    if start != expected_start || children != 24 || messages_end - messages_start != 2 {
+    if start != expected_start
+        || children != frozen::REQUEST_FIELD_COUNT
+        || messages_end - messages_start != 2
+    {
         return Err(storage("stable scalar prefix or messages geometry differs"));
     }
     Ok((fragment, messages_start, messages_end, children))
@@ -189,7 +192,7 @@ fn capture_stable(
             "INSERT INTO request_source_scalars(identity,metadata,checksum) VALUES(?1,?2,?3)",
             params![identity.as_slice(), bytes, checksum(&bytes).as_slice()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok((stable, tail))
 }
 pub(super) fn capture(

@@ -7,7 +7,7 @@ import { AttachmentCard } from '../src/presentation/attachments/AttachmentCard';
 import { Server } from './fixture';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
-it.each([false, true])('managed Artifact Download has an explicit original-source intent before and after inline loading (image=%s)', async image => {
+it.each([false, true])('managed artifacts use card/thumbnail preview and an independent original-source download (image=%s)', async image => {
   const server = new Server(); await server.attached('A');
   server.held.add('artifact/read');
   const create = vi.fn(() => 'blob:inline'), revoke = vi.fn();
@@ -21,16 +21,28 @@ it.each([false, true])('managed Artifact Download has an explicit original-sourc
   fireEvent.click(ui.getByRole('button', { name: 'Download 报告 original' }));
   expect(download).toHaveBeenLastCalledWith(artifact); expect(openPreview).not.toHaveBeenCalled();
   expect(server.requests).toHaveLength(before); expect(create).not.toHaveBeenCalled();
-  fireEvent.click(ui.getByRole('button', { name: 'Load attachment' }));
-  const request = await server.waitFor('artifact/read', 1);
-  await act(async () => server.socket.success(request, { type: 'artifact_bytes', data: btoa('original bytes') }));
-  fireEvent.click(ui.getByRole('button', { name: 'Download 报告 original' }));
-  expect(download).toHaveBeenCalledTimes(2); expect(openPreview).not.toHaveBeenCalled(); expect(ui.queryByRole('link')).toBeNull();
+  expect(ui.queryByText('Load attachment')).toBeNull();
+  expect(ui.queryByText(`Preview ${artifact.name}`)).toBeNull();
+  fireEvent.click(ui.getByRole('button', { name: `Preview ${artifact.name}` }));
+  expect(openPreview).toHaveBeenCalledExactlyOnceWith(artifact);
+  expect(server.requests).toHaveLength(before);
   if (image) {
+    fireEvent.click(ui.getByRole('button', { name: /^Load attachment / }));
+    const request = await server.waitFor('artifact/read', 1);
+    await act(async () => server.socket.success(request, { type: 'artifact_bytes', data: btoa('original bytes') }));
     fireEvent.click(ui.getByRole('button', { name: 'Open image 报告 original' }));
-    expect(ui.getByRole('dialog').querySelector('a[download]')).toBeNull();
+    expect(openPreview).toHaveBeenCalledTimes(2);
+  } else {
+    expect(ui.queryByRole('button', { name: /Load attachment/ })).toBeNull();
+    expect(server.requests).toHaveLength(before);
   }
-  ui.unmount(); inline.dispose(); server.client.disconnect(); expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:inline');
+  expect(openPreview).toHaveBeenLastCalledWith(artifact);
+  fireEvent.click(ui.getByRole('button', { name: 'Download 报告 original' }));
+  expect(download).toHaveBeenCalledTimes(2); expect(ui.queryByRole('link')).toBeNull();
+  expect(ui.queryByRole('dialog')).toBeNull();
+  ui.unmount(); inline.dispose(); server.client.disconnect();
+  if (image) expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:inline');
+  else expect(revoke).not.toHaveBeenCalled();
 });
 
 it('local user-attachment bytes keep the draft owner download URL without a native preview intent', () => {

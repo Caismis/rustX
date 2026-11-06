@@ -158,6 +158,15 @@ impl AskUserInput {
                      {MIN_QUESTIONNAIRE_OPTIONS}–{MAX_QUESTIONNAIRE_OPTIONS} authored options. Adjust the option count."
                 ));
             }
+            if let Some(option) = question
+                .options
+                .iter()
+                .position(|option| option.description.is_empty())
+            {
+                return Err(format!(
+                    "questions[{index}].options[{option}].description must contain non-whitespace text. Supply meaningful text."
+                ));
+            }
         }
         Ok(())
     }
@@ -287,7 +296,6 @@ impl ToolExecutor for AskUserExecutor {
                     .request_questionnaire(QuestionnaireFacts {
                         invocation_id: invocation.id,
                         requester: ask_user_requester(),
-                        turn: 0,
                         questionnaire: specification.clone(),
                     })
                     .await;

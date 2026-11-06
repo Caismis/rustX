@@ -98,9 +98,9 @@ async fn plain_text_normalizes() {
         ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
-                input_tokens: 10,
-                output_tokens: 5,
-                total_tokens: 15,
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                total_tokens: Some(15),
                 details: Some(UsageDetails {
                     reasoning_tokens: Some(1),
                     cached_input_tokens: Some(4),

@@ -1,0 +1,229 @@
+use super::*;
+use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
+use serde_json::json;
+
+fn file() -> WorkflowFileDocument {
+    let mut document: WorkflowFileDocument = serde_json::from_str(include_str!(
+        "../../tests/fixtures/workflow/visual-authoring.json"
+    ))
+    .unwrap();
+    document.editor = None;
+    document
+}
+fn annotated() -> WorkflowFileDocument {
+    let mut document = file();
+    document.editor=Some(serde_json::from_value(json!({
+        "nodes":[
+            {"address":{"block":[],"node":"repeat"},"title":"Review loop","description":"Author-only guidance","position":{"x":0.5,"y":-40.0},"dimensions":{"width":900.0,"height":600.0}},
+            {"address":{"block":[{"node":"repeat"}],"node":"bump"},"position":{"x":200.0,"y":300.0}},
+            {"address":{"block":[],"node":"start"},"position":{"x":-200.0,"y":0.0},"title":"User input","description":"Where the user uploads files"}
+        ],
+        "notes":[{"id":"note_1","block":[{"node":"repeat"}],"text":"# Review\n\n**Markdown** and 中文 🦀\n","theme":"blue","position":{"x":-100.0,"y":200.0},"dimensions":{"width":240.0,"height":180.0}}],
+        "orders":[{"target":{"kind":"block_input","block":[],"path":[]},"fields":["message"]}]
+    })).unwrap());
+    document
+}
+#[test]
+fn complete_file_round_trip_preserves_nested_metadata_markdown_order_and_numbers() {
+    let document = annotated();
+    let bytes = document.canonical_bytes().unwrap();
+    assert_eq!(document, serde_yaml::from_slice(&bytes).unwrap());
+    assert_eq!(
+        bytes,
+        serde_yaml::from_slice::<WorkflowFileDocument>(&bytes)
+            .unwrap()
+            .canonical_bytes()
+            .unwrap()
+    );
+    let mut value = serde_json::to_value(&document).unwrap();
+    value["block"]["input"]["properties"]["numbers"] =
+        json!({"type":"object","default":{"large":9_007_199_254_740_993_u64,"fraction":0.25}});
+    let numbers: WorkflowFileDocument = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        numbers,
+        serde_yaml::from_slice(&numbers.canonical_bytes().unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn presentation_changes_source_bytes_but_not_program_digest_graph_or_model_contracts() {
+    let original = file();
+    let presented = annotated();
+    let id = WorkflowId::parse("review").unwrap();
+    let frozen = WorkflowProgram::compile(id.clone(), original.definition.clone()).unwrap();
+    let program = WorkflowProgram::compile(id, presented.definition.clone()).unwrap();
+    assert_ne!(
+        original.canonical_bytes().unwrap(),
+        presented.canonical_bytes().unwrap()
+    );
+    assert_eq!(frozen.tool_identity(), program.tool_identity());
+    assert_eq!(frozen.input_schema(), program.input_schema());
+    assert_eq!(
+        crate::tools::native::workflow_definition(&frozen),
+        crate::tools::native::workflow_definition(&program)
+    );
+    assert_eq!(frozen.node_outputs(), program.node_outputs());
+    assert_eq!(frozen.inspect(), program.inspect());
+    assert!(
+        !serde_json::to_string(&program.inspect())
+            .unwrap()
+            .contains("Author-only")
+    );
+    let mut changed = presented;
+    changed.editor.as_mut().unwrap().notes[0].text = "Later note".into();
+    changed.definition.block.input["description"] = json!("Model-visible input contract");
+    let updated =
+        WorkflowProgram::compile(WorkflowId::parse("review").unwrap(), changed.definition).unwrap();
+    assert_ne!(frozen.tool_identity(), updated.tool_identity());
+    assert_eq!(
+        updated.input_schema()["description"],
+        "Model-visible input contract"
+    );
+    assert_eq!(
+        frozen.input_schema().get("description"),
+        None,
+        "admitted program stays frozen"
+    );
+}
+
+#[test]
+fn missing_metadata_is_optional_and_unknown_or_duplicate_fields_are_rejected() {
+    let document = file();
+    assert!(document.editor.is_none());
+    let mut value = serde_json::to_value(&document).unwrap();
+    value["unknown_execution_field"] = json!(true);
+    assert!(serde_json::from_value::<WorkflowFileDocument>(value).is_err());
+    let mut text = String::from_utf8(document.canonical_bytes().unwrap()).unwrap();
+    text.push_str("editor: {}\neditor: {}\n");
+    assert!(serde_yaml::from_str::<WorkflowFileDocument>(&text).is_err());
+    assert_eq!(document.timeout_ms, 600_000);
+}
+
+#[test]
+fn metadata_bounds_and_stale_references_have_distinct_non_destructive_outcomes() {
+    let mut document = annotated();
+    document.editor.as_mut().unwrap().nodes[0].address.node = "deleted".into();
+    let before = document.clone();
+    assert!(document.validate().is_ok());
+    assert!(
+        document
+            .presentation_diagnostics()
+            .iter()
+            .any(|d| d.category == "presentation_reference")
+    );
+    assert_eq!(document, before);
+    assert!(document.canonical_bytes().is_ok());
+    for bad in [f64::NAN, f64::INFINITY, 1_000_001.0] {
+        let mut invalid = before.clone();
+        invalid.editor.as_mut().unwrap().notes[0].position.x = bad;
+        assert_eq!(invalid.validate().unwrap_err().category, "presentation");
+    }
+    let mut invalid = before.clone();
+    invalid.editor.as_mut().unwrap().notes[0].text = "界".repeat(22_000);
+    assert!(invalid.validate().is_err(), "UTF-8 byte bound");
+    let mut invalid = before.clone();
+    let note = invalid.editor.as_ref().unwrap().notes[0].clone();
+    invalid.editor.as_mut().unwrap().notes.push(note);
+    assert!(
+        invalid.validate().is_err(),
+        "stable note identities are unique"
+    );
+    let mut invalid = before.clone();
+    invalid.editor.as_mut().unwrap().notes[0].dimensions.width = 0.0;
+    assert!(invalid.validate().is_err());
+    let mut invalid = before.clone();
+    invalid.editor.as_mut().unwrap().nodes[0].title = Some("界".repeat(86));
+    assert!(invalid.validate().is_err(), "Start title UTF-8 byte bound");
+}
+
+#[test]
+fn annotations_are_bounded_and_do_not_change_structural_compatibility() {
+    use crate::runtime::workflow::authoring::analyze;
+    let mut document = file();
+    document.block.input["description"] = json!("Input description");
+    document.block.input["properties"]["message"]["description"] = json!("Message to echo");
+    WorkflowProgram::compile(
+        WorkflowId::parse("review").unwrap(),
+        document.definition.clone(),
+    )
+    .unwrap();
+    assert!(
+        analyze(
+            &document.definition,
+            None,
+            &std::collections::BTreeSet::default()
+        )
+        .is_ok()
+    );
+    document.block.input["description"] = json!("界".repeat(1366));
+    assert!(
+        WorkflowProgram::compile(WorkflowId::parse("review").unwrap(), document.definition)
+            .is_err()
+    );
+}
+
+fn sized_code_document(target: usize) -> WorkflowFileDocument {
+    let mut document: WorkflowFileDocument = serde_json::from_value(json!({
+        "description": "Large authored Workflow",
+        "block": {"input":{"type":"object","properties":{},"additionalProperties":false},
+            "nodes": {"start":{"type":"start"},
+                "code":{"type":"code","code_language":"python3","variables":{},"code":format!("def main(): return {{'result': 1}} #{}", "\\".repeat(1024)), "outputs":{"result":"number"}},
+                "done":{"type":"return","outputs":[]}},
+            "edges":[{"from":"start","to":"code"},{"from":"code","to":"done"}]}
+    })).unwrap();
+    let base = serde_json::to_vec(&document).unwrap().len();
+    let crate::runtime::workflow::WorkflowNodeDefinition::Code { code, .. } =
+        document.definition.block.nodes.get_mut("code").unwrap()
+    else {
+        unreachable!()
+    };
+    code.push_str(&"x".repeat(target - base));
+    assert_eq!(serde_json::to_vec(&document).unwrap().len(), target);
+    document
+}
+
+#[test]
+fn issue527_expanded_document_exact_byte_bound_and_canonical_round_trip() {
+    for size in [768 * 1024 + 1, 1024 * 1024 + 1, MAX_WORKFLOW_DOCUMENT_BYTES] {
+        let document = sized_code_document(size);
+        document.validate().unwrap();
+        WorkflowProgram::compile(
+            WorkflowId::parse("large").unwrap(),
+            document.definition.clone(),
+        )
+        .unwrap();
+        let bytes = document.canonical_bytes().unwrap();
+        assert!(bytes.len() <= MAX_WORKFLOW_FILE_BYTES);
+        assert_eq!(
+            serde_yaml::from_slice::<WorkflowFileDocument>(&bytes).unwrap(),
+            document
+        );
+    }
+    assert!(
+        sized_code_document(MAX_WORKFLOW_DOCUMENT_BYTES + 1)
+            .validate()
+            .unwrap_err()
+            .reason
+            .contains("expanded Workflow document exceeds 16 MiB")
+    );
+}
+
+#[test]
+fn issue527_unicode_and_json_escaping_measure_encoded_bytes_independently() {
+    let mut document = file();
+    document.description = "中文 🦀 \"\\\n\t".into();
+    assert_eq!(
+        serde_yaml::from_slice::<WorkflowFileDocument>(&document.canonical_bytes().unwrap())
+            .unwrap(),
+        document
+    );
+    let mut document = sized_code_document(1024 * 1024);
+    let crate::runtime::workflow::WorkflowNodeDefinition::Code { code, .. } =
+        document.definition.block.nodes.get_mut("code").unwrap()
+    else {
+        unreachable!()
+    };
+    *code = "\u{1}".repeat(3 * 1024 * 1024);
+    assert!(serde_yaml::to_string(&document).unwrap().len() < MAX_WORKFLOW_FILE_BYTES);
+    assert!(document.validate().unwrap_err().reason.contains("expanded"));
+}

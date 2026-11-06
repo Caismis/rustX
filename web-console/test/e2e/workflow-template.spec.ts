@@ -1,0 +1,59 @@
+import { test,expect } from '@playwright/test';
+import { mkdirSync,readFileSync,writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parse } from 'yaml';
+import { dataNodesDocument } from '../workflow-data-document';
+import { viewId } from '../../src/app/workflows/ui/editor/selection';
+import { startDogfood } from './dogfood-server';
+import { connectRemote,openEmptySession,choose } from './shell-actions';
+import { routeWorkspaceHost } from './workspace-host';
+
+for(const width of [1440,390])test.describe(`Template panel ${width}`,()=>{
+  test.use({viewport:{width,height:1000},hasTouch:width===390});
+  test('Jinja bindings, insertion, disclosure, expansion and persistence',async({page})=>{
+    page.setDefaultTimeout(15000);const fixture=await startDogfood('web_console_dogfood'),errors:string[]=[];
+    page.on('pageerror',error=>errors.push(error.message));page.on('console',message=>{if(message.type()==='error')errors.push(message.text());});
+    try {
+      const directory=join(fixture.workspaceA,'.agents/workflows');mkdirSync(directory,{recursive:true});const file=join(directory,'template.yaml');
+      const workflow=dataNodesDocument();workflow.block.nodes.left={type:'template',variables:{arg1:{type:'reference',path:['args','query']}},template:'{{ arg1 }}'};writeFileSync(file,JSON.stringify(workflow));
+      await page.context().grantPermissions(['clipboard-read','clipboard-write']);
+      await page.addInitScript(dark=>localStorage.setItem('rustx-appearance-v1',dark?'dark':'light'),width===390);
+      await routeWorkspaceHost(page,fixture);await page.goto('/');await connectRemote(page,fixture.endpoint,fixture.token);await openEmptySession(page,fixture,'Workspace A');
+      await page.getByRole('navigation',{name:'Global panels'}).getByRole('button',{name:'Workflows',exact:true}).click();await page.getByRole('button',{name:'template',exact:true}).click();
+      const card=page.locator(`.react-flow__node[data-id='${viewId([],'node','left')}']`);await card.focus();await card.press('Enter');
+      await page.getByRole('button',{name:'Settings',exact:true}).click();await choose(page.getByRole('dialog',{name:'Settings',exact:true}),'Language','中文');await page.getByRole('button',{name:'关闭设置',exact:true}).click();
+      const panel=page.getByRole('complementary',{name:'检查器',exact:true}),code=panel.getByRole('textbox',{name:'模板代码',exact:true}),editor=panel.getByRole('region',{name:'模板代码',exact:true});
+      await expect(panel.getByText('视觉',{exact:true})).toHaveCount(0);await expect(panel.getByRole('button',{name:/AI|生成提示词/})).toHaveCount(0);
+      await expect(editor.getByRole('link',{name:'只支持 Jinja2'})).toHaveAttribute('href','https://jinja.palletsprojects.com/en/3.1.x/templates/');
+      const names=panel.getByRole('textbox',{name:'变量名',exact:true});await names.fill('question');await names.press('Enter');await expect(code.locator('.cm-line')).toHaveText(['{{ question }}']);
+      await panel.getByRole('button',{name:'添加输入变量',exact:true}).click();await expect(names).toHaveCount(2);
+      await expect(panel.getByRole('button',{name:'选择变量',exact:true}).nth(1)).toContainText('设置变量值');
+      const inputBox=(await names.first().boundingBox())!,referenceBox=(await panel.getByRole('button',{name:'选择变量',exact:true}).first().boundingBox())!;
+      expect(inputBox.x+inputBox.width).toBeLessThanOrEqual(referenceBox.x);expect(Math.abs(inputBox.height-referenceBox.height)).toBeLessThan(1);
+      await panel.getByRole('button',{name:'删除输入 arg1',exact:true}).click();
+      await code.fill('Result: ');await code.press('End');await code.press('/');
+      const picker=page.getByRole('dialog',{name:'选择变量',exact:true});await expect(picker).toBeVisible();
+      const popup=(await picker.boundingBox())!;expect(popup.x).toBeGreaterThanOrEqual(0);expect(popup.x+popup.width).toBeLessThanOrEqual(width);expect(popup.y+popup.height).toBeLessThanOrEqual(1000);
+      await picker.getByRole('button',{name:/^args \/ query /}).click();await expect(code.locator('.cm-line')).toHaveText(['Result: {{ question }}']);await expect(names).toHaveCount(1);await expect(code).toBeFocused();
+      await code.press('End');await code.press('{');await picker.getByRole('button',{name:/^args \/ priority /}).click();
+      await expect(code.locator('.cm-line')).toHaveText(['Result: {{ question }}{{ priority }}']);await expect(names).toHaveCount(2);
+      await page.getByRole('button',{name:'撤销',exact:true}).click();await expect(names).toHaveCount(1);await expect(code.locator('.cm-line')).toHaveText(['Result: {{ question }}{']);
+      await page.getByRole('button',{name:'重做',exact:true}).click();await expect(names).toHaveCount(2);await expect(code.locator('.cm-line')).toHaveText(['Result: {{ question }}{{ priority }}']);
+      await names.nth(1).fill('importance');await names.nth(1).press('Enter');await expect(code).toContainText('{{ importance }}');
+      const source='{{ question.strip() | upper }} / {{ importance }}\n{% if question %}{{ question }}{% endif %}';await code.fill(source);await code.blur();
+      await expect(editor.locator('.cm-gutters')).toBeVisible();await expect(editor.locator('.tok-keyword').first()).toBeVisible();
+      await editor.getByRole('button',{name:'复制',exact:true}).click();await expect.poll(()=>page.evaluate(()=>navigator.clipboard.readText())).toBe(source);
+      await editor.getByRole('button',{name:'展开',exact:true}).click();await expect(editor).toHaveCSS('position','fixed');
+      const body=(await panel.locator('[data-workflow-inspector-body]').boundingBox())!,expanded=(await editor.boundingBox())!;expect(Math.abs(expanded.height-body.height)).toBeLessThan(2);
+      await code.click();await code.press('ControlOrMeta+End');await code.press('/');await expect(picker).toBeVisible();await page.keyboard.press('Escape');await expect(picker).toHaveCount(0);await expect(code).toBeFocused();await expect(editor).toHaveCSS('position','fixed');
+      await code.press('Escape');await expect(panel.locator('[data-template-expanded]')).toHaveCount(0);await code.fill(source);await code.blur();
+      const output=panel.getByRole('button',{name:'输出变量',exact:true});await expect(output).toHaveAttribute('aria-expanded','false');await output.click();await expect(panel.getByText('转换后的内容。',{exact:true})).toBeVisible();
+      await panel.locator('[data-workflow-inspector-body]').evaluate(element=>{element.scrollTop=0;});await panel.screenshot({path:`/tmp/rustx-template-${width}.png`});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+      const save=page.getByRole('button',{name:'保存文件',exact:true});await save.click();await expect(save).toBeDisabled({timeout:15000});
+      const saved=parse(readFileSync(file,'utf8'));expect(saved.block.nodes.left).toMatchObject({template:source,variables:{question:{type:'reference',path:['args','query']},importance:{type:'reference',path:['args','priority']}}});
+      await page.getByRole('button',{name:'返回工作流',exact:true}).first().click();await page.getByRole('button',{name:'template',exact:true}).click();await card.focus();await card.press('Enter');await expect(code.locator('.cm-line')).toHaveText(source.split('\n'));
+      expect(errors).toEqual([]);
+    }finally{await fixture.stop(false);}
+  });
+});

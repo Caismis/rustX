@@ -79,8 +79,7 @@ mkdir -p /tmp/rustx-dogfood-work
 # Use the built binary's absolute path for these commands.
 env HOME="$dogfood_home" rustx init --template openai-chat --provider fixture --model-id integration-model \
   --endpoint http://127.0.0.1:8765/v1 --credential-env RUSTX_DOGFOOD_KEY \
-  --context-window 128000 --max-output 4096 --tool-calls true --reasoning false \
-  --compat 'chat_reasoning_replay = "omit"'
+  --context-window 128000 --max-output 4096
 # From the repository root, through the canonical development owner:
 env HOME="$dogfood_home" pnpm --dir dev tui -- --workspace /tmp/rustx-dogfood-work \
   --runtime-root /tmp/rustx-dogfood-runtime
@@ -134,8 +133,8 @@ and authoritative state; never resubmit a mutation merely because its reply was 
 
 Edit the printed canonical TOML source after a runtime is loaded. Resync preserves
 that Session's adopted binding. **Rescan configuration files** ingests external
-changes; independently valid policy applies automatically and prepared context
-requires explicit adoption. Runtime reconstruction does not adopt pending context.
+changes; independently valid policy applies automatically and native commits
+prepared context at the Session's safe boundary, with no client adoption.
 To dogfood automatic idle residency, configure `[app_server] idle_grace_ms` before
 server startup, detach every view/controller of an idle Session, and inspect
 `server/diagnostics` until it reports unloaded. The catalog remains visible and a

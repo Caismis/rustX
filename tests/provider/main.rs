@@ -23,4 +23,5 @@ mod live;
 mod openai_chat;
 mod openai_responses;
 mod request_params;
+mod structured_output;
 mod transport;

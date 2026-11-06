@@ -2,8 +2,9 @@ import {applicationReceipt} from './fixture';
 import {readCut} from './fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v52';
-import { interactionKey, OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/app-server';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v73';
+import { interactionKey } from '../src/client/contracts';
+import { OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/errors';
 import { conversation } from '../src/bindings/projection';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { translator } from '../src/locale/translation';
@@ -11,6 +12,14 @@ import { capabilities, endpoint, interaction, Server, snapshot, TOKEN } from './
 const servers: Server[] = [];
 const server = () => { const value = new Server(); servers.push(value); return value; };
 afterEach(() => { for (const s of servers.splice(0)) s.client.disconnect(); vi.useRealTimers(); });
+/** Observe the exact publication; initialized transport readiness does not
+ * imply that a Session's independent restoration has settled. */
+function publication(s: Server, matches: () => boolean): Promise<void> {
+  if (matches()) return Promise.resolve();
+  return new Promise(resolve => {
+    const stop = s.client.subscribe(() => { if (matches()) { stop(); resolve(); } });
+  });
+}
 
 describe('native App Server connection', () => {
   it('T20 queues same-target Child reopen until the original Observe terminates while controls progress', async () => {
@@ -44,8 +53,8 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 52 } });
-    expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 73 } });
+    expect(JSON.stringify(s.client.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
     const s = server(); s.version = 28;
@@ -55,8 +64,8 @@ describe('native App Server connection', () => {
     const t = server(); t.capabilities = { ...capabilities, headless_interactions: false };
     await expect(t.connect()).rejects.toThrow('Incompatible');
   });
-  it('rejects the pre-message-window App Server before attachment', async () => {
-    const s = server(); s.version = 45;
+  it('rejects a v56 App Server before attachment or completed-source reads', async () => {
+    const s = server(); s.version = 56;
     await expect(s.connect()).rejects.toThrow('Incompatible');
     expect(s.client.getSnapshot().connection).toBe('incompatible');
     expect(s.requests.map(item => item.request.method)).toEqual(['initialize']);
@@ -98,7 +107,7 @@ describe('native App Server connection', () => {
     const oldRequest = s.requests.at(-1)!.request;
     old.close(); s.held.delete('session/checkpoint');
     s.snapshots.set('A', { ...snapshot(), messages: [{ id: 'fresh', role: 'assistant', content: [{ type: 'text', text: 'Recovered' }] }] });
-    await s.connect(); await staleRead;
+    await s.connect(); await s.client.waitForAttachment('A', () => true); await staleRead;
     const current = s.client.getSnapshot().views.A;
     old.success(oldRequest, {type:'checkpoint', checkpoint:checkpoint(snapshot(),'999')});
     old.deliver({ jsonrpc: '2.0', method: 'session/closed', params: { target: oldTarget } });
@@ -119,13 +128,14 @@ describe('native App Server connection', () => {
     const s = server(); const item = interaction(type); s.snapshots.get('A')!.pending_interactions = [item];
     await s.attached('A'); s.client.disconnect();
     expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([item]);
-    await s.connect(); expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([item]);
+    await s.connect(); await s.client.waitForAttachment('A', () => true); expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([item]);
     s.client.disconnect();
     const fresh = server(); fresh.snapshots = s.snapshots; fresh.client.restoreViews(['A']); await fresh.connect();
+    await fresh.client.waitForAttachment('A', () => true);
     expect(fresh.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([item]);
     fresh.client.disconnect();
     const absent = interaction(type, 'A', 'created-while-absent'); fresh.snapshots.get('A')!.pending_interactions = [absent];
-    await fresh.connect(); expect(fresh.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([absent]);
+    await fresh.connect(); await fresh.client.waitForAttachment('A', () => true); expect(fresh.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([absent]);
     await fresh.client.answer('A', absent.interaction, type === 'approval' ? { type, decision: { type: 'allow' } } : { type, response: { type: 'declined' } });
     expect(fresh.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([]);
   });
@@ -147,7 +157,7 @@ describe('native App Server connection', () => {
     const rejected = expect(s.client.send('A', 'run once')).rejects.toBeInstanceOf(OutcomeUncertain);
     await vi.advanceTimersByTimeAsync(30_000); await rejected;
     expect(s.client.getSnapshot().connection).toBe('stale');
-    await s.connect(); expect(s.requests.filter(item => item.request.method === 'turn/start')).toHaveLength(1);
+    await s.connect(); await s.client.waitForAttachment('A', () => true); expect(s.requests.filter(item => item.request.method === 'turn/start')).toHaveLength(1);
     expect(s.client.getSnapshot().uncertain[0].method).toBe('turn/start');
   });
   it('lost interaction acknowledgement never fabricates settlement; native resolution removes controls without cross-talk', async () => {
@@ -156,6 +166,7 @@ describe('native App Server connection', () => {
     await s.attached('A', 'B'); s.held.add('interaction/respond');
     const rejected = expect(s.client.answer('A', a.interaction, { type: 'approval', decision: { type: 'allow' } })).rejects.toBeInstanceOf(OutcomeUncertain);
     s.socket.close(); await rejected; await s.connect();
+    await Promise.all(['A', 'B'].map(id => s.client.waitForAttachment(id, () => true)));
     const key = interactionKey(a.interaction);
     expect(s.client.getSnapshot().interactionOperations[key].status).toBe('uncertain');
     expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([a]);
@@ -167,13 +178,7 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().views.B.snapshot?.pending_interactions).toEqual([b]);
     expect(s.requests.filter(item => item.request.method === 'interaction/respond')).toHaveLength(1);
   });
-  it('observes actual wire requests/responses/notifications before adaptation', async () => {
-    const s = server(); await s.attached('A'); await s.update('A', snapshot());
-    const log = s.client.log.getSnapshot();
-    expect(log.entries.some(entry => entry.kind === 'notification' && JSON.parse(entry.json).method === 'session/event')).toBe(true);
-    expect(log.entries.some(entry => entry.kind === 'response' && entry.method === 'session/attach' && entry.sessionId === 'A')).toBe(true);
-    expect(log.entries.filter(entry => entry.direction === 'out').map(entry => JSON.parse(entry.json))).toEqual(s.requests.map(item => item.request));
-  });
+
   it('close view releases attachment and preserves runtime for reopen', async () => {
     const s = server(); await s.attached('A'); await s.client.release('A');
     expect(s.client.getSnapshot().views.A.attachment).toBe('detached');
@@ -201,8 +206,8 @@ describe('native App Server connection', () => {
   });
   it('discards a capacity-queued interaction without marking an unsent response uncertain', async () => {
     const s = server(); s.snapshots.get('A')!.pending_interactions = [interaction('approval')]; await s.attached('A');
-    s.held.add('session/settings');
-    const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings').catch(() => {}));
+    s.held.add('session/summary');
+    const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary').catch(() => {}));
     const response = s.client.answer('A', interaction('approval').interaction, { type: 'approval', decision: { type: 'allow' } });
     const rejected = expect(response).rejects.not.toBeInstanceOf(OutcomeUncertain);
     expect(s.requests.filter(item => item.request.method === 'interaction/respond')).toEqual([]);
@@ -210,14 +215,7 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().uncertain).toEqual([]);
     expect(s.client.getSnapshot().interactionOperations).toEqual({});
   });
-  it('pausing raw-log presentation does not pause authoritative protocol processing', async () => {
-    const s = server(); await s.attached('A'); s.client.log.pause(true);
-    const frozen = s.client.log.getSnapshot().entries;
-    await s.update('A', { ...snapshot(), pending_interactions: [interaction('questionnaire')] });
-    expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toHaveLength(1);
-    expect(s.client.log.getSnapshot().entries).toBe(frozen);
-    s.client.log.pause(false); expect(s.client.log.getSnapshot().entries.length).toBeGreaterThan(frozen.length);
-  });
+
   it('lost close acknowledgement preserves released intent and never reattaches or replays', async () => {
     const s = server(); await s.attached('A', 'B'); const method = 'session/detach' as const;
     s.held.add(method); const baseline = s.requests.length;
@@ -229,6 +227,7 @@ describe('native App Server connection', () => {
     s.socket.close(); await rejected;
     expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });
     await s.connect();
+    await s.client.waitForAttachment('B', () => true);
     expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
     expect(s.requests.filter(({ request }) => request.method === method)).toHaveLength(1);
     expect(s.loaded.has('A')).toBe(true); expect(s.coldLoads.get('A')).toBe(1);
@@ -250,6 +249,7 @@ describe('native App Server connection', () => {
     }
     expect(s.maxClaims).toBe(2);
     const baseline = s.requests.length; await s.connect();
+    await s.client.waitForAttachment('B', () => true);
     expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
   });
   it('close during attach waits for its exact target, then detaches without changing runtime facts', async () => {
@@ -278,8 +278,15 @@ describe('native App Server connection', () => {
   });
   it('reconnect reads intent after each await instead of restoring a captured historical intent', async () => {
     const s = server(); s.client.restoreViews(['A', 'B']); s.held.add('session/attach');
+    const entered = deferred<void>(), gate = deferred<void>();
+    s.client.setSessionAdmission(async id => {
+      if (id === 'B') { entered.resolve(); await gate.promise; }
+      return { current: () => true, validate: async () => true };
+    });
     const connecting = s.connect(); const request = await s.waitFor('session/attach', 1);
-    await s.client.release('B'); s.reply(request); await connecting;
+    await entered.promise;
+    const releasing = s.client.release('B'); gate.resolve(); await releasing;
+    s.reply(request); await connecting; await s.client.waitForAttachment('A', () => true);
     expect(s.requests.filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'A', node_id: 'node-A' }]);
     expect(s.client.getSnapshot().views.B.attachmentIntent).toBe('released');
   });
@@ -318,6 +325,7 @@ describe('exact inbound mutation transport repair', () => {
     const request = await s.waitFor('inbound/remove', 1); s.commit(request);
     s.socket.close(); expect(await work).toEqual({ status: 'uncertain' });
     await s.connect();
+    await s.client.waitForAttachment('A', () => true);
     expect(s.client.getSnapshot().views.A.snapshot?.inbound.pending ?? []).toEqual([]);
     expect(s.requests.filter(item => item.request.method === 'inbound/remove')).toHaveLength(1);
   });
@@ -328,6 +336,7 @@ describe('exact inbound mutation transport repair', () => {
     const request = await s.waitFor('inbound/edit', 1); const old = s.socket;
     old.close(); expect(await work).toEqual({ status: 'uncertain' });
     await s.connect();
+    await Promise.all(['A', 'B'].map(id => s.client.waitForAttachment(id, () => true)));
     old.success(request, { type: 'inbound_mutation', outcome: { status: 'applied' ,read_cut:readCut()} });
     expect(s.client.getSnapshot().views.B.snapshot?.conversation_id).toBe('conversation-B');
     expect(s.client.getSnapshot().views.A.snapshot?.inbound.pending?.[0].revision).toBe('0');
@@ -349,6 +358,9 @@ it.each(['not_found', 'committed_cleanup_pending', 'committed_durability_uncerta
     : { status, session_id: 'A' } }));
   const before = s.requests.length;
   await s.connect();
+  await publication(s, () => status === 'not_found' ? !s.client.getSnapshot().views.A
+    : status === 'preview' ? s.client.getSnapshot().views.A?.deleting === false
+    : s.client.getSnapshot().views.A?.deletionRecovery === status);
   expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(1);
   expect(s.requests.slice(before).filter(row => row.request.method === 'session/deletePreview')).toHaveLength(1);
   expect(s.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(0); // Unknown deletion never creates another attachment mutation.
@@ -371,6 +383,7 @@ it('lost recovery reply removes recovery authority until fresh committed observa
   await expect(s.client.recoverSessionDeletion('A')).rejects.toThrow('Observe committed');
   s.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'committed_cleanup_pending', session_id: 'A' } }));
   await s.connect();
+  await publication(s, () => s.client.getSnapshot().views.A?.deletionRecovery === 'committed_cleanup_pending');
   expect(s.client.getSnapshot().views.A.deletionRecovery).toBe('committed_cleanup_pending');
   expect(s.requests.filter(r => r.request.method === 'session/recoverDeletion')).toHaveLength(1);
   expect(s.requests.filter(r => r.request.method === 'session/delete')).toHaveLength(1);
@@ -393,24 +406,24 @@ it.each(['preview', 'blocked', 'stale', 'not_found'] as const)('recovery settles
 it('T12 native configuration notifications reject stale versions independently per Session', async () => {
   const s = server(); await s.attached('A', 'B');
   const desired = { input_revision: 'input', attempt: '9007199254740993' };
-  const application = { eligibility: { status: 'unavailable' as const }, scope: 'A', sources: [{ kind: 'user' as const }], version: '9007199254740993', desired, units: { execution_policy: { status: 'applied' as const } }, candidate: null };
+  const application = { eligibility: { status: 'unavailable' as const }, scope: 'A', sources: [{ kind: 'user' as const }], version: '9007199254740993', desired, units: { execution_policy: { status: 'applied' as const } } };
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application:applicationReceipt(application) } });
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: (applicationReceipt(({ ...application, version: '9007199254740992', units: { execution_policy: { status: 'preparing' } } }))) } });
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: (applicationReceipt(({ ...application, scope: 'B', version: '2' }))) } });
   expect(s.client.getSnapshot().configuration?.A).toEqual(application);
   expect(s.client.getSnapshot().configuration?.B?.version).toBe('2');
-  expect(s.requests.filter(({ request }) => ['configuration/sourceWrite', 'configuration/reconcile', 'session/adoptConfiguration'].includes(request.method))).toHaveLength(0);
+  expect(s.requests.filter(({ request }) => ['configuration/sourceWrite', 'configuration/reconcile'].includes(request.method))).toHaveLength(0);
 });
 
 it('first-submit authority retirement drops a capacity-queued admission before dispatch', async () => {
-  const s = server(); await s.attached('A'); s.held.add('session/settings');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  const s = server(); await s.attached('A'); s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
   let current = true;
   const admission = s.client.send('A', 'retained', [], 'send', undefined, () => current);
   const rejected = expect(admission).rejects.toThrow('before dispatch');
   expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
   current = false;
-  for (const item of s.requests.filter(item => item.request.method === 'session/settings').slice(-6)) s.reply(item.request);
+  for (const item of s.requests.filter(item => item.request.method === 'session/summary').slice(-6)) s.reply(item.request);
   await Promise.all([...reads, rejected]);
   expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
@@ -427,14 +440,14 @@ it('ACK observer exceptions cannot strand a mutation or block queued request dis
     facts.push(result.session.id);
     throw new Error('broken presentation subscriber');
   });
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(5);
+  const reads = Array.from({ length: 2 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(1);
   const mutation = s.requests.find(row => row.request.method === 'session/create')!.request;
   const result = { type: 'session_transition' as const, session: { id: 'created', active_node: 'node', active_conversation_id: 'conversation', node_count: 1, created_at: '0', updated_at: '0' }, editor: null, durability_diagnostic: null };
   s.socket.success(mutation, result);
   expect((await created).session.id).toBe(facts[0]);
   expect(facts).toHaveLength(1);
-  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(6);
+  expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(2);
   s.socket.success(mutation, result); // Duplicate wire delivery cannot notify or dispatch again.
   expect(facts).toHaveLength(1);
   for (const row of s.requests.filter(row => row.request.method === 'session/settings')) s.reply(row.request);
@@ -483,6 +496,58 @@ it('late history cannot replace an attached conversation or a retired navigation
     await Promise.resolve(); await Promise.resolve();
     expect(s.client.getSnapshot().views.A.preview).toBeUndefined();
   }
+});
+
+it.each(['before attachment', 'after attachment', 'after release'] as const)('a cold history stale_runtime %s cannot fail or replay the attachment', async timing => {
+  const s = server(); await s.connect();
+  s.held.add('session/attach'); s.held.add('session/history');
+  const requests = vi.spyOn(s.client, 'request');
+  const work = s.client.attach('A');
+  const history = await s.waitFor('session/history', 1), attach = await s.waitFor('session/attach', 1);
+  const historyCall = requests.mock.calls.findIndex(([operation]) => operation.method === 'session/history');
+  expect(historyCall).toBeGreaterThanOrEqual(0);
+  // Observe the real request's settlement, rather than waiting a fixed number
+  // of microtasks after delivering the native Loading-boundary refusal.
+  const rejected = expect(requests.mock.results[historyCall].value).rejects.toMatchObject({
+    error: { data: { kind: 'stale_runtime' } },
+  });
+  const rejectHistory = () => s.socket.deliver({ jsonrpc: '2.0', id: history.id,
+    error: { code: -32000, message: 'Runtime is loading', data: { kind: 'stale_runtime' } },
+  });
+  if (timing === 'before attachment') {
+    rejectHistory(); await rejected;
+    const waiting = s.client.getSnapshot().views.A;
+    expect(waiting).toMatchObject({ attachment: 'attaching', attachmentIntent: 'wanted' });
+    expect(waiting.preview).toBeUndefined(); expect(waiting.error).toBeUndefined();
+    expect(waiting.target).toBeUndefined();
+    expect(s.client.isAttachmentControlCurrent('A', waiting.attachmentObservation)).toBe(false);
+  }
+  s.reply(attach); await work;
+  const live = s.client.getSnapshot().views.A;
+  expect(live.snapshot).toBeTruthy();
+  expect(s.client.isAttachmentControlCurrent('A', live.attachmentObservation)).toBe(true);
+  expect(s.client.target('A')).toEqual(s.target('A'));
+  if (timing === 'after release') await s.client.release('A');
+  if (timing !== 'before attachment') { rejectHistory(); await rejected; }
+  const state = s.client.getSnapshot(), view = state.views.A;
+  expect(view.preview).toBeUndefined(); expect(view.error).toBeUndefined();
+  expect(state.error).toBeUndefined(); expect(state.uncertain).toEqual([]);
+  expect(view.snapshot).toBe(live.snapshot);
+  if (timing === 'after release') {
+    expect(view).toMatchObject({ attachment: 'detached', attachmentIntent: 'released' });
+    expect(view.target).toBeUndefined(); expect(s.claims()).toEqual([]);
+    expect(s.client.isAttachmentControlCurrent('A', view.attachmentObservation)).toBe(false);
+  } else {
+    expect(view).toMatchObject({ attachment: 'attached', attachmentIntent: 'wanted' });
+    expect(view.target).toBe(live.target);
+    expect(s.client.isAttachmentControlCurrent('A', view.attachmentObservation)).toBe(true);
+    expect(deriveSessionProductState(translator('en'), state, view)).toMatchObject({ status: 'idle', severity: 'quiet' });
+  }
+  expect(s.requests.filter(row => row.request.method === 'session/history')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(timing === 'after release' ? 1 : 0);
+  expect(s.requests.filter(row => ['session/create', 'session/fork', 'session/switchNode', 'turn/start', 'turn/cancel'].includes(row.request.method))).toEqual([]);
+  requests.mockRestore();
 });
 
 it('pages durable preview while connecting without starting another attachment', async () => {
@@ -581,9 +646,9 @@ it('Release permanently revokes an Open suspended in Product Host admission', as
 });
 
 it('Release revokes an Open waiting for RPC capacity before final dispatch', async () => {
-  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/settings');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  await s.waitFor('session/settings', 6);
+  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  await s.waitFor('session/summary', 6);
   const entered = deferred<void>();
   const request = s.client.request.bind(s.client);
   vi.spyOn(s.client, 'request').mockImplementation(((...args: Parameters<typeof request>) => {
@@ -595,18 +660,18 @@ it('Release revokes an Open waiting for RPC capacity before final dispatch', asy
   const refused = expect(old).rejects.toThrow('before dispatch');
   await entered.promise; expect(attachmentRequests(s)).toEqual([]);
   const release = s.client.release('A'), latest = s.client.attach('A');
-  s.held.delete('session/settings');
-  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings')) s.reply(request);
+  s.held.delete('session/summary');
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary')) s.reply(request);
   await Promise.all([...reads, refused, release, latest]);
   expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
   expect(s.claims()).toEqual([s.client.target('A')]); expect(s.maxClaims).toBe(1);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
   // Every original RPC slot is reusable after refusal and settlement.
-  s.held.add('session/settings');
-  const count = s.requests.filter(({ request }) => request.method === 'session/settings').length;
-  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  expect(s.requests.filter(({ request }) => request.method === 'session/settings')).toHaveLength(count + 6);
-  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings').slice(count)) s.reply(request);
+  s.held.add('session/summary');
+  const count = s.requests.filter(({ request }) => request.method === 'session/summary').length;
+  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  expect(s.requests.filter(({ request }) => request.method === 'session/summary')).toHaveLength(count + 6);
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary').slice(count)) s.reply(request);
   await Promise.all(reused);
 });
 
@@ -688,9 +753,9 @@ it('terminal local Release permits a later explicit Open through normal native a
 });
 
 it('terminal Release after RPC backpressure settles an unsent Open without publishing an obsolete error', async () => {
-  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/settings');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  await s.waitFor('session/settings', 6);
+  const s = server(); await s.connect(); await s.client.attach('A'); await s.client.release('A'); s.requests.length = 0; s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  await s.waitFor('session/summary', 6);
   const entered = deferred<void>(), request = s.client.request.bind(s.client);
   vi.spyOn(s.client, 'request').mockImplementation(((...args: Parameters<typeof request>) => {
     const work = request(...args); if (args[0].method === 'session/attach') entered.resolve(); return work;
@@ -698,13 +763,13 @@ it('terminal Release after RPC backpressure settles an unsent Open without publi
   const states: string[] = []; s.client.subscribe(() => { if (s.client.getSnapshot().views.A) states.push(s.client.getSnapshot().views.A.attachment); });
   const opening = s.client.attach('A'), refused = expect(opening).rejects.toBeInstanceOf(RequestNotDispatched);
   await entered.promise; const closing = s.client.release('A');
-  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings')) s.reply(request);
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary')) s.reply(request);
   await Promise.all([...reads, refused, closing]);
   expectReleased(s); expect(states).not.toContain('error'); expect(attachmentRequests(s)).toEqual([]);
-  const count = s.requests.filter(({ request }) => request.method === 'session/settings').length;
-  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
-  expect(s.requests.filter(({ request }) => request.method === 'session/settings')).toHaveLength(count + 6);
-  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/settings').slice(count)) s.reply(request);
+  const count = s.requests.filter(({ request }) => request.method === 'session/summary').length;
+  const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  expect(s.requests.filter(({ request }) => request.method === 'session/summary')).toHaveLength(count + 6);
+  for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary').slice(count)) s.reply(request);
   await Promise.all(reused); expectReleased(s);
 });
 
@@ -720,8 +785,8 @@ it('terminal Release during final validation aborts the reservation and settles 
   expect(signal.aborted).toBe(true); expectReleased(s); expect(states).not.toContain('error');
   expect(s.requests.slice(baseline).map(({ request }) => request.method)).toEqual(['session/read', 'session/node']);
   const afterIdentity = s.requests.length;
-  s.held.add('session/settings');
-  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
+  s.held.add('session/summary');
+  const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
   expect(s.requests.slice(afterIdentity)).toHaveLength(6);
   for (const { request } of s.requests.slice(afterIdentity)) s.reply(request);
   await Promise.all(reads);

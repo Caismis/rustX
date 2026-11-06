@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/trajectory-search-index.ts; see PROVENANCE.md. */
-import { contextKindLabel, recordLabel, systemPresentation, type InspectableDisplayItem, type TrajectoryProjection } from './layout';
+import { contextKindLabel, recordLabel, systemPresentation, isBetweenTurnsItem, type InspectableDisplayItem, type TrajectoryProjection } from './layout';
 import { translator } from '../../locale/translation';
 
 // Search accepts both built-in vocabularies regardless of the active locale.
@@ -14,12 +14,13 @@ export function searchItems(projection: TrajectoryProjection, query: string): Re
   const matches = new Set<string>();
   const match = (item: InspectableDisplayItem, structure: readonly string[]) => {
     const record = item.record;
+    const section = isBetweenTurnsItem(item) ? vocabulary.map(tx => tx('trajectory:section.between-turns')) : structure;
     const labels = vocabulary.map(tx => item.type === 'ContextRow' ? contextKindLabel(tx, item.context.context_kind)
       : item.type === 'SystemPromptCell' ? systemPresentation(tx, record)?.label : recordLabel(tx, record));
     const preview = item.type === 'ContextRow' ? item.context.preview?.text
       : item.type === 'SystemPromptCell' ? record.request?.system_prompt.preview?.text
         : record.preview?.text;
-    const text = [...structure, ...labels, preview, record.id, record.state,
+    const text = [...section, ...labels, preview, record.id, record.state,
       record.location.attempt_id, record.location.step_id, record.request?.request_id,
       ...(item.type === 'RequestBoundary' ? [record.request?.model, record.request?.failure_kind] : []),
       record.tool?.name, record.tool?.tool_id, record.tool?.call_id, record.tool?.detail?.text, record.tool?.arguments?.text,
@@ -28,7 +29,7 @@ export function searchItems(projection: TrajectoryProjection, query: string): Re
       ...(item.type === 'ContextRow' ? [item.context.message_id, JSON.stringify(item.context.producer), item.context.context_kind, JSON.stringify(item.context.source)] : []),
     ].join('\n').toLowerCase();
     if (terms.every(term => /^(turn|step) \d+$/.test(term)
-      ? structure.some(label => label.toLowerCase() === term) : text.includes(term))) matches.add(item.display_key);
+      ? section.some(label => label.toLowerCase() === term) : text.includes(term))) matches.add(item.display_key);
   };
   for (const section of projection.sections) {
     if (section.kind === 'outside') {

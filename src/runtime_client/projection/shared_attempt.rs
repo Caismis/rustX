@@ -2,18 +2,18 @@
 use super::shared_snapshot::CowDomain;
 use crate::model::ModelUsage;
 use crate::model::session::AttemptModelView;
+use crate::observation::tool::ForegroundToolExecution;
 use crate::runtime::identity::AttemptId;
 use crate::runtime_client::settings::AdmittedSettings;
 use crate::runtime_client::snapshot::{
-    ForegroundToolExecution, InFlightAssistantMessage, RuntimeClientAttempt,
-    RuntimeClientAttemptPhase,
+    InFlightAssistantMessage, RuntimeClientAttempt, RuntimeClientAttemptPhase,
 };
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct SharedAttempt {
     pub attempt_id: Option<AttemptId>,
-    pub attempt_id_source: Option<crate::runtime_client::response::AttemptIdentitySource>,
+    pub attempt_id_source: Option<crate::observation::turn::AttemptIdentitySource>,
     pub phase: RuntimeClientAttemptPhase,
     pub turn: u32,
     #[serde(skip_serializing_if = "Option::is_none")]

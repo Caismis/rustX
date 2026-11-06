@@ -19,20 +19,18 @@ max_output_tokens = 8192
 [models."arbitrary-name".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
 "#;
 const ROOT: &str = r#"
 [agent.model]
 model = "arbitrary-name"
 "#;
 
-const WORKFLOW: &str = "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  output: {type: object, properties: {}, additionalProperties: false}\n  entry: done\n  nodes:\n    done:\n      type: return\n      output: {type: literal, value: {}}\n";
+const WORKFLOW: &str = "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  edges:\n  - from: workflow_start\n    to: done\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      outputs: []\n";
 
 #[test]
 fn workflow_shadowing_preserves_the_complete_winning_identity_and_native_origin() {
-    use rustx::local_runtime::configuration::settings::SourceScope;
     use rustx::runtime::capability_inspection::ResourceFamily;
+    use rustx::runtime::resources::SourceScope;
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
     let user = host
@@ -78,8 +76,17 @@ fn workflow_shadowing_preserves_the_complete_winning_identity_and_native_origin(
         "[agent]\nworkflows = ['helper']\n",
     )
     .unwrap();
+    // An enabled malformed Workspace Workflow stays off, and never exposes
+    // the valid User program it shadows.
+    let captured = analyze(&request, &host).unwrap();
     assert!(
-        analyze(&request, &host).is_err(),
+        !captured
+            .resource_inspection()
+            .main
+            .as_ref()
+            .unwrap()
+            .workflows
+            .contains(&rustx::runtime::workflow::WorkflowId::parse("helper").unwrap()),
         "a selected malformed Workspace Workflow cannot expose the valid User program"
     );
     std::fs::remove_file(&user).unwrap();
@@ -98,8 +105,8 @@ fn workflow_shadowing_preserves_the_complete_winning_identity_and_native_origin(
 #[tokio::test]
 async fn python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_admission() {
     use rustx::local_runtime::composition::{LocalConversationCore, LocalRuntimeDependencies};
-    use rustx::local_runtime::configuration::settings::SourceScope;
     use rustx::runtime::capability_inspection::ResourceFamily;
+    use rustx::runtime::resources::SourceScope;
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(
         root.path(),
@@ -851,13 +858,13 @@ async fn malformed_workspace_mcp_reserves_shadow_and_unused_definition_warns() {
             .unwrap();
         core.runtime().activate();
         assert!(
-            !core
-                .runtime()
-                .configuration_view()
-                .unwrap()
-                .resources
-                .resource_diagnostics
-                .is_empty()
+            !rustx::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                core.runtime()
+            )
+            .unwrap()
+            .resources
+            .resource_diagnostics
+            .is_empty()
         );
         core.shutdown().await.unwrap();
         std::fs::write(
@@ -1081,4 +1088,44 @@ fn rustx_target(
     rustx::local_runtime::configuration::settings::SourceTarget::Workspace {
         directory: directory.to_path_buf(),
     }
+}
+
+#[test]
+fn each_scope_enables_only_the_workflow_files_it_owns() {
+    let root = tempfile::tempdir().unwrap();
+    let user_config = format!(
+        "{PROVIDER}{MODEL}[agent]\nworkflows = ['helper']\n[agent.model]\nmodel = \"arbitrary-name\"\n"
+    );
+    let (host, request) = sources(root.path(), &user_config, "");
+    let user = host
+        .home_directory
+        .join("rustx/.agents/workflows/helper.yaml");
+    let workspace = host.launch_directory.join(".agents/workflows/helper.yaml");
+    for path in [&user, &workspace] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, WORKFLOW).unwrap();
+    }
+    // What the root Agent of a Session in this Workspace may invoke.
+    let enabled = || {
+        analyze(&request, &host)
+            .unwrap()
+            .resource_inspection()
+            .main
+            .as_ref()
+            .unwrap()
+            .workflows
+            .contains(&rustx::runtime::workflow::WorkflowId::parse("helper").unwrap())
+    };
+    // The Global entry names the Global file; the Workspace file shadowing
+    // it is not enabled by it.
+    assert!(!enabled());
+    std::fs::remove_file(&workspace).unwrap();
+    assert!(enabled(), "the Global file is enabled in every Workspace");
+    std::fs::write(&workspace, WORKFLOW).unwrap();
+    std::fs::write(
+        host.launch_directory.join("rustx.toml"),
+        "[agent]\nworkflows = ['helper']\n",
+    )
+    .unwrap();
+    assert!(enabled(), "the Workspace enables its own file");
 }

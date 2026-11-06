@@ -3,7 +3,8 @@ import { expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { routeFixture } from './shell-navigation-fixture';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
-import type { AppServerClient, ClientView } from '../src/client/app-server';
+import type { AppServerClient } from '../src/client/app-server';
+import type { ClientView } from '../src/client/contracts';
 import { WorkspaceHostError, type ProductHostWorkspaces, type SessionLocation, type WorkspaceCatalog } from '../src/workspaces/host';
 
 function deferred<T>() {
@@ -30,7 +31,7 @@ async function fixture(listWorkspaces: ProductHostWorkspaces['listWorkspaces'] =
     }),
     adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
   };
-  const client = { firstSubmissions: { draft: () => undefined }, recheckAdmissions: () => {}, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
+  const client = { onAuthorityRetired: () => () => {}, onDispose: () => () => {}, recheckAdmissions: () => {}, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
   const navigation = routeFixture(client);
   const authority = new WorkspaceAuthority(host);
   const owner = new WorkspaceAssociations(client, authority);

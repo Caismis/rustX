@@ -1,13 +1,13 @@
 //! Finite own lifecycle evidence from original native J and captured C headers.
 use super::TraceProjection;
-use super::bounds::TracePreview;
-use super::types::{
-    TraceArtifact, TraceCursor, TraceFieldSource, TraceGeneration, TraceKind, TraceLocation,
-    TraceState, TraceTiming, TraceToolCall, TraceToolSummary,
-};
 use crate::durable::ConversationStoreError;
 use crate::durable::observation::{
     TraceFactData as D, TraceFactHeader, TraceFactKind as K, TraceTerminalClass,
+};
+use crate::observation::trace::bounds::TracePreview;
+use crate::observation::trace::types::{
+    TraceArtifact, TraceCursor, TraceFieldSource, TraceGeneration, TraceKind, TraceLocation,
+    TraceState, TraceTiming, TraceToolCall, TraceToolSummary,
 };
 
 pub(super) struct AnchorFacts {
@@ -31,7 +31,8 @@ pub(super) struct AnchorFacts {
     pub has_detail: bool,
     pub truncated: bool,
     pub fields: Vec<TraceFieldSource>,
-    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
+    pub configuration: Option<crate::runtime::configuration_commit::ConfigurationChange>,
 }
 pub(super) struct AnchorRequest {
     pub start_sequence: u64,
@@ -70,6 +71,7 @@ impl AnchorFacts {
             truncated: false,
             fields: header.fields.clone(),
             collections: Vec::new(),
+            configuration: None,
         }
     }
     pub(super) fn canonical(
@@ -115,7 +117,10 @@ impl AnchorFacts {
         if let Some(request) = &mut self.request {
             request.failure_kind = terminal.failure_kind;
             request.generation = terminal.generation.map(|evidence| {
-                super::record::generation_metrics(evidence, terminal.usage.as_ref())
+                crate::observation::trace::generation::generation_metrics(
+                    evidence,
+                    terminal.usage.as_ref(),
+                )
             });
             request.usage = terminal.usage;
         }
@@ -156,6 +161,32 @@ impl TraceProjection<'_> {
         };
         facts.terminal(ending, anchor.sequence);
         Ok(facts)
+    }
+    fn workflow_nodes(
+        &self,
+        facts: &mut AnchorFacts,
+        sequence: u64,
+    ) -> Result<(), ConversationStoreError> {
+        let nodes = self
+            .store
+            .observation_workflow_nodes(self.cut()?, sequence, 0, 0)?;
+        facts.preview = Some(TracePreview::of(&nodes.workflow_id));
+        if let Some(parent) = nodes.parent_sequence {
+            facts.location = self
+                .anchor_facts(&self.inspection_anchor(parent)?)?
+                .location;
+        }
+        facts
+            .collections
+            .push(crate::observation::cut::CollectionFrontier {
+                domain: format!("trace.records.{sequence}.workflow.nodes"),
+                revision: nodes.revision,
+                total: nodes.total,
+                loaded: 0,
+                next_offset: (nodes.total > 0).then_some(0),
+            });
+        facts.has_detail = true;
+        Ok(())
     }
     fn anchor_start(
         &self,
@@ -242,6 +273,7 @@ impl TraceProjection<'_> {
                 facts
                     .originating_tool_call_id
                     .clone_from(originating_tool_call_id);
+                self.workflow_nodes(facts, anchor.sequence)?;
                 vec![
                     K::WorkflowCompleted,
                     K::WorkflowFailed,
@@ -253,6 +285,7 @@ impl TraceProjection<'_> {
                 facts.native_id.clone_from(native_id);
                 vec![K::InteractionSettled]
             }
+            D::Configuration { change } => configuration_start(facts, change),
             D::CanonicalToolCommit { .. } | D::Terminal(_) => {
                 return Err(ConversationStoreError::InvalidReference(
                     "native fact is not a Trace anchor".into(),
@@ -294,6 +327,22 @@ impl TraceProjection<'_> {
         Ok(())
     }
 }
+/// A Session-level record between Attempts: its own native position, no
+/// owning Attempt, Step or request.
+fn configuration_start(
+    facts: &mut AnchorFacts,
+    change: &crate::runtime::configuration_commit::ConfigurationChange,
+) -> Vec<K> {
+    facts.kind = TraceKind::Configuration;
+    facts.state = TraceState::Completed;
+    facts.timing.ended_at = Some(facts.timing.started_at);
+    facts.timing.duration_ms = Some(0);
+    // The retained instructions are read through the record's detail cut.
+    facts.has_detail = true;
+    facts.configuration = Some(change.clone());
+    Vec::new()
+}
+
 fn request_start(facts: &mut AnchorFacts, data: &D) -> Vec<K> {
     let D::RequestStart {
         start_sequence,
@@ -341,9 +390,9 @@ fn subagent_start(facts: &mut AnchorFacts, data: &D) -> Vec<K> {
 
 pub(super) fn public_occurrence(
     occurrence: &crate::events::types::ToolObservationOccurrence,
-) -> crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-    crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-        locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+) -> crate::observation::tool::RuntimeClientToolOccurrence {
+    crate::observation::tool::RuntimeClientToolOccurrence {
+        locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position: occurrence.ledger_position,
         },
         block_index: occurrence.block_index,

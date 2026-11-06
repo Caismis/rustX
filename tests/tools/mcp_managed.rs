@@ -56,6 +56,8 @@
 //! skips the real-materialization acceptance; a lane that sets
 //! `RUSTX_REQUIRE_PROVIDER_EMULATOR` fails instead.
 
+use sha2::Digest;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -299,16 +301,24 @@ async fn one_folder_serves_multiple_tools_through_one_server_identity() {
     let directory = tempfile::tempdir().expect("fixture root");
     let workspace_root = directory.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
+    let server_source = format!(
+        "{CALC_SERVER}\nfrom pathlib import Path\nimport hashlib\n@mcp.tool\ndef asset_digest() -> str:\n    digest = hashlib.sha256()\n    with Path(__file__).with_name('asset.bin').open('rb') as asset:\n        while chunk := asset.read(65536):\n            digest.update(chunk)\n    return digest.hexdigest()\n"
+    );
     write_package(
         &workspace_root,
         "calc",
         &[
-            ("server.py", CALC_SERVER),
+            ("server.py", server_source.as_str()),
             ("common.py", CALC_COMMON),
             ("requirements.txt", "# none\n"),
         ],
     );
 
+    let asset_path = workspace_root.join(".agents/tools/calc/asset.bin");
+    std::fs::File::create(&asset_path)
+        .unwrap()
+        .set_len(17 * 1024 * 1024)
+        .unwrap();
     // Discovery: exactly one synthesized server identity for the folder.
     let workspace = Workspace::new(&workspace_root).expect("workspace");
     let discovered = crate::common::discover_python_packages(&workspace).expect("discover");
@@ -320,6 +330,19 @@ async fn one_folder_serves_multiple_tools_through_one_server_identity() {
         .expect("valid package")
         .clone();
 
+    // A post-capture rewrite cannot change the anonymous authorized snapshot.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&asset_path)
+        .unwrap()
+        .write_all(&[255])
+        .unwrap();
+    let mut original_hash = sha2::Sha256::new();
+    let zeroes = vec![0; 65_536];
+    for _ in 0..17 * 16 {
+        original_hash.update(&zeroes);
+    }
+    let expected_original = format!("{:x}", original_hash.finalize());
     let store = PythonToolStore::new(directory.path().join("runtime")).expect("store");
     let prepared = prepare(&store, &package).await;
     let server = ConnectedServer::connect(
@@ -337,7 +360,11 @@ async fn one_folder_serves_multiple_tools_through_one_server_identity() {
         .map(|tool| tool.name.as_str())
         .collect::<Vec<_>>();
     names.sort_unstable();
-    assert_eq!(names, ["add", "subtract"], "one tools/list, both tools");
+    assert_eq!(
+        names,
+        ["add", "asset_digest", "subtract"],
+        "one tools/list, all tools"
+    );
     for name in ["add", "subtract"] {
         let definition = server.definition(name);
         assert_eq!(
@@ -364,7 +391,31 @@ async fn one_folder_serves_multiple_tools_through_one_server_identity() {
         .call("subtract", serde_json::json!({"a": 100, "b": 58}))
         .await;
     assert_eq!(result_text(&difference), "difference:42");
+    assert_eq!(
+        result_text(&server.call("asset_digest", serde_json::json!({})).await),
+        expected_original
+    );
     server.close().await;
+    let reloaded = discover(&workspace_root, "calc");
+    assert_ne!(package.source_digest(), reloaded.source_digest());
+    let changed = prepare(&store, &reloaded).await;
+    assert_ne!(prepared.fingerprint, changed.fingerprint);
+    let changed_server = ConnectedServer::connect(
+        &changed,
+        "calc",
+        &workspace_root,
+        "conv_edd4f70d-427d-7f1b-923b-46eb11a8dfb2",
+    )
+    .await;
+    assert_ne!(
+        result_text(
+            &changed_server
+                .call("asset_digest", serde_json::json!({}))
+                .await
+        ),
+        expected_original
+    );
+    changed_server.close().await;
 }
 
 /// Two package folders prepare two distinct fingerprint-keyed state

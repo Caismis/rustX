@@ -1,7 +1,7 @@
 //! Original RequestStart-owned allowlisted structural inspection layout.
 //! Request inspection composes authenticated fragments over the native selected
 //! tree. Other finite state domains retain their original segmented layouts.
-use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension, params, sqlite_error, storage};
 use crate::durable::observation::{
     HEADER_PAGE_MAX, ObservationValueChunk, RequestObservationField, RequestObservationHeader,
     RequestObservationPage,
@@ -26,6 +26,7 @@ struct SourceWriter<'a> {
     first: Vec<u8>,
     written: u64,
     segment: u64,
+    failure: Option<ConversationStoreError>,
 }
 impl SourceWriter<'_> {
     fn drain(&mut self) -> std::io::Result<()> {
@@ -33,7 +34,7 @@ impl SourceWriter<'_> {
             if self.segment == 0 {
                 self.first = std::mem::take(&mut self.buffer);
             } else {
-                self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'j',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(std::io::Error::other)?;
+                self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'j',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(|error| { self.failure = Some(sqlite_error(&error,error.to_string())); std::io::Error::other("native observation source write failed") })?;
             }
             self.written = self
                 .written
@@ -42,7 +43,7 @@ impl SourceWriter<'_> {
                 } else {
                     self.buffer.len()
                 } as u64)
-                .filter(|value| *value <= crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+                .filter(|value| *value <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
                 .ok_or_else(|| {
                     std::io::Error::other("native structural source exceeds safe offsets")
                 })?;
@@ -126,18 +127,29 @@ pub(super) fn index_state_source(
         first: Vec::new(),
         written: 0,
         segment: 0,
+        failure: None,
     };
     source
         .copy_original_bytes_to(&mut writer)
-        .map_err(|error| storage(error.to_string()))?;
-    writer.flush().map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| {
+            writer
+                .failure
+                .take()
+                .unwrap_or_else(|| storage(error.to_string()))
+        })?;
+    writer.flush().map_err(|error| {
+        writer
+            .failure
+            .take()
+            .unwrap_or_else(|| storage(error.to_string()))
+    })?;
     state_preview::index_fields(&writer, source)?;
     connection
         .execute(
             "INSERT INTO content_frontiers VALUES(?1,?2,0,'j',1,?3,?4)",
             params![kind, id, writer.written, writer.first],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 #[cfg(test)]
@@ -163,7 +175,7 @@ fn stored_preview(
     } else {
         None
     };
-    Ok(crate::runtime_client::checkpoint::bounded_bytes(
+    Ok(crate::observation::bounded::bounded_bytes(
         original_message.as_ref().unwrap_or(preview),
         16_384,
     )
@@ -173,9 +185,9 @@ fn provenance_source(
     sequence: u64,
     item: u64,
     encoded_bytes: u64,
-) -> crate::runtime_client::trace::TraceFieldSource {
-    crate::runtime_client::trace::TraceFieldSource::Value {
-        field: crate::runtime_client::trace::TraceFieldKind::Provenance,
+) -> crate::observation::trace::TraceFieldSource {
+    crate::observation::trace::TraceFieldSource::Value {
+        field: crate::observation::trace::TraceFieldKind::Provenance,
         domain: format!("trace.records.{sequence}.detail.request.messages"),
         item_offset: item,
         path: vec!["provenance".into()],
@@ -195,7 +207,7 @@ fn input_view(
     frozen: &crate::model::projected::FrozenModelInput,
 ) -> Result<
     (
-        crate::runtime_client::trace::TraceRequestMessage,
+        crate::observation::trace::TraceRequestMessage,
         Option<crate::durable::observation::MessageHeader>,
     ),
     ConversationStoreError,
@@ -206,7 +218,7 @@ fn input_view(
         crate::model::projected::FrozenModelInput::Original(original) => Some(original),
         _ => None,
     };
-    let mut view = crate::runtime_client::trace::frozen::input_message(scope, message, original);
+    let mut view = crate::observation::trace::frozen::input_message(scope, message, original);
     let header = message
         .canonical_id()
         .map(|id| {
@@ -215,7 +227,7 @@ fn input_view(
         })
         .transpose()?;
     if let Some(header) = &header {
-        crate::runtime_client::trace::request::bind_original_provenance(&mut view, header)?;
+        crate::observation::trace::request::bind_original_provenance(&mut view, header)?;
     }
     Ok((view, header))
 }
@@ -236,7 +248,7 @@ pub(super) fn legacy_request_source_bytes(
     snapshot: &crate::model::RequestSnapshot,
 ) -> Result<Vec<u8>, ConversationStoreError> {
     let capture = |_ordinal: u64, _bytes: &[u8]| Ok(());
-    let value = crate::runtime_client::trace::frozen_request_detail(
+    let value = crate::observation::trace::frozen_request_detail(
         snapshot,
         FrozenMessages {
             connection,
@@ -278,7 +290,7 @@ pub(super) fn legacy_field_headers_oracle(
         headers.borrow_mut().push(bytes.to_vec());
         Ok(())
     };
-    let value = crate::runtime_client::trace::frozen_request_detail(
+    let value = crate::observation::trace::frozen_request_detail(
         snapshot,
         FrozenMessages {
             connection,
@@ -301,7 +313,7 @@ pub(super) fn legacy_field_headers_oracle(
                         .map_err(|_| "legacy message ordinal invalid")?]
                     .clone()
                 } else {
-                    crate::runtime_client::checkpoint::bounded_bytes(preview, 16_384)
+                    crate::observation::bounded::bounded_bytes(preview, 16_384)
                         .unwrap_or_else(|| b"null".to_vec())
                 };
                 fields.push((path.to_vec(), start, end, children, bytes));
@@ -348,7 +360,7 @@ impl serde::Serialize for FrozenMessages<'_> {
             view.provenance_source = Some(provenance_source(self.sequence, ordinal as u64, bytes));
             if let Some(header) = header {
                 let (value, _) = message_value_capture(&header, &view).map_err(S::Error::custom)?;
-                let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
+                let bytes = crate::observation::bounded::bounded_bytes(&value, 16_384)
                     .ok_or_else(|| S::Error::custom("request item header exceeds bound"))?;
                 (self.capture_header)(ordinal as u64, &bytes).map_err(S::Error::custom)?;
                 sequence.serialize_element(&provenance::Canonical {
@@ -358,7 +370,7 @@ impl serde::Serialize for FrozenMessages<'_> {
             } else {
                 let header = bounded_message_descriptor(&view, view.blocks.len(), false)
                     .map_err(S::Error::custom)?;
-                let bytes = crate::runtime_client::checkpoint::bounded_bytes(&header, 16_384)
+                let bytes = crate::observation::bounded::bounded_bytes(&header, 16_384)
                     .ok_or_else(|| S::Error::custom("request item header exceeds bound"))?;
                 (self.capture_header)(ordinal as u64, &bytes).map_err(S::Error::custom)?;
                 sequence.serialize_element(&input::Input {
@@ -376,7 +388,7 @@ fn started(
     request: &RequestId,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let sequence:Option<u64>=connection.query_row_cached("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let sequence:Option<u64>=connection.query_row_cached("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     sequence.ok_or_else(|| {
         ConversationStoreError::InvalidReference("request is outside native read cut".into())
     })
@@ -412,12 +424,12 @@ pub(super) fn field_coordinates(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| sqlite_error(&error, error.to_string()))?
         .ok_or_else(|| {
             ConversationStoreError::InvalidReference("request field is unavailable".into())
         })?;
     if coordinates.0 > coordinates.1
-        || coordinates.1 > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || coordinates.1 > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(storage("native field coordinates unavailable"));
     }
@@ -500,8 +512,8 @@ fn field_with_key(
     if table == "request_source_roots" {
         return composed::field(connection, id, path);
     }
-    let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|storage(error.to_string()))?
-        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(6)?))).optional().map_err(|error|storage(error.to_string()))?
+    let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
+        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(6)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
         .ok_or_else(||ConversationStoreError::InvalidReference("request field is unavailable".into()))?;
     let source = state_preview::Source::load(connection, id)?;
     let (start, end, children, bytes) = field.materialize(connection, id, path, &source)?;
@@ -521,11 +533,21 @@ pub(super) fn validate_start(
     sequence: u64,
     through: u64,
 ) -> Result<(), ConversationStoreError> {
-    match super::observation_event::kind(connection, sequence, through)?.as_deref() {
-        Some("model_request_started") => Ok(()),
-        _ => Err(ConversationStoreError::InvalidReference(
-            "source is not an actual Request start".into(),
-        )),
+    let agent: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM request_owners o WHERE o.start_sequence=e.sequence AND o.owner_kind='agent') FROM events e WHERE e.sequence=?1 AND e.sequence<=?2",
+            params![sequence, through],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sqlite_error(&error, error.to_string()))?
+        .unwrap_or(false);
+    if agent {
+        Ok(())
+    } else {
+        Err(ConversationStoreError::InvalidReference(
+            "source is not an actual primary Agent Request start".into(),
+        ))
     }
 }
 pub(super) fn header_at(
@@ -551,7 +573,7 @@ pub(super) fn header_at(
         value: serde_json::from_slice(&bytes)
             .map_err(|_| storage("native request field header corrupt"))?,
         content: Vec::new(),
-        collections: vec![crate::runtime_client::checkpoint::CollectionFrontier {
+        collections: vec![crate::observation::cut::CollectionFrontier {
             revision: sequence,
             domain: "messages".into(),
             total: count,
@@ -638,9 +660,9 @@ pub(super) fn page_from(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let rows=connection.prepare_cached(&format!("SELECT {},{} FROM {table} WHERE source_id=?1 AND parent_path=?2 AND ordinal>=?3 ORDER BY ordinal LIMIT ?4",page_metadata_columns(),header_columns(table)?))
-        .map_err(|error|storage(error.to_string()))?.query_map(params![id,field_path(path)?,offset,limit],
+        .map_err(|error|sqlite_error(&error, error.to_string()))?.query_map(params![id,field_path(path)?,offset,limit],
             |row| {let (path,key)=page_metadata(row,0)?;Ok((path,StoredField::row(row,2)?,key))})
-        .map_err(|error|storage(error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
+        .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
     let source = state_preview::Source::load(connection, id)?;
     let mut fields = rows
         .into_iter()
@@ -671,7 +693,7 @@ pub(super) fn page_from(
             })
         })
         .collect::<Result<Vec<_>, ConversationStoreError>>()?;
-    while crate::runtime_client::checkpoint::bounded_bytes(&fields, 524_288).is_none() {
+    while crate::observation::bounded::bounded_bytes(&fields, 524_288).is_none() {
         if fields.len() <= 1 {
             return Err(storage("native field descriptor cannot fit bounded page"));
         }
@@ -746,16 +768,16 @@ pub(super) fn read_from(
     }
     let relative_end = offset
         .checked_add(u64::from(max_bytes))
-        .filter(|value| *value <= crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX)
+        .filter(|value| *value <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(readable_end);
-    let bytes = super::content::range_bytes(
+    let bytes = crate::durable::sqlite::content::range_bytes(
         connection,
         (
             kind,
             id,
             0,
-            crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+            crate::observation::content::ContentRepresentation::CanonicalJsonV1,
         ),
         start
             .checked_add(offset)
@@ -818,8 +840,8 @@ pub(super) fn field_header(
 fn typed_value<T: serde::Serialize + schemars::JsonSchema>(
     value: &T,
 ) -> Result<serde_json::Value, ConversationStoreError> {
-    let root = crate::runtime_client::structural_json::root::<T>();
-    serde_json::to_value(crate::runtime_client::structural_json::Encoded {
+    let root = crate::observation::structural_json::root::<T>();
+    serde_json::to_value(crate::observation::structural_json::Encoded {
         value,
         schema: &root,
         root: &root,
@@ -852,16 +874,16 @@ pub(super) fn terminal(
             [request.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     if !retained {
         return Ok(());
     }
     let source_sequence = started(connection, request, event.sequence)?;
     let source_key = source_sequence.to_string();
-    let source = crate::runtime_client::trace::frozen_request_outcome(&event.event)
+    let source = crate::observation::trace::frozen_request_outcome(&event.event)
         .expect("matched native request terminal");
     let encode = |field, value: &_| {
-        super::content::index_structural_value(
+        crate::durable::sqlite::content::index_structural_value(
             connection,
             "trace_terminal",
             &source_key,
@@ -870,14 +892,14 @@ pub(super) fn terminal(
         )
     };
     let encoded_bytes = encode(0, &source)?;
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "trace_terminal",
         &source_key,
         1,
         &source.failure,
     )?;
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "trace_terminal",
         &source_key,
@@ -885,16 +907,16 @@ pub(super) fn terminal(
         &source
             .failure
             .as_ref()
-            .map(crate::runtime_client::trace::frozen::BorrowedFailure::message),
+            .map(crate::observation::trace::frozen::BorrowedFailure::message),
     )?;
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "trace_terminal",
         &source_key,
         3,
         &source.usage,
     )?;
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "trace_terminal",
         &source_key,
@@ -908,7 +930,7 @@ pub(super) fn terminal(
     let failure = source
         .failure
         .as_ref()
-        .map(crate::runtime_client::trace::frozen::BorrowedFailure::header);
+        .map(crate::observation::trace::frozen::BorrowedFailure::header);
     let header = crate::durable::observation::RequestObservationOutcome {
         terminal_sequence: event.sequence,
         event_id: (event.event_id.as_str().len() <= 512).then(|| event.event_id.clone()),
@@ -918,9 +940,9 @@ pub(super) fn terminal(
         failure_deferred,
         encoded_bytes,
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&header, 16_384)
+    let bytes = crate::observation::bounded::bounded_bytes(&header, 16_384)
         .ok_or_else(|| storage("native request outcome header exceeds bound"))?;
-    let changed=connection.execute_cached("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|storage(error.to_string()))?;
+    let changed=connection.execute_cached("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if changed != 1 {
         return Err(storage(
             "native request terminal header owner missing or duplicated",
@@ -935,7 +957,7 @@ pub(super) fn outcome_at(
 ) -> Result<Option<crate::durable::observation::RequestObservationOutcome>, ConversationStoreError>
 {
     validate_start(connection, source_sequence, through)?;
-    let row:Option<(Option<u64>,Option<Vec<u8>>)>=connection.query_row("SELECT completed_sequence,observation_terminal_header FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let row:Option<(Option<u64>,Option<Vec<u8>>)>=connection.query_row("SELECT completed_sequence,observation_terminal_header FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|sqlite_error(&error, error.to_string()))?;
     let (terminal, bytes) =
         row.ok_or_else(|| storage("original Request snapshot source absent"))?;
     if terminal.is_none_or(|sequence| sequence > through) {
@@ -976,7 +998,7 @@ pub(super) fn outcome_read_at(
             ));
         }
     };
-    super::content::structural_field_read(
+    crate::durable::sqlite::content::structural_field_read(
         connection,
         "trace_terminal",
         &source_sequence.to_string(),
@@ -1042,14 +1064,14 @@ fn metadata_list<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
         .get(name)
         .cloned()
         .map(|value| {
-            crate::runtime_client::checkpoint::decode_domain_value(value)
+            crate::observation::bounded::decode_domain_value(value)
                 .map_err(|error| storage(error.to_string()))
         })
         .transpose()
         .map(Option::unwrap_or_default)
 }
 fn bounded_message_descriptor(
-    message: &crate::runtime_client::trace::TraceRequestMessage,
+    message: &crate::observation::trace::TraceRequestMessage,
     mut loaded: usize,
     deferred: bool,
 ) -> Result<serde_json::Value, ConversationStoreError> {
@@ -1059,21 +1081,20 @@ fn bounded_message_descriptor(
     #[derive(serde::Serialize)]
     struct Descriptor<'a> {
         request_occurrence: &'a Option<crate::context::checkpoint::RequestMessageOccurrence>,
-        provenance: &'a crate::runtime_client::trace::TraceInputProvenance,
-        provenance_source: &'a Option<crate::runtime_client::trace::TraceFieldSource>,
-        role: &'a crate::runtime_client::trace::TraceMessageRole,
+        provenance: &'a crate::observation::trace::TraceInputProvenance,
+        provenance_source: &'a Option<crate::observation::trace::TraceFieldSource>,
+        role: &'a crate::observation::trace::TraceMessageRole,
         message_id: &'a Option<crate::runtime::identity::MessageId>,
         source: &'a Option<String>,
-        blocks: &'a [crate::runtime_client::trace::TraceContentBlock],
+        blocks: &'a [crate::observation::trace::TraceContentBlock],
         truncated: bool,
     }
     impl schemars::JsonSchema for Descriptor<'_> {
         fn schema_name() -> std::borrow::Cow<'static, str> {
-            <crate::runtime_client::trace::TraceRequestMessage as schemars::JsonSchema>::schema_name(
-            )
+            <crate::observation::trace::TraceRequestMessage as schemars::JsonSchema>::schema_name()
         }
         fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-            <crate::runtime_client::trace::TraceRequestMessage as schemars::JsonSchema>::json_schema(
+            <crate::observation::trace::TraceRequestMessage as schemars::JsonSchema>::json_schema(
                 generator,
             )
         }
@@ -1089,7 +1110,7 @@ fn bounded_message_descriptor(
             blocks: &message.blocks[..loaded],
             truncated: message.truncated || loaded < message.blocks.len() || deferred,
         };
-        if let Some(value) = crate::runtime_client::checkpoint::structural_value(&descriptor) {
+        if let Some(value) = crate::observation::bounded::structural_value(&descriptor) {
             break value;
         }
         loaded = loaded
@@ -1100,7 +1121,7 @@ fn bounded_message_descriptor(
 }
 fn message_value_capture(
     header: &crate::durable::observation::MessageHeader,
-    message: &crate::runtime_client::trace::TraceRequestMessage,
+    message: &crate::observation::trace::TraceRequestMessage,
 ) -> Result<(serde_json::Value, bool), ConversationStoreError> {
     let initial = if header.display.is_some() {
         message.blocks.len()
@@ -1125,7 +1146,7 @@ fn message_value_capture(
     } else {
         value["blocks"].as_array().map_or(0, Vec::len)
     } as u64;
-    let collections = vec![crate::runtime_client::checkpoint::CollectionFrontier {
+    let collections = vec![crate::observation::cut::CollectionFrontier {
         revision: 1,
         domain,
         total: header.block_count,
@@ -1135,7 +1156,7 @@ fn message_value_capture(
     value["content"] = typed_value(&content)?;
     value["collections"] = typed_value(&collections)?;
     value["deferred"] = serde_json::Value::Bool(header.deferred || pretrimmed);
-    while crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384).is_none() {
+    while crate::observation::bounded::bounded_bytes(&value, 16_384).is_none() {
         untrimmed = false;
         value["truncated"] = serde_json::Value::Bool(true);
         value["deferred"] = serde_json::Value::Bool(true);
@@ -1165,8 +1186,8 @@ fn message_value_capture(
 }
 fn message_bindings(
     header: &crate::durable::observation::MessageHeader,
-) -> Result<Vec<crate::runtime_client::checkpoint::ContentBinding>, ConversationStoreError> {
-    use crate::runtime_client::content::{CanonicalContentComponent, ContentSource};
+) -> Result<Vec<crate::observation::cut::ContentBinding>, ConversationStoreError> {
+    use crate::observation::content::{CanonicalContentComponent, ContentSource};
     let mut content = Vec::new();
     for binding in &header.content {
         if matches!(
@@ -1177,7 +1198,7 @@ fn message_bindings(
             }
         ) {
             if header.identity.is_none() {
-                content.push(crate::runtime_client::checkpoint::ContentBinding {
+                content.push(crate::observation::cut::ContentBinding {
                     path: vec!["message_id".into()],
                     source_path: Some(vec!["id".into()]),
                     content_ref: binding.content_ref.clone(),
@@ -1237,7 +1258,7 @@ fn message_bindings(
         for (suffix, source_path) in selections {
             let mut target = path.clone();
             target.extend(suffix);
-            content.push(crate::runtime_client::checkpoint::ContentBinding {
+            content.push(crate::observation::cut::ContentBinding {
                 source_path,
                 path: target,
                 content_ref: binding.content_ref.clone(),
@@ -1304,7 +1325,7 @@ fn index_key(
             insert,
             params![writer.id, encoded_path(&key_path)?, start, end],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     writer
         .connection
         .execute(
@@ -1316,7 +1337,7 @@ fn index_key(
                 header
             ],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 
@@ -1327,9 +1348,10 @@ mod source_buffer_tests {
     #[test]
     fn state_source_lazily_allocates_a_bounded_second_buffer() {
         let mut connection = Connection::open_in_memory().unwrap();
-        super::super::create_schema(&mut connection).unwrap();
+        crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
         let mut writer = SourceWriter {
             connection: &connection,
+            failure: None,
             id: "fragmented-source",
             kind: "state",
             buffer: Vec::with_capacity(SEGMENT),

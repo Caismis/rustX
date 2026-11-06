@@ -1,0 +1,86 @@
+[
+  {
+    "width": 390,
+    "locale": "en",
+    "byte_identical": true,
+    "images": [
+      {
+        "state": "pending",
+        "file": "pending-390-en.png",
+        "pixel_width": 390,
+        "pixel_height": 900,
+        "sha256": "68710e73e0c785a9a4249925b45338b806eec895f214d2a87d4d7954e12fd303"
+      },
+      {
+        "state": "ready",
+        "file": "ready-390-en.png",
+        "pixel_width": 390,
+        "pixel_height": 900,
+        "sha256": "68710e73e0c785a9a4249925b45338b806eec895f214d2a87d4d7954e12fd303"
+      }
+    ]
+  },
+  {
+    "width": 390,
+    "locale": "zh",
+    "byte_identical": true,
+    "images": [
+      {
+        "state": "pending",
+        "file": "pending-390-zh.png",
+        "pixel_width": 390,
+        "pixel_height": 900,
+        "sha256": "3b0e3bf02966aff01de895311a08afb7f6407c0c620441f799f8f1d5998f5f32"
+      },
+      {
+        "state": "ready",
+        "file": "ready-390-zh.png",
+        "pixel_width": 390,
+        "pixel_height": 900,
+        "sha256": "3b0e3bf02966aff01de895311a08afb7f6407c0c620441f799f8f1d5998f5f32"
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "locale": "en",
+    "byte_identical": true,
+    "images": [
+      {
+        "state": "pending",
+        "file": "pending-1440-en.png",
+        "pixel_width": 1440,
+        "pixel_height": 900,
+        "sha256": "28214f858f3ac3fcddec7bd63206bf3107ab2b99dfd16d330b8bc5ebf1074660"
+      },
+      {
+        "state": "ready",
+        "file": "ready-1440-en.png",
+        "pixel_width": 1440,
+        "pixel_height": 900,
+        "sha256": "28214f858f3ac3fcddec7bd63206bf3107ab2b99dfd16d330b8bc5ebf1074660"
+      }
+    ]
+  },
+  {
+    "width": 1440,
+    "locale": "zh",
+    "byte_identical": true,
+    "images": [
+      {
+        "state": "pending",
+        "file": "pending-1440-zh.png",
+        "pixel_width": 1440,
+        "pixel_height": 900,
+        "sha256": "d4ba8ea7d3c9add405337ce9312d4f1922c7025f23a9c7e5c2f5e68a3ae824b5"
+      },
+      {
+        "state": "ready",
+        "file": "ready-1440-zh.png",
+        "pixel_width": 1440,
+        "pixel_height": 900,
+        "sha256": "d4ba8ea7d3c9add405337ce9312d4f1922c7025f23a9c7e5c2f5e68a3ae824b5"
+      }
+    ]
+  }
+]

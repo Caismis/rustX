@@ -1,13 +1,13 @@
 use crate::durable::observation::{
     ObservationReadCut, ResponsePageSelection, ResponsePageSelectionKind,
 };
-use crate::runtime_client::snapshot::RuntimeClientTranscriptPage;
+use crate::observation::transcript::RuntimeClientTranscriptPage;
 
 fn response_page_at(
     store: &SqliteConversationStore,
     cut: &ObservationReadCut,
 ) -> RuntimeClientTranscriptPage {
-    crate::runtime_client::snapshot::transcript_header_view(
+    crate::observation::transcript::transcript_header_view(
         store.transcript_header_page(cut, None, 32).unwrap(),
     )
 }
@@ -44,7 +44,7 @@ fn assert_response_page_oracle(
     );
     current
 }
-pub(super) fn response_start(store: &SqliteConversationStore, name: &str) -> AttemptId {
+pub(in crate::durable::sqlite) fn response_start(store: &SqliteConversationStore, name: &str) -> AttemptId {
     let attempt = AttemptId::new(format!("response-{name}"));
     store
         .append_event(envelope(
@@ -58,7 +58,7 @@ pub(super) fn response_start(store: &SqliteConversationStore, name: &str) -> Att
         .unwrap();
     attempt
 }
-pub(super) fn response_message(store: &SqliteConversationStore, attempt: &AttemptId, id: &str) {
+pub(in crate::durable::sqlite) fn response_message(store: &SqliteConversationStore, attempt: &AttemptId, id: &str) {
     store
         .append_canonical_with_event(
             &assistant_message(id, "original exact body 水"),
@@ -73,7 +73,7 @@ pub(super) fn response_message(store: &SqliteConversationStore, attempt: &Attemp
         )
         .unwrap();
 }
-pub(super) fn response_complete(store: &SqliteConversationStore, attempt: &AttemptId) {
+pub(in crate::durable::sqlite) fn response_complete(store: &SqliteConversationStore, attempt: &AttemptId) {
     store
         .append_event(envelope(
             store.conversation_id(),
@@ -347,7 +347,7 @@ fn bounded_response_page_keeps_tool_and_assistant_owners_distinct_from_aliases()
         .unwrap()
         .unwrap();
     let mut page = response_page_at(&store, &cut);
-    page.entries.retain(|entry| matches!(&entry.item, crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message { message: MessageBlock::Assistant(message) } if message.id.as_str() == "other-final"));
+    page.entries.retain(|entry| matches!(&entry.item, crate::observation::transcript::RuntimeClientTranscriptItem::Message { message: MessageBlock::Assistant(message) } if message.id.as_str() == "other-final"));
     page.deferred_entries.clear();
     assert_eq!(page.entries.len(), 1);
     // Read the native page before corrupting the alias: tool header enrichment

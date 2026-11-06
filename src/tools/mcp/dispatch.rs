@@ -96,7 +96,7 @@
 //! the progress token inside the request, so that window is unavoidable and
 //! a fast server can answer inside it. Reading a correlated response as
 //! proof that no caller remains deleted the very evidence
-//! [`crate::tools::mcp::McpProgressRouter`] exists to keep. So this seam
+//! [`crate::tools::mcp::progress::McpProgressRouter`] exists to keep. So this seam
 //! completes the *remote* dimension on an answer or refusal. Admission in
 //! the outbound prologue independently consumes the admission dimension.
 //! The caller's `McpProgressLease` relinquishes local ownership; only an
@@ -121,7 +121,7 @@ use rmcp::model::{
 use rmcp::service::RoleClient;
 use rmcp::transport::Transport;
 
-use super::McpProgressRouter;
+use super::progress::McpProgressRouter;
 use super::streamable_http::{DispatchOwnership, McpHttpRequestOwnership, OutboundDispatch};
 
 /// The transport error of a request rustX refused to dispatch.
@@ -184,14 +184,15 @@ impl McpDispatchSeam {
 /// One outbound tool invocation, as the seam sees it.
 ///
 /// Only the requests **one rustX `ToolInvocation` owns** are tracked:
-/// `tools/call`, and the SEP-2663 task-control requests of a remote task that
-/// one `tools/call` materialized (Issue #243). They are exactly the requests
+/// standard Resource requests, `tools/call`, its live catalog validation, and the SEP-2663 task-control
+/// requests of a remote task that one `tools/call` materialized (Issue #243).
+/// They are exactly the requests
 /// an MCP settlement can ever need to terminate, so tracking anything else
 /// would create lifecycle state with no invocation to forget it.
 ///
 /// The **progress** dimension is narrower than the ownership dimension. Only
-/// a `tools/call` carries a token here, because only a `tools/call` has
-/// progress that is a live `ToolCall`'s idle-liveness evidence. A `tasks/get`
+/// a `tools/call` or Resource request carries a token here, because each is
+/// a live Tool invocation whose remote progress evidences liveness. A `tasks/get`
 /// is transport activity of a poll loop, not Tool progress, so it is owned
 /// locally and admits no progress token — rustX never turns "another poll was
 /// dispatched" into a fabricated liveness fact.
@@ -203,15 +204,28 @@ struct OwnedRequest {
     tool: String,
 }
 
+/// Local-only request extension: startup listing has a composition owner,
+/// while first-use listing must participate in invocation settlement.
+#[derive(Clone)]
+pub(super) struct InvocationCatalogRequest;
+
 fn owned_request(message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
     let ClientJsonRpcMessage::Request(request) = message else {
         return None;
     };
     let token = match &request.request {
-        ClientRequest::CallToolRequest(_) => request.request.get_meta().get_progress_token(),
+        ClientRequest::CallToolRequest(_)
+        | ClientRequest::ListResourcesRequest(_)
+        | ClientRequest::ListResourceTemplatesRequest(_)
+        | ClientRequest::ReadResourceRequest(_) => request.request.get_meta().get_progress_token(),
         ClientRequest::GetTaskRequest(_)
         | ClientRequest::UpdateTaskRequest(_)
         | ClientRequest::CancelTaskRequest(_) => None,
+        ClientRequest::ListToolsRequest(list)
+            if list.extensions.get::<InvocationCatalogRequest>().is_some() =>
+        {
+            None
+        }
         _ => return None,
     };
     Some(OwnedRequest {
@@ -222,7 +236,7 @@ fn owned_request(message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
     })
 }
 
-/// The test probes' label: the tool name, or the task-control method.
+/// The test probes' label: the tool name, or the owned protocol method.
 #[cfg(test)]
 fn probe_label(request: &ClientRequest) -> String {
     match request {
@@ -230,6 +244,10 @@ fn probe_label(request: &ClientRequest) -> String {
         ClientRequest::GetTaskRequest(_) => GET_TASK_METHOD.to_owned(),
         ClientRequest::UpdateTaskRequest(_) => UPDATE_TASK_METHOD.to_owned(),
         ClientRequest::CancelTaskRequest(_) => CANCEL_TASK_METHOD.to_owned(),
+        ClientRequest::ListToolsRequest(_) => "tools/list".to_owned(),
+        ClientRequest::ListResourcesRequest(_) => "resources/list".to_owned(),
+        ClientRequest::ListResourceTemplatesRequest(_) => "resources/templates/list".to_owned(),
+        ClientRequest::ReadResourceRequest(_) => "resources/read".to_owned(),
         _ => unreachable!("only owned requests are labelled"),
     }
 }
@@ -496,7 +514,7 @@ mod tests {
     };
 
     use super::{McpDispatchSeam, answered_request};
-    use crate::tools::mcp::McpProgressRouter;
+    use crate::tools::mcp::progress::McpProgressRouter;
 
     fn id(value: i64) -> RequestId {
         RequestId::Number(value)
@@ -599,7 +617,7 @@ mod tests {
                     .get(&id(i64::from(value)))
                     .expect("live caller");
                 assert!(entry.admission_consumed);
-                assert!(entry.remote == crate::tools::mcp::RemoteOwnership::Terminal);
+                assert!(entry.remote == crate::tools::mcp::progress::RemoteOwnership::Terminal);
             }
             drop(lease);
             assert_eq!(progress.tracked_requests(), 0);

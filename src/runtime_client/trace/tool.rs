@@ -17,13 +17,15 @@
 //! No Tool result is stored, cached or reassembled here. The canonical
 //! `ToolMessage` in the Message Ledger remains the one result authority.
 
-use super::bounds::{TraceText, identity_fits};
-use super::content::{tool_outcome, tool_result_artifacts, tool_result_blocks, tool_status_detail};
-use super::types::{
+use crate::message::types::ToolMessageBlock;
+use crate::observation::trace::bounds::{TraceText, identity_fits};
+use crate::observation::trace::content::{
+    tool_outcome, tool_result_artifacts, tool_result_blocks, tool_status_detail,
+};
+use crate::observation::trace::types::{
     TraceManagedOutput, TraceToolDefinition, TraceToolDetail, TraceToolLifecycle, TraceToolResult,
     TraceToolSource, TraceToolTruncation,
 };
-use crate::message::types::ToolMessageBlock;
 use crate::tools::types::{ManagedOutputContinuation, ToolCall};
 
 /// One native Tool contract that identifies an argument field as a program.
@@ -166,7 +168,8 @@ pub(super) fn tool_detail(
         } else {
             TraceToolLifecycle::Proposed
         },
-        arguments: call.map(|call| super::bounds::TraceJson::bounded(&call.arguments)),
+        arguments: call
+            .map(|call| crate::observation::trace::bounds::TraceJson::bounded(&call.arguments)),
         source: call.and_then(native_source),
         definition,
         result: message.map(tool_result),
@@ -192,7 +195,9 @@ pub(super) fn historical_definition(
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             description: TraceText::detail(&definition.description),
-            input_schema: super::bounds::TraceJson::bounded(&definition.input_schema),
+            input_schema: crate::observation::trace::bounds::TraceJson::bounded(
+                &definition.input_schema,
+            ),
         })
 }
 

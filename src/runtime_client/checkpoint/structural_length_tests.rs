@@ -1,8 +1,8 @@
-use super::{
+use crate::observation::bounded::{
     CHECKPOINT_TARGET_BYTES, bounded_bytes, bounded_structural_len,
     bounded_structural_len_with_budget,
 };
-use crate::runtime_client::{preflight, structural_json};
+use crate::observation::{preflight, structural_json};
 use serde::Serialize;
 
 fn matches_buffered<T: Serialize + schemars::JsonSchema>(value: &T) {

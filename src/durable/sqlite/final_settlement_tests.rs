@@ -1,4 +1,4 @@
-use crate::durable::inbox::{CommittedModelTurn, ModelTurnBoundary, ModelTurnSettlement};
+use crate::durable::{CommittedModelTurn, ModelTurnBoundary, ModelTurnSettlement};
 
 struct FinalFixture {
     store: SqliteConversationStore,
@@ -93,6 +93,7 @@ impl FinalFixture {
             provider: self.event(
                 "provider",
                 RuntimeEvent::ModelRequestCompleted {
+                    owner: crate::model::ModelRequestOwner::Agent { identity: crate::model::RequestIdentity { attempt_id: self.start.attempt_id.clone(), turn: self.start.turn_id.clone(), retry_number: 0 } },
                     request_id: self.start.request_id.clone(),
                     finish_reason: finish_reason.clone(),
                     usage: None,
@@ -495,9 +496,9 @@ fn final_model_commit_contains_ordered_facts_and_readable_canonical_output() {
         terminal.turn_id.is_none(),
         "Attempt terminal is not a Turn fact"
     );
-    let source = crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-        component: crate::runtime_client::content::CanonicalContentComponent::Payload,
-        locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+    let source = crate::observation::content::ContentSource::CanonicalMessageBlock {
+        component: crate::observation::content::CanonicalContentComponent::Payload,
+        locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: fixture.start.message_id.clone(),
         },
         block_index: crate::message::types::ContentBlockIndex::new(0),
@@ -506,7 +507,7 @@ fn final_model_commit_contains_ordered_facts_and_readable_canonical_output() {
         .store
         .content_descriptor(
             &source,
-            crate::runtime_client::content::ContentRepresentation::Utf8Text,
+            crate::observation::content::ContentRepresentation::Utf8Text,
         )
         .unwrap()
         .unwrap();

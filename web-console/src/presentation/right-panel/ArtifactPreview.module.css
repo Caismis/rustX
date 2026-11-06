@@ -10,7 +10,8 @@
 .tool:focus-visible { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: -2px; }
 .body { flex: 1 1 auto; min-height: 0; margin: 0; padding: 10px 12px; overflow: auto; color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code), monospace; font-size: 13px; line-height: 1.6; white-space: pre; }
 .body pre { margin: 0; max-height: none; overflow: visible; font: inherit; white-space: inherit; }
-.body[data-kind=text][data-wrap=true] { white-space: pre-wrap; overflow-wrap: anywhere; }
+.body[data-kind=text] { --dsl-code-block-line-white-space: pre; }
+.body[data-kind=text][data-wrap=true] { --dsl-code-block-line-white-space: pre-wrap; white-space: pre-wrap; overflow-wrap: anywhere; }
 .body[data-kind=markdown] { padding: 0; white-space: normal; font-family: var(--dsw-font, inherit); }
 .document { min-width: 0; padding: 10px 12px; white-space: normal; }
 .image { max-width: 100%; object-fit: contain; }

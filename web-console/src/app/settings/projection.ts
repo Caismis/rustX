@@ -2,8 +2,8 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v52';
-import type { ConnectionState } from '../../client/app-server';
+} from '../../../../protocol/app-server/v73';
+import type { ConnectionState } from '../../client/contracts';
 
 /** Each Settings target names one exact configuration owner. The catalog scope
  * menu switches targets; transactions and source facts remain owned separately. */
@@ -64,7 +64,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
     case 'goal': return document.agent?.plugins?.goal;
     case 'agent_status': return document.agent?.plugins?.agent_status;
     case 'agents': return document.agent?.agents;
-    case 'workflows': return document.agent?.workflows;
+    case 'workflow_enabled': return document.agent?.workflows?.includes(unit.id);
     case 'agent_identity': return document.agent_id;
     case 'description': return document.agent?.description;
     case 'instructions': return document.agent?.instructions;
@@ -98,7 +98,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
  * definitions carry a `mcp_servers.<id>` default origin. */
 export function unitProvenancePath(mutation: SourceMutation): string | undefined {
   if (mutation.kind === 'mcp') return `mcp_servers.${mutation.id}`;
-  if (mutation.kind === 'agent' || mutation.kind === 'repair_config') return undefined;
+  if (mutation.kind === 'agent' || mutation.kind === 'repair_config' || mutation.kind === 'workflow') return undefined;
   const unit = mutation.mutation;
   switch (unit.unit) {
     case 'provider': return `providers.${unit.id}`;
@@ -111,7 +111,7 @@ export function unitProvenancePath(mutation: SourceMutation): string | undefined
     case 'goal': return 'agent.plugins.goal';
     case 'agent_status': return 'agent.plugins.agent_status';
     case 'agents': return 'agent.agents';
-    case 'workflows': return 'agent.workflows';
+    case 'workflow_enabled': return 'agent.workflows';
     case 'agent_identity': return 'agent_id';
     case 'description': return 'agent.description';
     case 'instructions': return 'agent.instructions';
@@ -468,30 +468,36 @@ export function observedUnitLabel(tx: Translate, unit: ObservedUnit): string {
           : unit === 'provider' ? tx('settings:copy.providers-models')
             : tx('settings:copy.shared-capacity');
 }
-/** A truthful observed result. `ready` carries native cache impact; `applied`
- * is the native-confirmed state and is never called a classification. */
+/** A truthful observed result. `ready` means prepared and waiting for the
+ * Session's current work to settle before native commits it; `applied` is the
+ * native-confirmed state and is never called a classification. */
 export type ObservedResult =
   | { state: 'applied' }
   | { state: 'preparing' }
-  | { state: 'ready'; impact: string }
+  | { state: 'ready' }
   | { state: 'failed'; diagnostic: string }
+  | { state: 'uncertain'; diagnostic: string }
   | { state: 'restart_pending' }
   | { state: 'unavailable' };
 export function observedResult(unit: UnitApplication | undefined): ObservedResult {
   if (!unit) return { state: 'unavailable' };
-  if (unit.status === 'applied') return { state: 'applied' };
-  if (unit.status === 'preparing') return { state: 'preparing' };
-  if (unit.status === 'failed') return { state: 'failed', diagnostic: unit.diagnostic };
-  if (unit.status === 'process_restart') return { state: 'restart_pending' };
-  return { state: 'ready', impact: unit.impact };
+  switch (unit.status) {
+    case 'applied': return { state: 'applied' };
+    case 'preparing': return { state: 'preparing' };
+    case 'ready': return { state: 'ready' };
+    case 'failed': return { state: 'failed', diagnostic: unit.diagnostic };
+    case 'uncertain': return { state: 'uncertain', diagnostic: unit.diagnostic };
+    case 'process_restart': return { state: 'restart_pending' };
+  }
 }
 export function observedResultLabel(tx: Translate, result: ObservedResult): string {
   return result.state === 'applied' ? tx('settings:copy.applied')
     : result.state === 'preparing' ? tx('settings:copy.preparing')
       : result.state === 'failed' ? tx('settings:copy.failed')
-        : result.state === 'restart_pending' ? tx('settings:copy.restart-pending')
-          : result.state === 'ready' ? tx('settings:copy.ready')
-            : tx('settings:copy.not-observed');
+        : result.state === 'uncertain' ? tx('settings:copy.uncertain')
+          : result.state === 'restart_pending' ? tx('settings:copy.restart-pending')
+            : result.state === 'ready' ? tx('settings:copy.waiting-to-apply')
+              : tx('settings:copy.not-observed');
 }
 
 /** Native change behavior, distinct from an observed result. */

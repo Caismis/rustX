@@ -1,5 +1,5 @@
 import type { AppServerClient } from './app-server';
-import { sameTarget } from './app-server';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 export const ARTIFACT_MAX_BYTES = 256 * 1024;
 export const ARTIFACT_MAX_TRANSFERS = 2;
 export const ARTIFACT_MAX_URLS = 16;

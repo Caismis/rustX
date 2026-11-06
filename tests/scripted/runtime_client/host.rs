@@ -533,7 +533,7 @@ async fn foreground_tools_project_with_stable_identities() {
     );
     assert!(foreground.iter().all(|slot| matches!(
         slot.state,
-        rustx::runtime_client::ForegroundToolState::Settled { .. }
+        rustx::observation::tool::ForegroundToolState::Settled { .. }
     )));
 }
 
@@ -950,7 +950,7 @@ async fn agent_status_shares_one_composition() {
     );
     assert!(matches!(
         status_view.sections.first(),
-        Some(rustx::runtime_client::RuntimeClientStatusSection::Temporal { .. })
+        Some(rustx::observation::status::RuntimeClientStatusSection::Temporal { .. })
     ));
     let composed_wire = serde_json::to_value(
         events
@@ -1029,15 +1029,15 @@ async fn agent_status_shares_one_composition() {
         .target_locator
         .as_ref()
         .expect("positive canonical target locator");
-    let loaded = page.entries.iter().any(|entry| matches!(&entry.item, rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } if rustx::conversation::message_id_of(message) == target_message_id));
+    let loaded = page.entries.iter().any(|entry| matches!(&entry.item, rustx::observation::transcript::RuntimeClientTranscriptItem::Message { message } if rustx::conversation::message_id_of(message) == target_message_id));
     let deferred = page
         .deferred_entries
         .iter()
         .filter_map(|item| item.value.as_ref())
         .filter(|value| value.get("locator").is_some())
         .any(|value| {
-            let descriptor: rustx::runtime_client::snapshot::RuntimeClientMessageDescriptor =
-                rustx::runtime_client::checkpoint::decode_domain_value(value.clone())
+            let descriptor: rustx::observation::transcript::RuntimeClientMessageDescriptor =
+                rustx::observation::bounded::decode_domain_value(value.clone())
                     .expect("finite original message descriptor");
             descriptor.locator == *target_locator
                 && descriptor.identity.as_ref() == Some(&target_message_id)
@@ -1049,7 +1049,7 @@ async fn agent_status_shares_one_composition() {
     assert!(
         !snapshot.transcript.entries.iter().any(|entry| matches!(
             &entry.item,
-            rustx::runtime_client::RuntimeClientTranscriptItem::Message { message }
+            rustx::observation::transcript::RuntimeClientTranscriptItem::Message { message }
                 if rustx::conversation::message_id_of(message)
                     == status_view.status_message_id.as_ref().expect("native inline status identity").clone()
         )),
@@ -1092,7 +1092,7 @@ async fn agent_status_shares_one_composition() {
     }));
     assert!(matches!(
         status_view.sections.first(),
-        Some(rustx::runtime_client::RuntimeClientStatusSection::Temporal { .. })
+        Some(rustx::observation::status::RuntimeClientStatusSection::Temporal { .. })
     ));
     assert_eq!(
         snapshot
@@ -1377,7 +1377,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),
     });
-    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+    let capabilities: rustx::observation::capability_source::CapabilityView =
         super::super::common::native_domain_single(
             response.result.expect("successful native domain read"),
         );
@@ -1397,175 +1397,4 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
     assert_eq!(snapshot.capabilities.as_ref(), &capabilities);
-}
-
-/// Configuration-adoption eligibility is runtime-domain state the runtime
-/// publishes on change, not a side effect of event traffic. A long streamed
-/// answer publishes Busy once at admission and Eligible once after settlement;
-/// none of its deltas publishes eligibility, so a client that observes
-/// eligibility never re-reads configuration because output streamed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn streamed_deltas_publish_no_adoption_eligibility_change() {
-    use rustx::local_runtime::configuration::application::AdoptionEligibility;
-    const DELTAS: usize = 200;
-    let (release_tx, release_rx) = support::fake::model_release();
-    let mut steps = vec![
-        FakeStep::Emit(ModelEvent::Started),
-        // Parked before the first delta until Busy is observably published,
-        // so the admission publication cannot interleave with the deltas.
-        FakeStep::ParkUntilReleased(release_rx),
-    ];
-    steps.extend((0..DELTAS).map(|index| {
-        FakeStep::Emit(ModelEvent::TextDelta {
-            block_index: ContentBlockIndex::new(u32::try_from(index % 2).unwrap()),
-            text: format!("{index} "),
-        })
-    }));
-    steps.push(FakeStep::Emit(ModelEvent::Completed {
-        finish_reason: ModelFinishReason::Stop,
-        usage: None,
-    }));
-    let (_, host) = host(
-        "conv_0d6b1f4e-4a51-7c3e-9a1d-451451451451",
-        FakeModel::new(vec![steps]),
-        ToolRegistry::new(),
-        status_engine(),
-        None,
-    )
-    .await;
-    let (attachment, _) = host
-        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .expect("attach");
-    let subscription = attachment
-        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
-        .expect("subscribe");
-    let eligibility = |event: &RuntimeClientProtocolEvent| {
-        event.event.facts().iter().find_map(|fact| match fact {
-            RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { eligibility } => {
-                Some(eligibility.clone())
-            }
-            _ => None,
-        })
-    };
-    let mut seen = receive_until(&subscription, |event| {
-        eligibility(event) == Some(AdoptionEligibility::Eligible)
-    })
-    .await;
-    attachment.handle_request(RuntimeClientRequest::SubmitInbound {
-        id: rustx::runtime_client::RequestId::new(1),
-        content: text("stream"),
-    });
-    seen.extend(
-        receive_until(&subscription, |event| {
-            eligibility(event) == Some(AdoptionEligibility::Busy)
-        })
-        .await,
-    );
-    let busy_at = seen.len();
-    release_tx.send(true).expect("release");
-    seen.extend(
-        receive_until(&subscription, |event| {
-            event
-                .event
-                .facts()
-                .iter()
-                .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
-        })
-        .await,
-    );
-    seen.extend(
-        receive_until(&subscription, |event| {
-            eligibility(event) == Some(AdoptionEligibility::Eligible)
-        })
-        .await,
-    );
-
-    let streamed = &seen[busy_at..];
-    let deltas: Vec<usize> = streamed
-        .iter()
-        .enumerate()
-        .filter(|(_, event)| event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text")))
-        .map(|(index, _)| index)
-        .collect();
-    // Publication release may coalesce model deltas; every streamed byte is
-    // still published between the first and last delta event.
-    let text: String = streamed
-        .iter()
-        .flat_map(|event| event.event.facts())
-        .filter_map(|event| match event {
-            RuntimeClientEvent::BlockContentAdvanced {
-                kind,
-                inline_delta: Some(delta),
-                ..
-            } if kind == "text" => Some(delta.as_str()),
-            _ => None,
-        })
-        .collect();
-    let expected = (0..DELTAS).fold(String::new(), |mut text, index| {
-        use std::fmt::Write as _;
-        write!(text, "{index} ").expect("writing to a String cannot fail");
-        text
-    });
-    assert!(
-        !text.is_empty(),
-        "the scenario must exercise actual partial release"
-    );
-    assert_eq!(
-        text,
-        expected[..text.len()],
-        "partial output is the exact ordered prefix"
-    );
-    let committed: Vec<_> = streamed
-        .iter()
-        .flat_map(|event| event.event.facts())
-        .filter_map(|fact| match fact {
-            RuntimeClientEvent::MessageCommitted {
-                message: MessageBlock::Assistant(assistant),
-                ..
-            } => Some(assistant),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(committed.len(), 1);
-    assert_eq!(
-        committed[0].content,
-        (0..2)
-            .map(|block| rustx::message::types::AssistantContentBlock::Text(
-                rustx::message::content::TextBlock {
-                    text: (block..DELTAS)
-                        .step_by(2)
-                        .fold(String::new(), |mut output, index| {
-                            use std::fmt::Write as _;
-                            write!(output, "{index} ").expect("String write");
-                            output
-                        })
-                }
-            ))
-            .collect::<Vec<_>>(),
-        "the final notification supplies every byte including the unflushed tail"
-    );
-    let (first, last) = (deltas[0], deltas[deltas.len() - 1]);
-    assert!(
-        streamed[first..=last]
-            .iter()
-            .all(|event| eligibility(event).is_none()),
-        "no delta publishes eligibility"
-    );
-    // After admission, exactly one publication remains: settlement's Eligible.
-    let after_busy: Vec<_> = streamed.iter().filter_map(eligibility).collect();
-    assert_eq!(after_busy, vec![AdoptionEligibility::Eligible]);
-    // The whole stream never republishes an unchanged value.
-    let published: Vec<_> = seen.iter().filter_map(eligibility).collect();
-    assert!(
-        published.windows(2).all(|pair| pair[0] != pair[1]),
-        "{published:?}"
-    );
-    assert_eq!(
-        host.checkpoint()
-            .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
-            .expect("snapshot")
-            .0
-            .configuration_adoption_eligibility,
-        AdoptionEligibility::Eligible
-    );
 }

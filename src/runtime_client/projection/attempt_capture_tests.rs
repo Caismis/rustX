@@ -1,9 +1,11 @@
-use crate::runtime_client::checkpoint::{self, Capture, ContentBinding};
-use crate::runtime_client::content::{
+use crate::observation::capture::{Capture};
+use crate::observation::cut::{ContentBinding};
+use crate::observation::content::{
     CanonicalContentComponent, CanonicalContentLocator, ContentRef, ContentRepresentation,
     ContentSource, PublicationContentComponent,
 };
-use crate::runtime_client::snapshot::{ForegroundToolExecution, InFlightAssistantMessage};
+use crate::observation::tool::{ForegroundToolExecution};
+use crate::runtime_client::snapshot::{InFlightAssistantMessage};
 
 fn content_reference() -> ContentRef {
     ContentRef {
@@ -69,7 +71,7 @@ fn tool_result(bytes: usize) -> ToolExecutionResult {
 
 fn foreground(state: ForegroundToolState, committed: bool) -> ForegroundToolExecution {
     ForegroundToolExecution {
-        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+        occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
             locator: CanonicalContentLocator::ByLedgerPosition { position: 17 },
             block_index: ContentBlockIndex::new(3),
         },
@@ -78,7 +80,7 @@ fn foreground(state: ForegroundToolState, committed: bool) -> ForegroundToolExec
         call_id: Some(ToolCallId::new("call")),
         metadata_ref: Some(content_reference()),
         assembly_complete: true,
-        result_source: Some(crate::runtime_client::snapshot::JournalFieldRef {
+        result_source: Some(crate::observation::tool::JournalFieldRef {
             sequence: 31,
             path: vec!["result".into()],
             encoded_bytes: 123,
@@ -109,6 +111,7 @@ fn old_deferred(
             result.artifacts.clear();
             result.deliveries.clear();
             result.workflow = None;
+            result.managed_output = None;
         };
         if let Some(result) = &mut tool.committed_result {
             clear(result);
@@ -152,7 +155,7 @@ fn foreground_admission_matches_old_fields_without_allocating_discarded_payloads
                                 ..content_reference()
                             },
                             content: Vec::new(),
-                            frontier: checkpoint::CollectionFrontier {
+                            frontier: crate::observation::cut::CollectionFrontier {
                                 domain: "result.content".into(),
                                 revision: 19,
                                 total: 1,
@@ -220,12 +223,12 @@ fn attempt_bindings_reuse_only_identical_position_source_frontier_and_deferred_s
     owners.append(vec![binding.clone()], &mut original);
     let bytes = serde_json::to_vec(&original).unwrap();
     let _ = original[0].size();
-    checkpoint::metadata_fragment::take_work();
+    crate::observation::metadata::take_work();
     let mut unchanged = Vec::new();
     owners.clone().append(vec![binding.clone()], &mut unchanged);
     assert!(unchanged[0].same_owner(&original[0]));
     let _ = unchanged[0].size();
-    assert_eq!(checkpoint::metadata_fragment::take_work(), 0);
+    assert_eq!(crate::observation::metadata::take_work(), 0);
     let mut changes = vec![binding.clone(); 5];
     changes[0].path[2] = "1".into();
     changes[1].content_ref.content_revision += 1;
@@ -292,9 +295,9 @@ fn live_attempt_keeps_32_descriptors_and_reuses_binding_owners_across_unchanged_
     }).into();
     let original = projection.capture_working_seed();
     let mut old_capture = Capture::new(1);
-    checkpoint::take_prepared_fit_work();
+    crate::observation::capture::take_prepared_fit_work();
     let old = original.capture_attempt(&mut old_capture).unwrap();
-    assert_eq!(checkpoint::take_prepared_fit_work(), 0);
+    assert_eq!(crate::observation::capture::take_prepared_fit_work(), 0);
     let old_bytes = serde_json::to_vec(&old_capture.content).unwrap();
     assert_eq!(old.in_flight.as_ref().unwrap().blocks.len(), 32);
     assert_eq!(old_capture.content.len(), 32);
@@ -452,7 +455,7 @@ fn prepared_tool_admission_reads_current_result_sources_with_unchanged_attempt_o
             content_ref: content_reference(),
             deferred: true,
         }],
-        frontier: checkpoint::CollectionFrontier {
+        frontier: crate::observation::cut::CollectionFrontier {
             domain: "result.content".into(),
             revision: 1,
             total: 9,

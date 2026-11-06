@@ -4,7 +4,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { TurnUsage, ConversationStats } from '../src/app/agent/UsageStats';
 import { localeController } from '../src/locale/controller';
 import { prependTranscript, refreshTranscript, replaceTranscript } from '../src/client/transcript';
-import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v52';
+import type { CompletedResponseView, RuntimeClientSnapshot } from '../../protocol/app-server/v73';
 import { snapshot } from './fixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => localeController.setLocale('en')); });
@@ -91,14 +91,15 @@ it('composer pills read native totals and the last measured request, never the l
   const partial=within(await ui.findByRole('dialog',{name:'词元用量'}));
   expect(partial.getByText('输入')).toBeTruthy(); expect(partial.getByText('33/34')).toBeTruthy();
 });
-it('an unresolved response outside the fresh window is reread instead of freezing missing completion', () => {
+it('an unresolved response outside the fresh head remains in place for automatic rereading', () => {
   const state=conversation(); state.transcript.entries![2].response_pending=true;
   delete state.transcript.entries![2].completed_response;
   const old=replaceTranscript(state.transcript);
   const newer={entries:[state.transcript.entries![1],{cursor:'4',item:{type:'message' as const,message:{role:'user' as const,id:'new-user',source:'human' as const,content:[]}}}]};
   const refreshed=refreshTranscript(old,newer);
-  expect(refreshed.epoch).toBe(old.epoch+1);
-  expect(refreshed.error).toContain('reread unresolved native responses');
+  expect(refreshed.epoch).toBe(old.epoch);
+  expect(refreshed.page.entries).toHaveLength(4);
+  expect(refreshed.error).toBeUndefined();
 });
 
 it('the Turn usage dialog splits cached input and names the requests\' models', async () => {
@@ -128,4 +129,14 @@ it('T14 the real usage dialog renders u64MAX and a one-token cache miss exactly'
   expect(dialog.textContent).toContain('99.99999999999999999%');
   expect(dialog.textContent).toContain('Uncached input1 token');
   expect(dialog.textContent).not.toContain('18,446,744,073,709,552,000');
+});
+
+it('partial provider usage keeps missing input and total unreported', async () => {
+  const ui = render(<TurnUsage models={[]} usage={{ output_tokens: '9', details: { cached_input_tokens: '3' } }}/>);
+  fireEvent.click(ui.getByRole('button', { name: 'Usage Not reported' }));
+  const dialog = await ui.findByRole('dialog', { name: 'Turn usage' });
+  expect(dialog.textContent).toContain('InputNot reported');
+  expect(dialog.textContent).toContain('Output9 token');
+  expect(dialog.textContent).toContain('Cached input3 token');
+  expect(dialog.textContent).not.toMatch(/Cache hit|0 token|12 token/);
 });

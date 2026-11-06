@@ -28,6 +28,7 @@
 //! `runtime_multi_compaction.rs`.
 
 use super::super::{common, support};
+use rustx::durable::RequestStore;
 use support::model::{FixtureModel, ScriptedAdapterFactory, fixture_session_model};
 
 use std::sync::Arc;
@@ -40,7 +41,6 @@ use rustx::context::{
     ContextErrorKind, ContextProposal, ContextRuntime, TokenEstimator, UserMessageProposal,
 };
 use rustx::conversation::ConversationState;
-use rustx::durable::ConversationStore;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -88,9 +88,9 @@ fn done_with_usage(reason: ModelFinishReason, input_tokens: u64) -> ModelEvent {
     ModelEvent::Completed {
         finish_reason: reason,
         usage: Some(ModelUsage {
-            input_tokens,
-            output_tokens: 4,
-            total_tokens: input_tokens + 4,
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(4),
+            total_tokens: Some(input_tokens + 4),
             details: None,
         }),
     }
@@ -131,6 +131,20 @@ fn overflow_error() -> rustx::model::ModelError {
         timeout_phase: None,
         generation: None,
     }
+}
+
+fn coded_overflow_error() -> rustx::model::ModelError {
+    crate::model::adapter::openai::mapping::normalize_error(
+        async_openai::error::OpenAIError::ApiError(async_openai::error::ApiErrorResponse {
+            status_code: reqwest::StatusCode::BAD_REQUEST,
+            api_error: async_openai::error::ApiError {
+                message: "请求被拒绝".into(),
+                r#type: Some("invalid_request_error".into()),
+                code: Some("context_length_exceeded".into()),
+                param: None,
+            },
+        }),
+    )
 }
 
 fn request(
@@ -687,6 +701,31 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
             .effective_system_prompt
             .contains(&extension_guidance)
     );
+    // Inspect the actual provider input, not just the hot conversation's ids:
+    // the retired prefix is replaced, while the recent message keeps its exact
+    // original body and canonical identity after the summary.
+    assert_eq!(requests[0].messages.len(), 2);
+    let ModelInputMessage::Derived(summary) = &requests[0].messages[0] else {
+        panic!("the compacted prefix must be a derived summary");
+    };
+    assert!(
+        summary
+            .transformations
+            .contains(&rustx::model::projected::SemanticTransformation::Summary)
+    );
+    assert_eq!(
+        requests[0].messages[1].as_canonical(),
+        Some(&user("recent", "recent history")),
+        "nonzero recent-token retention preserves the original message verbatim"
+    );
+    let history = rustx::runtime::RequestHistory::new(tool_runtime.durable_store());
+    let frozen = common::request_snapshots(&history);
+    assert_eq!(frozen.len(), 1);
+    let reconstructed = history.reconstruct(&frozen[0].identity).unwrap();
+    assert_eq!(
+        reconstructed.messages, requests[0].messages,
+        "the frozen request inspected by Trace preserves the same summary and original recent suffix"
+    );
 }
 
 /// A long history compacts proactively before the next model request: the
@@ -745,16 +784,30 @@ async fn proactive_compaction_before_the_next_turn() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             finish_reason: ModelFinishReason::ToolCalls,
             usage: Some(ModelUsage {
-                input_tokens: 100,
-                output_tokens: 4,
-                total_tokens: 104,
+                input_tokens: Some(100),
+                output_tokens: Some(4),
+                total_tokens: Some(104),
                 details: None,
             }),
             generation: None,
@@ -780,10 +833,24 @@ async fn proactive_compaction_before_the_next_turn() {
         compaction_event(&result, true),
         compaction_event(&result, false),
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("2"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("2"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -947,11 +1014,14 @@ async fn below_threshold_runs_without_compaction() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn overflow_compact_and_retry_succeeds() {
+    let overflow = coded_overflow_error();
     let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text_delta(0, "provisional")),
-            FakeStep::Emit(overflow_event()),
+            FakeStep::Emit(ModelEvent::Failed {
+                error: overflow.clone(),
+            }),
         ],
         vec![
             FakeStep::Emit(started()),
@@ -988,12 +1058,26 @@ async fn overflow_compact_and_retry_succeeds() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestFailed {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
-            error: overflow_error(),
+            error: overflow,
             usage: None,
             generation: None,
         },
@@ -1005,16 +1089,30 @@ async fn overflow_compact_and_retry_succeeds() {
             retry_delay_ms: None,
         },
         RuntimeEvent::ModelRequestStarted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 1,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestCompleted {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 1,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
-                input_tokens: 4,
-                output_tokens: 4,
-                total_tokens: 8,
+                input_tokens: Some(4),
+                output_tokens: Some(4),
+                total_tokens: Some(8),
                 details: None,
             }),
             generation: None,
@@ -2088,6 +2186,13 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
 
     let expected_tail = vec![
         RuntimeEvent::ModelRequestFailed {
+            owner: rustx::model::ModelRequestOwner::Agent {
+                identity: rustx::model::RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: rustx::runtime::identity::TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
             request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             error: overflow_error(),
             usage: None,
@@ -2124,6 +2229,101 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
 // ---------------------------------------------------------------------------
 // Context failure classification (preparation vs compaction)
 // ---------------------------------------------------------------------------
+
+/// A logical step's proactive compaction and later overflow recovery share
+/// one deadline. Refusing recovery after that deadline preserves the provider
+/// failure and reports the compaction diagnostic without another Summary call.
+#[tokio::test]
+async fn expired_proactive_compaction_budget_preserves_later_overflow() {
+    let clock = Arc::new(crate::runtime::monotonic::ManualMonotonicClock::new());
+    let (release, released) = model_release();
+    let model = fake_model(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::ParkUntilReleased(released),
+        FakeStep::Emit(overflow_event()),
+    ]]);
+    let mut parked = model.parked();
+    let controller_clock = clock.clone();
+    let controller = tokio::spawn(async move {
+        parked.wait_for(|parked| *parked).await.unwrap();
+        controller_clock.advance(300_000);
+        release.send(true).unwrap();
+    });
+    let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary".into())]);
+    let mut policy = crate::scripted_suites::support::default_execution_policy();
+    policy.monotonic_clock = clock;
+    policy.model_timeout_policy = rustx::model::ModelTimeoutPolicy::new(
+        std::time::Duration::from_secs(600),
+        std::time::Duration::from_secs(600),
+    );
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            fresh_request(
+                "attempt-1",
+                vec![
+                    user("old-1", "old"),
+                    user("old-2", "older"),
+                    fresh_user("msg-inbound-1", "fresh instruction"),
+                ],
+                &model,
+            ),
+            capability.into_lease(),
+            &cancellation,
+            policy,
+            runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer.clone()),
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .unwrap()
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
+    assert_single_terminal(&result.event_history);
+    assert_eq!(
+        result.outcome,
+        AttemptOutcome::Failed {
+            error: AttemptFailure::Model {
+                error: overflow_error(),
+            },
+        }
+    );
+    controller.await.unwrap();
+    assert_eq!(model.requests().len(), 1, "no overflow retry starts");
+    assert_eq!(
+        summarizer.requests().len(),
+        1,
+        "only proactive Summary starts"
+    );
+    let started: Vec<_> = result
+        .event_history
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::CompactionStarted { operation_id } => Some(operation_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started.len(), 2);
+    assert_ne!(started[0], started[1]);
+    assert!(result.event_history.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::CompactionCompleted { operation_id, .. } if operation_id == started[0]
+    )));
+    assert!(result.event_history.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::CompactionFailed { operation_id, error }
+            if operation_id == started[1] && error.contains("deadline")
+    )));
+    assert!(
+        !result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Overflow replanning at the attempt boundary
@@ -2216,9 +2416,8 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![
-        FakeSummaryStep::Fail(ContextError::new(
-            ContextErrorKind::SummaryInputTooLarge,
-            "the summary request exceeded the summary model context window",
+        FakeSummaryStep::Fail(rustx::context::summarizer::summary_execution_failed(
+            coded_overflow_error(),
         )),
         FakeSummaryStep::Return("summary-1".to_owned()),
     ]));
@@ -2540,6 +2739,257 @@ async fn no_progress_compaction_fails_without_retry() {
 // ---------------------------------------------------------------------------
 // Cancellation at the Agent Loop/context boundary
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cancellation_observed_by_compaction_budget_preserves_the_attempt_reason() {
+    use crate::runtime::monotonic::{ManualMonotonicClock, MonotonicClock};
+    #[derive(Debug)]
+    struct CancelOnBudgetClock {
+        cancellation: AgentCancellation,
+        clock: ManualMonotonicClock,
+        reads: AtomicUsize,
+    }
+    impl MonotonicClock for CancelOnBudgetClock {
+        fn now_millis(&self) -> u64 {
+            if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.cancellation.cancel();
+            }
+            self.clock.now_millis()
+        }
+        fn wait_until_millis(&self, deadline: u64) -> futures_util::future::BoxFuture<'static, ()> {
+            self.clock.wait_until_millis(deadline)
+        }
+    }
+    for reason in [
+        CancellationReason::UserRequested,
+        CancellationReason::RuntimeShutdown,
+    ] {
+        let cancellation = AgentCancellation::new(reason);
+        let clock = Arc::new(CancelOnBudgetClock {
+            cancellation: cancellation.clone(),
+            clock: ManualMonotonicClock::new(),
+            reads: AtomicUsize::new(0),
+        });
+        let model = fake_model(Vec::new());
+        let summarizer = FakeContextSummarizer::new(Vec::new());
+        let context = runtime_with(50, 0, 0, weighted(100, 10, 0), summarizer.clone());
+        // The first monotonic read on this proactive path constructs the
+        // budget after the initial cancellation check and before check_start.
+        let mut policy = crate::scripted_suites::support::default_execution_policy();
+        policy.monotonic_clock = clock.clone();
+        let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+        let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let result = common::durable_agent_result(
+            AgentExecution::new(
+                request(
+                    "cancel-budget-precheck",
+                    vec![user("history", "history")],
+                    1,
+                    &model,
+                ),
+                capability.into_lease(),
+                &cancellation,
+                policy,
+                context,
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .unwrap()
+            .run()
+            .await,
+            tool_runtime.durable_store().as_ref(),
+        );
+        assert_eq!(clock.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(result.outcome, AttemptOutcome::Cancelled { reason });
+        assert_single_terminal(&result.event_history);
+        assert!(
+            matches!(result.event_history.last(), Some(RuntimeEvent::AttemptCancelled { reason: observed, .. }) if *observed == reason)
+        );
+        assert!(!result.event_history.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::AttemptFailed { .. }
+                | RuntimeEvent::CompactionStarted { .. }
+                | RuntimeEvent::CompactionFailed { .. }
+                | RuntimeEvent::ModelRequestStarted { .. }
+                | RuntimeEvent::AuxiliaryCallStarted { .. }
+        )));
+        assert!(model.requests().is_empty());
+        assert!(summarizer.requests().is_empty());
+        assert_no_compaction_committed(&result);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One native admission gate covers trigger, cancellation reason and each Busy source.
+async fn cancellation_winning_summary_admission_is_not_a_compaction_failure() {
+    #[derive(Clone, Copy)]
+    enum Pressure {
+        None,
+        Capacity,
+        Lifecycle,
+    }
+    for (pressure, cancel_attempt) in [
+        (Pressure::None, true),
+        (Pressure::Capacity, true),
+        (Pressure::Lifecycle, true),
+        (Pressure::Lifecycle, false),
+    ] {
+        for (reason, overflow) in [
+            (CancellationReason::UserRequested, false),
+            (CancellationReason::UserRequested, true),
+            (CancellationReason::RuntimeShutdown, false),
+            (CancellationReason::RuntimeShutdown, true),
+        ] {
+            let model = fake_model(if overflow {
+                vec![vec![
+                    FakeStep::Emit(started()),
+                    FakeStep::Emit(overflow_event()),
+                ]]
+            } else {
+                Vec::new()
+            });
+            let cancellation = AgentCancellation::new(reason);
+            let policy = crate::scripted_suites::support::default_execution_policy();
+            let request = request(
+                "cancel-summary-admission",
+                vec![user("history", "history")],
+                1,
+                &model,
+            );
+            let mut context = runtime_with(
+                if overflow { 5_000 } else { 50 },
+                0,
+                0,
+                weighted(100, 10, 0),
+                FakeContextSummarizer::new(Vec::new()),
+            );
+            context.summarizer = Arc::new(rustx::context::ModelBackedSummarizer::new(
+                request.model.summary_invocation().clone(),
+                policy.model_timeout_policy,
+                policy.monotonic_clock.clone(),
+            ));
+            let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+            let capacity = crate::runtime::auxiliary::capacity::ProcessCapacity::new();
+            let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+            assert!(lifecycle.activate());
+            let backend = crate::runtime::auxiliary::executor::AuxiliaryExecutor::new(
+                tool_runtime.durable_store().clone(),
+                Arc::new(crate::runtime::types::SystemClock),
+                policy.monotonic_clock.clone(),
+                lifecycle.clone(),
+                Arc::new(crate::runtime::types::DurabilityGate::new()),
+                capacity.conversation(),
+            )
+            .unwrap();
+            context
+                .summarizer
+                .bind_backend(Arc::new(backend), context.resource_revision.get());
+            let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+            let mut execution = AgentExecution::new(
+                request,
+                capability.into_lease(),
+                &cancellation,
+                policy,
+                context,
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .unwrap();
+            let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+            let _release = gate.arm_scoped();
+            execution.install_compaction_admission_gate(gate.clone());
+            let cancel = cancellation.clone();
+            let (finished, settled) = std::sync::mpsc::channel();
+            let controller = tokio::task::spawn_blocking(move || {
+                gate.wait_entered();
+                let mut held = Vec::new();
+                if matches!(pressure, Pressure::Capacity) {
+                    for _ in 0..8 {
+                        let domain = capacity.conversation();
+                        for _ in 0..4 {
+                            held.push(domain.reserve_compaction().unwrap());
+                        }
+                    }
+                }
+                let resume = || {
+                    if cancel_attempt {
+                        cancel.cancel();
+                    }
+                    gate.release();
+                };
+                if matches!(pressure, Pressure::Lifecycle) {
+                    // This is the very same lifecycle used by the executor,
+                    // held independently of its cancellation gate. No Store
+                    // connection/SQL lease is held across terminal writes.
+                    lifecycle
+                        .with_running_commit(|| {
+                            resume();
+                            settled
+                                .recv_timeout(std::time::Duration::from_secs(10))
+                                .unwrap();
+                        })
+                        .unwrap();
+                } else {
+                    resume();
+                }
+                held
+            });
+            let execution_result = execution.run().await;
+            let _ = finished.send(());
+            let _held = controller.await.unwrap();
+            let result = common::durable_agent_result(
+                execution_result,
+                tool_runtime.durable_store().as_ref(),
+            );
+            if cancel_attempt {
+                assert_eq!(result.outcome, AttemptOutcome::Cancelled { reason });
+            } else {
+                assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
+                assert!(
+                    result.event_history.iter().any(|event| matches!(
+                        event, RuntimeEvent::CompactionFailed { error, .. }
+                            if error.contains("native lifecycle ownership boundary is busy")
+                    )),
+                    "active lifecycle contention still reports Busy without waiting"
+                );
+            }
+            assert!(
+                result
+                    .event_history
+                    .iter()
+                    .any(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
+            );
+            if cancel_attempt {
+                assert!(!result.event_history.iter().any(|event| matches!(
+                    event,
+                    RuntimeEvent::CompactionFailed { .. } | RuntimeEvent::AttemptFailed { .. }
+                )));
+                assert!(matches!(
+                    result.event_history.last(),
+                    Some(RuntimeEvent::AttemptCancelled { .. })
+                ));
+            }
+            assert_eq!(
+                model.requests().len(),
+                usize::from(overflow),
+                "cancellation prevents Summary dispatch and any subsequent primary dispatch"
+            );
+            assert_no_compaction_committed(&result);
+            let journal = tool_runtime.durable_store().read_events(None, 32).unwrap();
+            assert!(
+                !journal.events.iter().any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::AuxiliaryCallStarted { .. }
+                        | RuntimeEvent::ModelRequestStarted {
+                            owner: rustx::model::ModelRequestOwner::Auxiliary { .. },
+                            ..
+                        }
+                )),
+                "cancelled admission creates no Summary Call or Request start"
+            );
+        }
+    }
+}
 
 /// Cancellation before proactive compaction begins: no `CompactionStarted`,
 /// no summary, no canonical commit, no Surface rewrite, no retry.
@@ -3632,7 +4082,7 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
                 None,
                 vec![UploadFile {
                     name: "data.txt".into(),
-                    bytes: b"local, Session-owned contents".to_vec(),
+                    data: b"local, Session-owned contents".to_vec().into(),
                 }],
             )
             .await

@@ -69,7 +69,7 @@ test("pending edit/remove use exact observed CAS once, including stale results",
       const item = pending("9007199254740994", "9007199254740995", "original");
       const h = await harness(snapshot({ inbound: { pending: [item] } }));
       const view = new PendingInputView(terminal(), h.session, () => {}, () => {});
-      h.session.updateState(state => ({ ...state, inbound: { pending: [{ ...item, revision: "9007199254740996" }] } }));
+      h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { registration_id: registrationId(h.target), target: h.target, cursor: "1", event: { type: "pending_inbound_changed", pending: [{ ...item, revision: "9007199254740996" }] } } });
       const work = view.mutate(method === "inbound/edit" ? "edited" : undefined);
       const request = await nextRequest(h, method, 0);
       assert.deepEqual((request.params as MethodParams<typeof method>).expected, { sequence: item.sequence, revision: item.revision });
@@ -151,6 +151,55 @@ test("whole and fragmented bracketed paste cannot Send/Queue/dispatch a slash; l
   assert.equal(editor.getExpandedText(), payload); assert.ok(editor.render(40).length < 24);
 });
 
+for (const reset of ['none', 'clear', 'replace', 'empty restore'] as const) {
+  test(`literal restore editor: ${reset} preserves the intended command boundary`, () => {
+    const editor = new ComposerEditor(terminal());
+    const submitted: Array<{ text: string; commands: boolean }> = [];
+    editor.onPrompt = (text, commands) => submitted.push({ text, commands });
+    // Leave Pi's token-end paste decision pending across the explicit restore.
+    editor.handleInput('/can');
+    editor.handleInput('\x1b[200~cel\x1b[201~');
+    editor.restoreDraftText('/cancel', { literal: true });
+    let text = '/cancel';
+    if (reset === 'clear') {
+      editor.setText('');
+      editor.handleInput(text);
+    } else if (reset === 'replace') {
+      text = '/settings';
+      editor.setText(text);
+    } else if (reset === 'empty restore') {
+      editor.restoreDraftText('', { literal: false });
+      editor.handleInput(text);
+    }
+    assert.equal(editor.getExpandedText(), text);
+    editor.handleInput('\r');
+    assert.deepEqual(submitted, [{ text, commands: reset !== 'none' }]);
+    assert.equal(editor.getExpandedText(), '');
+  });
+}
+
+test('logical draft provenance: token-end paste survives A/B activation without entering the typed B command', () => {
+  const editor = new ComposerEditor(terminal());
+  const submitted: Array<{ text: string; commands: boolean }> = [];
+  editor.onPrompt = (text, commands) => submitted.push({ text, commands });
+  editor.handleInput('/can');
+  editor.handleInput('\x1b[200~cel\x1b[201~');
+  const textA = editor.getExpandedText();
+  const provenanceA = editor.captureProvenance();
+  assert.equal(provenanceA.literal, false);
+  assert.equal(provenanceA.pasteAtTokenEnd, 4, 'classification remains pending until the next key');
+  editor.setText('/settings');
+  const textB = editor.getExpandedText();
+  const provenanceB = editor.captureProvenance();
+  assert.equal(provenanceB.literal, false);
+  assert.equal(provenanceB.pasteAtTokenEnd, undefined);
+  editor.restoreDraftText(textA, provenanceA);
+  editor.handleInput('\r');
+  editor.restoreDraftText(textB, provenanceB);
+  editor.handleInput('\r');
+  assert.deepEqual(submitted, [{ text: '/cancel', commands: false }, { text: '/settings', commands: true }]);
+});
+
 test("Pi grapheme cursor and deletion retain CJK, emoji and combining sequences", () => {
   const editor = new ComposerEditor(terminal()); editor.setText("中👨‍👩‍👧‍👦e\u0301");
   editor.handleInput("\x7f"); assert.equal(editor.getExpandedText(), "中👨‍👩‍👧‍👦");
@@ -184,30 +233,26 @@ test("exact historical completed_response drives tails and whole-conversation st
   assert.match(transcriptString(replaceFromSnapshot(native, "20")), /120 tok · 18.0s/);
 });
 
-test("T12/T16 native application notifications reject reorder and adoption sends the inspected identity", async () => {
+test("partial response usage shows observed fields without inventing a total", () => {
+  const native = snapshot({ transcript: { entries: [{ cursor: "4", item: { type: "message", message: assistantMessage("answer", "partial usage") },
+    completed_response: { closing_locator: { type: "by_message_id", message_id: "answer" }, deferred_fields: [], closing_message_id: "answer",
+      origin: { attempt_id_source: null, conversation_id: "origin", attempt_id: "old", closing_message_id: "answer" },
+      completed_at: "2026-01-01T00:00:00Z", surface_revision: "4", usage: { output_tokens: "0" } },
+  }] } });
+  const rendered = transcriptString(replaceFromSnapshot(native, "10"));
+  assert.match(rendered, /↑\? ↓0 tok/);
+  assert.doesNotMatch(rendered, /↑0|\n0 tok/);
+});
+
+test("T12/T16 native application notifications reject reorder", async () => {
   const h = await harness();
-  const candidate = { identity: { input_revision: "input", attempt: "4" }, expected_binding: "2", impact: "prefix_changed" as const };
   // A Session application scope is the Session identity; its authored source
   // owners are a separate native fact.
-  const application = { scope: h.session.sessionId, sources: [{ kind: "user" as const }, { kind: "workspace" as const, directory: "/workspace/A" }], version: "9007199254740993", desired: candidate.identity,
-    units: { execution_policy: { status: "applied" as const }, instructions: { status: "ready" as const, impact: "prefix_changed" as const } }, candidate };
+  const application = { scope: h.session.sessionId, sources: [{ kind: "user" as const }, { kind: "workspace" as const, directory: "/workspace/A" }], version: "9007199254740993", desired: { input_revision: "input", attempt: "4" },
+    units: { execution_policy: { status: "applied" as const }, instructions: { status: "ready" as const } } };
   h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application:applicationReceipt(application) } });
-  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: (applicationReceipt(({ ...application, version: "9", candidate: null }))) } });
+  h.session.applyNotification({ jsonrpc: "2.0", method: "configuration/changed", params: { application: applicationReceipt({ ...application, version: "9", units: { execution_policy: { status: "applied" as const }, instructions: { status: "applied" as const } } }) } });
   assert.deepEqual(h.session.application, application);
-  const adopting = h.session.adoptConfiguration(candidate);
-  const request = await nextRequest(h, "session/adoptConfiguration", 0);
-  assert.deepEqual(request.params, { session_id: h.session.sessionId, candidate: candidate.identity, expected_binding: candidate.expected_binding });
-  h.transport.respond(request.id, {type:'configuration_receipt',scope:({ ...application, version: "9007199254740994", candidate: null })?.scope??'configuration',version:({ ...application, version: "9007199254740994", candidate: null })?.version??'0'});
-  const adoptionRead = await nextRequest(h,"session/configuration");
-  h.transport.respond(adoptionRead.id,{type:"session_configuration",projection:applicationReceipt(application)});
-  await adopting;
-  assert.deepEqual(h.session.application?.candidate, candidate, "acknowledgement alone cannot clear pending state");
-  const reading = h.session.readConfiguration();
-  const read = await nextRequest(h, "session/configuration", 0);
-  h.transport.respond(read.id, { type: "session_configuration", projection:(applicationReceipt(({ ...application, version: "9007199254740994", candidate: null }))) });
-  await reading;
-  assert.equal(h.session.application?.candidate, null);
-  assert.equal(h.transport.transportCount("session/adoptConfiguration"), 1);
   h.client.close();
 });
 

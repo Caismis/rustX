@@ -1,8 +1,11 @@
-import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v52.ts';
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v52.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v73.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v73.ts';
+import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v73.ts';
+import type { WorkflowEdit, WorkflowSource } from '../../../protocol/app-server/workflow-documents.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
-export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number }
-export interface DeliveryBytes { file: SessionFileReference; data: string }
+import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
+export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }
+export interface DeliveryBytes extends FileBytes { file: SessionFileReference }
 export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
@@ -23,6 +26,33 @@ export type WorkspaceConfigurationResult =
   | { kind: 'mcp_probe'; result: McpProbeResult }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
+/** One native Workflow file operation on one registered Workspace's own
+ * files (Issue #491). */
+export type WorkflowHostOperation =
+  | { kind: 'list' }
+  | { kind: 'read'; id: string }
+  | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
+  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null }
+  | { kind: 'enable'; id: string; expected_revision: string; enabled: boolean }
+  | { kind: 'analyze'; id: string; document: WorkflowFileDocument; generation: string; query?: WorkflowAnalysisQuery }
+  | { kind: 'check'; id: string; document: WorkflowFileDocument }
+  | { kind: 'write'; id: string; expected_revision: string; edit: WorkflowEdit };
+/** The separate authoritative read attempted after a confirmed Workflow
+ * write; its failure never turns the committed write into a failed one. */
+export type WorkflowReread = { status: 'observed'; source: WorkflowSource } | { status: 'failed'; error: string };
+export interface WorkflowCommit {
+  acknowledgement: { revision: string; configuration_revision: string | null };
+  reread: WorkflowReread;
+}
+export type WorkflowHostResult =
+  | { kind: 'list'; library: WorkflowLibrary }
+  | { kind: 'read'; source: WorkflowSource }
+  | { kind: 'model_choices'; choices: WorkflowModelChoices }
+  | { kind: 'tool_catalog'; catalog: WorkflowToolCatalog }
+  | { kind: 'enable' }
+  | { kind: 'analyze'; report: WorkflowAnalysisReport }
+  | { kind: 'check'; report: WorkflowCheckReport }
+  | { kind: 'write'; commit: WorkflowCommit };
 /** Product Host contract. No rustX trust, configuration, or Session ownership. */
 export interface ProductHostWorkspace { id: string; displayName: string; location: string; displayPath: string }
 export interface WorkspaceAuthorityScope {
@@ -49,11 +79,32 @@ export function validateLocations(value: unknown, count: number): asserts value 
 export class WorkspaceHostError extends Error {
   readonly kind?: string;
   readonly uncertain: boolean;
-  constructor(message: string, kind?: string, uncertain = false) {
+  /** The typed native rejection the Host relayed, when one exists. */
+  readonly native?: ErrorData;
+  constructor(message: string, kind?: string, uncertain = false, native?: ErrorData) {
     super(message);
     this.name = 'WorkspaceHostError';
     this.kind = kind;
     this.uncertain = uncertain;
+    this.native = native;
+  }
+}
+/** Source/authority facts shared by content retention and presentation. */
+export function fileSourceFailure(cause: unknown): 'authorization_revoked' | 'obsolete' | 'source_missing' | 'source_unavailable' | 'source_changed' | 'too_large' | 'capacity' | undefined {
+  if (!(cause instanceof WorkspaceHostError)) return;
+  if (cause.kind === 'authority_replaced') return 'authorization_revoked';
+  if (['stale_attachment', 'stale_runtime', 'unknown_session', 'unknown_node'].includes(cause.kind ?? '')) return 'obsolete';
+  if (cause.native?.kind === 'session_file_read') {
+    switch (cause.native.reason) {
+      case 'unauthorized': return 'authorization_revoked';
+      case 'missing': return 'source_missing';
+      case 'unavailable': case 'not_regular': return 'source_unavailable';
+      case 'replaced': return 'source_changed';
+      case 'too_large': case 'capacity': return cause.native.reason;
+    }
+  }
+  switch (cause.kind) {
+    case 'authorization_revoked': case 'obsolete': case 'source_missing': case 'source_unavailable': case 'source_changed': case 'too_large': case 'capacity': return cause.kind;
   }
 }
 /** Private physical facts, independent of cancellation/publication intent.
@@ -69,12 +120,23 @@ export function settlementFailureKind(cause: unknown): SettlementFailureKind | u
 }
 
 export interface ProductHostWorkspaces {
+  /** Targeted change hints. Initial version is native-authorized after the
+   * watcher is ready; every hint still requires a fresh authorized probe. */
+  observeDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation>;
+  observeWorkspaceFile?(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation>;
   workbench?(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, signal?: AbortSignal): Promise<import('./workbench.ts').WorkbenchResult>;
   previewDocument?(scope: WorkspaceAuthorityScope, request: DocumentRequest, signal?: AbortSignal): Promise<DocumentResult>;
   desktopCatalog?(scope: WorkspaceAuthorityScope, refresh?: boolean): Promise<import('./desktop.ts').DesktopCatalog>;
   openWorkspace?(scope: WorkspaceAuthorityScope, target: import('./desktop.ts').DesktopTarget, application: import('./desktop.ts').DesktopAppId): Promise<import('./desktop.ts').DesktopLaunch>;
   readDelivery?(scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal): Promise<DeliveryBytes>;
   configureWorkspace?(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult>;
+  /** Workflow file authoring in one registration of exactly `scope`, the
+   * Product Host authority that admitted the transaction, on exactly the
+   * native App Server `native` (its `initialize` authority identity) the
+   * transaction was bound to. The two are separate constraints: the Host
+   * checks `native` against the connection it opened, after initializing it
+   * and before dispatching anything. */
+  workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
   /** Each metadata write must validate this expected scope at execution, before changing registrations. */
   adoptWorkspace(scope: WorkspaceAuthorityScope, location: string): Promise<void>;

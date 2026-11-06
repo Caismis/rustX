@@ -57,7 +57,7 @@ export const ZoomControls = forwardRef<ZoomControlsHandle, {
         </svg>
       </Button></span>
     </Tooltip>
-    <Menu open={open} align="start" dense className={css.zoomMenu}
+    <Menu open={open} align="start" dense listClassName={css.zoomMenu}
       anchor={<Button size="sm" className={css.percent} aria-label={labels.menu} aria-expanded={open}
         onMouseDown={(event) => { event.preventDefault() }} onClick={() => { setOpen(value => !value) }}>
         <span>{labels.value(Math.round(displayZoom * 100))}</span>

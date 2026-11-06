@@ -1,0 +1,90 @@
+description: Review the request with a native child agent.
+block:
+  input:
+    type: object
+    properties:
+      task:
+        type: string
+      report:
+        type: object
+        properties:
+          overview:
+            type: string
+          issues:
+            type: array
+            items:
+              type: string
+          candidate:
+            type: "null"
+        required:
+          - overview
+          - issues
+          - candidate
+        additionalProperties: false
+    required:
+      - task
+      - report
+    additionalProperties: false
+  nodes:
+    workflow_start:
+      type: start
+    review:
+      type: agent
+      profile: reviewer
+      task:
+      - type: literal
+        value: "Review the request and commit the result."
+      - type: literal
+        value: "\n\ntask: "
+      - type: reference
+        path: ["args", "task"]
+      output:
+        type: json_schema
+        schema:
+          type: object
+          properties:
+            passed:
+              type: boolean
+            summary:
+              type: string
+          required:
+            - passed
+            - summary
+          additionalProperties: false
+    gate:
+      type: review
+      content:
+      - type: reference
+        path: [args, report, overview]
+      - type: literal
+        value: "\n\nIssues: "
+      - type: reference
+        path: [args, report, issues]
+      actions:
+      - id: accept
+        title: Accept
+      - id: revise
+        title: Revise
+      timeout_ms: 600000
+    success:
+      type: return
+      outputs:
+      - {variable: summary, value_selector: [review, summary]}
+    failure:
+      type: return
+      outputs:
+      - {variable: summary, value_selector: [args, task]}
+  edges:
+  - from: workflow_start
+    to: review
+  - from: review
+    to: gate
+  - from: gate
+    to: success
+    port: accept
+  - from: gate
+    to: failure
+    port: revise
+  - from: gate
+    to: failure
+    port: timeout

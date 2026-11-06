@@ -247,12 +247,17 @@ fn handle_request(
                     request.params.protocol_version
                 ),
             );
-            let mut result = InitializeResult::new(
-                ServerCapabilities::builder()
-                    .enable_tools()
-                    .enable_tool_list_changed()
-                    .build(),
-            );
+            let mut capabilities = ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build();
+            if std::env::var_os(super::TOOLS_DISABLED_ENV).is_some() {
+                capabilities.tools = None;
+            }
+            if std::env::var_os(super::RESOURCES_ENV).is_some() {
+                capabilities.resources = Some(rmcp::model::ResourcesCapability::default());
+            }
+            let mut result = InitializeResult::new(capabilities);
             result.protocol_version = revision.clone();
             result.server_info = Implementation::new("rustx-legacy-fixture", "0.0.0");
             vec![legacy_response(ServerResult::InitializeResult(result), id)]
@@ -265,6 +270,9 @@ fn handle_request(
             };
             vec![legacy_response(ServerResult::ListToolsResult(result), id)]
         }
+        request @ (ClientRequest::ListResourcesRequest(_)
+        | ClientRequest::ListResourceTemplatesRequest(_)
+        | ClientRequest::ReadResourceRequest(_)) => handle_resource_request(request, id),
         ClientRequest::CallToolRequest(request) if request.params.name == "mutate" => {
             record(journal, JOURNAL_MUTATE);
             *changed = true;
@@ -339,4 +347,38 @@ fn record(journal: Option<&PathBuf>, entry: &str) {
     };
     let _ = writeln!(file, "{entry}");
     let _ = file.flush();
+}
+
+/// Resource framing is shared with the ordinary fixture; only legacy wire encoding differs.
+fn handle_resource_request(request: ClientRequest, id: RequestId) -> Vec<ServerJsonRpcMessage> {
+    match request {
+        ClientRequest::ListResourcesRequest(request) => {
+            let state = super::resources::ResourceFixtureState::from_env();
+            match state.list(request.params, false) {
+                Ok(page) => vec![legacy_response(ServerResult::ListResourcesResult(page), id)],
+                Err(error) => vec![ServerJsonRpcMessage::error(error, Some(id))],
+            }
+        }
+        ClientRequest::ListResourceTemplatesRequest(request) => {
+            let state = super::resources::ResourceFixtureState::from_env();
+            match state.templates(request.params) {
+                Ok(page) => vec![legacy_response(
+                    ServerResult::ListResourceTemplatesResult(page),
+                    id,
+                )],
+                Err(error) => vec![ServerJsonRpcMessage::error(error, Some(id))],
+            }
+        }
+        ClientRequest::ReadResourceRequest(request) => {
+            let state = super::resources::ResourceFixtureState::from_env();
+            state
+                .record("resources/read", Some(&request.params.uri))
+                .unwrap();
+            match super::resources::ResourceFixtureState::contents(request.params) {
+                Ok(page) => vec![legacy_response(ServerResult::ReadResourceResult(page), id)],
+                Err(error) => vec![ServerJsonRpcMessage::error(error, Some(id))],
+            }
+        }
+        _ => unreachable!("only resource requests reach this fixture helper"),
+    }
 }

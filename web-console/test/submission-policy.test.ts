@@ -12,6 +12,8 @@ describe('composer submission policy (no runtime authority)', () => {
     ['running empty cannot cancel', { running: true, actionable: false, cancellationAvailable: false }, 'enter', 'stop', 'Stop', true, undefined, 'stop-double-escape'],
     ['running blocked', { running: true, blocked: true }, 'enter', 'stop', 'Stop', false, undefined, 'stop-double-escape'],
     ['running blocked cannot cancel', { running: true, blocked: true, cancellationAvailable: false }, 'enter', 'stop', 'Stop', true, undefined, 'stop-double-escape'],
+    ['child running empty keeps Send', { separateStop: true, running: true, actionable: false }, 'enter', 'message', 'Send', true, 'send', 'send'],
+    ['child blocked keeps disabled Send', { separateStop: true, running: true, blocked: true }, 'enter', 'message', 'Send', true, 'send', 'send'],
     ['running queue Enter', { running: true }, 'enter', 'message', 'Queue', false, 'send', 'queue-enter-ctrl-cmd-enter-to-steer'],
     ['running queue accelerated', { running: true }, 'accelerated', 'message', 'Steer', false, 'steer', 'steer'],
     ['running steer Enter', { running: true, busyEnter: 'steer' }, 'enter', 'message', 'Steer', false, 'steer', 'steer-enter-ctrl-cmd-enter-to-queue'],

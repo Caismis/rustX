@@ -86,9 +86,9 @@ fn attempt_view_borrows_warm_blocks_and_tools_without_changing_public_wire() {
     assert_eq!(super::super::prepared_attempt::take_budget_work(), 0);
     assert_eq!(
         second.fit,
-        crate::runtime_client::preflight::required_safe_integer_budget(
+        crate::observation::preflight::required_safe_integer_budget(
             &second,
-            checkpoint::CHECKPOINT_TARGET_BYTES
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES
         )
     );
     assert!(Arc::ptr_eq(&first.model, &second.model));
@@ -140,9 +140,9 @@ fn borrowed_attempt_keeps_budget_rejection_frontiers_and_old_owner_after_mutatio
         let borrowed = seed.capture_attempt_view(&mut actual).unwrap();
         assert_eq!(
             borrowed.fit,
-            crate::runtime_client::preflight::required_safe_integer_budget(
+            crate::observation::preflight::required_safe_integer_budget(
                 &borrowed,
-                checkpoint::CHECKPOINT_TARGET_BYTES
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES
             )
         );
         assert_eq!(
@@ -196,9 +196,9 @@ fn composed_attempt_budget_keeps_unsafe_quantities_and_current_tool_decoration()
         let view = seed.capture_attempt_view(&mut capture).unwrap();
         assert_eq!(
             view.fit,
-            crate::runtime_client::preflight::required_safe_integer_budget(
+            crate::observation::preflight::required_safe_integer_budget(
                 &view,
-                checkpoint::CHECKPOINT_TARGET_BYTES
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES
             )
         );
         assert_eq!(

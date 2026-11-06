@@ -5,14 +5,11 @@
 //! sleeps or races: ordering is established by committing facts in order, and
 //! read cuts are captured explicitly at the point the assertion is about.
 
-use super::bounds::{
-    TRACE_DETAIL_TEXT_BYTES, TRACE_PREVIEW_BYTES, TRACE_SUMMARY_CONTEXT,
-    TRACE_SUMMARY_CONTEXT_BYTES, TraceText,
-};
-use super::record::{bound_record, generation_metrics};
+use super::record::bound_record;
 use super::*;
 use crate::context::assembly::ContextGeneration;
 use crate::durable::SqliteConversationStore;
+use crate::durable::{CanonicalStore, InboxStore, JournalStore, ObservationStore, RequestStore};
 use crate::events::types::RuntimeEvent as E;
 use crate::message::content::TextBlock;
 use crate::message::types::{
@@ -28,6 +25,11 @@ use crate::model::types::ModelUsage;
 use crate::model::{
     ModelCapabilities, ModelCompat, ModelProtocol, RequestIdentity, RequestSnapshot,
 };
+use crate::observation::trace::bounds::{
+    TRACE_DETAIL_TEXT_BYTES, TRACE_PREVIEW_BYTES, TRACE_SUMMARY_CONTEXT,
+    TRACE_SUMMARY_CONTEXT_BYTES, TraceText,
+};
+use crate::observation::trace::generation::generation_metrics;
 use crate::runtime::identity::{
     ArtifactId, AttemptId, CapabilityRevision, CertifiedExtensionIdentity, ConversationId, EventId,
     MessageId, RequestId, ToolCallId, ToolId, TurnId,
@@ -85,7 +87,7 @@ fn append(store: &dyn ConversationStore, kind: E, seconds: i64) {
     let envelope = event(store, kind, seconds);
     match &envelope.event {
         E::BackgroundExecutionCommitted { .. } => {
-            crate::durable::inbox::ConversationInboundCapability::commit_background_ownership(
+            crate::durable::ConversationInboundCapability::commit_background_ownership(
                 store, envelope,
             )
             .unwrap();
@@ -199,12 +201,11 @@ fn prepared_request(
                     serde_json::json!(EXECUTOR_ENVIRONMENT),
                 ),
             ]),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         4096,
         None,
-        false,
         vec![ModelToolDefinition {
             id: ToolId::new("tool-bash"),
             name: "bash".into(),
@@ -253,6 +254,8 @@ fn commit_request(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                response_schema: None,
+                response_byte_limit: None,
                 continuation_source: snapshot.continuation_source.clone(),
                 images: crate::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),
@@ -340,6 +343,9 @@ fn failure(store: &dyn ConversationStore, request: &RequestSnapshot, kind: Model
     append(
         store,
         E::ModelRequestFailed {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: request.identity.clone(),
+            },
             request_id: request.request_id.clone(),
             usage: None,
             error: ModelError {
@@ -369,6 +375,9 @@ fn completion(
     let mut completed = event(
         store,
         E::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: request.identity.clone(),
+            },
             request_id: request.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage,
@@ -504,9 +513,9 @@ fn retries_stay_actual_requests_under_one_native_step_and_reopen_identically() {
         &store,
         &third,
         Some(ModelUsage {
-            input_tokens: 7,
-            output_tokens: 11,
-            total_tokens: 18,
+            input_tokens: Some(7),
+            output_tokens: Some(11),
+            total_tokens: Some(18),
             details: None,
         }),
         None,
@@ -554,7 +563,7 @@ fn retries_stay_actual_requests_under_one_native_step_and_reopen_identically() {
         Some(ModelErrorKind::MalformedToolProposal)
     );
     assert!(requests[0].usage.is_none(), "a failed request has no usage");
-    assert_eq!(requests[2].usage.as_ref().unwrap().input_tokens, 7);
+    assert_eq!(requests[2].usage.as_ref().unwrap().input_tokens, Some(7));
     assert_eq!(projected.records[0].timing.duration_ms, Some(9000));
     assert!(
         projected
@@ -620,12 +629,11 @@ fn historical_request_detail_ignores_later_configuration_and_later_history() {
             protocol: ModelProtocol::AnthropicMessages,
             max_output_tokens: 9999,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         1_000_000,
         None,
-        true,
         vec![],
         CapabilityRevision::new(2),
         ContextGeneration {
@@ -1237,7 +1245,7 @@ fn workflow_runs_join_exact_native_identity_not_definition_name() {
     let runs: Vec<_> = (1..=2)
         .map(|invocation| WorkflowRunId {
             conversation_id: store.conversation_id().clone(),
-            attempt_id: AttemptId::new("attempt-a"),
+            origin: (AttemptId::new("attempt-a")).into(),
             invocation,
         })
         .collect();
@@ -1245,7 +1253,7 @@ fn workflow_runs_join_exact_native_identity_not_definition_name() {
         append(
             &store,
             E::WorkflowStarted {
-                tool_call_id: ToolCallId::new("same-call"),
+                tool_call_id: Some(ToolCallId::new("same-call")),
                 workflow_id: id.clone(),
                 run_id: run.clone(),
             },
@@ -1280,9 +1288,9 @@ fn workflow_runs_join_exact_native_identity_not_definition_name() {
 #[test]
 fn generation_metrics_use_authoritative_endpoints_only() {
     let usage = ModelUsage {
-        input_tokens: 100,
-        output_tokens: 250,
-        total_tokens: 350,
+        input_tokens: Some(100),
+        output_tokens: Some(250),
+        total_tokens: Some(350),
         details: None,
     };
     let complete = generation_metrics(
@@ -1336,9 +1344,9 @@ fn throughput_requires_usage_evidence() {
     let measured = generation_metrics(
         evidence,
         Some(&ModelUsage {
-            input_tokens: 1,
-            output_tokens: 500,
-            total_tokens: 501,
+            input_tokens: Some(1),
+            output_tokens: Some(500),
+            total_tokens: Some(501),
             details: None,
         }),
     );
@@ -1360,9 +1368,9 @@ fn reopening_a_session_reproduces_identical_historical_timing() {
         &store,
         &frozen,
         Some(ModelUsage {
-            input_tokens: 40,
-            output_tokens: 120,
-            total_tokens: 160,
+            input_tokens: Some(40),
+            output_tokens: Some(120),
+            total_tokens: Some(160),
             details: None,
         }),
         Some(GenerationEvidence {
@@ -1634,8 +1642,8 @@ fn paging_and_the_read_cut_are_finite_and_mutate_nothing() {
 /// Lifecycle refresh stays bounded and repeats no immutable historical input.
 #[test]
 fn lifecycle_refresh_is_bounded_and_repeats_no_historical_input() {
+    use crate::observation::capability_source::CapabilityView;
     use crate::runtime_client::projection::RuntimeClientProjection;
-    use crate::runtime_client::snapshot::CapabilityView;
     let store = store("conv_08e8fef2-9708-70e8-875e-0815ed73b267");
     start(&store);
     request(&store, 0);
@@ -1685,7 +1693,7 @@ fn lifecycle_refresh_is_bounded_and_repeats_no_historical_input() {
 
 #[test]
 fn trace_page_native_proof_matches_structural_admission_at_budget_boundaries() {
-    use crate::runtime_client::{checkpoint, preflight, structural_json};
+    use crate::observation::{preflight, structural_json};
 
     let store = store("conv_37581a87-e638-7e20-bd27-e83b5101bc09");
     start(&store);
@@ -1695,7 +1703,8 @@ fn trace_page_native_proof_matches_structural_admission_at_budget_boundaries() {
         .page(None, 32)
         .unwrap();
     assert!(!original.records.is_empty());
-    let limit = checkpoint::CHECKPOINT_TARGET_BYTES - checkpoint::CHECKPOINT_ITEM_BYTES;
+    let limit = crate::observation::bounded::CHECKPOINT_TARGET_BYTES
+        - crate::observation::bounded::CHECKPOINT_ITEM_BYTES;
     assert_eq!(
         preflight::bounded_safe_integer_fit(&original, limit),
         Some(true)
@@ -1788,12 +1797,12 @@ fn trace_page_bound_native_admission_preserves_full_width_cuts_and_escaped_capac
     cut.through = u64::MAX;
     ensure_page_bound(&page).unwrap();
     let mut bytes = Vec::new();
-    crate::runtime_client::structural_json::to_writer(&mut bytes, &page).unwrap();
+    crate::observation::structural_json::to_writer(&mut bytes, &page).unwrap();
     let decoded: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(decoded["read_cut"]["revision"], u64::MAX.to_string());
     assert_eq!(decoded["read_cut"]["through"], u64::MAX.to_string());
-    let limit = crate::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES
-        - crate::runtime_client::checkpoint::CHECKPOINT_ITEM_BYTES;
+    let limit = crate::observation::bounded::CHECKPOINT_TARGET_BYTES
+        - crate::observation::bounded::CHECKPOINT_ITEM_BYTES;
     assert!(bytes.len() <= limit);
 
     page.next_cursor = Some(TraceCursor("\0".repeat(limit / 6 + 1)));
@@ -2101,8 +2110,8 @@ fn record_bounds_account_for_escaping_and_omit_oversized_identities() {
             call_id: Some(ToolCallId::new(escaped.clone())),
             tool_id: Some(ToolId::new(escaped.clone())),
             name: Some("x".repeat(4096)),
-            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: MessageId::new("bounded-fixture"),
                 },
                 block_index: ContentBlockIndex::new(0),
@@ -2150,8 +2159,9 @@ fn request_failure_preserves_native_cancellation_and_timeout_classes() {
 /// timing; a durable terminal always wins.
 #[test]
 fn live_labels_require_exact_runtime_identity_and_never_supply_timing() {
+    use crate::observation::capability_source::CapabilityView;
     use crate::runtime_client::projection::RuntimeClientProjection;
-    use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientJob};
+    use crate::runtime_client::snapshot::RuntimeClientJob;
     use crate::tools::background::BackgroundLifecycle;
     let store = store("conv_da5c0fef-42f3-73f9-8f7f-b6878d9b0cbd");
     start(&store);
@@ -2221,18 +2231,19 @@ fn live_labels_require_exact_runtime_identity_and_never_supply_timing() {
 #[test]
 #[allow(clippy::too_many_lines)] // Two independent native lifecycles, one history.
 fn older_records_are_repaired_and_settle_by_identity() {
+    use crate::observation::capability_source::CapabilityView;
     use crate::runtime::identity::{RuntimeResourceRevision, ToolExecutionId};
     use crate::runtime::workflow::read_model::{WorkflowRunView, WorkflowState};
     use crate::runtime::workflow::{WorkflowId, WorkflowRunId};
     use crate::runtime_client::projection::RuntimeClientProjection;
-    use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientJob};
+    use crate::runtime_client::snapshot::RuntimeClientJob;
     use crate::tools::background::BackgroundLifecycle;
     let store = store("conv_7cc9b826-cbd4-78d6-87f0-53569f654a7b");
     let execution = ToolExecutionId::new("exec_6600d36f-a2f9-7057-8735-85a8c316b8af");
     let workflow = WorkflowId::parse("old-workflow").unwrap();
     let run = WorkflowRunId {
         conversation_id: store.conversation_id().clone(),
-        attempt_id: AttemptId::new("attempt-a"),
+        origin: (AttemptId::new("attempt-a")).into(),
         invocation: 1,
     };
     append(
@@ -2248,7 +2259,7 @@ fn older_records_are_repaired_and_settle_by_identity() {
     append(
         &store,
         E::WorkflowStarted {
-            tool_call_id: ToolCallId::new("workflow-call"),
+            tool_call_id: Some(ToolCallId::new("workflow-call")),
             workflow_id: workflow.clone(),
             run_id: run.clone(),
         },
@@ -2294,13 +2305,14 @@ fn older_records_are_repaired_and_settle_by_identity() {
         workflow_id: workflow.clone(),
         program_digest: "digest".into(),
         resource_revision: RuntimeResourceRevision::new(1),
-        tool_call_id: ToolCallId::new("workflow-call"),
+        tool_call_id: Some(ToolCallId::new("workflow-call")),
         state: WorkflowState::Running,
         instances: vec![],
         omitted_instances: 0,
         steps_consumed: 0,
         steps_max: 10,
         agents_consumed: 0,
+        model_calls_consumed: 0,
     });
     let projection = TraceProjection::new(&store).unwrap();
     snapshot.trace = projection.page(None, 32).unwrap();
@@ -2457,7 +2469,7 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
     for oversized in [false, true] {
         let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
         let identity = if oversized {
-            "x".repeat(super::bounds::TRACE_IDENTITY_BYTES + 1)
+            "x".repeat(crate::observation::trace::bounds::TRACE_IDENTITY_BYTES + 1)
         } else {
             "valid-identity".to_owned()
         };
@@ -2589,7 +2601,7 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
 fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
     use crate::tools::managed_output::ManagedToolOutput;
     use crate::tools::output::{ForegroundOutputCapture, continuation_for_capture};
-    let private_path = "/private/rustx-managed-output/example/tasks/result.output";
+    let private_path = "temporary-output-allocation";
     for available in [false, true] {
         let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
         let directory = tempfile::tempdir().unwrap();
@@ -2601,17 +2613,7 @@ fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
         if available {
             output.fail_writes_after(0);
         } else {
-            // A real allocation error includes the private results directory.
-            let results = output.root().join("results");
-            std::fs::remove_dir(&results).unwrap();
-            std::fs::write(&results, "not a directory").unwrap();
-            assert!(
-                output
-                    .open_spill()
-                    .unwrap_err()
-                    .to_string()
-                    .contains(private_path)
-            );
+            output.set_force_open_failures(true);
         }
         let mut capture = ForegroundOutputCapture::with_limit(1);
         let diagnostic = capture.push("retained output", &output).unwrap_err();
@@ -2660,11 +2662,11 @@ fn managed_storage_failure_diagnostics_preserve_native_execution_facts() {
         if available {
             assert!(diagnostic.contains("test-forced output write failure"));
         } else {
-            assert!(diagnostic.contains(private_path));
+            assert!(diagnostic.contains("test-forced output open failure"));
             assert!(
                 serde_json::to_string(&detail)
                     .unwrap()
-                    .contains(private_path)
+                    .contains("test-forced output open failure")
             );
         }
     }
@@ -2675,7 +2677,8 @@ fn mandatory_tool_identities_bound_whole_details_and_historical_result_blocks() 
     for oversized in [None, Some("call"), Some("tool")] {
         let store = store("conv_ac56fc5d-a6f5-7885-8745-ac1fad19bb38");
         start(&store);
-        let sentinel = "opaque-identity-".repeat(super::bounds::TRACE_IDENTITY_BYTES);
+        let sentinel =
+            "opaque-identity-".repeat(crate::observation::trace::bounds::TRACE_IDENTITY_BYTES);
         let mut call = bash_call("ordinary-call");
         if oversized == Some("call") {
             call.id = ToolCallId::new(&sentinel);
@@ -2827,7 +2830,7 @@ fn managed_output_locators_and_diagnostics_are_exact_recorded_facts() {
 
 #[test]
 fn mandatory_request_identities_bound_the_entire_request_detail() {
-    let bound = super::bounds::TRACE_IDENTITY_BYTES;
+    let bound = crate::observation::trace::bounds::TRACE_IDENTITY_BYTES;
     // Includes derived Request/Assistant identities that exceed the bound
     // even though their individual Attempt and Step components fit.
     for (attempt_len, step_len) in [(bound + 1, 1), (1, bound + 1), (bound / 2, bound / 2)] {
@@ -3057,6 +3060,9 @@ fn a_fresh_step_at_retry_zero_is_still_compared_with_the_previous_request() {
     append_in_step(
         &store,
         E::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Agent {
+                identity: second.identity.clone(),
+            },
             request_id: second.request_id.clone(),
             finish_reason: ModelFinishReason::Stop,
             usage: None,
@@ -3391,7 +3397,7 @@ fn context_presentation_is_reproducible_and_bounded() {
 fn an_oversized_context_identity_is_omitted_whole() {
     let store = store("conv_0f6b52d7-9a48-7bc3-8e01-74d3fa26c519");
     start(&store);
-    let oversized = "x".repeat(super::bounds::TRACE_IDENTITY_BYTES + 1);
+    let oversized = "x".repeat(crate::observation::trace::bounds::TRACE_IDENTITY_BYTES + 1);
     let context = [
         extension_context(&oversized, "vendor.observability", "Oversized."),
         extension_context("ctx-kept", "vendor.observability", "Kept."),
@@ -3411,7 +3417,7 @@ fn an_oversized_context_identity_is_omitted_whole() {
     assert!(deferred.message_id.is_none());
     assert!(matches!(
         deferred.locator,
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { .. }
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { .. }
     ));
     let original_identity = deferred
         .fields
@@ -3534,11 +3540,11 @@ fn tool_owned_domains_carry_their_exact_originating_tool_call() {
     append(
         &store,
         E::WorkflowStarted {
-            tool_call_id: ToolCallId::new("call-workflow"),
+            tool_call_id: Some(ToolCallId::new("call-workflow")),
             workflow_id: crate::runtime::workflow::WorkflowId::parse("shared").unwrap(),
             run_id: crate::runtime::workflow::WorkflowRunId {
                 conversation_id: store.conversation_id().clone(),
-                attempt_id: AttemptId::new("attempt-a"),
+                origin: (AttemptId::new("attempt-a")).into(),
                 invocation: 1,
             },
         },
@@ -3799,8 +3805,8 @@ fn tool_correlation_survives_paging_and_lifecycle_refresh() {
 fn quiet_snapshot(
     store: &dyn ConversationStore,
 ) -> crate::runtime_client::snapshot::RuntimeClientSnapshot {
+    use crate::observation::capability_source::CapabilityView;
     use crate::runtime_client::projection::RuntimeClientProjection;
-    use crate::runtime_client::snapshot::CapabilityView;
     RuntimeClientProjection::new(
         store.conversation_id().clone(),
         vec![],
@@ -4397,7 +4403,7 @@ fn shared_predecessor_compares_complete_prompt_and_tool_definitions() {
         let detail = projection.detail(&record.id).unwrap().unwrap();
         assert_eq!(probe::counts(), (1, 0));
         assert_eq!(probe::tool_count(), 0);
-        assert!(super::bounds::encoded_len(&detail) <= TRACE_DETAIL_BYTES);
+        assert!(crate::observation::trace::bounds::encoded_len(&detail) <= TRACE_DETAIL_BYTES);
         let detail = detail.request.unwrap();
         assert_eq!(detail.predecessor, summary.predecessor);
         assert!(detail.effective_system_prompt.truncated);
@@ -4453,7 +4459,7 @@ fn predecessor_prompt_bounds_are_independent_and_empty_is_available() {
         completion(&store, &second, None, None, 6);
         let newest = TraceProjection::new(&store).unwrap().page(None, 1).unwrap();
         let detail = detail_of(&store, &newest.records[0].id);
-        assert!(super::bounds::encoded_len(&detail) <= TRACE_DETAIL_BYTES);
+        assert!(crate::observation::trace::bounds::encoded_len(&detail) <= TRACE_DETAIL_BYTES);
         let request = detail.request.unwrap();
         assert_eq!(request.effective_system_prompt.truncated, current_long);
         let previous = request.previous_system_prompt.unwrap();
@@ -4641,7 +4647,7 @@ fn tool_summary_one_exact_proposal_and_no_lifecycle_resolution() {
         assert_eq!(tool.name.as_deref(), Some("bash"));
         let arguments = tool.arguments.as_ref().unwrap();
         assert!(arguments.text.contains(prefix));
-        assert!(arguments.text.len() <= super::bounds::TRACE_PREVIEW_BYTES);
+        assert!(arguments.text.len() <= crate::observation::trace::bounds::TRACE_PREVIEW_BYTES);
         assert!(arguments.truncated);
     }
     probe::reset();
@@ -4681,7 +4687,7 @@ fn lifecycle_location_preserves_bounded_escaped_native_identities() {
     let read = TraceProjection::new(&store).unwrap();
     let header = read.anchor_at(&TraceCursor::at(1)).unwrap().unwrap();
     let mut facts = read.anchor_facts(&header).unwrap();
-    let escaped = "\u{0001}".repeat(super::bounds::TRACE_IDENTITY_BYTES);
+    let escaped = "\u{0001}".repeat(crate::observation::trace::bounds::TRACE_IDENTITY_BYTES);
     facts.location.attempt_id = Some(AttemptId::new(escaped.clone()));
     facts.location.step_id = Some(TurnId::new(escaped.clone()));
     let update = facts.lifecycle().unwrap();
@@ -4886,8 +4892,8 @@ fn native_numeric_tool_locator(
         .unwrap()
         .unwrap();
     TraceToolLocator {
-        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-            locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+            locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
                 position: ledger_position,
             },
             block_index: locator.occurrence.block_index,
@@ -4905,8 +4911,8 @@ mod scale {
     fn tool_locator_searches_complete_history_and_disambiguates_reused_call_ids() {
         let (store, first_cut, call) = reused_tool_history();
         let locator = TraceToolLocator {
-            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: MessageId::new("assistant-0"),
                 },
                 block_index: ContentBlockIndex::new(1),
@@ -4948,8 +4954,8 @@ mod scale {
             call.arguments["command"]
         );
         let wrong_block = TraceToolLocator {
-            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: MessageId::new("assistant-0"),
                 },
                 block_index: ContentBlockIndex::new(0),
@@ -4963,8 +4969,8 @@ mod scale {
         };
         assert!(projection.locate_tool(&wrong_tool).unwrap().is_none());
         let wrong_message = TraceToolLocator {
-            occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id: MessageId::new("unrelated-assistant"),
                 },
                 block_index: ContentBlockIndex::new(1),
@@ -4983,8 +4989,8 @@ mod scale {
         assert!(projection.locate_tool(&wrong_call).unwrap().is_none());
         let second = projection
             .locate_tool(&TraceToolLocator {
-                occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: MessageId::new("assistant-2047"),
                     },
                     block_index: ContentBlockIndex::new(1),
@@ -5060,8 +5066,8 @@ fn t12_t14_t19_trace_constructor_keeps_native_cut_across_later_canonical_and_jou
 
 fn trace_proposal_locator(message: &str, call: &ToolCall) -> TraceToolLocator {
     TraceToolLocator {
-        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-            locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+            locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: MessageId::new(message),
             },
             block_index: ContentBlockIndex::new(0),
@@ -5078,8 +5084,8 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
     let call = bash_call("proposal-only");
     propose_tool_call(&source, "proposal", &call, 2);
     let locator = TraceToolLocator {
-        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
-            locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
+            locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: MessageId::new("proposal"),
             },
             block_index: ContentBlockIndex::new(0),
@@ -5131,9 +5137,124 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
     assert_eq!(child.presentation_frontier().unwrap(), 0);
 }
 
-mod frozen_tests {
-    include!("frozen_tests.rs");
-}
-mod inspection_tests {
-    include!("inspection_tests.rs");
+mod frozen_tests;
+mod header_tests;
+mod inspection_tests;
+
+#[test]
+#[allow(clippy::too_many_lines)] // One immutable-cut and original-body read proof.
+fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bodies() {
+    use base64::Engine;
+    let store = store("conv_a7f34b28-5c91-7e06-8d42-3fb8c0e17d54");
+    start(&store);
+    let frozen = request(&store, 0);
+    let mut call = bash_call("workflow-call");
+    call.tool_id = ToolId::new("tool-workflow-test_flow");
+    call.name = "test_flow".into();
+    propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 2);
+    completion(&store, &frozen, None, None, 2);
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: ToolCallId::new("workflow-call"),
+            tool_id: ToolId::new("tool-workflow-test_flow"),
+        },
+        2,
+    );
+    let mut instance = crate::runtime::workflow::test_instance("test_flow", "transform");
+    instance.block.run.conversation_id = store.conversation_id().clone();
+    instance.block.run.origin = AttemptId::new("attempt-a").into();
+    append(
+        &store,
+        E::WorkflowStarted {
+            tool_call_id: Some(ToolCallId::new("workflow-call")),
+            workflow_id: crate::runtime::workflow::WorkflowId::parse("test_flow").unwrap(),
+            run_id: instance.block.run.clone(),
+        },
+        3,
+    );
+    let cut = store.observation_read_cut().unwrap();
+    let initial = TraceProjection::at_cut(&store, &cut).unwrap();
+    let root = initial
+        .page(None, 32)
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|record| record.kind == TraceKind::Workflow)
+        .unwrap();
+    let call = initial
+        .page(None, 32)
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|record| record.kind == TraceKind::Tool)
+        .unwrap();
+    assert_eq!(root.location, call.location);
+    assert_eq!(root.collections[0].total, 0);
+    append(
+        &store,
+        E::WorkflowNodeStarted {
+            instance: instance.clone(),
+        },
+        4,
+    );
+    let input = r#"{"args":{"integer":18446744073709551615},"variables":{}}"#;
+    append(
+        &store,
+        E::WorkflowNodeInputRecorded {
+            instance,
+            kind: crate::runtime::workflow::read_model::WorkflowNodeKind::Template,
+            value: Some(input.into()),
+        },
+        5,
+    );
+    let current = store.observation_read_cut().unwrap();
+    let refreshed = TraceProjection::at_cut(&store, &current)
+        .unwrap()
+        .refresh(std::slice::from_ref(&root.position), None)
+        .unwrap();
+    assert_eq!(refreshed[0].location, call.location);
+    assert_eq!(refreshed[0].collections[0].total, 1);
+    let nodes = store
+        .observation_workflow_nodes(&current, root.position.sequence().unwrap(), 0, 32)
+        .unwrap();
+    let Some(TraceFieldSource::Value { domain, path, .. }) = &nodes.nodes[0].input else {
+        panic!("original input selector")
+    };
+    let cut = TraceProjection::at_cut(&store, &current)
+        .unwrap()
+        .history_cut()
+        .unwrap();
+    let body = crate::runtime_client::journal_observation::value_read(
+        &store, &cut, domain, 0, path, 0, 65_536,
+    )
+    .unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body.bytes_base64)
+        .unwrap();
+    assert_eq!(serde_json::from_slice::<String>(&bytes).unwrap(), input);
+    assert!(
+        crate::runtime_client::journal_observation::value_read(
+            &store,
+            &cut,
+            domain,
+            0,
+            &["event".into(), "instance".into()],
+            0,
+            65_536
+        )
+        .is_err()
+    );
+    assert_eq!(
+        initial
+            .record(
+                &initial
+                    .inspection_anchor(root.position.sequence().unwrap())
+                    .unwrap()
+            )
+            .unwrap()
+            .collections[0]
+            .total,
+        0
+    );
 }

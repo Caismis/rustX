@@ -1,0 +1,59 @@
+{
+  "scenario": "switch_pending_then_send",
+  "width": 1440,
+  "a": {
+    "processes": 2,
+    "initializations": 2,
+    "probes": 2,
+    "lists": 2,
+    "completedLists": 1
+  },
+  "b": {
+    "processes": 1,
+    "initializations": 1,
+    "probes": 1,
+    "lists": 1,
+    "completedLists": 0
+  },
+  "first_request_tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "startup_echo",
+        "description": "Echo from the prepared source",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message"
+          ]
+        }
+      }
+    }
+  ],
+  "provider_requests": 1,
+  "switch_to_old_process_settled_ms": 310.2654859999893,
+  "cancellation_to_settlement_upper_bound_ms": 231.11376199999359,
+  "send_to_first_model_request_ms": 989.9323940000031,
+  "processes": [
+    {
+      "pid": 2177049,
+      "supervisorPid": 2177048,
+      "pgid": 2177048
+    },
+    {
+      "pid": 2177121,
+      "supervisorPid": 2177120,
+      "pgid": 2177120
+    },
+    {
+      "pid": 2177070,
+      "supervisorPid": 2177069,
+      "pgid": 2177069
+    }
+  ]
+}

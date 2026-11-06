@@ -2,22 +2,24 @@
 import { constants, openSync, closeSync, fstatSync, readSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { terminalProcess, type TerminalProcess } from './terminal-process.ts';
-import type { DesktopTarget } from '../src/workspaces/desktop.ts';
-import type { WorkbenchRequest, WorkbenchResult } from '../src/workspaces/workbench.ts';
+import type { WorkbenchRequest, WorkbenchResult, WorkbenchTarget } from '../src/workspaces/workbench.ts';
 export const workspaceDescriptors = createRequire(import.meta.url)('./workspace-fs/build/Release/workspace_fs.node') as {
   openChild(fd: number, name: string, directory: boolean): number;
   entries(fd: number): { name: Buffer; directory: boolean; link: boolean }[];
 };
 const MAX_OUTPUT = 256 * 1024;
-type TerminalOwner = DesktopTarget & { generation: bigint };
-type TerminalRead = () => Promise<{ cwd: string; ownershipGeneration: string }>;
-type TerminalRequest = Exclude<WorkbenchRequest, { kind: 'applications' | 'open' | 'office' | 'resolve' | 'files' | 'read' | 'bytes' }>;
-function sameTarget(a: DesktopTarget, b: DesktopTarget) { return a.session_id === b.session_id && a.active_node === b.active_node; }
+type TerminalOwner = WorkbenchTarget & { generation?: bigint };
+type TerminalRead = () => Promise<{ cwd: string; ownershipGeneration?: string }>;
+type TerminalRequest = Exclude<WorkbenchRequest, { kind: 'applications' | 'open' | 'office' | 'preview' | 'resolve' | 'files' | 'read' | 'bytes' }>;
+function sameTarget(a: WorkbenchTarget, b: WorkbenchTarget) {
+  return 'workspace_id' in a ? 'workspace_id' in b && a.workspace_id === b.workspace_id
+    : 'session_id' in b && a.session_id === b.session_id && a.active_node === b.active_node;
+}
 function sameOwner(a: TerminalOwner, b: TerminalOwner) { return sameTarget(a, b) && a.generation === b.generation; }
 interface TerminalState { owner: TerminalOwner; shell: string; pty: TerminalProcess; stopping?: Promise<void>; failure?: string; output: string; offset: number; exited: boolean; listeners: Set<() => void>; done: Promise<void> }
 /** Descriptor-relative traversal rejects symlinks at every component, including
  * ancestors of the authorized root. POSIX openat/fdopendir work on Linux and macOS. */
-export function withWorkspacePath<T>(cwd: string, path: string, directory: boolean, action: (fd: number) => T): T {
+export function openWorkspacePath(cwd: string, path: string, directory: boolean): number {
   if (typeof path !== 'string' || path.length > 4096 || path.startsWith('/') || path.split('/').some(p => p === '..' || p === '.' || p.includes('\0'))) throw new Error('Invalid workspace path');
   let fd = openSync('/', constants.O_RDONLY | constants.O_DIRECTORY);
   try {
@@ -26,8 +28,12 @@ export function withWorkspacePath<T>(cwd: string, path: string, directory: boole
       const next = workspaceDescriptors.openChild(fd, part, index < parts.length - 1 || directory);
       closeSync(fd); fd = next;
     });
-    return action(fd);
-  } finally { closeSync(fd); }
+    return fd;
+  } catch (error) { closeSync(fd); throw error; }
+}
+export function withWorkspacePath<T>(cwd: string, path: string, directory: boolean, action: (fd: number) => T): T {
+  const fd = openWorkspacePath(cwd, path, directory);
+  try { return action(fd); } finally { closeSync(fd); }
 }
 export function workspaceFile(cwd: string, path: string, read: boolean, binary = false): WorkbenchResult {
   return withWorkspacePath(cwd, path, !read, fd => {
@@ -53,7 +59,7 @@ export class WorkspaceTerminals {
   private readonly removed = new Map<string, TerminalOwner>();
   // Register before native reads. Retirements cover both retained processes and
   // reads that have not returned their generation yet; no unbounded tombstone map.
-  private readonly admissions = new Set<{ session: string; retiredThrough: bigint }>();
+  private readonly admissions = new Set<{ target: WorkbenchTarget; retiredThrough: bigint; retired: boolean }>();
   private readonly supervisor?: string;
   private readonly spawnTerminal: typeof terminalProcess;
   constructor(supervisor?: string, spawnTerminal = terminalProcess) { this.supervisor = supervisor; this.spawnTerminal = spawnTerminal; }
@@ -64,8 +70,17 @@ export class WorkspaceTerminals {
   }
   async retireOwnership(session: string, retiredThrough: string) {
     const watermark = BigInt(retiredThrough);
-    for (const admission of this.admissions) if (admission.session === session && admission.retiredThrough < watermark) admission.retiredThrough = watermark;
-    return this.settle([...this.terminals].filter(([, terminal]) => terminal.owner.session_id === session && terminal.owner.generation <= watermark));
+    for (const admission of this.admissions) if ('session_id' in admission.target && admission.target.session_id === session && admission.retiredThrough < watermark) admission.retiredThrough = watermark;
+    return this.settle([...this.terminals].filter(([, { owner }]) => 'session_id' in owner && owner.session_id === session && owner.generation! <= watermark));
+  }
+  async retireWorkspace(workspace: string) {
+    const target = { workspace_id: workspace };
+    for (const admission of this.admissions) if (sameTarget(admission.target, target)) admission.retired = true;
+    return this.settle([...this.terminals].filter(([, { owner }]) => sameTarget(owner, target)));
+  }
+  async retireNative() {
+    for (const admission of this.admissions) if ('session_id' in admission.target) admission.retired = true;
+    return this.settle([...this.terminals].filter(([, { owner }]) => 'session_id' in owner));
   }
   private async settle(terminals: [string, TerminalState][]) {
     const results = await Promise.allSettled(terminals.map(([id, terminal]) => this.stop(id, terminal)));
@@ -80,25 +95,25 @@ export class WorkspaceTerminals {
       while (this.removed.size > 128) this.removed.delete(this.removed.keys().next().value!);
     })();
   }
-  async request(target: DesktopTarget, read: TerminalRead, request: TerminalRequest, signal?: AbortSignal): Promise<WorkbenchResult> {
+  async request(target: WorkbenchTarget, read: TerminalRead, request: TerminalRequest, signal?: AbortSignal): Promise<WorkbenchResult> {
     if (this.closed) throw new Error('Terminal Host is closed');
     // Close cannot admit execution and remains valid after native deletion.
     if (request.kind === 'close') {
       const terminal = this.terminals.get(request.id);
       const owner = terminal?.owner ?? this.removed.get(request.id);
-      if (!owner || !sameTarget(owner, target)) throw new Error('Terminal does not belong to this Session');
+      if (!owner || !sameTarget(owner, target)) throw new Error('Terminal does not belong to this target');
       if (terminal) await this.stop(request.id, terminal);
       return this.list(owner);
     }
-    const admission = { session: target.session_id, retiredThrough: 0n };
+    const admission = { target, retiredThrough: 0n, retired: false };
     this.admissions.add(admission);
     try {
       const native = await read();
-      const owner = { ...target, generation: BigInt(native.ownershipGeneration) };
+      const owner: TerminalOwner = 'session_id' in target ? { ...target, generation: BigInt(native.ownershipGeneration!) } : target;
       const check = () => {
         signal?.throwIfAborted();
         if (this.closed) throw new Error('Terminal Host is closed');
-        if (owner.generation <= admission.retiredThrough) throw new Error('Terminal owner retired during admission');
+        if (admission.retired || owner.generation !== undefined && owner.generation <= admission.retiredThrough) throw new Error('Terminal owner retired during admission');
       };
       check();
       return await this.execute(owner, native.cwd, request, check, signal);
@@ -134,7 +149,7 @@ export class WorkspaceTerminals {
       return list();
     }
     const terminal = this.terminals.get(request.id);
-    if (!terminal || !sameOwner(terminal.owner, owner)) throw new Error('Terminal does not belong to this Session');
+    if (!terminal || !sameOwner(terminal.owner, owner)) throw new Error('Terminal does not belong to this target');
     if (terminal.failure) throw new Error(terminal.failure);
     if (terminal.stopping) throw new Error('Terminal is closing');
     if (request.kind === 'input') { if (typeof request.data !== 'string' || request.data.length > 16384 || terminal.exited) throw new Error('Terminal input unavailable'); terminal.pty.write(request.data); return {}; }

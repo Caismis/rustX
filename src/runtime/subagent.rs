@@ -154,7 +154,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use crate::durable::inbox::InboundDraft;
+use crate::durable::InboundDraft;
 use crate::events::types::{
     EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
     SubagentTerminalState,
@@ -200,9 +200,11 @@ use crate::runtime::types::ApprovalMode;
 /// invocation of the attempt, so the frozen generation and model authority
 /// are shared rather than copied into each execution future.
 #[derive(Clone)]
-pub struct AttemptSubagentContext {
-    inner: Arc<AttemptSubagentContextInner>,
+pub struct NativeExecutionContext {
+    inner: Arc<NativeExecutionContextInner>,
     pub(crate) native: Option<Arc<crate::tools::invocation::NativeInvocationServices>>,
+    pub(crate) workflow_model: Option<crate::runtime::workflow::model::WorkflowModelCapability>,
+    workflow_deadline: Option<Arc<NativeWorkflowDeadline>>,
 }
 
 /// Execution policies captured by the parent Attempt. Child preparation may
@@ -225,9 +227,14 @@ impl Default for InheritedExecutionPolicy {
     }
 }
 
-struct AttemptSubagentContextInner {
+struct NativeWorkflowDeadline {
+    clock: Arc<dyn crate::runtime::MonotonicClock>,
+    due: u64,
+    trigger: Arc<crate::runtime::cancellation::ExecutionCancellationTrigger>,
+}
+struct NativeExecutionContextInner {
     capability: crate::capabilities::CapabilityCoordinator,
-    attempt_id: crate::runtime::identity::AttemptId,
+    origin: crate::runtime::workflow::WorkflowRunOrigin,
     resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     model: crate::model::session::SessionModelConfig,
     models: crate::model::invocation::ModelBindingRegistry,
@@ -235,17 +242,17 @@ struct AttemptSubagentContextInner {
     policy: InheritedExecutionPolicy,
 }
 
-impl core::fmt::Debug for AttemptSubagentContext {
+impl core::fmt::Debug for NativeExecutionContext {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("AttemptSubagentContext")
+            .debug_struct("NativeExecutionContext")
             .field("resource_revision", &self.inner.resources.revision())
             .field("agents", &self.inner.resources.subagents().names())
             .finish_non_exhaustive()
     }
 }
 
-impl AttemptSubagentContext {
+impl NativeExecutionContext {
     #[cfg(test)]
     pub(crate) fn with_test_policy(mut self, policy: InheritedExecutionPolicy) -> Self {
         Arc::get_mut(&mut self.inner)
@@ -315,9 +322,9 @@ impl AttemptSubagentContext {
         policy: InheritedExecutionPolicy,
     ) -> Self {
         Self {
-            inner: Arc::new(AttemptSubagentContextInner {
+            inner: Arc::new(NativeExecutionContextInner {
                 capability,
-                attempt_id,
+                origin: attempt_id.into(),
                 resources,
                 model,
                 models,
@@ -325,13 +332,90 @@ impl AttemptSubagentContext {
                 policy,
             }),
             native: None,
+            workflow_model: None,
+            workflow_deadline: None,
         }
     }
 
     /// The native admitted attempt that owns this frozen execution context.
     #[must_use]
-    pub fn attempt_id(&self) -> &crate::runtime::identity::AttemptId {
-        &self.inner.attempt_id
+    pub fn attempt_id(&self) -> Option<&crate::runtime::identity::AttemptId> {
+        self.inner.origin.attempt_id()
+    }
+
+    pub(crate) fn scheduled(
+        capability: crate::capabilities::CapabilityCoordinator,
+        start_id: crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
+        resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
+        model: crate::model::session::SessionModelConfig,
+        models: crate::model::invocation::ModelBindingRegistry,
+        approval_mode: ApprovalMode,
+        policy: InheritedExecutionPolicy,
+    ) -> Self {
+        Self {
+            inner: Arc::new(NativeExecutionContextInner {
+                capability,
+                origin: crate::runtime::workflow::WorkflowRunOrigin::Scheduled { start_id },
+                resources,
+                model,
+                models,
+                approval_mode,
+                policy,
+            }),
+            native: None,
+            workflow_model: None,
+            workflow_deadline: None,
+        }
+    }
+
+    pub(crate) fn with_workflow_deadline(
+        mut self,
+        clock: Arc<dyn crate::runtime::MonotonicClock>,
+        due: u64,
+        trigger: Arc<crate::runtime::cancellation::ExecutionCancellationTrigger>,
+    ) -> Self {
+        self.workflow_deadline = Some(Arc::new(NativeWorkflowDeadline {
+            clock,
+            due,
+            trigger,
+        }));
+        self
+    }
+    pub(crate) fn check_workflow_deadline(
+        &self,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) {
+        if !cancellation.is_cancelled()
+            && let Some(deadline) = &self.workflow_deadline
+            && deadline.clock.now_millis() >= deadline.due
+        {
+            deadline
+                .trigger
+                .cancel(crate::tools::deadline::ToolCancellationCause::Deadline(
+                    crate::tools::deadline::ToolDeadlineKind::Hard,
+                ));
+        }
+    }
+    pub(crate) fn origin(&self) -> &crate::runtime::workflow::WorkflowRunOrigin {
+        &self.inner.origin
+    }
+    pub(crate) fn prepare_schedule_workflow(
+        &self,
+        binding: crate::scheduler::ScheduleBinding,
+        id: &crate::runtime::workflow::WorkflowId,
+        args: &serde_json::Value,
+    ) -> Result<crate::runtime::workflow::scheduled::PinnedScheduledWorkflow, String> {
+        let preparation = crate::runtime::workflow::scheduled::ScheduledWorkflowPreparation::new(
+            binding,
+            self.inner.resources.clone(),
+            self.inner.model.clone(),
+        )
+        .map_err(|e| e.to_string())?
+        .with_approval_mode(self.inner.approval_mode);
+        preparation
+            .prepare(id, args)
+            .map(|prepared| prepared.contract().clone())
+            .map_err(|e| e.to_string())
     }
 
     /// The immutable runtime resource generation the invoking attempt owns.
@@ -354,6 +438,28 @@ impl AttemptSubagentContext {
     #[must_use]
     pub fn execution_policy(&self) -> InheritedExecutionPolicy {
         self.inner.policy
+    }
+
+    /// Binds the existing Conversation owner without granting generic Tools a
+    /// model API. All model selection still uses this Attempt's frozen view.
+    pub(crate) fn with_workflow_models(
+        mut self,
+        executor: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
+    ) -> Self {
+        self.workflow_model =
+            Some(crate::runtime::workflow::model::WorkflowModelCapability::new(executor));
+        self
+    }
+
+    pub(crate) fn resolve_workflow_model(
+        &self,
+        policy: &crate::model::AuxiliaryModelPolicy,
+    ) -> Result<crate::model::ResolvedModelInvocation, crate::model::ModelInvocationError> {
+        self.inner.models.resolve(
+            &policy
+                .selection()
+                .unwrap_or_else(|| self.inner.model.selection()),
+        )
     }
 
     /// Resolves one named agent, with an optional **model-generated**
@@ -454,9 +560,9 @@ impl AttemptSubagentContext {
             resources.capability().mcp_servers(),
         );
         Self {
-            inner: Arc::new(AttemptSubagentContextInner {
+            inner: Arc::new(NativeExecutionContextInner {
                 capability: self.inner.capability.clone(),
-                attempt_id: self.inner.attempt_id.clone(),
+                origin: self.inner.origin.clone(),
                 resources: Arc::new((**resources).clone().with_workflow_catalog(catalog)),
                 model: self.inner.model.clone(),
                 models: self.inner.models.clone(),
@@ -464,6 +570,8 @@ impl AttemptSubagentContext {
                 policy: self.inner.policy,
             }),
             native: self.native.clone(),
+            workflow_model: self.workflow_model.clone(),
+            workflow_deadline: self.workflow_deadline.clone(),
         }
     }
 
@@ -501,6 +609,13 @@ pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str = "Your final response 
      task. Do not assume the parent can see your intermediate reasoning, tool calls, tool \
      outputs, or conversation history.";
 
+/// The final-report rule of a Workflow-owned child whose final reply is its
+/// node's `text` result.
+pub(crate) const WORKFLOW_TEXT_RESULT_INSTRUCTION: &str = "Your final response is the complete result of this \
+     workflow step. Later steps receive only that text: include every finding, conclusion and \
+     caveat they need, and do not assume they can see your intermediate reasoning, tool calls, \
+     tool outputs, or conversation history.";
+
 /// Composes the child's immutable `AgentProfile` System authority from the
 /// definition's instruction document (Issue #192).
 ///
@@ -508,9 +623,10 @@ pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str = "Your final response 
 /// final-report handoff rule is appended for a **normal** child activation,
 /// whose final response is the whole semantic result the parent receives.
 ///
-/// A Workflow-owned child (`workflow_output` terminal protocol) is
-/// deliberately excluded: its terminal contract is the structured,
-/// schema-validated `workflow_output` commit, so a free-form final-report
+/// A Workflow-owned child whose final reply is its result gets the same rule
+/// addressed to later workflow steps. One with a `workflow_output` terminal
+/// protocol is deliberately excluded: its terminal contract is the
+/// structured, schema-validated commit, so a free-form final-report
 /// instruction would contradict the terminal protocol its Agent Loop must
 /// satisfy.
 pub(crate) fn compose_child_agent_profile(
@@ -521,7 +637,12 @@ pub(crate) fn compose_child_agent_profile(
         ipc::ChildTerminalMode::Normal => {
             format!("{instructions}\n\n{SUBAGENT_FINAL_REPORT_INSTRUCTION}")
         }
-        ipc::ChildTerminalMode::WorkflowOutput { .. } => instructions.to_owned(),
+        ipc::ChildTerminalMode::WorkflowOutput {
+            output_schema: None,
+        } => format!("{instructions}\n\n{WORKFLOW_TEXT_RESULT_INSTRUCTION}"),
+        ipc::ChildTerminalMode::WorkflowOutput {
+            output_schema: Some(_),
+        } => instructions.to_owned(),
     }
 }
 

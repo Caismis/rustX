@@ -18,7 +18,7 @@ use rustx::model::catalog::{
 };
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::{
-    SessionModelConfig, SessionModelState, SessionModelView, SummaryModelView,
+    AuxiliaryModelView, SessionModelConfig, SessionModelState, SessionModelView,
 };
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
@@ -74,7 +74,7 @@ fn model_source<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
         assert_eq!(next, bytes.len() as u64);
         offset = next;
     }
-    rustx::runtime_client::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
+    rustx::observation::structural_json::decode(serde_json::from_slice(&bytes).unwrap())
         .expect("exact original native model value")
 }
 
@@ -91,7 +91,10 @@ fn model_value(
     model_source(attachment, &page, page.items[0].offset)
 }
 
-fn read_model(attachment: &rustx::runtime_client::RuntimeAttachment, id: u64) -> SessionModelView {
+pub(super) fn read_model(
+    attachment: &rustx::runtime_client::RuntimeAttachment,
+    id: u64,
+) -> SessionModelView {
     model_value(
         attachment,
         attachment
@@ -113,7 +116,7 @@ struct CatalogHeader {
 
 fn catalog_profiles(
     attachment: &rustx::runtime_client::RuntimeAttachment,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &rustx::observation::cut::CheckpointReadCut,
     model_offset: u64,
     total: u64,
 ) -> Vec<rustx::model::catalog::ModelProfileView> {
@@ -240,13 +243,12 @@ fn fixture_models() -> Vec<FixtureModel> {
         FixtureModel::text("alpha/model-a", ModelProtocol::OpenAiChatCompletions)
             .with_context_window(128_000)
             .with_max_output_tokens(4_096)
-            .claiming_reasoning()
+
             // Each profile is a complete preset: both repeat the sampling key.
             .with_profiles("on", serde_json::json!({
-                "off": {"reasoningEnabled": false, "maxOutputTokens": 2_048,
+                "off": {"maxOutputTokens": 2_048,
                         "requestParams": {"thinking": {"type": "disabled"}, "temperature": 0.2}},
-                "on": {"reasoningEnabled": true,
-                       "requestParams": {"thinking": {"type": "enabled"}, "temperature": 0.2}}
+                "on": {"requestParams": {"thinking": {"type": "enabled"}, "temperature": 0.2}}
             }))
             // Explicit Image intent is supported by the Chat adapter/runtime.
             .claiming_input("image"),
@@ -262,7 +264,7 @@ fn fixture_models() -> Vec<FixtureModel> {
         FixtureModel::text("always/always-on", ModelProtocol::OpenAiChatCompletions)
             .with_context_window(64_000)
             .with_max_output_tokens(512)
-            .claiming_reasoning(),
+            ,
     ]
 }
 
@@ -291,7 +293,7 @@ fn session_model(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, SessionModelSt
     (handle, state)
 }
 
-async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, RuntimeClientHost) {
+pub(super) async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, RuntimeClientHost) {
     let (handle, model) = session_model(scripts);
     let host = support::runtime_client_fixture::RuntimeClientFixture::builder(
         "conv_95b1a03d-ab33-7d8c-98d3-934561e7386b",
@@ -397,8 +399,7 @@ async fn the_identity_receipt_and_checkpoint_keep_the_redacted_session_model() {
         Some(ModelProfileId::new("on")),
         "the model's declared default profile is selected"
     );
-    assert!(model.effective.as_ref().unwrap().reasoning_enabled);
-    assert_eq!(model.summary, Some(SummaryModelView::Session));
+    assert_eq!(model.summary, Some(AuxiliaryModelView::Session));
 
     // The effective capabilities are the intersection, not the raw claim.
     assert!(
@@ -475,24 +476,15 @@ async fn the_catalog_query_exposes_safe_selectable_models() {
     assert_eq!(primary.context_window, 128_000);
     assert_eq!(primary.max_output_tokens, 4_096);
     assert_eq!(primary.default_profile, Some(ModelProfileId::new("on")));
-    let profiles: Vec<(String, bool, Option<u32>)> = primary
+    let profiles: Vec<(String, Option<u32>)> = primary
         .profiles
         .iter()
-        .map(|profile| {
-            (
-                profile.id.to_string(),
-                profile.reasoning_enabled,
-                profile.max_output_tokens,
-            )
-        })
+        .map(|profile| (profile.id.to_string(), profile.max_output_tokens))
         .collect();
     assert_eq!(
         profiles,
-        vec![
-            ("off".to_owned(), false, Some(2_048)),
-            ("on".to_owned(), true, None)
-        ],
-        "profile identities, reasoning state and output defaults are exposed"
+        vec![("off".to_owned(), Some(2_048)), ("on".to_owned(), None)],
+        "profile identities and output defaults are exposed"
     );
     assert!(
         primary
@@ -549,7 +541,6 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
     let model = read_model(&attachment, 100);
     assert_eq!(model.configured, desired);
     assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 1_000);
-    assert!(!model.effective.as_ref().unwrap().reasoning_enabled);
     assert_eq!(
         model.effective.as_ref().unwrap().request_params["thinking"],
         serde_json::json!({"type": "disabled"}),
@@ -653,7 +644,6 @@ async fn model_get_returns_the_authoritative_session_state() {
         None,
         "a model that declares no profiles selects none"
     );
-    assert!(!after.effective.as_ref().unwrap().reasoning_enabled);
 }
 
 /// The TUI `/model X` operation sends a complete replacement: primary
@@ -666,7 +656,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
 
-    let summary_policy = rustx::model::session::SummaryModelPolicy::Explicit {
+    let summary_policy = rustx::model::session::AuxiliaryModelPolicy::Explicit {
         model: model_ref("summary/summary-model"),
         profile: None,
         request_params: common::request_params(serde_json::json!({"summary_tag": "keep"})),
@@ -677,6 +667,9 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         profile: Some(ModelProfileId::new("off")),
         request_params: common::request_params(serde_json::json!({"top_k": 40})),
         max_output_tokens: Some(1_000),
+        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+        classification_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
+        btw_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
         summary_model: summary_policy.clone(),
     };
     let initial_response = attachment.handle_request(RuntimeClientRequest::ModelSet {
@@ -690,6 +683,9 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         profile: None,
         request_params: rustx::model::RequestParams::new(),
         max_output_tokens: None,
+        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
+        classification_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
+        btw_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
         summary_model: summary_policy.clone(),
     };
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
@@ -710,7 +706,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     assert_eq!(model.effective.as_ref().unwrap().profile, None);
     assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 2_048);
     assert!(model.effective.as_ref().unwrap().request_params.is_empty());
-    let Some(SummaryModelView::Explicit(summary)) = model.summary else {
+    let Some(AuxiliaryModelView::Explicit(summary)) = model.summary else {
         panic!("the explicit summary policy survives the primary switch");
     };
     assert_eq!(summary.model, model_ref("summary/summary-model"));
@@ -727,14 +723,14 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     assert_eq!(snapshot.model.as_ref().unwrap().configured, selected);
     assert_eq!(
         snapshot.model.as_ref().unwrap().summary,
-        Some(SummaryModelView::Explicit(summary))
+        Some(AuxiliaryModelView::Explicit(summary))
     );
 }
 
 /// Runtime Client model projections preserve always-on reasoning as enabled
 /// without inventing a selectable profile or a provider wire field.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
+async fn runtime_client_lists_a_model_without_synthetic_profiles() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
     let (attachment, _) = host
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -749,7 +745,6 @@ async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
     );
     let model = read_model(&attachment, 100);
     assert_eq!(model.effective.as_ref().unwrap().profile, None);
-    assert!(model.effective.as_ref().unwrap().reasoning_enabled);
 
     let catalog_response = attachment.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),
@@ -881,7 +876,7 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
     );
     assert_eq!(
         attempt.model.as_ref().unwrap().summary,
-        SummaryModelView::Session
+        AuxiliaryModelView::Session
     );
 }
 
@@ -1162,7 +1157,7 @@ async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
         ),
     ] {
         let config: SessionModelConfig =
-            rustx::runtime_client::structural_json::decode(config).expect("Runtime Client JSON");
+            rustx::observation::structural_json::decode(config).expect("Runtime Client JSON");
         let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
             id: RequestId::new(id),
             config: Box::new(config),

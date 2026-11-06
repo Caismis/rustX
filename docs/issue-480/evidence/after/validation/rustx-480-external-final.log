@@ -337,7 +337,7 @@ test overrides::cfg3_named_agent_and_invocation_tools_are_independent_of_root_vi
 test overrides::ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly ... ok
 test end_to_end::a_subagent_child_runs_end_to_end_through_the_real_process_stack ... ok
 test end_to_end::alias_product_root_child_startup_and_historical_inspection_share_authority ... ok
-test overrides::goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_overrides ... ok
+test overrides::goal84_root_only_scope_is_enforced_for_definition_and_invocation_overrides ... ok
 test overrides::goal84_workflow_program_cannot_enable_goal_for_an_agent_node ... ok
 test overrides::sub258_a_child_override_never_mutates_the_parent ... ok
 test overrides::sub258_a_nested_workflow_override_is_validated_with_a_precise_path ... ok

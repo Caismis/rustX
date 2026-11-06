@@ -37,7 +37,7 @@
 //!
 //! ```text
 //! before/after:publish_session, before/after:publish_node,
-//! before/after:publish_display_preview
+//! before/after:publish_display_preview, before/after:publish_generated_title
 //!     the native Session catalog's visibility commit — the atomic rename that
 //!     makes a lineage the active one or a display projection visible — under
 //!     the supervisor state mutex the whole publish operation holds
@@ -51,6 +51,14 @@
 //! parks the loop before it can do more work; unlike the durable boundaries,
 //! its purpose is to prove that process-local eligibility is not reconstructed
 //! after recovery.
+//!
+//! Auxiliary execution also parks at `after:auxiliary_call_start_confirmed`,
+//! `after:auxiliary_request_start_confirmed`
+//! and `after:auxiliary_dispatch_granted`. These are owner-local boundaries
+//! outside the Store connection lease: confirmed Call/Request starts are
+//! already durable, and the parked owner cannot enter its adapter. Other
+//! planes are not globally frozen. Reopening must preserve that historical
+//! uncertainty without reconstructing or replaying the process-local grant.
 //!
 //! # Why this is a `cfg(test)` seam
 //!

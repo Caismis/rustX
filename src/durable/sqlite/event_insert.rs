@@ -3,12 +3,12 @@
 use super::{
     Connection, ConversationId, ConversationStoreError, MessageBlock, OptionalExtension,
     PublicationFrame, PublicationSettlement, PublicationStreamId, RequestSnapshot, RuntimeEvent,
-    RuntimeEventEnvelope, Transaction, TranscriptCursor, append_facts, append_transcript_reference,
-    content, observation, observation_event, observation_execution, observation_members,
-    observation_occupancy, observation_readiness, observation_receipt, observation_request,
-    observation_state, observation_statistics, observation_trace, observation_turn,
-    optional_display_layout, params, storage,
+    RuntimeEventEnvelope, Transaction, TranscriptCursor, append_facts, content, observation,
+    observation_event, observation_execution, observation_members, observation_occupancy,
+    observation_readiness, observation_receipt, observation_request, observation_state,
+    observation_statistics, observation_trace, observation_turn, optional_display_layout, params,
 };
+use crate::durable::sqlite::canonical::ledger::append_transcript_reference;
 use crate::durable::sqlite::statements::FixedStatements;
 
 /// Only the schema seen at connection installation may bypass a schema scan.
@@ -38,8 +38,9 @@ impl Guard {
             .ok()
             .and_then(|transaction| {
                 let installed = no_custom_triggers(&transaction)
-                    .then(|| schema_versions(&transaction))
-                    .flatten();
+                    .ok()
+                    .filter(|clean| *clean)
+                    .and_then(|_| schema_versions(&transaction).ok());
                 transaction.commit().ok().and(installed)
             });
         if installed.is_none() {
@@ -51,22 +52,41 @@ impl Guard {
             execution: observation_execution::FoldCache::default(),
         }
     }
-    pub(super) fn can_prepare(&self, connection: &Connection) -> bool {
-        if let Some(installed) = self.installed
-            && schema_versions(connection) == Some(installed)
-        {
-            return true;
+    pub(super) fn can_prepare(
+        &self,
+        connection: &Connection,
+    ) -> Result<bool, ConversationStoreError> {
+        if let Some(installed) = self.installed {
+            match schema_versions(connection) {
+                Ok(current) if current == installed => return Ok(true),
+                Err(
+                    error @ (ConversationStoreError::OperationCancelled
+                    | ConversationStoreError::TransactionInvalid(_)),
+                ) => return Err(error),
+                _ => {}
+            }
         }
         self.statistics.disable();
-        no_custom_triggers(connection)
+        match no_custom_triggers(connection) {
+            Ok(available) => Ok(available),
+            Err(
+                error @ (ConversationStoreError::OperationCancelled
+                | ConversationStoreError::TransactionInvalid(_)),
+            ) => Err(error),
+            Err(_) => Ok(false),
+        }
     }
     pub(super) fn publish_statistics(&self, connection: &Connection) {
         self.statistics.publish(connection);
     }
 }
-fn schema_versions(connection: &Connection) -> Option<(i64, i64)> {
-    let read = |sql| connection.query_row_cached(sql, [], |row| row.get(0)).ok();
-    Some((
+fn schema_versions(connection: &Connection) -> Result<(i64, i64), ConversationStoreError> {
+    let read = |sql| {
+        connection
+            .query_row_cached(sql, [], |row| row.get(0))
+            .map_err(|error| super::sqlite_error(&error, error.to_string()))
+    };
+    Ok((
         read("PRAGMA main.schema_version")?,
         read("PRAGMA temp.schema_version")?,
     ))
@@ -76,7 +96,7 @@ fn schema_versions(connection: &Connection) -> Option<(i64, i64)> {
 /// those SQL programs' ordering, including TEMP triggers and dynamic DDL. The
 /// only exceptions are our exact DELETE-only TEMP cleanup programs: no DELETE
 /// of either source occurs while preparing or inserting an event.
-fn no_custom_triggers(connection: &Connection) -> bool {
+fn no_custom_triggers(connection: &Connection) -> Result<bool, ConversationStoreError> {
     #[cfg(test)]
     GUARD_SCANS.with(|count| count.set(count.get() + 1));
     let event = "CREATE TRIGGER event_readiness_source_deleted AFTER DELETE ON main.events\n             BEGIN\n                 DELETE FROM event_observation_readiness WHERE sequence=OLD.sequence;\n             END";
@@ -84,7 +104,7 @@ fn no_custom_triggers(connection: &Connection) -> bool {
     connection.query_row_cached(
         "SELECT NOT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='trigger') AND NOT EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE type='trigger' AND (sql IS NULL OR sql NOT IN(?1,?2)))",
         params![event, transcript], |row| row.get(0),
-    ).unwrap_or(false)
+    ).map_err(|error|super::sqlite_error(&error,error.to_string()))
 }
 
 /// Only the already validated canonical publication transition supplies this
@@ -128,13 +148,33 @@ pub(super) fn prepared(
     publication: Option<&CanonicalPublication<'_>>,
     previous_members: Option<&observation_members::Captured>,
 ) -> Result<Option<Inserted>, ConversationStoreError> {
-    if !guard.can_prepare(transaction) {
+    if transaction.is_autocommit() {
+        return Err(ConversationStoreError::TransactionInvalid(
+            "native prepared event lost its owning transaction".into(),
+        ));
+    }
+    // Auxiliary lifecycle indexing and configuration transcript capture retain
+    // main's native-first order. Agent turns keep the prepared single INSERT.
+    if event.event.is_auxiliary_model_request()
+        || matches!(
+            event.event,
+            RuntimeEvent::AuxiliaryCallStarted { .. }
+                | RuntimeEvent::AuxiliaryCallSettled { .. }
+                | RuntimeEvent::AuxiliaryRetryScheduled { .. }
+                | RuntimeEvent::ConfigurationApplied { .. }
+        )
+    {
+        return Ok(None);
+    }
+    if !guard.can_prepare(transaction)? {
         return Ok(None);
     }
     transaction
         .execute_cached("SAVEPOINT rustx_prepared_event", [])
-        .map_err(|error| storage(format!("prepare native event: {error}")))?;
-    let Ok(row) = prepare(
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("prepare native event: {error}"))
+        })?;
+    let row = match prepare(
         guard,
         transaction,
         event,
@@ -142,13 +182,25 @@ pub(super) fn prepared(
         snapshot,
         publication,
         previous_members,
-    ) else {
-        rollback(transaction)?;
-        // Preserve native-first error precedence too: a mandatory
-        // preparation failure is reproduced after the native INSERT.
-        return Ok(None);
+    ) {
+        Ok(row) => row,
+        Err(
+            error @ (ConversationStoreError::OperationCancelled
+            | ConversationStoreError::TransactionInvalid(_)),
+        ) => return Err(error),
+        Err(_) => {
+            rollback(transaction)?;
+            return Ok(None);
+        }
     };
-    if insert(transaction, event, json, &row).is_err() {
+    if let Err(error) = insert(transaction, event, json, &row) {
+        if matches!(
+            error,
+            ConversationStoreError::OperationCancelled
+                | ConversationStoreError::TransactionInvalid(_)
+        ) {
+            return Err(error);
+        }
         // The failed statement may have run constraints or auxiliary writes.
         // No effect from preparation is retained across domain isolation.
         rollback(transaction)?;
@@ -159,9 +211,15 @@ pub(super) fn prepared(
         });
         return Ok(None);
     }
+    super::auxiliary::index_event_tx(transaction, event)?;
     transaction
         .execute_cached("RELEASE rustx_prepared_event", [])
-        .map_err(|error| storage(format!("release native event preparation: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("release native event preparation: {error}"),
+            )
+        })?;
     #[cfg(test)]
     WORK.with(|work| {
         let (ok, isolated) = work.get();
@@ -182,7 +240,12 @@ fn rollback(connection: &Connection) -> Result<(), ConversationStoreError> {
     connection
         .execute_cached("ROLLBACK TO rustx_prepared_event", [])
         .and_then(|_| connection.execute_cached("RELEASE rustx_prepared_event", []))
-        .map_err(|error| storage(format!("rollback native event preparation: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("rollback native event preparation: {error}"),
+            )
+        })?;
     Ok(())
 }
 
@@ -211,11 +274,16 @@ fn prepare(
                     publication.stream.as_str()
                 ],
             )
-            .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("settle canonical publication: {error}"),
+                )
+            })?;
     }
     let readiness = optional_display_layout(transaction, || {
         observation_readiness::prepare(transaction, event)
-    })
+    })?
     .is_some();
     let aggregate_required = observation_statistics::is_trace_anchor(&event.event)
         || observation_statistics::requires_statistics(event)
@@ -224,29 +292,31 @@ fn prepare(
         // The builder only reads and encodes. Its stored columns are installed
         // by the final INSERT under the outer preparation savepoint.
         .then(|| {
-            append_facts::prepare_aggregates_cached(
+            super::optional_display_value(append_facts::prepare_aggregates_cached(
                 transaction,
                 event,
                 previous_members,
                 Some(&guard.statistics),
-            )
-            .ok()
+            ))
         })
+        .transpose()?
         .flatten();
     let mut available = !aggregate_required || aggregates.is_some();
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
-        transaction.execute_cached("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),event.sequence,message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute_cached("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),event.sequence,message_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
     let assistant_ledger =
         if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
-            let captured = transaction
-                .query_row_cached(
-                    "SELECT position FROM message_ledger WHERE message_id=?1",
-                    [message_id.as_str()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .ok();
+            let captured = super::optional_display_value(
+                transaction
+                    .query_row_cached(
+                        "SELECT position FROM message_ledger WHERE message_id=?1",
+                        [message_id.as_str()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|error| super::sqlite_error(&error, error.to_string())),
+            )?;
             available &= captured.is_some();
             captured.flatten()
         } else {
@@ -265,6 +335,7 @@ fn prepare(
                 )
             })
         })
+        .transpose()?
         .flatten()
         .flatten();
     available &= !execution_required || execution.is_some();
@@ -279,7 +350,7 @@ fn prepare(
             }
     );
     available &= !state_required
-        || optional_display_layout(transaction, || observation_state::event(transaction, event))
+        || optional_display_layout(transaction, || observation_state::event(transaction, event))?
             .is_some();
     let request_required = matches!(
         event.event,
@@ -292,7 +363,7 @@ fn prepare(
             let occupancy = observation_occupancy::prepare(transaction, event)?;
             observation_request::terminal(transaction, event)?;
             Ok(occupancy)
-        });
+        })?;
         available &= captured.is_some();
         captured.flatten()
     } else {
@@ -322,7 +393,7 @@ fn prepare(
         transcript_cursor: transcript,
         assistant_ledger,
     };
-    let source = observation_event::prepare_pending(transaction, event, json.as_bytes(), &pending);
+    let source = observation_event::prepare_pending(transaction, event, json.as_bytes(), &pending)?;
     available &= source.as_ref().is_some_and(|source| source.available);
     let trace = if let Some(snapshot) = snapshot {
         // Fresh core is its own optional domain, as in request admission.
@@ -330,11 +401,11 @@ fn prepare(
         // original-event witness/source domain.
         Some(optional_display_layout(transaction, || {
             observation_trace::prepare_request_core(transaction, event, snapshot, true)
-        }))
+        })?)
     } else {
         optional_display_layout(transaction, || {
             observation_trace::prepare_event(transaction, event, pending.execution, true)
-        })
+        })?
     };
     available &= trace.is_some();
     let turn_required = observation_turn::required(event)
@@ -343,8 +414,14 @@ fn prepare(
         .then(|| {
             // Pending Turn preparation has no SQL writes; even the adoption
             // prompt is returned for the same final INSERT.
-            observation_turn::prepare(transaction, event, pending.statistics, Some(&pending)).ok()
+            super::optional_display_value(observation_turn::prepare(
+                transaction,
+                event,
+                pending.statistics,
+                Some(&pending),
+            ))
         })
+        .transpose()?
         .flatten();
     available &= !turn_required || turn.is_some();
     if let Some(cursor) = transcript {
@@ -357,7 +434,7 @@ fn prepare(
             "attempt_terminal"
         };
         available &= optional_display_layout(transaction, || {
-            observation::index_pending_native_event(
+            observation::index::index_pending_native_event(
                 transaction,
                 kind,
                 event,
@@ -365,7 +442,7 @@ fn prepare(
                 aggregates.as_ref().and_then(|value| value.members.as_ref()),
                 pending.execution,
             )
-        })
+        })?
         .is_some();
     }
     Ok(Row {
@@ -401,6 +478,8 @@ fn insert(
         }
         _ => None,
     };
+    #[cfg(test)]
+    let _probe = super::start_probe::for_event(event, super::AuxiliaryStartProbe::ObservationJson);
     connection.execute_cached(
         "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp,
         observation_trace_required,observation_statistics_required,observation_kind,observation_members_required,observation_turn_required,observation_trace_fact_required,observation_execution_required,
@@ -415,7 +494,7 @@ fn insert(
             row.assistant_ledger,occurrence.map(|value|value.ledger_position),occurrence.map(|value|value.block_index.get()),occurrence.and(phase),row.execution.as_ref().map(|value|&value.capture.bytes),row.execution.as_ref().map(|value|value.owner),
             row.occupancy,source.and_then(|value|value.inline_source.as_ref()),source.map(|value|&value.witness.bytes),row.trace.as_ref().map(|value|&value.bytes),row.trace.as_ref().and_then(|value|value.owner),
             row.transcript.map(TranscriptCursor::get),turn.and_then(|value|value.header.as_ref()),turn.and_then(|value|value.anchor),turn.and_then(|value|value.ordinal),turn.and_then(|value|value.prompt.as_ref()),turn.and_then(|value|value.prompt.as_ref()).is_some_and(|bytes|!bytes.is_empty()),!row.available])
-        .map_err(|error|storage(format!("insert prepared runtime event: {error}")))?;
+        .map_err(|error|crate::durable::sqlite::sqlite_error(&error,format!("insert prepared runtime event: {error}")))?;
     // Immediate foreign keys require the native J row before its model and
     // adoption children. Their values were prepared above without rereading
     // history. A failed child rolls back this entire candidate, then the
@@ -442,9 +521,16 @@ fn finish(
             "UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1",
             [event.sequence],
         )
-        .map_err(|error| storage(format!("update event sequence: {error}")))?;
-    if let RuntimeEvent::ModelRequestCompleted { request_id, .. } = &event.event {
-        let updated = transaction.execute_cached("UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL", params![event.sequence,request_id.as_str()]).map_err(|error|storage(format!("record provider outcome: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("update event sequence: {error}"))
+        })?;
+    if let RuntimeEvent::ModelRequestCompleted {
+        owner: crate::model::ModelRequestOwner::Agent { .. },
+        request_id,
+        ..
+    } = &event.event
+    {
+        let updated = transaction.execute_cached("UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL", params![event.sequence,request_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,format!("record provider outcome: {error}")))?;
         if updated != 1 {
             return Err(ConversationStoreError::TerminalViolation(format!(
                 "request {request_id} already has a durable provider outcome"

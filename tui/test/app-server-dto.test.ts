@@ -37,6 +37,22 @@ const fixtures = (JSON.parse(encoded) as unknown[]).map((record) => {
   return decoded;
 });
 
+it('decodes optional Model reasoning order without changing Profile identities', () => {
+  for (const id of ['ordered-model', 'unconfigured-model']) {
+    const fixture = JSON.parse(encoded).find((record: { id?: string }) => record.id === id);
+    assert.ok(fixture, id);
+    assert.ok(decodeProtocolMessage(fixture));
+    const model = fixture.params.mutation.mutation.authored;
+    assert.deepEqual(Object.keys(model.profiles), ['a-high', 'z-low']);
+    assert.equal(model.default_profile, 'a-high');
+    if (id === 'ordered-model') assert.deepEqual(model.reasoning_profile_order, ['z-low', 'a-high']);
+    else assert.equal(Object.hasOwn(model, 'reasoning_profile_order'), false);
+    // The strict structural boundary delegates permutation validation to native.
+    model.reasoning_profile_order = [42];
+    assert.equal(decodeProtocolMessage(fixture), undefined);
+  }
+});
+
 it('typed InvalidRange is a source range failure rather than a resync',()=>{
   const error={code:-32000,message:'Invalid source range',data:{kind:'invalid_range' as const}};
   assert.equal(describeRpcError(error),'the requested range is outside the retained source');

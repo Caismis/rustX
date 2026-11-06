@@ -14,7 +14,7 @@ use std::time::Duration;
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
 use rustx::context::{
     AgentStatusEngine, CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime,
-    ContextSummarizer, ModelBackedSummarizer, SummaryRequest,
+    ModelBackedSummarizer, SummaryRequest,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
@@ -183,6 +183,7 @@ async fn make_execution(setup: ExecutionSetup<'_>) -> AgentExecution<'_> {
         capability.into_lease(),
         cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: None,
             subagent_context: None,
             workflow_output: None,
             model_timeout_policy: policy,

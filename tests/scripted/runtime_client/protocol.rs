@@ -183,8 +183,10 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let request = InteractionRequest {
         id: interaction_id.clone(),
         conversation_id: ConversationId::new("conv_6261dea0-82cb-7ad5-8559-9b2de4dcbfe6"),
-        attempt_id: AttemptId::new("attempt-questionnaire-v3"),
-        turn: 1,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: AttemptId::new("attempt-questionnaire-v3"),
+            turn: 1,
+        },
         kind: InteractionKind::Questionnaire {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
@@ -222,7 +224,7 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let pending = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(20),
         event: RuntimeClientEvent::InteractionPending {
-            interaction: crate::runtime_client::checkpoint::interaction_header(
+            interaction: Box::new(crate::observation::interaction::interaction_header(
                 &RoutedInteraction {
                     interaction: InteractionRef::new(
                         request.conversation_id.clone(),
@@ -231,7 +233,7 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
                     source: InteractionSource::Primary,
                     request: request.clone().into(),
                 },
-            ),
+            )),
         },
     };
     let submitted_settled = RuntimeClientProtocolEvent {
@@ -357,11 +359,6 @@ async fn snapshot_dto_round_trips() {
         checkpoint.snapshot.conversation_id()
     );
     let (snapshot, cursor) = (checkpoint.snapshot, checkpoint.cursor);
-    // The baseline is the actual published bootstrap cut, never a guessed ordinal.
-    assert_eq!(
-        snapshot.configuration_adoption_eligibility,
-        rustx::local_runtime::configuration::application::AdoptionEligibility::Eligible
-    );
     let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
     let decoded: rustx::runtime_client::RuntimeClientSnapshot =
         serde_json::from_str(&json).expect("deserialize snapshot");
@@ -423,7 +420,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         assert!(response.error.is_none());
     }
 
-    // Every previous generation, including v54 with its retired Session
+    // Every previous generation, including v55 with its retired Session
     // catalog requests, is rejected.
     for requested in 0..rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION {
         assert!(matches!(host.attach(requested),
@@ -723,11 +720,8 @@ fn review_v21_shared_fixture_pins_complete_subject_and_response_identity() {
     };
     review.validate().unwrap();
     assert_eq!(review.digest(), subject_digest);
-    let response = rustx::events::review::ReviewResponse {
-        instance: review.instance.clone(),
-        subject_digest,
-        decision: rustx::events::review::ReviewDecision::Accepted,
-    };
+    assert_eq!(review.choose(0).subject_digest, subject_digest);
+    let response = review.choose(0);
     review.validate_response(&response).unwrap();
     let value = serde_json::to_value(InteractionResponse::Review { response }).unwrap();
     let mut forged = value.clone();
@@ -791,8 +785,10 @@ fn number_question_at_two_pow_63() -> InteractionRequest {
     InteractionRequest {
         id: InteractionId::new("interaction-number-v24"),
         conversation_id: ConversationId::new("conv_cbeb5dbf-dec8-7a50-840e-8eadce597bba"),
-        attempt_id: AttemptId::new("attempt-number-v24"),
-        turn: 1,
+        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: AttemptId::new("attempt-number-v24"),
+            turn: 1,
+        },
         kind: InteractionKind::Questionnaire {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("number-call"),

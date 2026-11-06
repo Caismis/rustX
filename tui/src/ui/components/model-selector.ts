@@ -6,15 +6,15 @@
  * │ Search: sonnet▌                                                    │
  * │                                                                    │
  * │ ❯ alpha/claude-sonnet-x                              configured    │
- * │     Messages · 200k ctx · 8k out · tools · in text/image           │
- * │     catalog reasoning: low medium high (catalog default medium)    │
+ * │     Messages · 200k ctx · 8k out · in text/image                   │
+ * │     catalog profiles: low medium high (catalog default medium)     │
  * │   beta/gpt-x                                         effective     │
  * │                                                                    │
  * │ configured  alpha/claude-sonnet-x                                  │
  * │ effective   beta/gpt-x                                             │
  * │ attempt     gamma/older-x · frozen at admission                    │
- * │ configured reasoning  profile high                                 │
- * │ effective reasoning   on (profile medium)                          │
+ * │ configured profile    high                                         │
+ * │ effective profile     medium                                       │
  * ├────────────────────────────────────────────────────────────────────┤
  * │ ↑↓ navigate · Enter select · Esc close                             │
  * ╰────────────────────────────────────────────────────────────────────╯
@@ -31,13 +31,13 @@
  * Every value shown is a `CatalogModelView` field the runtime published
  * through `model_catalog_get`. This component does not read `rustx.toml`,
  * does not contact a provider, does not know what "sonnet" means, and does
- * not invent a reasoning scale: a reasoning-capable model that declares no
+ * not invent a reasoning scale: a model that declares no
  * profiles is shown as exactly that, because there is no universal
  * off/low/medium/high and asserting one would make the client a second
  * model-configuration authority.
  *
  * Search runs over the same published catalog facts the rows display — the
- * model reference, the protocol, the modalities, the capability flags, the
+ * model reference, the protocol, the modalities, the
  * Model Profile ids, the limits — and over nothing else. See
  * {@link searchTerms}: there is no `claude`-means-Messages alias and no
  * family taxonomy, because the client is not an authority on what a model is.
@@ -63,7 +63,6 @@ import type { AttemptPresentation } from "../../presentation/state.ts";
 import {
   describeConfiguredProfile,
   describeProfile,
-  describeReasoning,
 } from "../../presentation/selectors.ts";
 import { role, style, plainText, plainWidth } from "../theme.ts";
 import {
@@ -370,9 +369,6 @@ export class ModelSelector implements PopupContent, Focusable {
       lines.push(
         role.meta(`effective profile   ${describeProfile(effective)}`),
       );
-      lines.push(
-        role.meta(`reasoning           ${describeReasoning(effective)}`),
-      );
     }
     return lines;
   }
@@ -385,7 +381,6 @@ export function capabilityLine(model: CatalogModelView): string {
     protocolLabel(model.protocol),
     `${tokens(model.contextWindow)} ctx`,
     `${tokens(model.maxOutputTokens)} out`,
-    capabilities.toolCalls ? "tools" : "no tools",
     `in ${capabilities.inputModalities.join("/") || "none"}`,
   ];
   return parts.join(" · ");
@@ -395,22 +390,17 @@ export function capabilityLine(model: CatalogModelView): string {
  * The Model Profiles the *catalog* published, exactly as published.
  *
  * A profile is an opaque invocation preset: its name carries no meaning, and
- * its reasoning state and output default are shown as the runtime declared
- * them. A reasoning-capable model without profiles is provider-default
- * reasoning, never a synthesized profile list.
+ * its output default is shown as the runtime declared it. A model without
+ * profiles never gets a synthesized profile list.
  */
 export function profileLine(model: CatalogModelView): string {
-  const reasoning = model.effectiveCapabilities.reasoning;
   const profiles = model.profiles ?? [];
   if (profiles.length === 0) {
-    return reasoning
-      ? "catalog profiles: none (provider-default reasoning)"
-      : "catalog profiles: none";
+    return "catalog profiles: none";
   }
   const names = profiles
     .map((profile) => {
       const facts = [
-        ...(reasoning ? [profile.reasoningEnabled ? "reasoning" : "no reasoning"] : []),
         ...(profile.maxOutputTokens == null ? [] : [`${tokens(profile.maxOutputTokens)} out`]),
       ];
       return facts.length === 0 ? profile.id : `${profile.id} (${facts.join(", ")})`;
@@ -494,11 +484,6 @@ export function searchTerms(model: CatalogModelView): string[] {
     protocolLabel(model.protocol),
     ...capabilities.inputModalities,
     ...capabilities.outputModalities,
-    // Capability terms are added only when the capability is present: a
-    // negative term would let a query match a model precisely because it
-    // cannot do the thing the query named.
-    ...(capabilities.toolCalls ? ["tools"] : []),
-    ...(capabilities.reasoning ? ["reasoning"] : []),
     ...(model.profiles ?? []).map((profile) => profile.id),
     ...(model.defaultProfile == null ? [] : [model.defaultProfile]),
     tokens(model.contextWindow),

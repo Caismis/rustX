@@ -45,6 +45,22 @@ const boundary = {
 };
 
 describe("native Session selectors", () => {
+  it("uses and searches generated titles while keeping manual names first", () => {
+    const selector = new SessionSelector({ sessions: [
+      { ...sessions[0]!, name: undefined, generated_title: { text: "Generated review", provenance: { type: "inherited", source_session: sessions[1]!.id } }, preview: "Opening prompt" },
+      { ...sessions[1]!, generated_title: { text: "Hidden generated title", provenance: { type: "inherited", source_session: sessions[0]!.id } } },
+    ] });
+    const rendered = selector.render(80).map(plainText).join("\n");
+    assert.match(rendered, /Generated review/);
+    assert.match(rendered, /saved review/);
+    assert.doesNotMatch(rendered, /Opening prompt|Hidden generated title/);
+    let selected: string | undefined;
+    selector.onSelect = session => { selected = session.id; };
+    for (const character of "Generated") selector.handleInput(character);
+    selector.handleInput("\r");
+    assert.equal(selected, sessions[0]!.id);
+  });
+
   it("filters persisted Sessions and emits the highlighted selection", () => {
     const selector = new SessionSelector({ sessions });
     let selected: string | undefined;
@@ -62,9 +78,8 @@ describe("native Session selectors", () => {
     );
   });
 
-  // A Session is unnamed until someone names it, so its row is the first
-  // message Rust derived — and a row is searched by whichever of the two it
-  // is actually showing.
+  // Before a generated or manual title exists, use the native preview or identity.
+  // Search uses the same label that the selector displays.
   it("shows and searches an unnamed Session by its first message", () => {
     const selector = new SessionSelector({
       sessions: [
@@ -85,7 +100,7 @@ describe("native Session selectors", () => {
     });
     const rendered = selector.render(80).map(plainText).join("\n");
     assert.match(rendered, /restore the auth module/);
-    assert.match(rendered, /\(no messages\)/);
+    assert.match(rendered, /ses_e1cdfcfb-8292-7831-b0a3-c977a5fd646f/);
 
     let selected: string | undefined;
     selector.onSelect = (session) => {

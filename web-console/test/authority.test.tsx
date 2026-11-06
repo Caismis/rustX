@@ -13,7 +13,7 @@ function pair() {
   const a = new Server(), b = new Server();
   const client = new AppServerClient((url, protocols) => (url === endpoint ? a : b).socketFactory(url, protocols));
   client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
-  const owner = new ConnectionController(client, async () => new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN }), { headers: { 'content-type': 'application/json' } }));
+  const owner = new ConnectionController(client, async () => new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN, appServerDeliveryToken: 'D'.repeat(43) }), { headers: { 'content-type': 'application/json' } }));
   return { a, b, client, owner };
 }
 afterEach(() => { cleanup(); localStorage.clear(); localeController.setLocale('en'); vi.useRealTimers(); });
@@ -21,6 +21,7 @@ it('two authorities containing Session A never inherit wanted attachment intent 
   const { a, b, client, owner } = pair();
   await owner.start(); await client.attach('A');
   await owner.disconnect(); await owner.reconnect();
+  await client.waitForAttachment('A', () => true);
   expect(a.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   await owner.select('remote'); await owner.connectRemote(remote, TOKEN);
   expect(client.getSnapshot().sessions.some(row => row.id === 'A')).toBe(true);
@@ -28,6 +29,7 @@ it('two authorities containing Session A never inherit wanted attachment intent 
   expect(b.requests.map(row => row.request.method)).toEqual(['initialize', 'session/list']);
   await client.attach('A');
   await owner.disconnect(); await owner.reconnect();
+  await client.waitForAttachment('A', () => true);
   expect(b.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
   await owner.select('local');
   expect(client.getSnapshot().views).toEqual({});

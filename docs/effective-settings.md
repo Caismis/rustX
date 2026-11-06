@@ -18,18 +18,19 @@ stale revisions. Conflicts preserve client drafts. Lost responses require an
 authoritative reread, never blind replay.
 
 Application is composable per unit: policy may already apply to future Attempts
-while instructions await Session adoption, another closure failed, and a process
+while instructions wait for the Session's safe boundary, another closure failed, and a process
 binding needs restart. The projection includes desired input revision, application
-attempt, per-unit results, actual process bindings, latest complete candidate and
-the addressed Session's adopted revision. Ready is distinct from adopted.
+attempt, per-unit results, actual process bindings and the addressed Session's
+committed revision. Ready (prepared, waiting) is distinct from applied.
 
-`session/adoptConfiguration` commits the inspected candidate with its expected
-Session baseline. Busy never cancels work. Conflict requires a reread. An admitted
+Native commits a prepared candidate automatically at the Session's safe boundary
+and records one `configuration_applied` fact per change. Waiting never cancels
+work; a superseded candidate never commits. An admitted
 Attempt and all descendants keep their immutable execution snapshot.
 `configuration/reconcile` owns external-file rescan and same-revision retry;
 ordinary Save does not invoke it as a second action. Healthy no-ops do not create
 fake pending state or resource churn. Scope-versioned notifications are native
 authority; reconnect rereads them without replaying mutations.
 
-See [application and adoption](configuration.md#save-automatic-application-and-session-adoption)
-for ownership, finite units, request-shape comparison and publication fences.
+See [automatic application](configuration.md#save-and-automatic-application)
+for ownership, finite units, the commit boundary and publication fences.

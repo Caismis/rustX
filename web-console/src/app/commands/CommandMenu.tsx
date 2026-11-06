@@ -15,12 +15,20 @@ export function CommandMenu({ rows, active, select, highlight, fileDescription }
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
-    const measure = () => { element.style.maxHeight = `${Math.max(0, Math.min(400, (element.parentElement?.getBoundingClientRect().top ?? 408) - 12))}px`; };
+    const viewport = element.closest<HTMLElement>('[data-conversation-scroll]');
+    // Like Harness, leave room below the conversation header. The actual
+    // scrollport edge also handles rustX's differently sized parent/child chrome.
+    const measure = () => {
+      const top = Math.max(0, viewport?.getBoundingClientRect().top ?? 0) + 12;
+      element.style.maxHeight = `${Math.max(0, Math.min(400, element.getBoundingClientRect().bottom - top))}px`;
+    };
     measure();
     const observer = new ResizeObserver(measure);
     if (element.parentElement) observer.observe(element.parentElement);
+    if (viewport) observer.observe(viewport);
     window.addEventListener('resize', measure);
-    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+    window.addEventListener('scroll', measure, true);
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure); window.removeEventListener('scroll', measure, true); };
   }, []);
   useLayoutEffect(() => {
     const element = root.current, selected = element?.querySelector<HTMLElement>('[aria-selected="true"]');

@@ -65,7 +65,7 @@ use std::path::{Path, PathBuf};
 use crate::runtime::identity::{SkillId, SkillVersionId};
 use crate::skills::dependencies::{DependencyManifest, parse_dependency_map};
 use crate::skills::diagnostics::{ShadowedSkill, SkillDiagnostic, SkillProvenance};
-use crate::skills::identity::package_version_id;
+use crate::skills::identity::inspect_package;
 use crate::skills::source::{AutomaticSkillRoot, SkillSource};
 use crate::tools::workspace::Workspace;
 
@@ -416,6 +416,7 @@ pub struct SkillDiscovery {
     /// [`MAX_SOURCE_SKILL_PACKAGES`] in production; a test may lower it to
     /// prove the boundary without materializing hundreds of package trees.
     source_budget: usize,
+    cancellation: crate::runtime::CancellationSignal,
 }
 
 /// An enumerated identity reserves its scope even when validation fails.
@@ -453,6 +454,7 @@ impl SkillDiscovery {
                 }],
             },
             source_budget: MAX_SOURCE_SKILL_PACKAGES,
+            cancellation: crate::runtime::CancellationSignal::new(),
         }
     }
 
@@ -468,6 +470,7 @@ impl SkillDiscovery {
             workspace: Some(workspace.root().to_path_buf()),
             config,
             source_budget: MAX_SOURCE_SKILL_PACKAGES,
+            cancellation: crate::runtime::CancellationSignal::new(),
         }
     }
 
@@ -486,7 +489,15 @@ impl SkillDiscovery {
             workspace: None,
             config,
             source_budget,
+            cancellation: crate::runtime::CancellationSignal::new(),
         }
+    }
+
+    /// Attach the native capture owner's cancellation authority to chunked I/O.
+    #[must_use]
+    pub fn with_cancellation(mut self, cancellation: crate::runtime::CancellationSignal) -> Self {
+        self.cancellation = cancellation;
+        self
     }
 
     /// Discovers the effective Skill package set.
@@ -537,7 +548,13 @@ impl SkillDiscovery {
             let collected = if escaped {
                 Vec::new()
             } else {
-                collect_automatic_source(source, &roots, self.source_budget, &mut diagnostics)
+                collect_automatic_source(
+                    source,
+                    &roots,
+                    self.source_budget,
+                    &mut diagnostics,
+                    &self.cancellation,
+                )
             };
             if diagnostics[before..].iter().any(|diagnostic| {
                 matches!(
@@ -658,6 +675,7 @@ fn collect_automatic_source(
     roots: &[&AutomaticSkillRoot],
     budget: usize,
     diagnostics: &mut Vec<SkillDiagnostic>,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Vec<Candidate> {
     // Phase 1: enumerate. No `SKILL.md` is parsed yet, so the source's total
     // candidate count is known before any validation work is spent.
@@ -688,7 +706,13 @@ fn collect_automatic_source(
     // Phase 2: validate each candidate against the root that offered it.
     let mut collected = Vec::with_capacity(candidates);
     for ResolvedRoot { boundary, entries } in resolved {
-        collected.extend(validate_candidates(source, &boundary, entries, diagnostics));
+        collected.extend(validate_candidates(
+            source,
+            &boundary,
+            entries,
+            diagnostics,
+            cancellation,
+        ));
     }
     collected
 }
@@ -748,6 +772,7 @@ fn validate_candidates(
     boundary: &Path,
     entries: Vec<(String, PathBuf)>,
     diagnostics: &mut Vec<SkillDiagnostic>,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Vec<Candidate> {
     let mut candidates = Vec::with_capacity(entries.len());
     for (name, path) in entries {
@@ -819,7 +844,7 @@ fn validate_candidates(
             });
             continue;
         }
-        match discover_package(&root, &name, source) {
+        match discover_package(&root, &name, source, cancellation) {
             Ok(package) => {
                 candidates.last_mut().expect("reserved identity").package = Some(package);
             }
@@ -886,6 +911,7 @@ fn discover_package(
     root: &Path,
     directory_name: &str,
     source: SkillSource,
+    cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<SkillPackage, SkillPackageError> {
     validate_skill_name(directory_name).map_err(|detail| SkillPackageError::InvalidName {
         directory: directory_name.to_owned(),
@@ -904,19 +930,19 @@ fn discover_package(
             directory: directory_name.to_owned(),
         });
     }
-    let markdown_bytes = crate::bounded_file::read_bounded(&skill_markdown).map_err(|error| {
-        SkillPackageError::Io {
-            path: skill_markdown.display().to_string(),
-            detail: error,
-        }
-    })?;
-    let markdown_text = String::from_utf8(markdown_bytes.clone()).map_err(|error| {
-        SkillPackageError::MalformedFrontmatter {
+    let mut files = Vec::new();
+    walk_package_files(root, root, &mut files, &mut 4096)?;
+    let (version_id, header) =
+        inspect_package(root, &files, cancellation).map_err(|detail| SkillPackageError::Io {
+            path: root.display().to_string(),
+            detail,
+        })?;
+    let markdown_text =
+        std::str::from_utf8(&header).map_err(|error| SkillPackageError::MalformedFrontmatter {
             directory: directory_name.to_owned(),
-            detail: format!("SKILL.md is not valid UTF-8: {error}"),
-        }
-    })?;
-    let frontmatter = parse_frontmatter(&markdown_text).map_err(|failure| match failure {
+            detail: error.to_string(),
+        })?;
+    let frontmatter = parse_frontmatter(markdown_text).map_err(|failure| match failure {
         FrontmatterFailure::Malformed(detail) => SkillPackageError::MalformedFrontmatter {
             directory: directory_name.to_owned(),
             detail,
@@ -966,17 +992,6 @@ fn discover_package(
         }
     })?;
 
-    // Collect the accepted package file set: every regular file below the
-    // package root, deterministically sorted by workspace-relative path,
-    // with package-internal symlinks rejected.
-    let mut files = Vec::new();
-    walk_package_files(root, root, &mut files, &mut 4096)?;
-    let version_id = package_version_id(root, &files, &markdown_bytes).map_err(|detail| {
-        SkillPackageError::Io {
-            path: root.display().to_string(),
-            detail,
-        }
-    })?;
     Ok(SkillPackage {
         id: SkillId::new(directory_name.to_owned()),
         version_id,

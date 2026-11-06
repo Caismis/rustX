@@ -1,4 +1,4 @@
-import { checkpointSnapshot } from '../../protocol/app-server/projection.ts';
+import { checkpointSnapshot, foldRuntimeEvent } from '../../protocol/app-server/projection.ts';
 import { checkpoint } from './support/fixtures.ts';
 import { nativeInteraction } from './support/fixtures.ts';
 import { contentAdvance, utf8Length } from './support/fixtures.ts';
@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  historyPresentation,
   mergeTranscriptPage,
   presentationCheckpoint,
   reduce,
@@ -71,21 +72,22 @@ function streamingOf(state: PresentationState): StreamingMessage | undefined {
 const initial = () => replaceFromSnapshot(snapshot(), runtimeCursor(0));
 
 describe("presentation projection", () => {
-  it("carries the runtime's published adoption eligibility from the snapshot and its change event alone", () => {
-    let state = replaceFromSnapshot(
-      snapshot({ configuration_adoption_eligibility: { status: "busy" } }),
-      runtimeCursor(1),
-    );
-    assert.equal(state.adoptionEligibility, "busy");
-    // Ordinary runtime traffic is not an eligibility fact.
-    state = reduce(state, { cursor: runtimeCursor(2), event: { type: "trace_changed" } });
-    assert.equal(state.adoptionEligibility, "busy");
-    state = reduce(state, {
-      cursor: runtimeCursor(3),
-      event: { type: "configuration_adoption_eligibility_changed", eligibility: { status: "eligible" } },
-    });
-    assert.equal(state.adoptionEligibility, "eligible");
-    assert.equal(state.cursor, "3");
+  it("appends a committed configuration change from its live event and its durable row alike", () => {
+    const change = {
+      reason: "source" as const, previous_binding_revision: "1", binding_revision: "2",
+      domains: ["tools" as const, "instructions" as const],
+      tools: { added: { names: ["fetch"], total: 1 }, removed: { names: [], total: 0 }, changed: { names: [], total: 0 } },
+      skills: { added: { names: [], total: 0 }, removed: { names: [], total: 0 }, changed: { names: [], total: 0 } },
+      instructions_bytes: "14", catalog_bytes: "2",
+    };
+    const instructions = { conversation_id: "conv", source: { type: "configuration_instructions" as const, journal_sequence: 7 }, representation: "utf8_text" as const, version: 1, content_revision: 1, readable_end: 14 };
+    const catalog = { ...instructions, source: { type: "configuration_catalog" as const, journal_sequence: 7 }, readable_end: 2 };
+    const item = { type: "configuration_applied" as const, event_id: "evt_1", timestamp: "2026-01-01T00:00:00Z", change, instructions, catalog };
+    const live = reduce(initial(), { cursor: runtimeCursor(1), event: { type: "configuration_applied", item, transcript_cursor: "7" } });
+    const entry = live.transcript.at(-1);
+    assert.deepEqual(entry, { kind: "configuration_applied", key: "configuration:evt_1", cursor: "7", change });
+    const paged = mergeTranscriptPage(initial(), { entries: [{ cursor: "7", item }] } as never);
+    assert.deepEqual(paged.transcript.at(-1), entry);
   });
 
   it("derives the initial state from an authoritative snapshot", () => {
@@ -354,6 +356,43 @@ describe("presentation projection", () => {
       "13",
     );
     assert.equal(state.pendingInteractions.length, 0, "historical audit is not a waiter");
+  });
+
+  it("reads every native-owned fact of a batch from one shared fold, not a second terminal fold", () => {
+    const seed = snapshot();
+    const state = replaceFromSnapshot(seed, runtimeCursor(0));
+    const message = { id: "queued", content: [{ type: "text" as const, text: "first" }], source: "human" as const, kind: "message" as const };
+    const transition: RuntimeClientEvent = {
+      type: "projection_transition",
+      metadata: { read_cut: checkpoint(seed).read_cut, content: [], collections: [] },
+      events: [
+        { type: "inbound_enqueued", sequence: "1", message, transcript_cursor: transcriptCursor(1) },
+        { type: "pending_inbound_changed", pending: [{ sequence: "1", revision: "1", message: { ...message, content: [{ type: "text", text: "edited" }] } }] },
+        { type: "job_updated", position: 0, job: backgroundExecution("job-1", "running") },
+      ],
+    };
+    const next = reduce(state, { cursor: runtimeCursor(1), event: transition });
+    // The authoritative repair from the same native fold agrees on every
+    // native-owned fact; only the terminal transcript adaptation differs.
+    const repaired = replaceFromSnapshot(foldRuntimeEvent(checkpointSnapshot(checkpoint(seed)), transition), runtimeCursor(1));
+    const { transcript: _t, transcriptNextCursor: _n, statistics: _s, deferredTranscriptEntries: _d, ...owned } = next;
+    const { transcript: _rt, transcriptNextCursor: _rn, statistics: _rs, deferredTranscriptEntries: _rd, ...repairedOwned } = repaired;
+    assert.deepEqual(owned, repairedOwned);
+    assert.deepEqual(next.inbound.pending?.map(item => item.revision), ["1"]);
+    // The edit inside the batch rewrites exactly the row the enqueue displayed.
+    assert.deepEqual(
+      next.transcript.map(entry => entry.kind === "committed" && entry.message.role === "user" && entry.message.content),
+      [[{ type: "text", text: "edited" }]],
+    );
+    const removed = reduce(next, { cursor: runtimeCursor(2), event: { type: "pending_inbound_changed", pending: [] } });
+    assert.deepEqual(removed.transcript, []);
+  });
+
+  it("refuses an observation that has no native checkpoint to fold into", () => {
+    assert.throws(
+      () => reduce(historyPresentation("conversation", { entries: [], statistics: undefined } as never), { cursor: runtimeCursor(1), event: { type: "runtime_shutdown" } }),
+      /No authoritative checkpoint/,
+    );
   });
 
   it("adds a user transcript row only when the durable acceptance event arrives", () => {
@@ -1134,7 +1173,8 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: { type: "future_variant" } as unknown as RuntimeClientEvent,
         }),
-      /unreachable Runtime Client event/,
+      // The shared native fold is the first authority to see the variant.
+      /Unknown Runtime Client event/,
     );
   });
 
@@ -1380,7 +1420,7 @@ it('T14 T19 canonical Tool result commitment is separate from execution-terminal
 it('T14 T17 native Trace read-domain head remains in the locally Applied checkpoint', () => {
   const initial = snapshot();
   const state = replaceFromSnapshot(checkpointSnapshot(checkpoint(initial)), '0');
-  const trace: import('../../protocol/app-server/v52.ts').TracePage = {records: [{
+  const trace: import('../../protocol/app-server/v73.ts').TracePage = {records: [{
     id: 'request:J1', position: 'native-trace-1', kind: 'request', state: 'running', fields: [], collections: [],
     location: {attempt_id: 'attempt-1', step_id: 'turn-1'}, timing: {started_at: '2026-01-01T00:00:00Z'},
     calls: [], attachments: [], has_detail: true, truncated: false,
@@ -1394,7 +1434,7 @@ it('T14 T17 native Trace read-domain head remains in the locally Applied checkpo
 it('T14 T19 deferred publication settlement retains source facts without settling execution', () => {
   const initial = snapshot({attempt: attemptView({attempt_id:'attempt-1'})});
   const state = replaceFromSnapshot(checkpointSnapshot(checkpoint(initial)), '0');
-  const sourceCut: import('../../protocol/app-server/v52.ts').ObservationReadCut = {
+  const sourceCut: import('../../protocol/app-server/v73.ts').ObservationReadCut = {
     read: {conversation_id: initial.conversation_id, journal:'0', transcript:'1', mutation_revision:'0', ledger_through:'0', surface_revision:'0', transcript_total:'1', pending_through:'0', pending_total:'0'},
     ledger_through:'0', transcript_total:'1', surface_revision:'0', inherited_through:'0',
   };

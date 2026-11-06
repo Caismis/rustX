@@ -116,7 +116,7 @@ fn bootstrap(connection: &Connection) -> Result<StatisticsLayout, ConversationSt
                 })
             })
         })
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
 }
 pub(super) fn layout(
     connection: &Connection,
@@ -139,7 +139,7 @@ pub(super) fn layout(
             })
         })
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .transpose()?;
     let sequence = latest.as_ref().map_or(0, |frame| frame.sequence);
     // A newer independent full record survives damage before its own cut.
@@ -147,7 +147,7 @@ pub(super) fn layout(
     let missing: bool = connection.prepare_cached(
         "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence>?1 AND sequence<=?2)",
     ).and_then(|mut statement| statement.query_row(params![sequence, through], |row| row.get(0)))
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if missing {
         return Err(storage("native statistics record unavailable"));
     }

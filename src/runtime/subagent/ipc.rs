@@ -108,7 +108,12 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 32 combines native attachment input with the frozen Session
 /// workspace path and removes workspace policy and Candidate snapshots.
 /// Both incompatible version-31 formats are rejected before composition.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 33;
+/// Version 34 adds native JSON Schema output to frozen model capabilities in Hello.
+/// Version 35 combines native JSON Schema output with reasoning-free and tool-switch-free capabilities.
+/// Version 36 freezes source-wide Resources authority independently of exact Tools.
+/// Version 37 combines frozen Resources authority with Scheduled Workflow and
+/// interaction origins and prepared execution inputs.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 37;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -262,10 +267,11 @@ impl SubagentChildSpec {
 pub(crate) enum ChildTerminalMode {
     /// Publish an ordinary named-subagent answer candidate.
     Normal,
-    /// Require the reserved Workflow Agent output protocol.
+    /// A Workflow-owned `AgentRun`: its final reply, or, with a schema, the
+    /// reserved Workflow Agent output protocol.
     WorkflowOutput {
-        /// The frozen JSON Schema shown to the child model.
-        output_schema: serde_json::Value,
+        /// The frozen JSON Schema shown to the child model, when declared.
+        output_schema: Option<serde_json::Value>,
     },
 }
 
@@ -523,7 +529,7 @@ pub(crate) enum ChildFrame {
     /// parent may drop exactly that retained anchor.
     AnchorReleased(ProcessUnitAnchorFrame),
     /// A child-owned interaction request committed by its coordinator.
-    InteractionRequested(Box<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>),
+    InteractionRequested(Box<crate::observation::interaction::RuntimeClientInteractionHeader>),
     /// Originating physical source loss retires this exact read/action locator.
     /// It is observation only and carries no fabricated execution outcome.
     InteractionRemoved {
@@ -964,6 +970,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn resolved_spec() -> ResolvedSubagentSpec {
         ResolvedSubagentSpec {
+            resource_sources: std::collections::BTreeSet::new(),
             environment: Vec::new(),
             generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
             skill_roots: Vec::new(),
@@ -1200,7 +1207,7 @@ mod tests {
     }
 
     /// Issue #462 (D07): a version-30 parent spoke a workspace snapshot
-    /// object. That Hello cannot decode under version 33, and a current-shape
+    /// object. That Hello cannot decode under the current version, and a current-shape
     /// Hello naming any other version is not this build's protocol, so the
     /// child refuses both before composing anything.
     #[test]
@@ -1218,7 +1225,22 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 33);
+        assert_eq!(SUBAGENT_IPC_VERSION, 37);
+    }
+
+    #[test]
+    fn child_spec_requires_explicit_frozen_resources_authority() {
+        let current = serde_json::to_value(allocation_spec()).unwrap();
+        assert_eq!(
+            current["resolved"]["resourceSources"],
+            serde_json::json!([])
+        );
+        let mut retired = current;
+        retired["resolved"]
+            .as_object_mut()
+            .unwrap()
+            .remove("resourceSources");
+        assert!(serde_json::from_value::<SubagentChildSpec>(retired).is_err());
     }
 
     #[test]
@@ -1356,8 +1378,10 @@ mod tests {
         let routed_request = InteractionRequest {
             id: InteractionId::new("interaction-questionnaire"),
             conversation_id: ConversationId::new("conv_b520d0ec-730a-7133-8d51-7de417e31c5a"),
-            attempt_id: crate::runtime::identity::AttemptId::new("attempt-1"),
-            turn: 3,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: crate::runtime::identity::AttemptId::new("attempt-1"),
+                turn: 3,
+            },
             kind: InteractionKind::Questionnaire {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
@@ -1386,7 +1410,7 @@ mod tests {
             },
         };
         let routed_ref = routed_request.interaction_ref();
-        let routed_header = crate::runtime_client::checkpoint::interaction_request_header(
+        let routed_header = crate::observation::interaction::interaction_request_header(
             &routed_request,
             crate::runtime::interaction::InteractionSource::Primary,
         );

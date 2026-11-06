@@ -80,7 +80,7 @@ impl Contribution {
                 .and_then(|mut statement| {
                     statement.query_row(params![start, attempt.as_str()], |row| row.get(0))
                 })
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             if matches {
                 same |= 4;
             }
@@ -90,7 +90,7 @@ impl Contribution {
                 attempt_id: (attempt.as_str().len() <= 512).then(|| attempt.clone()),
                 attempt_id_deferred: attempt.as_str().len() > 512,
                 attempt_id_source: if attempt.as_str().len() > 512 {
-                    Some(crate::runtime_client::snapshot::JournalFieldRef {
+                    Some(crate::observation::tool::JournalFieldRef {
                         sequence: event.sequence,
                         path: vec!["attempt_id".into()],
                         encoded_bytes: super::super::observation_request_summary::serialized_bytes(
@@ -155,7 +155,7 @@ impl Contribution {
             attempt_id,
             attempt_id_deferred: encoded_bytes.is_some(),
             attempt_id_source: encoded_bytes.map(|encoded_bytes| {
-                crate::runtime_client::snapshot::JournalFieldRef {
+                crate::observation::tool::JournalFieldRef {
                     sequence,
                     path: vec!["attempt_id".into()],
                     encoded_bytes,
@@ -293,13 +293,12 @@ impl Contribution {
                 settle_duration(&mut state.local, at);
             }
             state.local.active_start = Some(sequence);
-            state.local.view.duration.active = Some(
-                crate::runtime_client::agent_statistics::AgentActiveInterval {
+            state.local.view.duration.active =
+                Some(crate::observation::statistics::AgentActiveInterval {
                     started_at: self.at,
                     observed_at: self.at,
                     running: false,
-                },
-            );
+                });
         } else if self.same & 4 != 0 {
             if let Some(active) = &mut state.local.view.duration.active {
                 active.observed_at = active.observed_at.max(self.at);
@@ -331,5 +330,5 @@ fn clock_matches(
         .and_then(|mut statement| {
             statement.query_row(params![source.sequence, attempt.as_str()], |row| row.get(0))
         })
-        .map_err(|error| storage(error.to_string()))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))
 }

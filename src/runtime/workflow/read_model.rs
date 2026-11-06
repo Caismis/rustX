@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    WorkflowBlockInstance, WorkflowBlockProgram, WorkflowExecutionOutcome, WorkflowId,
-    WorkflowLoopExit, WorkflowNodeInstance, WorkflowNodeProgram, WorkflowRunId,
+    WorkflowBlockInstance, WorkflowExecutionOutcome, WorkflowId, WorkflowLoopExit,
+    WorkflowNodeInstance, WorkflowNodeProgram, WorkflowRunId,
 };
 use crate::runtime::identity::{SubagentId, ToolCallId};
 
@@ -46,14 +46,16 @@ pub struct WorkflowRunView {
     pub workflow_id: WorkflowId,
     pub program_digest: String,
     pub resource_revision: crate::runtime::identity::RuntimeResourceRevision,
-    pub tool_call_id: ToolCallId,
+    pub tool_call_id: Option<ToolCallId>,
     pub state: WorkflowState,
+    // Started blocks and nodes in native admission order, never definition order.
     pub instances: Vec<WorkflowInstanceView>,
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub omitted_instances: u64,
     pub steps_consumed: usize,
     pub steps_max: usize,
     pub agents_consumed: usize,
+    pub model_calls_consumed: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -73,6 +75,7 @@ pub enum WorkflowState {
 pub enum WorkflowWait {
     Tool,
     Agent,
+    Model,
     Capacity,
     Questionnaire,
     Approval,
@@ -84,13 +87,21 @@ pub enum WorkflowWait {
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowNodeKind {
+    Template,
+    List,
+    Aggregate,
+    Classifier,
     Block,
     Agent,
+    Model,
     Tool,
     Branch,
-    Parallel,
+    Start,
     Review,
     Loop,
+    Iteration,
+    LoopEnd,
+    Assigner,
     Return,
 }
 
@@ -104,14 +115,17 @@ pub struct WorkflowInstanceView {
     pub kind: WorkflowNodeKind,
     pub state: WorkflowState,
     pub child: Option<SubagentId>,
+    /// Exact read-only child identity; never grants durable Agent controls.
+    pub child_agent_id: Option<crate::runtime::identity::AgentId>,
     pub invocation: Option<crate::tools::types::ToolInvocationId>,
     pub tool_id: Option<crate::runtime::identity::ToolId>,
+    /// Logical Auxiliary identity only; prompts and output stay with their owners.
+    pub auxiliary_call_id: Option<crate::runtime::identity::AuxiliaryCallId>,
     pub interaction: Option<crate::runtime::interaction::InteractionRef>,
     pub iteration: Option<u32>,
     pub iterations_max: Option<u32>,
     pub loop_exit: Option<WorkflowLoopExit>,
     pub checks_passed: Option<bool>,
-    pub review_accepted: Option<bool>,
 }
 
 impl WorkflowInstanceView {
@@ -121,17 +135,46 @@ impl WorkflowInstanceView {
             visit: node.as_ref().map(|_| 0),
             node,
             kind,
-            state: WorkflowState::Pending,
+            state: WorkflowState::Running,
             child: None,
+            child_agent_id: None,
             invocation: None,
             tool_id: None,
+            auxiliary_call_id: None,
             interaction: None,
             iteration: None,
             iterations_max: None,
             loop_exit: None,
             checks_passed: None,
-            review_accepted: None,
         }
+    }
+
+    pub(super) fn started(node: &WorkflowNodeInstance, program: &WorkflowNodeProgram) -> Self {
+        let kind = match program {
+            WorkflowNodeProgram::Template { .. } => WorkflowNodeKind::Template,
+            WorkflowNodeProgram::List { .. } => WorkflowNodeKind::List,
+            WorkflowNodeProgram::Aggregate { .. } => WorkflowNodeKind::Aggregate,
+            WorkflowNodeProgram::Model(model) if !model.classes.is_empty() => {
+                WorkflowNodeKind::Classifier
+            }
+            WorkflowNodeProgram::Agent(_) => WorkflowNodeKind::Agent,
+            WorkflowNodeProgram::Model(_) => WorkflowNodeKind::Model,
+            WorkflowNodeProgram::Tool { .. } => WorkflowNodeKind::Tool,
+            WorkflowNodeProgram::Branch { .. } => WorkflowNodeKind::Branch,
+            WorkflowNodeProgram::Start => WorkflowNodeKind::Start,
+            WorkflowNodeProgram::Review { .. } => WorkflowNodeKind::Review,
+            WorkflowNodeProgram::Loop { .. } => WorkflowNodeKind::Loop,
+            WorkflowNodeProgram::Iteration { .. } => WorkflowNodeKind::Iteration,
+            WorkflowNodeProgram::LoopEnd => WorkflowNodeKind::LoopEnd,
+            WorkflowNodeProgram::Assigner { .. } => WorkflowNodeKind::Assigner,
+            WorkflowNodeProgram::Return { .. } => WorkflowNodeKind::Return,
+        };
+        let mut view = Self::new(node.block.clone(), Some(node.node.clone()), kind);
+        view.visit = Some(node.visit);
+        if let WorkflowNodeProgram::Loop { loop_count, .. } = program {
+            view.iterations_max = Some(*loop_count);
+        }
+        view
     }
 }
 
@@ -337,6 +380,24 @@ impl WorkflowReadModel {
         });
     }
 
+    /// Exercise native mutation, revision retention and the installed host
+    /// callback together in cross-owner publication contract tests.
+    #[cfg(test)]
+    pub(crate) fn publish_run_for_test(&self, run: WorkflowRunView, sequence: u64) {
+        if self
+            .snapshot()
+            .runs
+            .iter()
+            .any(|current| current.id == run.id)
+        {
+            let id = run.id.clone();
+            self.update(&id, |current| *current = run);
+        } else {
+            self.register(run);
+        }
+        self.publish_committed(sequence);
+    }
+
     pub(super) fn update(&self, id: &WorkflowRunId, mutate: impl FnOnce(&mut WorkflowRunView)) {
         self.commit(|state| {
             let Some(run) = state.runs.iter_mut().find(|run| &run.id == id) else {
@@ -351,33 +412,13 @@ impl WorkflowReadModel {
         });
     }
 
-    pub(super) fn block(
-        &self,
-        id: &WorkflowRunId,
-        block: &WorkflowBlockProgram,
-        instance: &WorkflowBlockInstance,
-    ) {
+    pub(super) fn block(&self, id: &WorkflowRunId, instance: &WorkflowBlockInstance) {
         self.update(id, |run| {
-            let mut view =
-                WorkflowInstanceView::new(instance.clone(), None, WorkflowNodeKind::Block);
-            view.state = WorkflowState::Running;
-            run.instances.push(view);
-            for (key, node) in &block.nodes {
-                let kind = match node {
-                    WorkflowNodeProgram::Agent(_) => WorkflowNodeKind::Agent,
-                    WorkflowNodeProgram::Tool { .. } => WorkflowNodeKind::Tool,
-                    WorkflowNodeProgram::Branch { .. } => WorkflowNodeKind::Branch,
-                    WorkflowNodeProgram::Parallel { .. } => WorkflowNodeKind::Parallel,
-                    WorkflowNodeProgram::Review { .. } => WorkflowNodeKind::Review,
-                    WorkflowNodeProgram::Loop { .. } => WorkflowNodeKind::Loop,
-                    WorkflowNodeProgram::Return { .. } => WorkflowNodeKind::Return,
-                };
-                let mut view = WorkflowInstanceView::new(instance.clone(), Some(key.clone()), kind);
-                if let WorkflowNodeProgram::Loop { max_iterations, .. } = node {
-                    view.iterations_max = Some(*max_iterations);
-                }
-                run.instances.push(view);
-            }
+            run.instances.push(WorkflowInstanceView::new(
+                instance.clone(),
+                None,
+                WorkflowNodeKind::Block,
+            ));
         });
     }
 
@@ -434,11 +475,6 @@ fn bound(run: &mut WorkflowRunView) {
             .instances
             .iter()
             .position(|node| matches!(node.state, WorkflowState::Settled { .. }))
-            .or_else(|| {
-                run.instances
-                    .iter()
-                    .position(|node| matches!(node.state, WorkflowState::Pending))
-            })
             .or_else(|| (!run.instances.is_empty()).then_some(0));
         let Some(index) = index else {
             break;
@@ -460,13 +496,14 @@ mod tests {
             workflow_id: WorkflowId::parse("projection").unwrap(),
             program_digest: "a".repeat(64),
             resource_revision: crate::runtime::identity::RuntimeResourceRevision::new(1),
-            tool_call_id: ToolCallId::new("outer"),
+            tool_call_id: Some(ToolCallId::new("outer")),
             state: WorkflowState::Running,
             instances: vec![],
             omitted_instances: 0,
             steps_consumed: 0,
             steps_max: 4096,
             agents_consumed: 0,
+            model_calls_consumed: 0,
         }
     }
 
@@ -539,12 +576,12 @@ mod tests {
         }
         assert_eq!(
             owner.snapshot().runs[0].instances[0].state,
-            WorkflowState::Pending
+            WorkflowState::Running
         );
-        owner.node(&node, |row| row.state = WorkflowState::Running);
+        owner.node(&node, |row| row.state = WorkflowState::Draining);
         assert_eq!(
             owner.snapshot().runs[0].instances[0].state,
-            WorkflowState::Running
+            WorkflowState::Draining
         );
     }
 
@@ -717,7 +754,7 @@ mod tests {
         let mut client = RuntimeClientProjection::new(
             prepared.runs[0].id.conversation_id.clone(),
             vec![],
-            crate::runtime_client::CapabilityView {
+            crate::observation::capability_source::CapabilityView {
                 configured_tools: Vec::new(),
                 revision: crate::runtime::identity::CapabilityRevision::new(1),
                 tools: vec![],

@@ -51,6 +51,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::bytes::BytesMut;
 use tokio_util::codec::Decoder as _;
 
+use crate::credentials::SourceCredentials;
 use crate::tools::limits::bounded_text_preview;
 
 /// The bounded serde diagnostic retained for a protocol violation.
@@ -65,12 +66,14 @@ const VIOLATION_LINE_PREVIEW_BYTES: usize = 160;
 /// machine acted on, and later lines were never delivered.
 pub(crate) struct ProtocolViolationRecorder {
     first: Mutex<Option<String>>,
+    credentials: SourceCredentials,
 }
 
 impl ProtocolViolationRecorder {
-    pub(crate) fn new() -> Arc<Self> {
+    pub(crate) fn new(credentials: SourceCredentials) -> Arc<Self> {
         Arc::new(Self {
             first: Mutex::new(None),
+            credentials,
         })
     }
 
@@ -84,8 +87,13 @@ impl ProtocolViolationRecorder {
         if first.is_some() {
             return;
         }
+        // Redact the original evidence before either preview is truncated:
+        // a clipped credential can no longer be recognized as its full value.
+        // The tee still delivers the unmodified bytes to rmcp's decoder.
+        let reason = self.credentials.redact(reason);
+        let line = self.credentials.redact(&String::from_utf8_lossy(line));
         let (reason, _) = bounded_text_preview(reason.as_bytes(), VIOLATION_REASON_BYTES);
-        let (preview, _) = bounded_text_preview(line, VIOLATION_LINE_PREVIEW_BYTES);
+        let (preview, _) = bounded_text_preview(line.as_bytes(), VIOLATION_LINE_PREVIEW_BYTES);
         *first = Some(format!(
             "well-formed JSON could not be decoded as an MCP message ({reason}; offending line: '{preview}')"
         ));
@@ -294,10 +302,43 @@ mod tests {
         assert!(!reason.is_empty());
     }
 
+    #[test]
+    fn source_credentials_are_redacted_before_bounding_reason_and_wire_evidence() {
+        let secret = format!("PR503_LONG_CREDENTIAL_{}_END", "a".repeat(512));
+        let mut credentials: SourceCredentials = serde_json::from_value(serde_json::json!({
+            "environment": {"TOKEN": "$FRAMING_TOKEN"}
+        }))
+        .unwrap();
+        credentials.capture(crate::credentials::CredentialSnapshot::new([(
+            "FRAMING_TOKEN".into(),
+            secret.clone(),
+        )]));
+        credentials.resolve().unwrap();
+        let recorder = ProtocolViolationRecorder::new(credentials);
+        recorder.record(
+            &format!("invalid method {secret}; {}", "reason".repeat(100)),
+            format!(
+                "{{\"method\":123,\"token\":\"{secret}\",\"padding\":\"{}\"}}",
+                "line".repeat(100)
+            )
+            .as_bytes(),
+        );
+        let diagnostic = recorder.violation().unwrap();
+        assert!(diagnostic.contains("<redacted>"));
+        assert!(!diagnostic.contains("PR503_LONG_CREDENTIAL_"));
+        assert!(!diagnostic.contains("aaaa_END"));
+        let framing_bytes =
+            "well-formed JSON could not be decoded as an MCP message (; offending line: '')".len();
+        assert!(
+            diagnostic.len()
+                <= framing_bytes + VIOLATION_REASON_BYTES + VIOLATION_LINE_PREVIEW_BYTES
+        );
+    }
+
     #[tokio::test]
     async fn a_healthy_stream_passes_bytes_through_unchanged() {
         let wire = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\nplain noise\n";
-        let recorder = ProtocolViolationRecorder::new();
+        let recorder = ProtocolViolationRecorder::new(SourceCredentials::default());
         let mut reader = ViolationObservingReader::new(&wire[..], recorder.clone());
         let mut observed = Vec::new();
         reader.read_to_end(&mut observed).await.expect("read");
@@ -308,7 +349,7 @@ mod tests {
     #[tokio::test]
     async fn a_violation_is_recorded_and_the_stream_ends_after_the_offending_line() {
         let wire = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":123}\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
-        let recorder = ProtocolViolationRecorder::new();
+        let recorder = ProtocolViolationRecorder::new(SourceCredentials::default());
         let mut reader = ViolationObservingReader::new(&wire[..], recorder.clone());
         let mut observed = Vec::new();
         reader.read_to_end(&mut observed).await.expect("read");
@@ -331,7 +372,7 @@ mod tests {
     async fn the_first_violation_wins() {
         let wire =
             b"{\"jsonrpc\":\"2.0\",\"method\":123}\n{\"jsonrpc\":\"2.0\",\"method\":false}\n";
-        let recorder = ProtocolViolationRecorder::new();
+        let recorder = ProtocolViolationRecorder::new(SourceCredentials::default());
         let mut reader = ViolationObservingReader::new(&wire[..], recorder.clone());
         let mut observed = Vec::new();
         reader.read_to_end(&mut observed).await.expect("read");
@@ -347,7 +388,7 @@ mod tests {
         // A partial line must never be classified: the seam observes at
         // line granularity, exactly like the framing it wraps.
         let (mut writer, reader) = tokio::io::duplex(64);
-        let recorder = ProtocolViolationRecorder::new();
+        let recorder = ProtocolViolationRecorder::new(SourceCredentials::default());
         let mut reader = ViolationObservingReader::new(reader, recorder.clone());
         writer
             .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"meth")

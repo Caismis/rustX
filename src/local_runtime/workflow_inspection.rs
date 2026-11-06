@@ -11,6 +11,7 @@ pub struct WorkflowProjection {
     pub source: PathBuf,
     pub admission: crate::runtime::capability_inspection::WorkflowInspection,
     pub program: Option<crate::runtime::workflow::inspection::WorkflowInspection>,
+    pub presentation: Vec<super::diagnostics::Diagnostic>,
 }
 
 pub(super) fn inspect(
@@ -69,6 +70,19 @@ pub(super) fn inspect(
         id: id.clone(),
         source,
         admission: admission.clone(),
+        presentation: launch
+            .workflows
+            .presentation_diagnostics
+            .get(id)
+            .into_iter()
+            .flatten()
+            .map(|error| {
+                let mut diagnostic =
+                    *super::diagnostics::LaunchFailure::resource(error.clone()).diagnostic;
+                diagnostic.classification = "warning";
+                diagnostic
+            })
+            .collect(),
         program: explain.then(|| {
             launch
                 .workflows

@@ -45,16 +45,16 @@ impl PublicationProjectionCommit for BatchProjection {
     }
     fn native_goal(
         &self,
-        _: &crate::durable::inbox::GoalObservationReceipt,
+        _: &crate::durable::GoalObservationReceipt,
     ) -> NativeReceiptInstallation {
         unreachable!()
     }
-    fn native_audit(&self, _: &AttemptId, _: &crate::durable::inbox::PublicationAuditReceipt) {
+    fn native_audit(&self, _: &AttemptId, _: &crate::durable::PublicationAuditReceipt) {
         unreachable!()
     }
     fn native_pending(
         &self,
-        _: Option<&crate::durable::inbox::PendingObservationReceipt>,
+        _: Option<&crate::durable::PendingObservationReceipt>,
         _: &crate::durable::reading::ConversationReadCut,
     ) {
         unreachable!()

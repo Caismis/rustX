@@ -1,0 +1,127 @@
+[
+  {
+    "name": "root const with only the destination key",
+    "path": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "const": {
+        "after": 42
+      }
+    },
+    "input": {
+      "after": 42
+    }
+  },
+  {
+    "name": "enum members separately owning source and destination keys",
+    "path": [],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true,
+      "enum": [
+        {
+          "before": "x"
+        },
+        {
+          "after": "x"
+        }
+      ]
+    },
+    "input": {
+      "after": "x"
+    }
+  },
+  {
+    "name": "ancestor object const with only the destination key",
+    "path": [
+      "properties",
+      {
+        "key": "child"
+      }
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "child": {
+          "type": "object",
+          "properties": {
+            "before": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "child"
+      ],
+      "additionalProperties": false,
+      "const": {
+        "child": {
+          "after": 42
+        }
+      }
+    },
+    "input": {
+      "child": {
+        "after": 42
+      }
+    }
+  },
+  {
+    "name": "ancestor array items const with only the destination key",
+    "path": [
+      "properties",
+      {
+        "key": "rows"
+      },
+      "items"
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "before": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "additionalProperties": false,
+      "const": {
+        "rows": [
+          {
+            "after": 42
+          }
+        ]
+      }
+    },
+    "input": {
+      "rows": [
+        {
+          "after": 42
+        }
+      ]
+    }
+  }
+]

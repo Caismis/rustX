@@ -37,6 +37,7 @@
 pub mod legacy;
 pub mod raw;
 pub mod recovery;
+pub mod resources;
 /// The in-process Streamable HTTP fixture.
 ///
 /// It is `cfg(test)` rather than merely feature-gated because it serves over
@@ -64,10 +65,21 @@ use rmcp::{RoleServer, ServerHandler, ServiceExt};
 /// The environment variable selecting fixture mode when the test binary is
 /// re-executed as its own stdio MCP server.
 pub const FIXTURE_MODE_ENV: &str = "RUSTX_M7_MCP_FIXTURE";
+/// Enables the standard resources capability in a self-spawned fixture.
+pub const RESOURCES_ENV: &str = "RUSTX_FIXTURE_RESOURCES";
+/// Removes the tools capability in a self-spawned fixture.
+pub const TOOLS_DISABLED_ENV: &str = "RUSTX_FIXTURE_TOOLS_DISABLED";
+/// Serves an empty ordinary tool catalog.
+pub const TOOLS_EMPTY_ENV: &str = "RUSTX_FIXTURE_TOOLS_EMPTY";
+/// Serves an empty resource descriptor catalog while retaining templates.
+pub const RESOURCES_EMPTY_ENV: &str = "RUSTX_FIXTURE_RESOURCES_EMPTY";
 /// The environment variable naming the marker file the `slow` tool writes
 /// the moment its server-side cancellation context fires (self-spawned
 /// stdio fixtures, where the fixture state lives in another process).
 pub const CANCEL_FILE_ENV: &str = "RUSTX_M7_FIXTURE_CANCEL_FILE";
+/// The marker releasing the `mutate` response after the parent observed its
+/// progress. The notification and response have independent SDK handlers.
+pub const MUTATE_RELEASE_FILE_ENV: &str = "RUSTX_M7_FIXTURE_MUTATE_RELEASE_FILE";
 /// The environment variable selecting the paginated `tools/list` catalog
 /// page size (self-spawned stdio fixtures).
 pub const PAGE_SIZE_ENV: &str = "RUSTX_M7_FIXTURE_PAGE_SIZE";
@@ -199,7 +211,13 @@ impl FixtureServer {
     pub fn from_env() -> Self {
         Self {
             list_changed_supported: true,
+            resources_supported: std::env::var_os(RESOURCES_ENV).is_some(),
+            tools_disabled: std::env::var_os(TOOLS_DISABLED_ENV).is_some(),
+            tools_empty: std::env::var_os(TOOLS_EMPTY_ENV).is_some(),
+            resources_empty: std::env::var_os(RESOURCES_EMPTY_ENV).is_some(),
+            resource_state: resources::ResourceFixtureState::from_env(),
             cancel_observed_file: std::env::var_os(CANCEL_FILE_ENV).map(PathBuf::from),
+            mutate_release_file: std::env::var_os(MUTATE_RELEASE_FILE_ENV).map(PathBuf::from),
             page_size: std::env::var(PAGE_SIZE_ENV)
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok()),
@@ -311,6 +329,16 @@ impl FixtureServer {
 )]
 #[derive(Clone, Default)]
 pub struct FixtureServer {
+    /// Advertise read-only MCP Resources.
+    pub resources_supported: bool,
+    /// Omit Tools entirely, proving resource-only readiness.
+    pub tools_disabled: bool,
+    /// Return zero ordinary tools while still advertising them.
+    pub tools_empty: bool,
+    /// Return zero resources; templates and direct URI reads still work.
+    pub resources_empty: bool,
+    /// Counted Resource protocol observations and cancellation gates.
+    pub resource_state: resources::ResourceFixtureState,
     /// The catalog flip observed by `tools/list`.
     pub changed: Arc<AtomicBool>,
     /// The current subscription sink, installed by `listen`.
@@ -324,6 +352,9 @@ pub struct FixtureServer {
     /// moment its cancellation context fires (for self-spawned stdio
     /// fixtures, where the fixture state lives in another process).
     pub cancel_observed_file: Option<PathBuf>,
+    /// When set, `mutate` holds its response until the parent creates this
+    /// file after observing progress through the real executor.
+    pub mutate_release_file: Option<PathBuf>,
     /// Whether the server advertises and accepts `tools/list_changed`.
     pub list_changed_supported: bool,
     /// When set, `tools/list` paginates its catalog with this page size.
@@ -834,18 +865,19 @@ fn record_echo_call(path: Option<&std::path::Path>) -> Result<(), rmcp::ErrorDat
 impl ServerHandler for FixtureServer {
     fn get_info(&self) -> ServerInfo {
         let mut capabilities = ServerCapabilities::builder().enable_tools();
-        if self.list_changed_supported {
-            capabilities = capabilities.enable_tool_list_changed();
+        if self.task_tools && !self.tasks_unadvertised {
+            capabilities = capabilities.enable_tasks();
         }
-        // Advertisement is authority: the unadvertised variant publishes the
-        // same guard tools and answers with the same `CreateTaskResult`,
-        // which is exactly the peer a client must refuse to follow.
-        let capabilities = if self.task_tools && !self.tasks_unadvertised {
-            capabilities.enable_tasks()
-        } else {
-            capabilities
-        };
-        let mut info = ServerInfo::new(capabilities.build());
+        let mut capabilities = capabilities.build();
+        if self.tools_disabled {
+            capabilities.tools = None;
+        } else if self.list_changed_supported {
+            capabilities.tools.as_mut().unwrap().list_changed = Some(true);
+        }
+        if self.resources_supported {
+            capabilities.resources = Some(rmcp::model::ResourcesCapability::default());
+        }
+        let mut info = ServerInfo::new(capabilities);
         // The legacy `initialize` fallback echoes this revision whenever the
         // client asks for one the fixture does not serve, so it must be a
         // revision the fixture really serves.
@@ -871,6 +903,36 @@ impl ServerHandler for FixtureServer {
             self.versions(),
             self.get_info(),
         )))
+    }
+
+    fn list_resources(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<rmcp::model::ListResourcesResult, rmcp::ErrorData>>
+    + Send {
+        std::future::ready(self.resource_state.list(request, self.resources_empty))
+    }
+
+    fn list_resource_templates(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<
+        Output = Result<rmcp::model::ListResourceTemplatesResult, rmcp::ErrorData>,
+    > + Send {
+        std::future::ready(self.resource_state.templates(request))
+    }
+
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        self.resource_state
+            .read(request, context)
+            .await
+            .map(Into::into)
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -904,7 +966,11 @@ impl ServerHandler for FixtureServer {
             )));
         }
         let ttl_ms = self.list_tools_ttl_ms;
-        let tools = self.catalog();
+        let tools = if self.tools_empty {
+            Vec::new()
+        } else {
+            self.catalog()
+        };
         let Some(page_size) = self.page_size else {
             let mut result = rmcp::model::ListToolsResult {
                 tools,
@@ -969,6 +1035,7 @@ impl ServerHandler for FixtureServer {
         let slow_started = self.slow_started.clone();
         let cancel_observed = self.cancel_observed.clone();
         let cancel_observed_file = self.cancel_observed_file.clone();
+        let mutate_release_file = self.mutate_release_file.clone();
         let result_bytes = self.result_bytes;
         let result_block_bytes = self.result_block_bytes.clone();
         let echo_call_count_file = self.echo_call_count_file.clone();
@@ -1041,6 +1108,20 @@ impl ServerHandler for FixtureServer {
                                 None,
                             )
                         })?;
+                }
+                if let Some(marker) = mutate_release_file {
+                    // A cross-process rendezvous, not a timing assumption:
+                    // the parent releases only after its ProgressReporter ran.
+                    tokio::select! {
+                        () = async {
+                            while !marker.exists() {
+                                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                            }
+                        } => {}
+                        () = context.ct.cancelled() => return Err(rmcp::ErrorData::internal_error(
+                            "fixture mutate cancelled before parent release", None,
+                        )),
+                    }
                 }
                 // Inline-lifecycle clients open a `subscriptions/listen`
                 // stream; legacy clients get the plain

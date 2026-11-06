@@ -79,7 +79,7 @@ impl NativeContextComposition {
     }
 }
 
-struct ContributionReminderReader(Arc<dyn crate::durable::ConversationStore>);
+struct ContributionReminderReader(Arc<dyn crate::durable::RequestStore>);
 
 impl crate::durable::ContributionEmissionLookup for ContributionReminderReader {
     fn latest_contribution_emission(

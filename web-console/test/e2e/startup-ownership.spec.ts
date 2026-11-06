@@ -8,7 +8,7 @@ async function begin(page: Page, language = 'en', files = false, model?: 'explic
   await page.goto(fixture);
   await page.getByRole('button', { name: language === 'en' ? 'Choose Workspace' : '选择工作区', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
-  if (model === 'explicit') { await page.getByRole('button', { name: 'Model and profile' }).click(); await page.getByRole('menuitem', { name: 'Model', exact: true }).click(); await page.getByRole('menuitem', { name: 'fixture/second', exact: true }).click(); }
+  if (model === 'explicit') { await page.getByRole('button', { name: 'Model and thinking effort' }).click(); await page.getByRole('menuitem', { name: 'Model', exact: true }).click(); await page.getByRole('menuitemradio', { name: 'fixture/second', exact: true }).click(); }
   await page.locator('textarea').fill('Retained first input');
   if (files) await page.locator('input[type=file]').setInputFiles([{ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('first') }, { name: 'second.txt', mimeType: 'text/plain', buffer: Buffer.from('second') }]);
   await page.locator('[data-composer-primary]').click();
@@ -141,7 +141,7 @@ for (const language of ['en', 'zh']) test(`lost ready read is reconciled from th
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'uncertain');
   await page.evaluate(() => { (window as any).startupFixture.remount(); (window as any).startupFixture.allow('session/uploadStatus'); });
   await page.evaluate(() => (window as any).startupFixture.reconnect());
-  const check = page.getByRole('button', { name: language === 'en' ? 'Check status' : '检查状态', exact: true });
+  const check = page.getByRole('button', { name: language === 'en' ? 'Check status for first.txt' : '检查 first.txt 的上传状态', exact: true });
   await expect(check).toBeEnabled(); await check.focus(); await check.press('Enter');
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'paused');
   const repaired = await page.evaluate(() => (window as any).startupFixture.operation());

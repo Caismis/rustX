@@ -117,6 +117,7 @@ fn execution_policy(
     clock: Arc<dyn MonotonicClock>,
 ) -> crate::agent::execution::AgentExecutionRuntimePolicy {
     crate::agent::execution::AgentExecutionRuntimePolicy {
+        workspace_changes: None,
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy,
         monotonic_clock: clock as Arc<dyn MonotonicClock>,

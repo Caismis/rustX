@@ -1,0 +1,245 @@
+{
+  "schema": "issue-499-protocol-retirement-measurement-v1",
+  "recorded_at": "2026-10-25T02:49:25.560582+00:00",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "previous_head": "ec76eaf2131f5876eca17669d885bf5f864447c6",
+  "source": {
+    "native_inputs": 1013,
+    "native_sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+    "delta_native_since_review15": {
+      "count": 6,
+      "sha256": "4b918bc8d92dd4693b44bbedf11d8f08138e111ad26beb4adeb6ebe076bb5ee5",
+      "inputs": [
+        {
+          "path": "src/runtime/conversation_runtime/probe.rs",
+          "sha256": "a27176ce0962e875a5cf5cd5221639329e39817a939b4f4333d0ab29e03b5096"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog.rs",
+          "sha256": "6bc8de1976127faaca8b1f55bc3e1e73eb6011899f4853f6bde764c9a8d63e69"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "b1615b712a92da3261bf667794a8305686b6b505f558bf8cc3c1b2650f9c095a"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "a5e58e2e1bbd121324009169468aa8828dfb7871ea6c46c7a2838950f4f082a5"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "233f444e8c58f979ff0eeceeb4f06ad1aa19bc9a6bb1feb1092f72df73684552"
+        },
+        {
+          "path": "tests/scripted/runtime_client/auxiliary.rs",
+          "sha256": "0108687278affcc1fc224dc233af37106389d2e0d12848a310e76db4c8483f85"
+        }
+      ]
+    },
+    "current_delta_since_ec76": {
+      "count": 14,
+      "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+      "inputs": [
+        {
+          "path": "src/runtime/conversation_runtime/probe.rs",
+          "sha256": "a27176ce0962e875a5cf5cd5221639329e39817a939b4f4333d0ab29e03b5096"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog.rs",
+          "sha256": "6bc8de1976127faaca8b1f55bc3e1e73eb6011899f4853f6bde764c9a8d63e69"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "b1615b712a92da3261bf667794a8305686b6b505f558bf8cc3c1b2650f9c095a"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "a5e58e2e1bbd121324009169468aa8828dfb7871ea6c46c7a2838950f4f082a5"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "233f444e8c58f979ff0eeceeb4f06ad1aa19bc9a6bb1feb1092f72df73684552"
+        },
+        {
+          "path": "tests/scripted/runtime_client/auxiliary.rs",
+          "sha256": "0108687278affcc1fc224dc233af37106389d2e0d12848a310e76db4c8483f85"
+        },
+        {
+          "path": "tui/src/app-server/editor.ts",
+          "sha256": "53b41a57e9dde4db84fb58b75d4987ac0b224699e39e50925b214272e64959d5"
+        },
+        {
+          "path": "tui/src/ui/app.ts",
+          "sha256": "2dbd6779283f128723d88b55b27d9187b0dd3d53f5f263263a614d8992d05900"
+        },
+        {
+          "path": "tui/src/ui/composer-draft.ts",
+          "sha256": "3048761a44da5f0e61398c655e9694fe1153ad2cd0f78ee09ad8a6c6b1c821da"
+        },
+        {
+          "path": "tui/test/composer-app.test.ts",
+          "sha256": "e1102143198b05092a57966f4feac4ae83e39c7ae1605b82bb2ba409fb7f7ece"
+        },
+        {
+          "path": "tui/test/startup.test.ts",
+          "sha256": "6b58b58922ef9bf5f8a8d3cc73d194fd07c43528932332437481fae88b1e41ee"
+        },
+        {
+          "path": "web-console/src/app/navigation/machine.ts",
+          "sha256": "9516038a539fd4468db53167abd565e00297650d02ebab63198e59c4e818b94f"
+        },
+        {
+          "path": "web-console/test/cold-session-navigation.test.tsx",
+          "sha256": "7ccf8c51e7c9d8f10dac1622743f543ac1800280ec02af2a3eb210b9a4b66988"
+        },
+        {
+          "path": "web-console/test/navigation-ownership.test.ts",
+          "sha256": "a2fd027cebbc5813c0df76541463171878da40916f956f38bc73aa42621e4b71"
+        }
+      ]
+    },
+    "recipe": "Sorted POSIX path+NUL+ASCII file SHA256+LF; SHA256 of concatenation. Native closure independently rehashes all1013 preceding source/test/build paths; no prior record is rewritten.",
+    "reconstruction": "Preserve preceding review15 Native1013 inventory; replace the six listed Native inputs. Complete current fourteen-file authored/test delta is listed separately. All1013 inputs were rehashed before/after this measurement.",
+    "source_audit_path": "/tmp/issue499/review16-source-audit-final.json",
+    "source_audit_sha256": "f8eccccd92b4b1cc3ff255a81741b9923f326bcaadabe4b5466ce4a675657697"
+  },
+  "measurement": {
+    "current": "submission-live-review16-current.json",
+    "current_sha256": "4e156cf64a5b9ff9bfcb53d1e7a6e49ee1f0da109ee66a1f4ac6c48a25d0437d",
+    "receipt": {
+      "command": "env RUSTX_STARTUP_TIMING_JSON=docs/issue-499/evidence/submission-live-review16-current.json cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T02:46:56.279105+00:00",
+      "finished_at": "2026-10-25T02:47:49.144200+00:00",
+      "elapsed_seconds": 52.865098762034904,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "1d1603f2fcac260369d8a2e9a67e8476a2d5524870ed668c04dd5af870975475"
+    },
+    "receipt_sha256": "62f22e834c698a0472e2a2b398f280d3d9154c572c7edb9916968a8e98dfb776",
+    "source_receipt": {
+      "recorded_at": "2026-10-25T02:47:49.180180+00:00",
+      "command": [
+        "env",
+        "RUSTX_STARTUP_TIMING_JSON=docs/issue-499/evidence/submission-live-review16-current.json",
+        "cargo",
+        "test",
+        "--lib",
+        "--all-features",
+        "capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing",
+        "--",
+        "--ignored",
+        "--exact",
+        "--nocapture"
+      ],
+      "before": {
+        "current_delta": {
+          "count": 14,
+          "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+          "matches_frozen": true
+        },
+        "native": {
+          "count": 1013,
+          "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+          "matches_frozen": true
+        }
+      },
+      "after": {
+        "current_delta": {
+          "count": 14,
+          "sha256": "aaa57d4b1f7312e9304837d091193f5250233bb1d075235a2ba1031bf9256799",
+          "matches_frozen": true
+        },
+        "native": {
+          "count": 1013,
+          "sha256": "a25e40e7636f406209fd5ef14f33218d3027bef8856d193f482169916902db3c",
+          "matches_frozen": true
+        }
+      },
+      "source_stable": true,
+      "exit_code": 0,
+      "test_summaries": [
+        {
+          "status": "ok",
+          "passed": "1",
+          "failed": "0",
+          "ignored": "0",
+          "measured": "0",
+          "filtered_out": "4776"
+        }
+      ],
+      "RUSTX_BINARY": null
+    },
+    "source_receipt_sha256": "f3d43b78df37a365eae55f48210a7b55292dbb9bd71964bcca0fdbc149835055",
+    "counts": {
+      "rows": 24,
+      "model_requests": 24,
+      "handshakes": 78,
+      "tools_list": 78,
+      "tools_call": 12,
+      "http_requests": 168,
+      "server_handler_instances": 180,
+      "peak_in_flight_phases_max": 4,
+      "spawned_server_processes": 0,
+      "active_phases_after_shutdown": 0
+    },
+    "baseline": "submission-live-baseline.json",
+    "baseline_sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "baseline_adapter": "submission-live-baseline-adapter.json",
+    "baseline_adapter_sha256": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+    "baseline_rerun": false,
+    "fixtures": [
+      {
+        "path": "src/capabilities/coordinator/tests/performance_startup.rs",
+        "previous_sha256": "3afb33655fcdfe50d3b8dca65cf18f1615d6d03ae293dd4e415d02f9df8ca236",
+        "sha256": "3afb33655fcdfe50d3b8dca65cf18f1615d6d03ae293dd4e415d02f9df8ca236",
+        "unchanged": true
+      },
+      {
+        "path": "src/capabilities/coordinator/tests/performance_startup_model.rs",
+        "previous_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029",
+        "sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029",
+        "unchanged": true
+      }
+    ],
+    "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "interpretation": "Fresh final-source controlled loopback HTTP run; exact actual ModelRequest and affected tools/call inventories/counts asserted. Baseline is preserved same-fixture main00978 sample with documented API seam, not rerun. Single shared-host samples establish neither percentiles nor statistical significance. HTTP handlers are not physical connections. Measured server processes are exactly zero. Prior grace/cached42ms is superseded.",
+    "scope_notes": {
+      "measurement": "real ConversationRuntime inbound -> AgentExecution -> ModelAdapter::stream(request); timestamp recorded at adapter entry",
+      "timing_scope": "starts immediately before native source preparation; includes candidate commit, runtime construction, activation, admission and context assembly; authored config, loopback servers and tool storage setup are outside the clock",
+      "provider": "scripted adapter; exactly one actual ModelRequest per row; no external provider network latency",
+      "transport": "real loopback Streamable HTTP; client and server share one test process; server processes are therefore exactly zero",
+      "handler_count_scope": "server_handler_instances counts SDK request-handler factory invocations, not physical connections or MCP sessions; handshake counts independently prove one live initialization per source",
+      "first_tool_scope": "first affected MCP tools/call through the captured native executor after the measured model Attempt settles; not a model-generated tool step",
+      "capability_scope": "terminal_capability_ready_ms includes Ready and explicit Unavailable outcomes, not successful readiness of failed sources",
+      "baseline_failure_scope": "a preparation rejection records startup_failure and null capability/request/Attempt timestamps with zero model requests; it is not converted into optional success by the baseline adapter",
+      "fresh_repeat_scope": "a separate Conversation native source owner first discovers the same endpoints/workspace with fast responses, closes its connections, and is excluded from the measured clock and request counts",
+      "timing_assertions": "none; exact model/tool/protocol counts and tool inventories are asserted; controlled delays are workload inputs"
+    }
+  },
+  "preceding_review15_preserved": {
+    "current": "submission-live-review15-current.json",
+    "current_sha256": "d7366f0ae506db1f31aad0462c6135a0808c163c27e5a0a3690483e800fe1aed",
+    "manifest": "submission-live-review15-manifest.json",
+    "manifest_sha256": "f26009d9941e2773f7764425512c33eafc60045b6b13f6ea72503bda9644d5ca",
+    "native_sha256": "1ea25f55fe1012ad6f26e2bd1e718c427ef82c193659e279d29c6daedbc797ff",
+    "unchanged": true
+  },
+  "immutable_preceding_evidence": {
+    "count": 63,
+    "all_unchanged": true,
+    "snapshot": "/tmp/issue499/review16-measurement-docs-before.json",
+    "snapshot_sha256": "50fa04581e625b5c0445c26db77c222699340cbfbe8fa7e24fc1cc1e5c199a03"
+  },
+  "independent_review": "independentreview16.md",
+  "independent_review_sha256": "91d275492c159231b9a81ce0f9e7126d7f70ecda2dc9eb7ddbda2d735d185a54",
+  "validation_record": "validation-review16.json"
+}

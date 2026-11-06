@@ -162,6 +162,8 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
         _ => unreachable!("validated in main"),
     };
     ModelRequest {
+        response_schema: None,
+        response_byte_limit: None,
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: ModelInvocationConfig {
@@ -169,7 +171,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
             protocol,
             max_output_tokens: 512,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
+            capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         messages: vec![rustx::model::ModelInputMessage::Canonical(

@@ -20,16 +20,16 @@ impl<'a> FactSpool<'a> {
     fn disk_insert(&self, key: &str, value: &[u8]) -> Result<(), ConversationStoreError> {
         self.connection
             .prepare_cached("INSERT INTO request_source_fact_spool(key,value) VALUES(?1,?2)")
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .execute(params![key, value])
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(())
     }
     fn spill(&mut self) -> Result<(), ConversationStoreError> {
         self.connection
             .prepare_cached("DELETE FROM request_source_fact_spool")
             .and_then(|mut statement| statement.execute([]))
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         for (key, value) in std::mem::take(&mut self.facts) {
             self.disk_insert(&key, &value)?;
         }
@@ -68,11 +68,14 @@ impl<'a> FactSpool<'a> {
             let mut statement = self
                 .connection
                 .prepare_cached("SELECT key,value FROM request_source_fact_spool ORDER BY key")
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             let mut rows = statement
                 .query([])
-                .map_err(|error| storage(error.to_string()))?;
-            while let Some(row) = rows.next().map_err(|error| storage(error.to_string()))? {
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+            while let Some(row) = rows
+                .next()
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+            {
                 builder.push(
                     row.get(0).map_err(|error| storage(error.to_string()))?,
                     row.get(1).map_err(|error| storage(error.to_string()))?,
@@ -92,9 +95,9 @@ impl<'a> FactSpool<'a> {
         if self.spilled {
             self.connection
                 .prepare_cached("DELETE FROM request_source_fact_spool")
-                .map_err(|error| storage(error.to_string()))?
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
                 .execute([])
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
         Ok(result)
     }

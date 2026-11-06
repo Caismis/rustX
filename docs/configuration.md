@@ -24,9 +24,16 @@ facts and keep unsaved drafts.
             └── conversations/
                 └── conv_<uuid-v7>/
                     ├── conversation.sqlite
-                    └── tool-output/
-                        ├── results/result_<uuid-v7>.txt
-                        └── tasks/exec_<uuid-v7>.output
+                    ├── output-namespaces.json
+                    └── output-namespaces.lock
+
+<std::env::temp_dir()>/
+├── .rx-retired-<16 hex>/            shared private retirement arena (0700)
+│   └── .owner                      product ownership proof, retained
+└── rx-<16 hex>/                     private Conversation namespace (0700)
+    ├── .owner                      ownership validation (0600)
+    ├── r-<16 hex>.txt               lazy foreground spill (0600)
+    └── e-<16 hex>.output            pre-acceptance background output (0600)
 
 <workspace>/
 ├── rustx.toml
@@ -44,7 +51,24 @@ accumulate. Runtime files can also contain ownership locks, SQLite sidecars and
 physical execution scratch beneath their native owner directories.
 
 `--config /absolute/file.toml` replaces the User document binding for this
-process (`rustx app-server` and the offline configuration commands). User resources stay at `~/rustx/.agents`; the Workspace document stays
+process (`rustx app-server` and the offline configuration commands). Any file
+name works except those rustX reserves for writer metadata beside a source:
+`.rustx-locks` and names starting with `.rustx-stage-`, including case variants
+on **every filesystem**, even a case-sensitive one. For this conservative
+comparison only, rustX maps the basename to Unicode uppercase then lowercase;
+this also reserves forms such as `.RUSTX-LOCKS`, `.RuStX-LoCkS`,
+`.rustx-locKs` (Kelvin sign), `.ruſtx-locks` (long s), and case-mapped stage
+prefixes. Actual file paths and revision identities retain their exact bytes.
+For an existing document, a read-only device/inode check also rejects any other
+filesystem alias of the sibling `.rustx-locks` path. No OS-name or default-volume
+assumption determines this check.
+
+Selection resolves symlinks first: an ordinary alias to a reserved canonical
+document is refused; a reserved-spelling alias in a different directory to an
+ordinary canonical document is allowed. Rejection names the source and asks
+the user to rename it, before repair, metadata or runtime storage creation, or
+protocol service. The selected file remains untouched. User resources stay at
+`~/rustx/.agents`; the Workspace document stays
 at `<workspace>/rustx.toml`. `--runtime-root /absolute/directory` replaces only
 the process runtime storage root. Both are fixed process bindings.
 Workspace identity never determines the default runtime storage root.
@@ -97,7 +121,7 @@ version is `schema_version = 10`.
 ### Providers and Models
 
 Provider names, Model names and Profile names are lookup identities. They do not
-infer protocol, credentials, limits, endpoint, reasoning support, compatibility
+infer protocol, credentials, limits, endpoint, compatibility
 or any provider-native parameter. A Model can be replaced without replacing its
 Provider.
 
@@ -107,7 +131,7 @@ Ownership is layered, and each layer owns only its own facts:
 | --- | --- |
 | Provider | `base_url` and the credential source |
 | Model | provider binding, provider-native `id`, `protocol`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
-| Model Profile | one complete, independent invocation preset: `reasoning_enabled`, an optional default `max_output_tokens`, and its own native `request_params` |
+| Model Profile | one complete, independent invocation preset: an optional default `max_output_tokens` and its own native `request_params` |
 | Model selection | the chosen `model`, optional `profile`, explicit `request_params` overrides and an optional output limit |
 | Provider adapter | protocol structure, the output-token field spelling, and final protected-key validation |
 
@@ -128,11 +152,6 @@ request_params = '{"temperature":0.2,"vendor":{"nested_option":true,"unset":null
 [models.fast.capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
-[models.fast.compat]
-chat_reasoning_replay = "omit"
 
 # A Model with profiles: each profile is a complete preset; the Model itself
 # declares no request_params.
@@ -143,29 +162,22 @@ protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 8192
 default_profile = "balanced"
+reasoning_profile_order = ["fast", "balanced", "precise"]
 
 [models.thinker.capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = true
-
-[models.thinker.compat]
-chat_reasoning_replay = "omit"
 
 [models.thinker.profiles.fast]
-reasoning_enabled = true
 max_output_tokens = 2048
 request_params = '{"reasoning_effort":"low"}'
 
 [models.thinker.profiles.balanced]
-reasoning_enabled = true
 request_params = '''
 {"reasoning_effort": "medium", "metadata": {"tier": null}}
 '''
 
 [models.thinker.profiles.precise]
-reasoning_enabled = false
 request_params = '{"temperature":0.1,"top_p":0.5,"stop":["\n\n"]}'
 
 [agent.model]
@@ -183,10 +195,48 @@ credential source; no member is recovered from the shadowed User Provider.
 Each Model requires `provider`, provider-native `id`, explicit `protocol`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
 Supported protocols and modality values are enumerated by the generated schema.
+rustX treats every configured model as supporting tool calls; there is no per-model capability switch.
+Agent tool selection and runtime permissions determine which tools are available.
+The obsolete `capabilities.tool_calls` field and `rustx init --tool-calls` flag are
+not accepted; remove them from existing configuration and launch commands.
+No `compat` declaration is required, including with `rustx init`. Like ZCode's
+OpenAI-compatible path, Chat Completions defaults to `max_completion_tokens`,
+`stream_options.include_usage = true`, native `tool_calls`, and replay of exposed
+assistant thinking through `reasoning_content`. The Chat response parser accepts
+either `reasoning_content` or `reasoning`; replay concatenates plaintext thinking blocks
+in order and skips opaque blocks that have no Chat representation. These rules
+do not enable thinking or synthesize reasoning request parameters. Profiles
+continue to own the exact provider parameters that control generation.
+
+The bounded endpoint/model rules in `src/model/compat.rs` use `max_tokens` for
+the OpenCode Go API models listed there, following ZCode's built-in catalog.
+Rules are resolved before freezing an invocation, so replay and subprocess
+execution retain the same effective request policy. Unknown endpoints/models
+use the general defaults; there is no speculative retry after an API rejection.
+
+
+The single `json_schema_output` capability defaults to `false`. Set it to `true`
+only after verifying native API-enforced JSON Schema output for this exact Model,
+Provider endpoint and protocol, including the Profile settings that can be selected.
+The effective capability is the
+intersection of the Model declaration, adapter and runtime; it is retained in the
+frozen invocation and read projections. A Workspace Model replaces the full User
+Model, including this declaration. Web Settings exposes **Native JSON Schema output**
+as an advanced model capability checkbox.
+
+This declaration alone changes no Agent, Title or Summary request. Only a structured
+Auxiliary Call supplies a response schema. Auxiliary freezes native schema enforcement
+when the effective claim is true, otherwise trusted prompt guidance; both paths apply
+the same local schema validation before accepting output. A native-format failure
+is an explicit failure and never triggers an extra prompt-mode request.
+
 Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
-`responses_storage`. Protocol validation determines which members are applicable
-and required.
+`responses_storage` (Responses defaults to `stored`). Explicit overrides win
+over built-in rules. The model settings UI exposes API format, limits,
+capabilities, profiles and request parameters; protocol overrides belong to
+source configuration. Changing API format in the UI clears overrides belonging
+to the previous protocol. Protocol validation rejects foreign members.
 
 #### Provider-native request parameters
 
@@ -223,14 +273,53 @@ string if the provider accepts one.
   naming one of them, and must not declare model-level `request_params` — not
   even `'{}'`.
 - A Model without profiles must not declare `default_profile`; selecting any
-  profile for it fails. A reasoning-capable Model without profiles keeps
-  provider-default reasoning without a synthetic wire field.
-- On a reasoning-capable Model every profile declares `reasoning_enabled`. On a
-  non-reasoning Model omission means `false` and `true` is invalid. Reasoning
-  state is never inferred from a profile name or a native key.
+  profile for it fails.
+- Models and profiles do not declare a reasoning capability or enabled flag.
+  Provider-native `request_params` control reasoning. Returned thinking blocks
+  determine the reasoning content shown for each response; absence of a block
+  does not classify the model.
 - A profile `max_output_tokens` is a positive default no greater than the
   Model's hard maximum.
 - Profiles never inherit: neither from the Model nor from another profile.
+
+#### Optional reasoning order
+
+`reasoning_profile_order` optionally declares all of one Model's Profile
+identities from lower to higher reasoning strength. It is an authored relative
+declaration, not a measured guarantee about quality, speed, price or provider
+support. Names and native parameters have no inferred ranking semantics.
+
+For the three Profiles above, `["fast", "balanced", "precise"]` is complete.
+Omit the field entirely to leave the Model unconfigured; a singleton Model may
+declare its singleton Profile. `[]`, missing identities, duplicates, identities
+belonging only to another Model and orders on a Model without Profiles fail
+native validation. Authorized diagnostics name missing, repeated or unknown
+identities; automatic repair receipts retain only the safe field/category.
+Invalid orders are never sorted, completed or cleared automatically.
+
+Profiles, default and order belong to the same complete Model transaction.
+Workspace replacement does not merge arrays with the User definition. A complete
+Workspace Model omitting the field intentionally has no order; removing that
+override restores inheritance. Invalid writes and stale revisions commit nothing.
+
+In Web Settings, **Reasoning order (low to high)** starts **Not configured**.
+Configure seeds an identity-sorted draft, with no inferred strength. Move controls
+change that draft; Save accepts it. New Profiles are appended to a configured
+draft for review, deletion removes the same identity from both collections, and
+deleting the final Profile omits the order. Clear removes only the order. Reset
+and Cancel restore the form's baseline, including membership and order.
+
+Full catalog views expose optional camel-case `reasoningProfileOrder`; authored
+TOML/Settings documents use `reasoning_profile_order`. Absent fields serialize as
+omitted. Frozen invocations know only their selected Profile and omit the order;
+bounded selection headers also omit this complete metadata. Ordinary Profile
+lists, `profile_position`, pagination and workflow selection retain their lexical
+enumeration, independent of semantic order. Existing revision fences still apply.
+
+The default Profile remains independent. Primary and Summary/Title/Classification/
+BTW policies, parameters, budgets and frozen Attempts are unchanged. No reasoning
+parameter mapping or task-specific automatic selection is implemented; compaction
+and title generation do not yet consume this metadata.
 
 #### Resolution
 
@@ -256,19 +345,41 @@ applies independently. An omitted `profile` selects `default_profile`; an
 unknown or inapplicable explicit profile fails without fallback.
 
 The Root `agent.model` object contains `model` and optional `profile`,
-`request_params`, `max_output_tokens`, and `summary_model`. An output limit is
-`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary
-selection is `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
-with its own `profile`, output and request settings. The whole selection is
+`request_params`, `max_output_tokens`, `summary_model`, and `title_model`. An output limit is
+`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary and Title
+selection use the same native policy: `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
+with independent `profile`, output and request settings. An absent policy follows the
+Session primary. TOML auxiliary `request_params` is a JSON object string, while
+native/client protocol values are structured objects. Both apply the same shallow
+overlay, Profile key ownership, protected fields and Model hard output limit. The whole selection is
 replaced together. Domain defaults are evaluated inside that winning object.
 An admitted Attempt freezes the complete resolved invocation — Model, Profile,
-reasoning state, output budget and parameters — so later configuration changes
+output budget and parameters — so later configuration changes
 affect only later admissions.
+
+Automatic Title captures its independent invocation at admission using the current
+Session model and resource revision fences. A later settings change cannot restart
+that operation or reset its source eligibility. Technical retries reuse that captured
+invocation. Summary keeps the parent Attempt snapshot, or the independent manual
+Compaction admission snapshot. Bounded source/effective/model views retain both
+auxiliary policies in inline values, deferred reads and current-revision collection
+pages. These observations grant no execution authority. Web Settings exposes Title
+selection alongside Summary; native, Web and TUI primary-model changes preserve
+explicit auxiliary choices.
 
 ### Root Agent
 
 `agent` supports `description`, `instructions`, `model`, `tools`, `skills`,
 `plugins`, `agents`, `workflows`, and `agents_md`.
+
+Every primary Agent request includes rustX's built-in coding-assistant guidance
+and execution working directory, even when `instructions` is omitted.
+Agent instructions extend that baseline; they do not replace it.
+The effective System Prompt is ordered as built-in
+guidance, Agent instructions, project instructions selected by `agents_md`,
+certified-extension sections, and visible Skill guidance. Root and named Agents
+use the same baseline with their own admitted instructions and capabilities.
+Auxiliary summary requests retain their separate task-specific input.
 
 ```toml
 [agent]
@@ -296,15 +407,68 @@ files = []
 Native Tools use an exact whitelist. An omitted whitelist grants none. MCP source
 identities use their server names; Managed Python uses `python:<package>`.
 Each source selection is `"all"`, an exact Tool-name array, or `[]` for none.
+`"all"` grants source-wide trust: ordinary Tools and MCP Resources when the
+connected server advertises Resources. Exact arrays authorize only the named
+Tools, never Resources. This rule also applies to Managed Python sources under
+their `python:<package>` identity. A source connected for a Workflow or another
+Agent grants no Resource authority to the Root.
+
+At least one authorized source with a validated Resources capability composes
+exactly three native Agent Tools: `list_mcp_resources`,
+`list_mcp_resource_templates`, and `read_mcp_resource`. Do not add these names to
+`tools.builtin`; there is no separate Resource flag. Resource-only servers and
+servers with empty resource lists or only URI templates are eligible. Configured,
+unselected, failed and unconnected hint-only sources are not.
+
+The list Tools accept an optional `server` and `cursor`. A cursor requires its
+server. Named requests return one bounded page and its next cursor; aggregate
+requests return one page per server in source identity order, with independent
+statuses and cursors (at most 32 servers, four concurrent requests). Use a named
+request for larger sets. Reads require `server` and `uri`; the URI is passed only
+to that peer, including `file://` URIs, and need not have appeared in a listing.
+Large text uses managed output continuations and blobs use managed artifacts.
+Resource bodies remain untrusted Tool output and enter model context only when
+the Agent invokes and commits an ordinary Tool call.
+
+Named and Workflow Agents freeze their own source-wide intent and exact physical
+bindings. A resource-only child materializes its selected source even with zero
+ordinary Tools. Parent permissions and later configuration changes never expand
+that frozen set. A replacement connection that loses Resources fails a frozen
+Resource call before dispatch; current Attempts retain their declared Tool set
+until the existing safe capability commit boundary.
+
 An empty source map replaces no named source entries; set a particular source
-to `[]` to override its inherited selection. Agent and Workflow allowlists are
-complete arrays, default empty. Their dispatcher capabilities follow admission
+to `[]` to override its inherited selection. The Agent allowlist is a complete
+array, default empty. `agent.workflows` is the one accumulating unit: the User
+and Workspace arrays are merged, and each enables only the Workflow files its
+own scope owns: a Global file enabled in User `rustx.toml` is enabled in every
+Workspace that does not shadow it, and a Workspace enables its own files. The Workflows page edits it one
+file at a time (`workflow_enabled`). Dispatcher capabilities follow admission
 of those selections. Definition existence never selects a resource.
 
 `agents_md.inherit` defaults true and `files` defaults empty inside its winning
-object. Files are resolved by the native resource owner, captured with the
-generation, and ordered as authored. Root has no child timeout field; it
-belongs to named profiles.
+object. Automatic instruction discovery loads one global file from
+`~/rustx/.agents/`, then one file from the resolved Workspace root. In each
+directory the first regular file wins in this order: `AGENTS.override.md`,
+`AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`. The global resource directory
+stays bound to the User home even with an explicit `--config`. Workspace
+ancestors are not searched, and coincident global and Workspace paths contribute
+only once.
+
+Explicit `files` are appended in authored order. Setting `inherit = false`
+excludes both automatically discovered scopes while retaining explicit files.
+All instruction files must be UTF-8; one optional leading BOM is removed.
+Each nonempty file is rendered in the System Prompt as
+`<project_instructions path="/absolute/source/path">` followed by its content
+and `</project_instructions>`. Source paths are escaped for the attribute;
+file contents are preserved after BOM removal.
+
+Files are resolved by the native resource owner and captured with the
+generation. Source edits affect later configuration captures; an admitted
+request and its reconstructed history retain the original content and source
+markers. Named children inherit the parent generation's frozen automatic chain
+according to their own `agents_md` policy, without rediscovering the filesystem.
+Root has no child timeout field; it belongs to named profiles.
 
 ### Plugins
 
@@ -329,6 +493,52 @@ Root-only Goal pursuit. No dynamic plugin loading, hook API or marketplace exist
 (default 120000) and `idle_liveness_ms`, either `{ mode = "disabled" }` or
 `{ mode = "window", milliseconds = N }`. Meaningful progress can satisfy an
 idle window but cannot extend a hard deadline.
+
+Initial MCP readiness uses a separate native policy in `rustx.toml`:
+
+```toml
+[mcp_startup_policy]
+wait_timeout_ms = 15000
+```
+
+The product default is 15,000 milliseconds. The value must be a positive integer
+whose addition to the native monotonic submission timestamp is representable;
+zero is invalid. User and Workspace use complete-object replacement: a Workspace
+`[mcp_startup_policy]` with no members resets the timeout to the product default,
+rather than inheriting the User member. Omission leaves the lower object in
+force. Provenance belongs to the winning object, including its defaulted member.
+Native source round trips preserve this object even when an editor has no control
+for it.
+
+Without already accepted executable intent, preparation before submission consumes
+none of this budget. Native
+captures the first submission intent before any MCP-dependent load, attach,
+claim or wait and arms `deadline = submission_received_at + wait_timeout_ms`.
+The whole selected batch shares the deadline, including remaining queueing,
+negotiation, all tool pages and validation. Waiters, handoff and reconnect never
+extend it; ordinary later messages sharing that initialization do not incur a
+new startup wait. A cold Conversation load after unload creates a new physical
+initialization and uses its first accepted submission needing preparation; it
+adds no artificial full-budget wait per message. The policy does not change
+model-response timeouts, Tool execution deadlines or MCP protocol
+negotiation/fallback behavior.
+
+The first-submission receipt is accepted synchronously for an exact Session/node
+before native asynchronous catalog resolution. Matching early preparation and
+new loading owners consume the same receipt; loading or catalog latency cannot
+postpone the clock. Client reconnect, repeated intent and source-phase transitions
+do not restart it. A receipt belongs to its admitted request and initialization,
+not to a separate draft or durable Session lease. Unload/drain fences its retired
+initialization from late activation.
+
+Already-durable Pending Inbox or safe adopted-turn continuation counts as accepted
+executable intent. Native load/headless entry captures a prospective monotonic
+receipt before metadata or allocation claim; read-only existing recovery evidence
+recognizes it before source preparation, including selected managed Python.
+Empty/completed history alone does not arm a budget. An earlier recovery receipt
+recognized after a later Send tightens their shared absolute deadline; it never
+extends it or creates a new wait. Recognition leaves native history reconciliation
+and replay ownership unchanged.
 
 `subagents.max_concurrent` is global child capacity, not a Root delegation
 allowlist. `environment` maps variable names to literal strings in the authored
@@ -372,13 +582,14 @@ units; there is no recursive TOML merge.
 | Skill visibility | Complete `agent.skills` value | `[]` exposes none; `"all"` exposes valid eligible packages |
 | Plugins | Complete `agent.plugins.<plugin>` object | Empty object defaults off; omitted contributors use that Plugin's defaults |
 | Agent delegation | Complete `agent.agents` array | `[]` permits no named Agents and composes no Agent controls |
-| Workflow admission | Complete `agent.workflows` array | `[]` permits no Workflows |
+| Workflow enablement | `agent.workflows` array, merged across User and Workspace | `[]` adds none; it never disables a Global Workflow |
 | Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true, files=[] |
 | Native invocation policy | Complete `native_tools.<tool>` object | `{}` restores that Tool's product defaults |
 | MCP invocation policy | Complete `mcp_tool_policies.<server>` object | `{}` restores domain defaults |
 | Context | Complete `context` object | `{}` restores product defaults |
 | Model timeouts | Complete `model_timeout_policy` object | `{}` restores product defaults |
 | Tool deadlines | Complete `tool_deadline_policy` object | `{}` restores product defaults |
+| Initial MCP readiness wait | Complete `mcp_startup_policy` object | `{}` restores the 15,000 ms product default |
 | Runtime child capacity | Complete `subagents` object | `{}` restores product defaults |
 | Environment | One `environment.<variable>` string | Empty string is an authored empty value; `{}` replaces no identities |
 | Process policy | Complete User `app_server` object | Defaults inside that object; Workspace rejected; restart required |
@@ -452,7 +663,47 @@ validates exact model-facing capability exposure. Failed required preparation
 rejects the candidate. Unselected sources cause zero connections or preparation.
 See [Workflow authoring](workflow-authoring.md) for the unchanged Workflow language.
 
-## Save, automatic application and Session adoption
+Selected MCP sources prepare concurrently under the native four-source bound.
+The first executable Attempt waits for the finite selected batch's live readiness
+or terminal outcomes; a healthy source finishing within the submission budget is
+present in the first provider request. Each Conversation owns its connections.
+Earlier metadata never substitutes for protocol negotiation, complete paginated
+discovery, canonical registration validation and a stable invalidation epoch.
+A valid empty catalog is Ready. Missing credentials, a failed connection or an
+expired startup becomes Unavailable for an optional Root source while healthy
+siblings and native tools remain usable. Required Workflow and frozen child
+contracts remain strict. Unselected sources perform no initialization.
+
+Deadline expiry cancels and retires pending initialization. That same attempt
+cannot later publish success. Resource counts and occupied preparation permits
+remain until physical settlement; timeout alone is not cleanup evidence.
+Successful supported runtime retry/reconnect/catalog reconciliation under an
+unchanged committed binding publishes automatically at the native idle/admission
+boundary. No Reload or Retry action is needed for normal success. An active Attempt keeps its complete capability snapshot throughout
+later model steps; the next eligible Attempt captures the published update.
+Readiness alone starts no model request and changes no canonical history. A Busy
+native lifecycle grant retains the result and defers existing admission; the
+worker awaits the actual commit frontier outside the coordinator lock, keeping
+native controls responsive. Per-source continuity rejects old X→Y→X completions
+while unrelated Todo/context/model and sibling changes remain committed. Pure
+rebase keeps an eligible recovered source together with those current resources
+without another discovery.
+
+Runtime publication cannot commit unrelated pending authored instructions,
+source selection, environment or model intent. A staged authored candidate is
+kept and revalidated against the new baseline before its own automatic commit.
+A failed refresh retains the last successfully committed snapshot, including an
+empty catalog, and reports the failure honestly. Explicit reconciliation can
+retry an invalidated or Unavailable source; it does not create an automatic retry
+loop. Managed Python source admission remains strict. A failed explicit refresh's
+source-scoped diagnostic survives older queued success, unrelated sibling success
+and a context commit. A newer successful explicit whole-batch refresh clears it;
+superseded source authority cannot install its old result or diagnostic.
+Public Reconcile treats a retained failure under current source authority as a
+reason for that explicit retry, even when an older success has already restored
+Ready and the catalog epoch. It does not schedule automatic retries.
+
+## Save and automatic application
 
 `configuration/sourceWrite` is a typed source CAS operation. The native writer
 checks the exact byte revision, validates and canonicalizes TOML, stages and syncs
@@ -488,12 +739,31 @@ the writer checks the pathname again after the replacement and reports
 `committed_durability_uncertain` when it no longer names that directory, as it
 does when the directory sync fails. An uncertain write is never replayed.
 
-Writer artifacts have fixed-length names, so every basename the filesystem
-accepts for a source document stays writable. The persistent writer lock beside a
-document is `.rustx-lock-<sha256 of the exact basename bytes>.lock`: every native
-writer of that document — source authoring, automatic repair and create-only
-initialization — locks the same inode exclusively, and distinct documents never
-share one. Writers create it; nothing unlinks it.
+Writer artifacts have fixed-length names, so every nonreserved basename the
+filesystem accepts for a source document stays writable, including names at
+the filesystem's length limit. The persistent writer lock of a
+document is `.rustx-locks/<sha256 of the exact basename bytes>.lock` in the
+document's directory: every native writer of that document — source authoring,
+automatic repair and create-only initialization — locks the same inode
+exclusively, and distinct documents never share one. Writers create the private
+lock directory and the lock; nothing unlinks either. Keeping every lock in that
+one directory means a directory's own entries grow by at most one however many
+documents were ever written there, so bounded resource scans never count lock
+history. The lock directory is opened without following a symlink. Because the
+lock directory and staged candidates share the namespace of the documents beside
+them, those names are reserved: a User source selected with `--config` may not
+use one under the case-mapping and filesystem-alias policy above (the Workspace
+document is always `rustx.toml`, and Workflow IDs cannot
+start with a dot). Any fixed metadata name inside a source's directory would
+collide with some selectable file name, and metadata kept elsewhere would lose
+exclusion between processes that share the directory, so the reservation is
+explicit and enforced where the source is selected.
+
+This source-selection policy is distinct from bounded resource discovery:
+discovery excludes only the one exact `.rustx-locks` entry. Differently cased
+siblings on a case-sensitive volume are ordinary counted entries. Reading at
+most 1,026 raw entries and excluding at most one therefore still detects more
+than 1,024 authored entries; the reservation does not widen that exemption.
 
 Every reader of a `rustx.toml` has the same physical authority as a write.
 Session resolution — Session creation and loading, configuration application
@@ -559,25 +829,35 @@ together. Candidate preparation happens off-side with one active preparation and
 latest pending work per Session. Preparation has a bounded deadline. Failures do
 not roll back independently applied units or mutate resources leased by old work.
 
-Each Session retains its adopted binding across runtime unload/load and reconnect
-within an App Server process. Comparison uses that Session's actual adopted
-provider request shape. Adapter-built system contributions, ordered Tool schemas,
-provider/model namespace and request parameters determine impact. Natural history
-growth is excluded. Preserved means configuration preserves the relevant prefix;
-it does not promise a provider cache hit. Unproven changes require adoption.
+Each Session retains its committed binding across runtime unload/load and
+reconnect within an App Server process. A prepared candidate — instructions,
+context policy, capability closure, Skills, model invocations and execution policy
+together — is staged in the resident runtime and committed automatically at the
+Session's next safe boundary, under the same coordinator lock as Attempt
+admission. The boundary is narrower than idleness: a current or scheduled
+Attempt, manual compaction, a manual tail, a durability failure, and background
+or Subagent work that still holds the old configuration block the commit; a
+pending inbox, a Goal continuation or a recovered continuation does not, so the
+commit lands before that work's next Attempt captures. An admitted Attempt keeps
+its frozen snapshot, fencing and resource settlement unchanged. Each scope's
+desired application identity is an epoch fence: a superseded candidate can never
+commit after a newer one, and a candidate whose baseline or owner moved is
+superseded and prepared again. Nothing is ever asked of a client, and there is no
+cache-impact consent: a commit can change the provider request prefix, which the
+change fact makes explicit.
 
 Whether a model or catalog edit reaches an existing Session at all is decided by
 the effective invocations an Attempt of that Session would freeze — its primary
-and explicit Summary selection and those of its admitted named Agents — resolved
+and explicit auxiliary selections and those of its admitted named Agents — resolved
 exactly as admission resolves them: provider endpoint and credential source,
 wire model, protocol, limits, compat, effective capabilities, the resolved
-Profile, reasoning state, output budget and request parameters. An omitted
+Profile, output budget and request parameters. An omitted
 `profile` and an explicit `profile` naming the default resolve to the same
 invocation, and an edited, added or removed Profile that no such selection
 resolves through changes nothing for the Session's invocation: it prepares and
-adopts nothing, exactly as for an unselected Model.
+commits nothing, exactly as for an unselected Model.
 
-Catalog publication is a separate contract from invocation adoption. A valid
+Catalog publication is a separate contract from invocation commit. A valid
 source generation's Model Catalog — the Provider unit: `models`, `providers` and
 the new-Session default `agent.model` the catalog is validated with — is the
 authority for future selection. It is published to an existing Session without
@@ -586,17 +866,16 @@ Session's own configured Model or Profile is one the new catalog no longer
 admits: the catalog is what the replacement is chosen from, and a stale Session
 selection never makes a valid catalog unpublishable. The Provider unit settles on
 its own: an Instructions, context or Capability change in the same generation
-neither holds it back nor is adopted by it. That includes the named Agents Root
-admits and their definitions, which are the Capability unit's until it adopts: a
-newly admitted Agent is not an invocation of the adopted closure, and an Agent
+neither holds it back nor is committed by it. That includes the named Agents Root
+admits and their definitions, which are the Capability unit's until it commits: a
+newly admitted Agent is not an invocation of the committed closure, and an Agent
 naming no model inherits the invoking Attempt's. What publication must preserve
-is each adopted Agent's own explicit selection, which resolves against the
+is each committed Agent's own explicit selection, which resolves against the
 published catalog. Those units are then prepared as
-usual against the binding just published, and their candidate waits for
-adoption as before, so the Session can discover and select a replacement first.
-An explicit selection committed meanwhile recaptures the generation over the new
-selection; the older candidate's expected binding no longer matches and it
-cannot adopt. Under the gate Attempt
+usual against the binding just published, and their candidate commits at the
+next safe boundary like any other. An explicit selection committed meanwhile
+recaptures the generation over the new selection; the older staged candidate's
+baseline no longer matches, so it is superseded and never commits. Under the gate Attempt
 admission takes, the Session's selection authority, the catalog its configuration
 generation carries and its retained binding are committed together, all or
 nothing, and the configuration generation advances, while the current resolved
@@ -608,37 +887,57 @@ keeps the snapshot and registry it froze. A failed or overtaken generation never
 publishes, so the last good catalog remains the authority; a catalog the source
 document cannot validate fails that generation's context units with it. When the
 edit changes an invocation the Session can still resolve — its own, or what an
-adopted named Agent's explicit selection resolves to — the catalog arrives with
-that change's adoption,
+committed named Agent's explicit selection resolves to — the catalog arrives with
+that change's commit,
 together with any capability or context change of the same generation. A cold
 Session receives the catalog when it next becomes resident. New Sessions start
 from the Workspace's published creation catalog.
 
 A configured selection the published catalog does not admit is **unavailable**.
 The Session keeps it configured — nothing switches it to the catalog default or
-drops an explicit Summary policy — and `session/model` reports it in
+drops an explicit Summary or Title policy — and `session/model` reports it in
 `unavailable` with the native diagnostic. Its last resolved `effective` and
-`summary` remain display facts only; a Session loaded with an already unavailable
+`summary` and `title` remain display facts only; a Session loaded with an already unavailable
 selection, after residency loss or a restart, has none. While unavailable, the
 Session admits no model work: `turn/start`, `turn/steer` and `context/compact`
 are refused with `model_unavailable`, and inbound accepted before the publication
 is held, never run on the removed selection and never dropped. Held work does not
 make the Session busy for the correction. The correction is an ordinary
 `session/setModel` with a complete selection the
-catalog admits, primary and explicit Summary alike; it commits through the usual
+catalog admits, primary and explicit auxiliary selections alike; it commits through the usual
 fence and admits held work with exactly the new selection.
 
-The adopted generation's `source_revisions` stay the source manifest its context
+The committed generation's `source_revisions` stay the source manifest its context
 was resolved from. Independently published units — execution policy, shared
 capacity and the Model Catalog's Provider unit — carry their own component
 revision with their values and provenance, so a source file that also holds
-unrelated, not yet applied changes never makes those changes look adopted.
+unrelated, not yet applied changes never makes those changes look committed.
 
-`session/adoptConfiguration` addresses a concrete ready candidate and expected
-Session binding revision. It returns typed Busy, NotReady or Conflict, or commits
-the complete binding atomically under the same gate as Attempt admission. It never
-cancels work, edits history, compacts, invokes a model or changes the selected model.
-A ready candidate is not an adopted binding.
+Every commit that changes what future work observes records exactly one typed
+`configuration_applied` fact in the Event Journal: its reason (source, model
+selection or reallocation), the previous and new binding revisions, the changed
+domains, and bounded added/removed/changed Tool and Skill names (at most 16 names
+and 1 KiB of encoded names per list, with exact totals). A Tool changes when its
+definition or the executable binding of the server it runs on changes, and a
+Skill when its content version changes, even if the model-visible declaration is
+byte-identical. The independently published execution-policy unit records its own
+fact (an approval-mode change, for example) without rebinding the Session, so both
+of its revisions are the same. The fact retains the exact effective instructions
+the commit installed, readable in bounded ranges through `content_read` with the
+row's `instructions` reference, so a configuration no request ever used stays
+inspectable. The fact is a transcript row and a Trace anchor, counted in the
+Trace total and released in Journal order; it never enters model context. A
+commit never cancels work, edits history, compacts or invokes a model. A durable
+append failure is an absorbing `record_configuration_change` durability failure
+and reports the commit as uncertain: the configuration is published but not
+recorded, and new work waits for recovery. A `ready` unit is prepared and waiting
+for that boundary; it is not a committed binding. While a ready capability
+candidate waits for a concurrent lifecycle commit to release the capability
+boundary, Attempt admission waits with it and resumes on that release, so the
+next Attempt captures the candidate. A runtime that drained itself in place
+prepares nothing: its application defers to the next allocation like a cold
+Session, and attaching a client to the runtime that already holds a ready
+candidate keeps it.
 
 An independent Attempt captures complete execution configuration once. Requests,
 Steps, retries, recovery, Tool batches, Subagents and Workflow children inherit
@@ -656,15 +955,15 @@ coordinator gate serializes that commit with independent Attempt admission: a
 selection committed first is captured by the new Attempt; an Attempt admitted
 first retains its complete previous snapshot. Concurrent or superseded candidates
 fail instead of overwriting newer authority. Model selection never imports pending
-instructions, capabilities or other source changes. Explicit context adoption
-retains its separate readiness, cache-impact and idle-safety rules.
+instructions, capabilities or other source changes; a staged source candidate
+whose baseline it replaces is superseded and prepared again.
 
 The whole `SessionModelConfig` is replaced together. A same-Model Profile choice
-preserves request overrides, output override and Summary Model policy; native
+preserves request overrides, output override and Summary and Title policies; native
 validation rejects any newly incompatible combination. Choosing a different Model
 resets primary request/output overrides and uses that Model's default Profile
 unless a Profile is explicitly chosen, while retaining the independently selected
-Summary Model policy. There
+Summary and Title policies. There
 is no fallback to another Model or Profile after validation failure.
 
 The selected Session Model/Profile and an active Attempt's Model/Profile are
@@ -704,10 +1003,29 @@ a source-application scope when the Session has no source application to reconsi
 `configuration/reconcile` rescans external files or retries failed preparation.
 Stable changed inputs create a new desired revision; retrying unchanged inputs
 creates a new application attempt. Healthy semantic no-ops do not advance runtime
-generation or rebuild resources. There is no filesystem watcher.
+generation or rebuild resources.
+
+A bounded native watcher (the `notify` crate) feeds external edits into the same
+path as a native write. Coverage is the User document's directory, for that one
+file; the User resource root `~/rustx/.agents` for `mcp.toml`, with its
+`agents`, `skills`, `tools` and `workflows` directories recursively (its parent
+until it exists); each Workspace that holds source authority or a Session's
+configuration, for `rustx.toml`, root `*.md` and the guidance files; and that
+Workspace's `.agents` in the same way. The guidance files are exactly the
+loader's (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`,
+`CLAUDE.MD`), at a Workspace root and at the User resource root. Anything else
+under `.agents`, such as Session uploads, is neither watched nor routed. A
+notification for a watched directory or its ancestor may mean it was replaced at
+the same path, so those watches are registered again, and only a watch that
+actually registered counts as active. A notification is only invalidation: it names the owning source
+target, notifications coalesce into one capture per target, and the capture
+rereads, fences and validates the files exactly as after `configuration/sourceWrite`.
+An unchanged healthy source is a no-op. Unrelated directories are never watched,
+and a platform without a watcher keeps working through `configuration/reconcile`.
 
 Effective and source projections report simultaneous per-unit results: applied,
-preparing, ready for adoption, failed, and process restart required. Actual process
+preparing, ready (waiting for the safe boundary), failed, uncertain, and process
+restart required. Actual process
 bindings are separate from desired state. Connection/residency admission limits
 apply through their owners; the process drain deadline waits for restart. Fixed
 startup storage/transport bindings remain process-owned. Notifications identify
@@ -871,10 +1189,10 @@ boundaries admit their own. Once a scope is admitted, User and Workspace remain
 independent transactions: a later failure of one never rolls back the other.
 
 `rustx config check`, `rustx config show --sources`, `configuration/sourcesRead`
-and every client navigation stay read-only. There is no watcher and no periodic
-check. A committed repair is handed to the configuration coordinator exactly like a
+and every client navigation stay read-only. The bounded source watcher only
+invalidates; there is no periodic check. A committed repair is handed to the configuration coordinator exactly like a
 committed `configuration/sourceWrite`, under the same lock, so one commit is
-captured once and application, preparation and Session adoption keep their
+captured once and application, preparation and automatic commit keep their
 existing contracts: a repaired file is desired state, not proof that anything was
 applied. A receipt never enters canonical history, the Event Journal or model
 context.
@@ -942,9 +1260,10 @@ example `subagents.max_concurrent = 0`) is left unchanged and reported
 `unresolved` with that constraint's location. Facts another scope may supply —
 Model definitions, the default selection — are never part of it. An unresolved
 receipt is withdrawn only when the source satisfies this contract, at a later
-boundary or after a committed `configuration/sourceWrite`; a committed write that
-leaves it still invalid replaces the receipt with the current observation. A
-write never creates a receipt for a source that had none.
+boundary or after a committed `configuration/sourceWrite`. Managed writes reject
+source-intrinsically invalid candidates before publication, preserving the source
+and any unresolved receipt. A write never creates a receipt for a source that had
+none.
 
 A semantic failure of Session resolution names the document that authored the
 failing field, decided from the overlay provenance of the composition: every
@@ -955,10 +1274,13 @@ when both documents define Models — names no file: it belongs to the
 composition.
 
 Manual `repair_config` remains the editor for documents that fail their own source
-contract — syntax, types, Workspace `app_server`, a foreign schema version —
-including TOML-parsable ones; ordinary semantic-unit writes require a document that
-satisfies it, and the source projection marks a document violating it as not
-loaded.
+contract — syntax, types, Workspace `app_server`, a foreign schema version or any
+source-intrinsic semantic constraint — including TOML-parsable ones. Ordinary
+semantic-unit writes require a document that satisfies it, and the source
+projection marks a document violating it as not loaded, exposing whole-document
+repair. A complete valid replacement must match the observed source revision;
+invalid replacements and stale revisions leave the original unchanged. Missing
+Providers or default selections supplied by another scope do not require repair.
 
 ## Durable identity and retention
 
@@ -976,15 +1298,31 @@ Forking allocates a new Conversation without changing the source lineage identit
 Every Conversation has its own SQLite database, including multiple lineages within
 one Session. There is no global or per-Session Conversation database.
 
-Oversized foreground results preserve their bounded canonical ToolResult in
-history and spill auxiliary continuation text to `results/result_<uuid-v7>.txt`.
-Provider ToolCall IDs do not choose filenames and restart does not scan a numeric
-watermark. Background acceptance and terminal/live output use the same
-`tasks/exec_<uuid-v7>.output` locator. Stable model-readable output is Conversation
-owned, outside OS temporary directories. Session/Conversation deletion owns its
-cleanup; no unrelated TTL can invalidate a historical locator. Uncommitted child
-rollback cleans its staged database and managed outputs while retaining its burned
-identity reservation.
+Oversized foreground results preserve bounded canonical ToolResults and stream
+auxiliary text to `<temp>/rx-<16 hex>/r-<16 hex>.txt`. Background acceptance,
+live reads and terminal results share `<temp>/rx-<16 hex>/e-<16 hex>.output`.
+These are real absolute files, allocated exclusively with bounded collision
+retries. Semantic IDs remain full UUIDv7 values and never determine published output filenames.
+There is no output-storage TOML option or persistent fallback.
+
+A temporary root inside the workspace is rejected with a configuration error;
+managed output namespaces must be disjoint from the workspace.
+
+Conversation-local `output-namespaces.json` binds each namespace to its owner,
+filesystem identity and ownership token. A fresh allocator lazily creates a new namespace on first output;
+old bindings retain original locators for reads and Session deletion. A missing
+namespace is never recreated. Published output survives normal exit and runtime
+drop, but the OS may remove it at any time. History remains valid; complete
+oversized output is neither durable nor guaranteed reconstructible. Session
+deletion removes only confirmed owned namespaces under Conversation exclusion.
+It first durably moves each namespace into a private retirement slot on the same
+filesystem, then removes it relative to the validated arena descriptor. The
+arena marker survives Session cleanup so process death after unlinking a slot's
+marker is recoverable. `<ProductRoot>/output-retirement/` retains directly
+addressed arena bindings and a publication lock, without an output index or
+scanning. Empty arenas remain shared product infrastructure outside the cascade.
+Forks/clones inherit source references without deletion authority. Archives omit
+auxiliary output. See [the complete storage contract](issue-520/README.md).
 
 ## Clients and format replacement
 
@@ -994,13 +1332,16 @@ owns only durable Session selections/status. User and Workspace edit native stru
 selection, policies, Plugins, MCP definitions and complete named-Agent profiles.
 The User config pathname and fixed User resource root are shown separately.
 Save starts native application automatically. Settings presents independent
-application, failure/retry and actual-versus-desired process state. The only ordinary
-Web adoption surface is below the focused Session title, using the runtime's published adoption eligibility.
+application, failure/retry and actual-versus-desired process state. Below the
+focused Session title, a compact status line appears only while a change is
+preparing, waiting for current work, failed (previous configuration kept), uncertain
+or waiting for a restart; Chat shows committed Tool additions and removals as
+DisclosureRow facts, and Trace shows every committed change.
 CAS conflicts preserve drafts. Rescan is a diagnostics action.
 
 TUI `/settings` authors explicit User/Workspace sources; `/session settings` inspects
-Session selections and application, and `/session adopt` submits the inspected
-candidate and binding. `/model` changes Session selection. Neither client parses,
+Session selections and application; the footer shows the same transient status
+and the transcript shows each committed change as a concise notice. `/model` changes Session selection. Neither client parses,
 merges or classifies configuration. App Server protocol 16 is generated from Rust; obsolete
 development protocols are rejected without compatibility decoding.
 
@@ -1069,8 +1410,6 @@ max_output_tokens = 4096
 [models.vision.capabilities]
 input_modalities = ["text", "image"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
 
 [agent.model]
 model = "vision"

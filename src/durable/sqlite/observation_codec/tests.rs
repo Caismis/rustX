@@ -4,11 +4,13 @@ use crate::durable::observation::{
     AttemptMemberCounts, ObservationEventWitness, TraceFactData, TraceFactHeader, TraceFactKind,
     TraceTerminalClass, TraceTerminalHeader,
 };
+use crate::observation::bounded::bounded_bytes;
 use crate::runtime::identity::{AttemptId, ConversationId, EventId, MessageId, TurnId};
-use crate::runtime_client::checkpoint::bounded_bytes;
 
 fn witness() -> ObservationEventWitness {
     ObservationEventWitness {
+        owner: None,
+        auxiliary_call_id: None,
         occupancy: None,
         native_direct: false,
         trace_total: Some(u64::MAX),
@@ -33,11 +35,12 @@ fn witness() -> ObservationEventWitness {
 
 fn trace() -> TraceFactHeader {
     TraceFactHeader {
+        owner: Some(crate::durable::observation::RequestOwnerKind::Agent),
         sequence: u64::MAX,
         timestamp: witness().timestamp,
         kind: TraceFactKind::ModelRequestCompleted,
         owner_anchor: Some(u64::MAX),
-        location: crate::runtime_client::trace::TraceLocation::default(),
+        location: crate::observation::trace::TraceLocation::default(),
         fields: Vec::new(),
         fact: TraceFactData::Terminal(TraceTerminalHeader {
             class: TraceTerminalClass::Completed,
@@ -58,7 +61,7 @@ fn trace() -> TraceFactHeader {
 }
 
 fn members() -> AttemptMemberCounts {
-    use crate::runtime_client::content::{
+    use crate::observation::content::{
         CanonicalContentComponent, CanonicalContentLocator, ContentRef, ContentRepresentation,
         ContentSource,
     };
@@ -416,7 +419,7 @@ fn compact_observation_write_certificate_skips_json_rewalk_but_checks_uncertain_
     );
     let uncertain = std::collections::BTreeMap::from([(Some("key"), 3_u64)]);
     assert_eq!(
-        crate::runtime_client::preflight::bounded_fit(&uncertain, 128),
+        crate::observation::preflight::bounded_fit(&uncertain, 128),
         None
     );
     let bytes = encode(&uncertain, &(&uncertain,), 128).unwrap();
@@ -427,7 +430,7 @@ fn compact_observation_write_certificate_skips_json_rewalk_but_checks_uncertain_
     );
     let invalid = std::collections::BTreeMap::from([((1_u8, 2_u8), 3_u64)]);
     assert_eq!(
-        crate::runtime_client::preflight::bounded_fit(&invalid, 128),
+        crate::observation::preflight::bounded_fit(&invalid, 128),
         None
     );
     assert!(bounded_bytes(&invalid, 128).is_none());
@@ -468,7 +471,7 @@ fn compact_observation_read_certificate_visits_normal_public_values_once() {
     fn check(value: &impl Serialize) {
         let limit = crate::durable::observation::HEADER_ENCODED_MAX;
         assert_eq!(
-            crate::runtime_client::preflight::bounded_fit(value, limit),
+            crate::observation::preflight::bounded_fit(value, limit),
             Some(true)
         );
         assert!(serde_json::to_vec(value).unwrap().len() <= limit);
@@ -498,7 +501,7 @@ fn admitted_witness(value: &ObservationEventWitness) -> Vec<u8> {
         &value.attempt_id,
         &value.turn_id,
         &value.timestamp,
-        &value.event_kind,
+        (&value.event_kind, &value.owner, &value.auxiliary_call_id),
         &value.tool_occurrence,
         value.result_ledger_position,
         &value.value,
@@ -519,7 +522,7 @@ fn compact_observation_read_certificate_keeps_dense_floats_and_wide_opaque_integ
         let expected = serde_json::to_vec(&value).unwrap();
         assert!(expected.len() <= 16_384);
         assert_eq!(
-            crate::runtime_client::preflight::bounded_fit(&value, 16_384),
+            crate::observation::preflight::bounded_fit(&value, 16_384),
             Some(false)
         );
         validate_public(&value, 16_384).unwrap();
@@ -543,11 +546,11 @@ fn compact_observation_read_certificate_checks_uncertain_keys_and_serializer_err
     let uncertain = std::collections::BTreeMap::from([(Some("key"), 3_u64)]);
     let invalid = std::collections::BTreeMap::from([((1_u8, 2_u8), 3_u64)]);
     assert_eq!(
-        crate::runtime_client::preflight::bounded_fit(&uncertain, 128),
+        crate::observation::preflight::bounded_fit(&uncertain, 128),
         None
     );
     assert_eq!(
-        crate::runtime_client::preflight::bounded_fit(&invalid, 128),
+        crate::observation::preflight::bounded_fit(&invalid, 128),
         None
     );
     assert_eq!(
@@ -569,7 +572,7 @@ fn compact_observation_read_certificate_preserves_exact_public_byte_boundary() {
         value.event_kind = "x".repeat(size - base);
         assert_eq!(serde_json::to_vec(&value).unwrap().len(), size);
         assert_eq!(
-            crate::runtime_client::preflight::bounded_fit(&value, 16_384),
+            crate::observation::preflight::bounded_fit(&value, 16_384),
             Some(false)
         );
         assert_eq!(validate_public(&value, 16_384).is_ok(), size <= 16_384);

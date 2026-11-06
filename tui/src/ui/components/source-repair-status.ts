@@ -38,8 +38,10 @@
 import { truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 import type { ConfigRepairReceipt, SourceTarget } from "../../protocol/app-server.ts";
-import { SourceRepairAnnouncements, olderSequence, repairNotice, retainSource, sourceKey, type SourceRepairObservation } from "../../presentation/source-repairs.ts";
+import { SourceRepairAnnouncements, repairNotice, type SourceRepairObservation } from "../../presentation/source-repairs.ts";
+import { olderRepairSequence, retainSourceRepair, sourceRepairKey } from "../../../../protocol/app-server/source-repair.ts";
 import { role } from "../theme.ts";
+import type { AppServerHost } from "../../app-server/host.ts";
 
 const MAX_ROWS = 2;
 
@@ -55,9 +57,61 @@ interface SourceState {
 export class SourceRepairStatus implements Component {
   /** The App Server authority whose observations this line presents. */
   #authorityId: string | undefined;
-  /** Per source, least recently observed first; finite (`retainSource`). */
+  /** Per source, least recently observed first; finite (`retainSourceRepair`). */
   #sources = new Map<string, SourceState>();
   readonly #announced = new SourceRepairAnnouncements();
+  #removeListener: () => void = () => {};
+
+  /**
+   * Presents `host`'s authority from now on and follows its observations
+   * while `live(host)` holds. Reconnecting to the same authority keeps the
+   * entries and rereads the sources still presented.
+   */
+  watch(host: AppServerHost, live: (host: AppServerHost) => boolean, changed: () => void): void {
+    this.#removeListener();
+    const kept = this.adopt(host.authorityId);
+    const observe = (observation: SourceRepairObservation) => {
+      if (!live(host) || !this.observe(host.authorityId, observation)) return;
+      changed();
+    };
+    for (const observation of host.sourceRepairs()) observe(observation);
+    this.#removeListener = host.onSourceRepair(observe);
+    changed();
+    if (kept) void this.#reconcile(host, live);
+  }
+
+  /**
+   * Rereads, through `host`, every source the repair line still presents:
+   * each Workspace, whose read also rereads the User, and the User alone
+   * only when no Workspace read succeeded — a Workspace that can no longer
+   * be read never keeps the independent User source from its own read.
+   * Bounded by the line's finite sources, one read at a time, and read-only
+   * (`configuration/sourcesRead` never repairs, reconciles, loads a Session
+   * or reaches a model). Each result reaches the line through the host's
+   * sequence-ordered observations, so it never overwrites a newer notice.
+   * It stops once `host` is replaced, closed or the client quits. A failed
+   * read proves nothing — the entry stays until a later read or notice —
+   * and it never fails the connection.
+   */
+  async #reconcile(host: AppServerHost, live: (host: AppServerHost) => boolean): Promise<void> {
+    const pending = this.pendingSources();
+    let userRead = false;
+    const read = async (target: SourceTarget) => {
+      if (!live(host) || host.client.closed !== undefined) return false;
+      try {
+        await host.readSourceRepairs(target);
+        userRead = true;
+      } catch {
+        // Not a withdrawal; `/settings repairs` reads again explicitly.
+      }
+      return true;
+    };
+    for (const target of pending.filter(source => source.kind === "workspace")) {
+      if (!await read(target)) return;
+    }
+    if (!userRead && pending.some(source => source.kind === "user")) await read({ kind: "user" });
+  }
+
 
   /**
    * Presents `authorityId` from now on. A different authority retires every
@@ -81,13 +135,14 @@ export class SourceRepairStatus implements Component {
    */
   observe(authorityId: string, { target, receipt, sequence }: SourceRepairObservation): boolean {
     if (authorityId !== this.#authorityId) return false;
-    const key = sourceKey(target);
+    const key = sourceRepairKey(target);
     const known = this.#sources.get(key);
-    if (known !== undefined && !olderSequence(known.sequence, sequence)) return false;
+    if (known !== undefined && !olderRepairSequence(known.sequence, sequence)) return false;
     const pending = receipt === undefined ? undefined
       : known?.pending?.id === receipt.id ? known.pending
       : this.#announced.announce(authorityId, receipt) ? receipt : undefined;
-    const forgotten = retainSource(this.#sources, key, { target, sequence, pending });
+    const { retained, forgotten } = retainSourceRepair(this.#sources, key, { target, sequence, pending });
+    this.#sources = new Map(retained);
     return known?.pending?.id !== pending?.id || forgotten?.pending !== undefined;
   }
 

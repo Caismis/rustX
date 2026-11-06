@@ -17,8 +17,10 @@
 //! reaches into [`super::record`].
 
 use super::anchor::AnchorFacts;
-use super::bounds::{encoded_len, identity_fits};
-use super::types::{TraceLifecycle, TraceRequestOutcome, TraceToolOutcomeUpdate};
+use crate::observation::trace::bounds::{encoded_len, identity_fits};
+use crate::observation::trace::types::{
+    TraceLifecycle, TraceRequestOutcome, TraceToolOutcomeUpdate,
+};
 
 /// Encoded-byte ceiling of one lifecycle update.
 ///

@@ -1,5 +1,5 @@
-use super::{CHECKPOINT_ITEM_BYTES, bounded_bytes, bounded_len};
-use crate::runtime_client::preflight;
+use crate::observation::bounded::{CHECKPOINT_ITEM_BYTES, bounded_bytes, bounded_len};
+use crate::observation::preflight;
 use serde::Serialize;
 
 fn matches_buffered<T: Serialize + ?Sized>(value: &T) {

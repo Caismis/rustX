@@ -50,6 +50,14 @@ pub enum ModelProtocol {
 /// context is settled before an adapter is called.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
+    /// Frozen per-call output contract. Ordinary text requests leave this absent.
+    /// Prompt preparation retains the schema for the same local validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<super::structured::PreparedResponseSchema>,
+    /// Native per-response transport allocation budget, before provider parsing.
+    /// It is neither provider input nor durable semantic evidence.
+    #[serde(skip)]
+    pub response_byte_limit: Option<usize>,
     /// Resolved managed images for transport only; never serialized into durable records.
     #[serde(skip)]
     pub images: crate::model::images::ResolvedImages,
@@ -180,19 +188,31 @@ impl ModelRequest {
 ///
 /// Providers do not expose identical token metrics; this is the stable
 /// common core. Provider SDK usage objects never appear here.
+/// Missing provider metrics remain absent; a reported zero is `Some(0)`.
 /// These are native u64 quantities, not byte offsets. Observation transports
 /// use the existing exact decimal codec without narrowing provider evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelUsage {
     /// Input tokens consumed by the request.
-    pub input_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
     /// Output tokens produced by the response.
-    pub output_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
     /// Total tokens, where the provider reports or can derive them.
-    pub total_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
     /// Optional normalized usage details.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<UsageDetails>,
+}
+
+impl ModelUsage {
+    /// Whether all normalized core metrics were observed or exactly derived.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.input_tokens.is_some() && self.output_tokens.is_some() && self.total_tokens.is_some()
+    }
 }
 
 /// Optional normalized token details where providers expose them.
@@ -224,6 +244,7 @@ impl ModelRequest {
             &self.tools,
             &self.invocation,
             &self.continuation,
+            &self.response_schema,
         ))
         .expect("semantic input serializes");
         format!("{:x}", Sha256::digest(bytes))
@@ -282,7 +303,7 @@ pub(crate) fn append_semantic_message(digest: &mut sha2::Sha256, message: &Model
             }
         }
         crate::model::projected::ModelMessageView::RequestOnly(context) => {
-            serde_json::json!({"role":"user", "text":context.render()})
+            serde_json::json!({"role": if context.is_assistant() { "assistant" } else { "user" }, "text":context.render()})
         }
     };
     serde_json::to_writer(SemanticWriter(&mut *digest), &value).expect("semantic input serializes");
@@ -316,9 +337,9 @@ mod tests {
     #[test]
     fn usage_round_trip() {
         let usage = ModelUsage {
-            input_tokens: 120,
-            output_tokens: 42,
-            total_tokens: 162,
+            input_tokens: Some(120),
+            output_tokens: Some(42),
+            total_tokens: Some(162),
             details: Some(UsageDetails {
                 reasoning_tokens: Some(10),
                 cached_input_tokens: Some(40),

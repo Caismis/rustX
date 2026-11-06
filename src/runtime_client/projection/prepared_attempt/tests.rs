@@ -1,11 +1,9 @@
 use super::*;
 use crate::message::types::ContentBlockIndex;
 use crate::model::{ModelProtocol, catalog::ModelCapabilities, invocation::ModelInvocationView};
+use crate::observation::capture::Capture;
 use crate::runtime::identity::{MessageId, RuntimeResourceRevision};
-use crate::runtime_client::{
-    checkpoint::{self, Capture},
-    snapshot::{InFlightAssistantMessage, RuntimeClientAttemptPhase},
-};
+use crate::runtime_client::snapshot::{InFlightAssistantMessage, RuntimeClientAttemptPhase};
 
 fn source() -> Arc<Option<SharedAttempt>> {
     let model = ModelInvocationView {
@@ -15,13 +13,12 @@ fn source() -> Arc<Option<SharedAttempt>> {
         model_max_output_tokens: 1024,
         max_output_tokens: 1024,
         profile: None,
-        reasoning_enabled: false,
         request_params: serde_json::json!({"zero": -0.0, "nested": {"a": 1, "b": 2}})
             .as_object()
             .unwrap()
             .clone(),
-        capabilities: ModelCapabilities::text_only(true, false),
-        declared_capabilities: ModelCapabilities::text_only(true, false),
+        capabilities: ModelCapabilities::text_only(),
+        declared_capabilities: ModelCapabilities::text_only(),
     };
     Arc::new(Some(SharedAttempt {
         attempt_id: None,
@@ -42,7 +39,7 @@ fn source() -> Arc<Option<SharedAttempt>> {
         foreground: Vec::new().into(),
         model: Some(Box::new(AttemptModelView {
             primary: model,
-            summary: SummaryModelView::Session,
+            summary: AuxiliaryModelView::Session,
         }))
         .into(),
         execution_settings: Some(AdmittedSettings {
@@ -115,7 +112,7 @@ fn attempt_item_reuse_encodes_only_changed_block_and_preserves_old_owner() {
     let initial = cache.select(&source);
     assert_eq!(initial.blocks.len(), 32);
     let original = captured(source.as_ref().as_ref().unwrap(), Some(&initial), 0).0;
-    checkpoint::take_item_work();
+    crate::observation::capture::take_item_work();
     assert_eq!(
         captured(
             source.as_ref().as_ref().unwrap(),
@@ -125,7 +122,7 @@ fn attempt_item_reuse_encodes_only_changed_block_and_preserves_old_owner() {
         .0,
         original
     );
-    assert_eq!(checkpoint::take_item_work(), [0, 0, 0]);
+    assert_eq!(crate::observation::capture::take_item_work(), [0, 0, 0]);
     let mut changed = Arc::clone(&source);
     let current = Arc::make_mut(&mut changed).as_mut().unwrap();
     current.turn += 1;
@@ -140,9 +137,9 @@ fn attempt_item_reuse_encodes_only_changed_block_and_preserves_old_owner() {
     }
     assert!(Arc::ptr_eq(&initial.model, &next.model));
     assert!(Arc::ptr_eq(&initial.settings, &next.settings));
-    checkpoint::take_item_work();
+    crate::observation::capture::take_item_work();
     let result = captured(changed.as_ref().as_ref().unwrap(), Some(&next), 0).0;
-    assert_eq!(checkpoint::take_item_work(), [1, 1, 0]);
+    assert_eq!(crate::observation::capture::take_item_work(), [1, 1, 0]);
     assert_ne!(result, original);
     assert_eq!(
         captured(source.as_ref().as_ref().unwrap(), Some(&initial), 0).0,
@@ -162,7 +159,7 @@ fn attempt_prepared_items_match_uncached_admission_at_shared_budget_boundaries()
     let blocks = &mut attempt.in_flight.as_mut().unwrap().blocks;
     blocks[0] = InFlightBlock::Refusal {
         block_index: ContentBlockIndex::new(0),
-        text: "x".repeat(checkpoint::CHECKPOINT_ITEM_BYTES),
+        text: "x".repeat(crate::observation::bounded::CHECKPOINT_ITEM_BYTES),
     };
     blocks[1] = InFlightBlock::Reasoning {
         block_index: ContentBlockIndex::new(1),
@@ -236,9 +233,7 @@ fn attempt_preparation_invalidates_order_signed_zero_settings_and_position() {
 }
 
 fn tool() -> ForegroundToolExecution {
-    use crate::runtime_client::{
-        content::CanonicalContentLocator, snapshot::RuntimeClientToolOccurrence,
-    };
+    use crate::observation::{content::CanonicalContentLocator, tool::RuntimeClientToolOccurrence};
     ForegroundToolExecution {
         occurrence: RuntimeClientToolOccurrence {
             locator: CanonicalContentLocator::ByLedgerPosition { position: 1 },
@@ -331,14 +326,14 @@ fn growing_stream_moves_each_normalized_allocation_without_fit_or_extra_copy() {
     let cache = PreparedAttemptItems::default();
     let original = Arc::clone(&current);
     let original_items = cache.select(&original);
-    checkpoint::take_prepared_fit_work();
+    crate::observation::capture::take_prepared_fit_work();
     let original_bytes = captured(
         original.as_ref().as_ref().unwrap(),
         Some(&original_items),
         0,
     )
     .0;
-    assert_eq!(checkpoint::take_prepared_fit_work(), 0);
+    assert_eq!(crate::observation::capture::take_prepared_fit_work(), 0);
     for _ in 0..128 {
         let attempt = Arc::make_mut(&mut current).as_mut().unwrap();
         let InFlightBlock::Text { text, .. } = &mut attempt.in_flight.as_mut().unwrap().blocks[0]
@@ -352,12 +347,12 @@ fn growing_stream_moves_each_normalized_allocation_without_fit_or_extra_copy() {
         let attempt = current.as_ref().as_ref().unwrap();
         let block = &attempt.in_flight.as_ref().unwrap().blocks[0];
         let expected = Capture::new(17).live_block(block).unwrap();
-        checkpoint::take_item_work();
-        checkpoint::take_prepared_fit_work();
+        crate::observation::capture::take_item_work();
+        crate::observation::capture::take_prepared_fit_work();
         NORMALIZED_ALLOCATION.with(|allocation| allocation.set(None));
         let actual = live_block(&mut Capture::new(17), &items.blocks[0], block).unwrap();
-        assert_eq!(checkpoint::take_item_work(), [1, 1, 0]);
-        assert_eq!(checkpoint::take_prepared_fit_work(), 0);
+        assert_eq!(crate::observation::capture::take_item_work(), [1, 1, 0]);
+        assert_eq!(crate::observation::capture::take_prepared_fit_work(), 0);
         let allocation = NORMALIZED_ALLOCATION
             .with(|allocation| allocation.replace(None))
             .unwrap();
@@ -376,16 +371,16 @@ fn growing_stream_moves_each_normalized_allocation_without_fit_or_extra_copy() {
         assert_eq!(actual, expected);
         let warm = live_block(&mut Capture::new(17), &items.blocks[0], block).unwrap();
         assert_eq!(warm, expected);
-        assert_eq!(checkpoint::take_item_work(), [0, 0, 0]);
-        assert_eq!(checkpoint::take_prepared_fit_work(), 0);
+        assert_eq!(crate::observation::capture::take_item_work(), [0, 0, 0]);
+        assert_eq!(crate::observation::capture::take_prepared_fit_work(), 0);
         // Model and settings also use admission-only preparations, including
         // their cold initial capture above and replay at the current revision.
-        checkpoint::take_prepared_fit_work();
+        crate::observation::capture::take_prepared_fit_work();
         assert_eq!(
             captured(attempt, Some(&items), 0).0,
             captured(attempt, None, 0).0
         );
-        assert_eq!(checkpoint::take_prepared_fit_work(), 0);
+        assert_eq!(crate::observation::capture::take_prepared_fit_work(), 0);
     }
     assert_eq!(
         captured(
@@ -403,7 +398,7 @@ fn live_admission_cache_matches_cold_and_warm_original_at_exact_budget_boundarie
     let tool = tool();
     for text in [
         "水\"\n\\ 1e+003 ".repeat(30),
-        "x".repeat(checkpoint::CHECKPOINT_ITEM_BYTES),
+        "x".repeat(crate::observation::bounded::CHECKPOINT_ITEM_BYTES),
     ] {
         for block in [
             InFlightBlock::Text {
@@ -428,9 +423,9 @@ fn live_admission_cache_matches_cold_and_warm_original_at_exact_budget_boundarie
             },
         ] {
             let encoded = serde_json::to_vec(&block).unwrap().len();
-            let required = crate::runtime_client::preflight::required_budget(
+            let required = crate::observation::preflight::required_budget(
                 &block,
-                checkpoint::CHECKPOINT_TARGET_BYTES,
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
             )
             .unwrap();
             for remaining in [
@@ -441,17 +436,17 @@ fn live_admission_cache_matches_cold_and_warm_original_at_exact_budget_boundarie
                 required - 1,
                 required,
                 required + 1,
-                checkpoint::CHECKPOINT_ITEM_BYTES,
+                crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
             ] {
                 let owner = OnceLock::new();
                 let mut expected_capture = Capture::with_remaining(7, remaining);
-                checkpoint::take_item_work();
+                crate::observation::capture::take_item_work();
                 let expected = expected_capture.live_block(&block);
-                let work = checkpoint::take_item_work();
+                let work = crate::observation::capture::take_item_work();
                 let mut cold_capture = Capture::with_remaining(7, remaining);
                 let cold = live_block(&mut cold_capture, &owner, &block);
                 assert_eq!(
-                    checkpoint::take_item_work(),
+                    crate::observation::capture::take_item_work(),
                     work,
                     "cold budget rejection must not encode twice"
                 );
@@ -462,7 +457,7 @@ fn live_admission_cache_matches_cold_and_warm_original_at_exact_budget_boundarie
                 );
                 let mut warm_capture = Capture::with_remaining(19, remaining);
                 assert_eq!(live_block(&mut warm_capture, &owner, &block), expected);
-                assert_eq!(checkpoint::take_item_work(), [0, 0, 0]);
+                assert_eq!(crate::observation::capture::take_item_work(), [0, 0, 0]);
                 assert_eq!(
                     warm_capture.admission_state(),
                     expected_capture.admission_state()
@@ -491,9 +486,9 @@ fn nonidentical_normalized_body_is_never_replaced_by_the_original_on_replay() {
     // Exercise the defensive branch with an actual prepared value that differs
     // from its source. Every replay must keep using that normalization operation.
     for remaining in [
-        checkpoint::CHECKPOINT_ITEM_BYTES,
+        crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
         0,
-        checkpoint::CHECKPOINT_ITEM_BYTES,
+        crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
     ] {
         let mut actual_capture = Capture::with_remaining(1, remaining);
         let actual = live_block_with(&mut actual_capture, &owner, &source, || {

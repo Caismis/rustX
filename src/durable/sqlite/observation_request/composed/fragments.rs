@@ -280,15 +280,15 @@ fn header_parts(value: &serde_json::Value) -> Result<(String, String), Conversat
 struct RawMessage<'a> {
     value: &'a serde_json::Value,
     message: &'a crate::model::ModelInputMessage,
-    view: &'a crate::runtime_client::trace::TraceRequestMessage,
+    view: &'a crate::observation::trace::TraceRequestMessage,
     frozen: &'a crate::model::projected::FrozenModelInput,
 }
 impl schemars::JsonSchema for RawMessage<'_> {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        <crate::runtime_client::trace::TraceRequestMessage as schemars::JsonSchema>::schema_name()
+        <crate::observation::trace::TraceRequestMessage as schemars::JsonSchema>::schema_name()
     }
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        <crate::runtime_client::trace::TraceRequestMessage as schemars::JsonSchema>::json_schema(
+        <crate::observation::trace::TraceRequestMessage as schemars::JsonSchema>::json_schema(
             generator,
         )
     }
@@ -317,7 +317,7 @@ impl serde::Serialize for RawMessage<'_> {
     }
 }
 fn display(
-    view: &crate::runtime_client::trace::TraceRequestMessage,
+    view: &crate::observation::trace::TraceRequestMessage,
     header: Option<&crate::durable::observation::MessageHeader>,
 ) -> Result<serde_json::Value, ConversationStoreError> {
     match header {

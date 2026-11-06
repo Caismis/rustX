@@ -321,7 +321,7 @@ pub(crate) struct GoalToolContext<'a> {
 /// Leaf observer called under the domain publication mutex; never acquires
 /// coordinator locks.
 pub(crate) trait GoalObserver: Send + Sync {
-    fn changed(&self, receipt: Option<&Arc<crate::durable::inbox::GoalObservationReceipt>>);
+    fn changed(&self, receipt: Option<&Arc<crate::durable::GoalObservationReceipt>>);
 }
 
 /// One durable state owner.
@@ -468,7 +468,7 @@ impl GoalDomain {
 
     pub(crate) fn observation_view(
         &self,
-    ) -> Result<crate::runtime_client::goal::RuntimeClientGoalView, ConversationStoreError> {
+    ) -> Result<crate::observation::goal::RuntimeClientGoalView, ConversationStoreError> {
         self.inner.store.goal_observation_view()
     }
 
@@ -626,6 +626,7 @@ impl GoalRoundDriver {
 mod tests {
     use super::*;
     use crate::durable::SqliteConversationStore;
+    use crate::durable::{InboxStore, JournalStore};
     use crate::message::{InboundKind, UserSource};
     use crate::runtime::identity::ConversationId;
 

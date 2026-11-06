@@ -1,0 +1,6 @@
+.fields { margin: 8px 0; }
+.field { margin: 8px 0; }
+.field > dt { color: var(--dsw-alias-label-tertiary); font-size: var(--dsh-content-font-size-secondary, 13px); }
+.field > dd { margin: 4px 0 0; padding-left: 12px; border-left: 1px solid var(--dsw-alias-border-l1); }
+.list { padding-left: 20px; }
+.empty { color: var(--dsw-alias-label-tertiary); }

@@ -2,9 +2,9 @@
 //! These indexes are derived read layouts, never canonical/model-context authority.
 use crate::conversation::SurfaceRevision;
 use crate::message::types::MessageBlock;
+use crate::observation::cut::{CollectionFrontier, ContentBinding};
+use crate::observation::transcript::RuntimeClientTranscriptEntry;
 use crate::runtime::identity::MessageId;
-use crate::runtime_client::checkpoint::{CollectionFrontier, ContentBinding};
-use crate::runtime_client::snapshot::RuntimeClientTranscriptEntry;
 use serde::{Deserialize, Serialize};
 
 pub use super::trace::{
@@ -35,8 +35,8 @@ pub enum ResponsePageSelectionKind {
 /// Finite response facts assembled in the same read transaction as their native owners.
 #[derive(Debug, Clone)]
 pub struct ResponsePageItem {
-    pub process: Option<crate::runtime_client::response::TurnProcessView>,
-    pub response: Option<crate::runtime_client::response::CompletedResponseView>,
+    pub process: Option<crate::observation::turn::TurnProcessView>,
+    pub response: Option<crate::observation::turn::CompletedResponseView>,
     pub failure_deferred: bool,
     pub models: Option<(u64, u64, Option<u64>)>,
     pub identity_fields: Vec<ResponseIdentityField>,
@@ -46,20 +46,61 @@ pub struct ResponsePageItem {
 pub struct ResponsePage {
     /// Same length and order as the selections, including rows with no owner.
     pub items: Vec<ResponsePageItem>,
-    pub statistics: crate::runtime_client::response::ConversationStatistics,
+    pub statistics: crate::observation::statistics::ConversationStatistics,
 }
 
 /// Bounded live checkpoint domains observed together at one native read cut.
 /// Original source values and explicit trace pages remain independently readable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckpointHead {
-    pub transcript: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,
+    pub transcript: crate::observation::transcript::RuntimeClientTranscriptPage,
     /// Complete body plus response decoration, owned by native read evidence.
     /// Internal only: page serialization and public cursor contracts are unchanged.
-    pub(crate) transcript_rows: Vec<crate::runtime_client::checkpoint::PreparedTranscriptRow>,
-    pub occupancy: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+    pub(crate) transcript_rows: Vec<crate::observation::transcript::PreparedTranscriptRow>,
+    pub occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
     pub trace_total: u64,
-    pub projection_head: Option<crate::runtime_client::snapshot::RuntimeClientProjectionHeadView>,
+    pub projection_head: Option<crate::observation::head::RuntimeClientProjectionHeadView>,
+}
+/// Durable visit lifecycle; transient labels additionally require a live owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowNodeTraceState {
+    /// A durable admission without a proven terminal or current live owner.
+    Incomplete,
+    Pending,
+    Running,
+    Waiting {
+        reason: crate::runtime::workflow::read_model::WorkflowWait,
+    },
+    Draining,
+    Settled {
+        outcome: crate::runtime::workflow::WorkflowExecutionOutcome,
+    },
+}
+
+/// Actual admitted nodes at one immutable Journal cut, not the program's nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkflowTraceNode {
+    pub id: String,
+    pub instance: crate::runtime::workflow::WorkflowNodeInstance,
+    pub kind: Option<crate::runtime::workflow::read_model::WorkflowNodeKind>,
+    pub state: WorkflowNodeTraceState,
+    pub timing: crate::observation::trace::TraceTiming,
+    pub input: Option<crate::observation::trace::TraceFieldSource>,
+    pub output: Option<crate::observation::trace::TraceFieldSource>,
+    pub input_preview: Option<String>,
+    pub output_preview: Option<String>,
+    pub input_omitted: bool,
+    pub output_omitted: bool,
+}
+#[derive(Debug, Clone)]
+pub struct WorkflowTraceNodes {
+    pub revision: u64,
+    pub workflow_id: String,
+    pub parent_sequence: Option<u64>,
+    pub total: u64,
+    pub nodes: Vec<WorkflowTraceNode>,
+    pub next_offset: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -80,12 +121,12 @@ pub struct TranscriptSourceReady {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MessageHeader {
-    pub deliveries: Option<crate::runtime_client::delivery::RuntimeClientDeliveryHead>,
-    pub tool_calls: Vec<crate::runtime_client::snapshot::ForegroundToolExecution>,
+    pub deliveries: Option<crate::observation::delivery::RuntimeClientDeliveryHead>,
+    pub tool_calls: Vec<crate::observation::tool::ForegroundToolExecution>,
     pub transcript_cursor: Option<super::TranscriptCursor>,
     /// Exact inline identity only while its complete UTF-8 representation fits 256 bytes.
     pub identity: Option<MessageId>,
-    pub locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
+    pub locator: Option<crate::observation::content::CanonicalContentLocator>,
     /// None while durably accepted inbound has not entered the canonical Ledger.
     pub ledger_position: Option<u64>,
     pub role: String,
@@ -116,10 +157,10 @@ pub struct MessageHeaderPage {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptHeader {
-    pub tool_calls: Vec<crate::runtime_client::snapshot::ForegroundToolExecution>,
+    pub tool_calls: Vec<crate::observation::tool::ForegroundToolExecution>,
     #[serde(default)]
     pub publication_settlement:
-        Option<crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord>,
+        Option<crate::observation::transcript::RuntimeClientPublicationSettlementRecord>,
     pub cursor: super::TranscriptCursor,
     pub reference_kind: String,
     pub reference_id: String,
@@ -149,13 +190,46 @@ pub struct MessageBlockHeader {
 pub struct MessageBlockHeaderPage {
     pub cut: ObservationReadCut,
     pub message_id: Option<MessageId>,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub total: u64,
     pub offset: u64,
     pub headers: Vec<MessageBlockHeader>,
     pub next_offset: Option<u64>,
 }
 
+/// Finite ownership discriminator copied from the authoritative physical fact.
+/// Full request identities remain in the indexed original Journal fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestOwnerKind {
+    Agent,
+    Auxiliary,
+}
+
+impl From<&crate::model::snapshot::ModelRequestOwner> for RequestOwnerKind {
+    fn from(owner: &crate::model::snapshot::ModelRequestOwner) -> Self {
+        match owner {
+            crate::model::snapshot::ModelRequestOwner::Agent { .. } => Self::Agent,
+            crate::model::snapshot::ModelRequestOwner::Auxiliary { .. } => Self::Auxiliary,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObservationEventHeader {
+    pub sequence: u64,
+    pub event_id: Option<crate::runtime::identity::EventId>,
+    pub event_kind: String,
+    pub attempt_id: Option<crate::runtime::identity::AttemptId>,
+    pub turn_id: Option<crate::runtime::identity::TurnId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<RequestOwnerKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auxiliary_call_id: Option<crate::runtime::identity::AuxiliaryCallId>,
+    pub display: Option<crate::events::types::RuntimeEventEnvelope>,
+    pub witness: Option<ObservationEventWitness>,
+    pub deferred: bool,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ObservationEventField {
     pub path: Vec<String>,
@@ -176,6 +250,12 @@ pub struct ObservationEventWitness {
     pub event_id: Option<crate::runtime::identity::EventId>,
     pub attempt_id: Option<crate::runtime::identity::AttemptId>,
     pub turn_id: Option<crate::runtime::identity::TurnId>,
+    /// Explicit physical-request owner captured from the committing fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<RequestOwnerKind>,
+    /// Explicit auxiliary Call identity for Call and auxiliary request facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auxiliary_call_id: Option<crate::runtime::identity::AuxiliaryCallId>,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub event_kind: String,
     pub tool_occurrence: Option<crate::events::types::ToolObservationOccurrence>,
@@ -189,9 +269,9 @@ pub struct ObservationEventWitness {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OccupancyObservation {
     /// Finite head captured with this original Completed J, before publication.
-    pub projection_head: crate::runtime_client::snapshot::RuntimeClientProjectionHeadView,
-    pub compaction: crate::runtime_client::snapshot::RuntimeClientCompactionView,
-    pub value: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
+    pub projection_head: crate::observation::head::RuntimeClientProjectionHeadView,
+    pub compaction: crate::observation::head::RuntimeClientCompactionView,
+    pub value: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -206,7 +286,7 @@ pub struct ToolAssociationHeader {
 pub struct ToolAssociationHeaderPage {
     pub cut: ObservationReadCut,
     pub message_id: Option<MessageId>,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub total: u64,
     pub offset: u64,
     pub headers: Vec<ToolAssociationHeader>,
@@ -232,7 +312,7 @@ pub struct NativeToolObservationHeader {
 pub struct NativeToolObservationPage {
     pub cut: ObservationReadCut,
     pub message_id: Option<MessageId>,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub total: u64,
     pub offset: u64,
     pub headers: Vec<NativeToolObservationHeader>,
@@ -253,7 +333,7 @@ pub struct ObservationWindow {
     pub cut: ObservationReadCut,
     pub page: TranscriptHeaderPage,
     pub newer_cursor: Option<super::TranscriptCursor>,
-    pub target: Option<crate::runtime_client::turn::ObservedTurnIdentity>,
+    pub target: Option<crate::observation::turn::ObservedTurnIdentity>,
     pub target_cursor: Option<super::TranscriptCursor>,
 }
 
@@ -285,9 +365,9 @@ pub struct AttemptMemberCounts {
     pub tool_call_count: u64,
     pub first_cursor: Option<super::TranscriptCursor>,
     pub final_message_id: Option<MessageId>,
-    pub final_message_locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
+    pub final_message_locator: Option<crate::observation::content::CanonicalContentLocator>,
     pub final_message_id_deferred: bool,
-    pub final_message_id_source: Option<crate::runtime_client::content::ContentRef>,
+    pub final_message_id_source: Option<crate::observation::content::ContentRef>,
     /// Proven by the original successful terminal or inherited response, never C alone.
     pub completed_response: bool,
     pub process: Option<MemberProcessHeader>,
@@ -297,7 +377,7 @@ pub struct AttemptMemberCounts {
 pub struct MemberProcessHeader {
     pub conversation_id: crate::runtime::identity::ConversationId,
     pub attempt_id: Option<crate::runtime::identity::AttemptId>,
-    pub attempt_id_source: Option<crate::runtime_client::response::AttemptIdentitySource>,
+    pub attempt_id_source: Option<crate::observation::turn::AttemptIdentitySource>,
     pub event_id: Option<crate::runtime::identity::EventId>,
     pub outcome: super::reading::TurnProcessOutcome,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -309,7 +389,7 @@ pub struct MemberProcessHeader {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AttemptExecutionSummary {
-    pub failure: Option<crate::runtime_client::event::RuntimeClientAttemptFailure>,
+    pub failure: Option<crate::observation::failure::RuntimeClientAttemptFailure>,
     pub failure_deferred: bool,
     pub failure_readable_end: u64,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -325,7 +405,7 @@ pub struct AttemptExecutionSummary {
     pub closing_identity_sequence: Option<u64>,
     pub last_request_id: Option<crate::runtime::identity::RequestId>,
     pub last_request_sequence: Option<u64>,
-    pub last_request_id_source: Option<crate::runtime_client::snapshot::JournalFieldRef>,
+    pub last_request_id_source: Option<crate::observation::tool::JournalFieldRef>,
     pub requests: u64,
     pub reports: u64,
     pub usage: Option<crate::model::ModelUsage>,
@@ -338,7 +418,7 @@ pub struct AttemptExecutionSummary {
 pub struct AttemptModelName {
     pub ordinal: u64,
     pub request_id: Option<crate::runtime::identity::RequestId>,
-    pub request_id_source: Option<crate::runtime_client::snapshot::JournalFieldRef>,
+    pub request_id_source: Option<crate::observation::tool::JournalFieldRef>,
     pub source_sequence: u64,
     pub encoded_bytes: u64,
     pub value: Option<String>,
@@ -400,7 +480,7 @@ pub struct InheritedResponseSummary {
 pub struct InheritedResponseOrigin {
     pub conversation_id: crate::runtime::identity::ConversationId,
     pub attempt_id: Option<crate::runtime::identity::AttemptId>,
-    pub attempt_id_source: Option<crate::runtime_client::response::AttemptIdentitySource>,
+    pub attempt_id_source: Option<crate::observation::turn::AttemptIdentitySource>,
     pub closing_message_id: Option<MessageId>,
 }
 
@@ -462,8 +542,8 @@ pub struct RequestObservationOutcome {
     pub terminal_sequence: u64,
     pub event_id: Option<crate::runtime::identity::EventId>,
     pub usage: Option<crate::model::ModelUsage>,
-    pub failure: Option<crate::runtime_client::trace::TraceRequestFailure>,
-    pub generation: Option<crate::runtime_client::trace::TraceGeneration>,
+    pub failure: Option<crate::observation::trace::TraceRequestFailure>,
+    pub generation: Option<crate::observation::trace::TraceGeneration>,
     pub failure_deferred: bool,
     pub encoded_bytes: u64,
 }
@@ -503,7 +583,7 @@ pub struct NativeObservationBatch {
     pub pending: Option<std::sync::Arc<super::inbox::PendingObservationReceipt>>,
     pub source_unavailable: bool,
     /// Existing normalized client failure policy, never a raw provider error.
-    pub failure: Option<crate::runtime_client::event::RuntimeClientAttemptFailure>,
+    pub failure: Option<crate::observation::failure::RuntimeClientAttemptFailure>,
     pub failure_deferred: bool,
     pub failure_readable_end: u64,
     pub failure_sequence: Option<u64>,
@@ -511,7 +591,7 @@ pub struct NativeObservationBatch {
     pub finish_reason: Option<NativeObservationFieldRef>,
     pub read_cut: ObservationReadCut,
     pub journal_range: Option<(u64, u64)>,
-    pub canonical: Option<std::sync::Arc<super::inbox::CanonicalObservationBatch>>,
+    pub canonical: Option<std::sync::Arc<super::CanonicalObservationBatch>>,
     pub transition: NativeObservationTransition,
 }
 
@@ -535,7 +615,7 @@ pub enum NativeObservationTransition {
         turn: Box<ObservationEventWitness>,
     },
     RequestStart {
-        statuses: Vec<crate::runtime_client::snapshot::AgentStatusView>,
+        statuses: Vec<crate::observation::status::AgentStatusView>,
         started: ObservationEventWitness,
         /// Finite native source head; all contribution rows remain indexed at J.
         contributions: Vec<ObservationEventWitness>,
@@ -558,7 +638,7 @@ pub enum NativeObservationTransition {
     ModelTurnSettlement {
         provider: Box<ObservationEventWitness>,
         canonical: Box<ObservationEventWitness>,
-        assistant: std::sync::Arc<super::inbox::CanonicalObservationBatch>,
+        assistant: std::sync::Arc<super::CanonicalObservationBatch>,
         boundary: Option<ModelTurnObservationBoundary>,
     },
 }
@@ -574,7 +654,7 @@ pub enum ModelTurnObservationBoundary {
     Adopted {
         turn: Box<ObservationEventWitness>,
         adoption: Box<ObservationEventWitness>,
-        canonical: std::sync::Arc<super::inbox::CanonicalObservationBatch>,
+        canonical: std::sync::Arc<super::CanonicalObservationBatch>,
     },
 }
 
@@ -589,6 +669,6 @@ pub struct NativeToolResultCommit {
     /// Positive native status/duration/exit/truncation summary, with deferred bodies.
     pub result: crate::tools::types::ToolExecutionResult,
     /// Canonical metadata includes the exact original status and diagnostics.
-    pub metadata: crate::runtime_client::content::ContentRef,
+    pub metadata: crate::observation::content::ContentRef,
     pub content: Vec<ContentBinding>,
 }

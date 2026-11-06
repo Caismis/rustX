@@ -1,0 +1,37 @@
+/* Native task bindings and Workflow results extend the Harness task surface. */
+.loading { color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.instructionLabel { display: block; color: var(--dsw-alias-label-secondary); font-size: 12px; margin-bottom: 8px; }
+.inlineActions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.sectionTitle { font-size: 13px; font-weight: 500; margin: 16px 0 8px; }
+.result, .savedVersion { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; padding: 12px; background: var(--dsw-alias-fill-quaternary); border-radius: 8px; font-size: 12px; }
+.savedVersion { max-height: 140px; }
+.technical { color: var(--dsw-alias-label-tertiary); font-size: 12px; padding: 16px 0; overflow-wrap: anywhere; }
+.technical summary { cursor: pointer; }
+.technical dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px; }
+.technical dd { margin: 0; user-select: text; }
+.steps { list-style: none; margin: 0; padding: 0; }
+.steps li { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 0.5px solid var(--dsw-alias-border-l4); }
+.steps li span:last-child { color: var(--dsw-alias-label-secondary); }
+.zoneCombo { flex: 0 1 68%; min-width: 0; }
+.pickerButton { border: 0; background: transparent; color: inherit; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 18px; }
+.pickerButton:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.zoneInput { display: flex; align-items: center; }
+.zoneInput input { width: 100%; min-width: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 13px; text-align: right; outline-offset: 3px; }
+.zoneInput button { display: flex; padding: 4px; border: 0; color: inherit; background: transparent; }
+.zonePopup { z-index: 1500; width: min(420px, calc(100vw - 32px)); max-height: 320px; overflow: auto; padding: 4px; border-radius: 12px; background: var(--dsw-specific-menu); color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-elevation-prominent); }
+.zoneList { outline: none; }
+.zoneOption { padding: 7px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; outline: none; }
+.zoneOption[data-focused], .zoneOption[data-selected] { background: var(--dsw-alias-interactive-bg-hover); }
+.taskTab { display: flex; min-height: 0; height: 100%; }
+.taskTab > aside { flex: 1; border: 0; }
+.clockMark { display: inline-flex; align-items: center; justify-content: center; color: var(--dsw-alias-label-tertiary); }
+.hoverTasks { border-top: 0.5px solid var(--dsw-alias-border-l4); margin-top: 8px; padding-top: 8px; font-size: 12px; }
+.hoverTasks p { margin: 6px 0 0; }
+.hoverTasks small { display: block; color: var(--dsw-alias-label-tertiary); }
+.created { display: flex; gap: 12px; align-items: center; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: 12px; padding: 12px 14px; max-width: 520px; margin: 12px 0; }
+.created > div { flex: 1; min-width: 0; }
+.created strong, .created small { display: block; overflow-wrap: anywhere; }
+.created small { color: var(--dsw-alias-label-secondary); margin-top: 3px; }
+@media (pointer: coarse) {
+  .zoneInput input { font-size: 16px; }
+}

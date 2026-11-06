@@ -53,9 +53,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientEvent;
-use super::snapshot::{RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage};
 use crate::message::types::UserContentBlock;
 use crate::model::session::SessionModelConfig;
+use crate::observation::transcript::{RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::interaction::{InteractionRef, InteractionResponse};
@@ -271,9 +271,22 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Version 69 separates typed projection history and exact frozen request occurrences from canonical execution.
 /// Version 70 represents absent wire fields for native-covered Tool associations.
 /// Version 71 adds bounded observation and exact source-unavailability handling.
-/// Version 72 permits Session enrichment without replacing the separately pinned Trace cache.
-/// Version 73 admits bounded standalone Trace repair prefixes with explicit input progress.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 73;
+/// Version 72 removes declared reasoning capability and enabled metadata.
+/// Version 72 adds bounded auxiliary retries and independent Title policy observation.
+/// Version 73 adds named auxiliary consumers, bounded result delivery and model policies.
+/// Version 74 adds native JSON Schema output to closed model capability views.
+/// Version 75 adds Workflow Model nodes, Model Call accounting and `CallId` association.
+/// Version 76 adds real Scheduled execution origins and native Workflow recovery.
+/// Version 77 publishes MCP availability only after live preparation settles.
+/// Version 79 combines Scheduled execution/recovery origins with reasoning-free
+/// Workflow, workspace changes and live MCP preparation projections.
+/// Version 80 adds native Workflow data-node and classifier observation kinds.
+/// Version 81 distinguishes incomplete historical Workflow nodes from proven live activity.
+/// Version 83 removes advisory configuration-adoption eligibility and adds
+/// Session configuration change transcript items and Trace records. Version
+/// 82 added optional, Model-owned reasoning Profile order to full catalog
+/// metadata; selection ordinals and frozen invocation snapshots are unchanged.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 84;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -444,9 +457,9 @@ pub enum RuntimeClientRequest {
     /// Read finite Trace records and exact own lifecycle interests.
     TracePageGet {
         id: RequestId,
-        before: Option<super::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
-        records: Vec<super::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     },
     /// Read one bounded durable transcript page. `before_cursor` is the
     /// exclusive boundary for older history; omitting it returns the newest
@@ -480,20 +493,20 @@ pub enum RuntimeClientRequest {
     },
     ContentRead {
         id: RequestId,
-        content_ref: super::content::ContentRef,
+        content_ref: crate::observation::content::ContentRef,
         offset: u64,
         max_bytes: u32,
     },
     CheckpointPageGet {
         id: RequestId,
-        cut: super::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         offset: u64,
         limit: usize,
     },
     CheckpointValueRead {
         id: RequestId,
-        cut: super::checkpoint::CheckpointReadCut,
+        cut: crate::observation::cut::CheckpointReadCut,
         domain: String,
         item_offset: u64,
         path: Vec<String>,
@@ -600,9 +613,9 @@ pub enum RuntimeClientRequest {
     AgentTrace {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
-        before: Option<super::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
-        records: Vec<super::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     },
     AgentTraceDetail {
         id: RequestId,
@@ -862,7 +875,7 @@ pub enum RuntimeClientResult {
     ContextCompacted {
         /// Always present on success: the exact receipt for this invocation,
         /// independently of the latest published context.
-        compaction: Option<super::snapshot::RuntimeClientCompactionView>,
+        compaction: Option<crate::observation::head::RuntimeClientCompactionView>,
     },
 
     /// `interaction_respond` succeeded: the coordinator accepted the one
@@ -884,7 +897,7 @@ pub enum RuntimeClientResult {
     },
     /// Bounded read-only Trace page of summary records.
     TracePage {
-        page: super::trace::TracePage,
+        page: crate::observation::trace::TracePage,
         /// Complete input prefix examined, including missing and duplicate interests.
         refreshed: usize,
     },
@@ -895,14 +908,14 @@ pub enum RuntimeClientResult {
         window: Box<super::snapshot::ConversationWindow>,
     },
     ConversationTurns {
-        page: crate::runtime_client::turn::ObservedTurnPage,
+        page: crate::observation::turn::ObservedTurnPage,
     },
     TranscriptPage {
         /// The bounded durable transcript page.
         page: RuntimeClientTranscriptPage,
     },
     ContentChunk {
-        chunk: super::content::ContentChunk,
+        chunk: crate::observation::content::ContentChunk,
     },
     CheckpointPage {
         page: super::checkpoint::CheckpointPage,
@@ -941,11 +954,8 @@ pub enum RuntimeClientResult {
         after_cursor: RuntimeClientCursor,
     },
     /// `capability_get` succeeded: the active capability projection.
-
     /// `model_catalog_get` succeeded: the safe selectable-model view.
-
     /// `model_get` succeeded: the authoritative session model state.
-
     /// Standalone model selection committed; durable Sessions use their native Session owner.
     ///
     /// This finite receipt confirms commitment. Read the current model through
@@ -967,7 +977,7 @@ pub enum RuntimeClientResult {
         observation: super::agent_observation::AgentObservation,
     },
     AgentStatistics {
-        metrics: super::agent_statistics::AgentStatistics,
+        metrics: crate::observation::statistics::AgentStatistics,
     },
 
     AgentMessage {
@@ -1010,10 +1020,8 @@ pub struct InteractionFieldItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientError {
-    /// Native Session adoption/model fence refusal.
-    ConfigurationAdoption {
-        rejection: crate::local_runtime::configuration::application::AdoptionError,
-    },
+    /// A newer Session binding superseded the model selection's fence.
+    ModelSelectionConflict,
     /// The negotiated protocol version is not supported by this runtime.
     UnsupportedProtocolVersion {
         /// The version this runtime speaks.
@@ -1116,6 +1124,9 @@ pub enum RuntimeClientError {
         message: String,
     },
     ObservationCapacityExceeded,
+    Auxiliary {
+        reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
+    },
     ContentSourceUnavailable,
     /// The requested byte range lies outside the authorized source frontier.
     InvalidRange,
@@ -1190,6 +1201,13 @@ impl RuntimeClientError {
     }
     /// Observation failures preserve the store's cut/source distinction. A
     /// storage fault cannot request replay repair of an otherwise valid cut.
+    pub(crate) fn tool_terminal_unavailable(
+        error: crate::observation::tool::ToolTerminalUnavailable,
+    ) -> Self {
+        Self::ObservationUnavailable {
+            message: error.to_string(),
+        }
+    }
     pub(crate) fn observation_store_error(error: crate::durable::ConversationStoreError) -> Self {
         use crate::durable::ConversationStoreError;
         let failure = match &error {
@@ -1224,7 +1242,7 @@ pub struct RuntimeClientProtocolEvent {
 }
 
 // Re-exported for use by the public protocol docs.
-pub use super::snapshot::{RuntimeClientAgent, RuntimeClientJob};
+pub use crate::runtime_client::snapshot::{RuntimeClientAgent, RuntimeClientJob};
 
 #[cfg(test)]
 mod tests {
@@ -1312,7 +1330,7 @@ mod tests {
     }
     use crate::runtime_client::event::RuntimeClientEvent;
 
-    /// Session catalog control is App Server's (#428). Complete v54 Session
+    /// Session catalog control is App Server's (#428). Complete v55 Session
     /// request, result and error shapes are unknown to strict decoding, so no
     /// Runtime Client peer can reach a Session control path.
     #[test]
@@ -1365,7 +1383,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 73);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 84);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1559,10 +1577,10 @@ mod tests {
     fn attempt_model_view(reference: &str) -> crate::model::session::AttemptModelView {
         use crate::model::catalog::{ModelCapabilities, ModelRef};
         use crate::model::invocation::{ModelInvocationView, RequestParams};
-        use crate::model::session::{AttemptModelView, SummaryModelView};
+        use crate::model::session::{AttemptModelView, AuxiliaryModelView};
         use crate::model::types::ModelProtocol;
 
-        let capabilities = ModelCapabilities::text_only(true, false);
+        let capabilities = ModelCapabilities::text_only();
         AttemptModelView {
             primary: ModelInvocationView {
                 model: ModelRef::parse(reference).expect("a valid model reference"),
@@ -1571,12 +1589,11 @@ mod tests {
                 model_max_output_tokens: 4096,
                 max_output_tokens: 4096,
                 profile: None,
-                reasoning_enabled: false,
                 request_params: RequestParams::new(),
                 capabilities: capabilities.clone(),
                 declared_capabilities: capabilities,
             },
-            summary: SummaryModelView::Session,
+            summary: AuxiliaryModelView::Session,
         }
     }
 
