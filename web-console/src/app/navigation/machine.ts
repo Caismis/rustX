@@ -41,7 +41,7 @@ export interface ShellNavigationContext extends Omit<Input, 'route'> {
   retry?: ResponseRetry;
   command?: { request: CommandRequest; route: ShellRoute; generation: number };
   restored?: { conversation: string; content: UserInputBlock[] };
-  draftSession?: { sessionId: string; intent: Pending };
+  draftSession?: { sessionId: string; intent: Pending; intentRevision: number };
   publication?: { sidebar: boolean; intent?: Pending; control: object };
   dismissedSidebar?: Pending;
   generation: number; authority: number | undefined;
@@ -81,7 +81,7 @@ function sessionRecoveryCurrent(client: AppServerClient, sessionId: string) {
 }
 /** A selected Session owns local input before it owns executable controls.
  * Ordinary selection and History Return share this target-bound publication. */
-function pendingSessionDraft(context: ShellNavigationContext, pending: Pending, sessionId: string) {
+function pendingSessionDraft(context: ShellNavigationContext, pending: Pending, sessionId: string, intentRevision = context.intentRevision) {
   const route = { kind: 'session-draft' as const, sessionId };
   const destination = pending.destination;
   const previous = context.draftSession?.intent.destination;
@@ -92,7 +92,7 @@ function pendingSessionDraft(context: ShellNavigationContext, pending: Pending, 
       && context.client.getSnapshot().views[sessionId]?.target?.conversation_id !== destination.conversationId;
   return { binding: replacing ? context.binding + 1 : context.binding,
     control: replacing ? {} : context.control,
-    route, draftSession: { sessionId, intent: pending } };
+    route, draftSession: { sessionId, intent: pending, intentRevision } };
 }
 /** Disposable preparation owns publication only. Native calls below are finite
  * lifecycle commands: aborting this actor retires admission, never settlement. */
@@ -260,7 +260,7 @@ export const shellNavigationMachine = setup({
       // without creating an Open or carrying a command/drawer interest.
       const destination = { ...event.intent.destination, sidebar: false, command: undefined };
       const pending: Pending = { recovery: true, destination, route: context.route, generation: event.generation, authority: event.authority };
-      return { ...pendingSessionDraft(context, pending, destination.sessionId), pending, dismissedSidebar: undefined,
+      return { ...pendingSessionDraft(context, pending, destination.sessionId, context.draftSession!.intentRevision), pending, dismissedSidebar: undefined,
         retry: undefined, command: undefined, error: undefined };
     }),
     dismissSidebar: assign(({ context }) => ({ dismissedSidebar: context.pending })),
@@ -281,7 +281,7 @@ export const shellNavigationMachine = setup({
       // Its own executable promotion retains this same binding.
       return { ...((destination.kind === 'restore-session' || destination.kind === 'session') ? pendingSessionDraft(context, pending, destination.sessionId) : {}), pending, retry, dismissedSidebar: undefined, command: undefined, error: undefined };
     }),
-    creationKnown: assign(({ event }) => event.type === 'CREATION.KNOWN' ? { route: { kind: 'session-draft' as const, sessionId: event.sessionId }, draftSession: { sessionId: event.sessionId, intent: event.pending } } : {}),
+    creationKnown: assign(({ context, event }) => event.type === 'CREATION.KNOWN' ? { route: { kind: 'session-draft' as const, sessionId: event.sessionId }, draftSession: { sessionId: event.sessionId, intent: event.pending, intentRevision: context.intentRevision } } : {}),
     create: assign(({ context, event }) => event.type === 'CREATE' ? { pending: { destination: { kind: 'creation' as const, binding: event.binding }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, command: undefined, error: undefined } : {}),
     retire: assign({ dismissedSidebar: () => undefined, retry: () => undefined, draftSession: () => undefined, pending: () => undefined, command: () => undefined, error: () => undefined }),
     retirePreparation: assign(({ context }) => {

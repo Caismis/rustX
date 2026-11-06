@@ -1,5 +1,5 @@
 import type { ClientView } from '../../client/contracts';
-import type { ShellRoute } from './machine';
+import type { ShellNavigationContext, ShellRoute } from './machine';
 
 export type SavedRoute = Exclude<ShellRoute, { kind: 'session-draft' }>;
 export const navigationPreferencesKey = 'rustx-console-view-v3';
@@ -41,8 +41,17 @@ export function restoreRoute(preferences: NavigationPreferences, state: Pick<Cli
     ? route : { kind: 'new-conversation' };
 }
 
-/** An uncommitted cold Session is not a durable executable selection or draft. */
-export function saveRoute(route: ShellRoute, openViews: readonly string[]): SavedRoute {
+/** A startup selection remains a presentation hint through transient admission
+ * failure. Other cold selections never persist an uncommitted Session or draft. */
+export function saveRoute(context: Pick<ShellNavigationContext, 'route' | 'draftSession' | 'pending' | 'intentRevision'>, openViews: readonly string[]): SavedRoute {
+  const { route, draftSession, pending, intentRevision } = context;
+  if (route.kind === 'session-draft' && draftSession?.sessionId === route.sessionId
+    && draftSession.intent.destination.kind === 'restore-session'
+    && draftSession.intent.destination.sessionId === route.sessionId
+    && draftSession.intentRevision === intentRevision
+    && (!pending || pending === draftSession.intent) && openViews.includes(route.sessionId)) {
+    return { kind: 'session', sessionId: route.sessionId };
+  }
   return route.kind === 'session-draft' || route.kind === 'session' && !openViews.includes(route.sessionId)
     ? { kind: 'new-conversation' } : route;
 }

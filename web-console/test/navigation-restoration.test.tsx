@@ -146,3 +146,54 @@ it.each(['authorization', 'operation'] as const)('a restored %s error retains it
   expect(hints().openViews).toContain('B');
   expect(server.client.getSnapshot().views.B.attachmentIntent).toBe('wanted');
 });
+it('reload retries the unresolved startup selection after a transient failure and closing another view', async () => {
+  seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
+  const ui = await mount(); await act(async () => server.connect());
+  const pending = await server.waitFor('session/read', 1);
+  expect(pending.params).toMatchObject({session_id:'B'});
+  await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'B temporarily unavailable',data:{kind:'operation_failed'}}}));
+  const other = await server.waitFor('session/read', 2);
+  await act(async () => server.reply(other));
+  await click(ui, 'View options');
+  await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Close view'})));
+  await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Session A'})));
+  expect(hints()).toEqual({endpoint,openViews:['B'],route:{kind:'session',sessionId:'B'}});
+  await act(async () => ui.unmount()); await server.client.disconnect(); server = newServer();
+  await mount(); await act(async () => server.connect());
+  expect(server.requests.some(row => row.request.method === 'session/read' && row.request.params.session_id === 'B')).toBe(true);
+  expect(title()).toBe('Session B');
+});
+it.each(['Workflows', 'New Conversation', 'Open Session A'] as const)('a failed startup restore yields its saved hint to explicit %s intent', async name => {
+  seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
+  const ui = await mount(); await act(async () => server.connect());
+  const pending = await server.waitFor('session/read', 1);
+  await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'B temporarily unavailable',data:{kind:'operation_failed'}}}));
+  const other = await server.waitFor('session/read', 2);
+  server.held.delete('session/read'); await act(async () => server.reply(other));
+  await click(ui, name);
+  expect(hints().route).toEqual(name === 'Open Session A' ? {kind:'session',sessionId:'A'} : {kind:name === 'Workflows' ? 'workflows' : 'new-conversation'});
+});
+it('a failed explicit Fork retires the unresolved startup hint even when its draft stays visible', async () => {
+  seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
+  const ui = await mount(); await act(async () => server.connect());
+  const pending = await server.waitFor('session/read', 1);
+  await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'B temporarily unavailable',data:{kind:'operation_failed'}}}));
+  const other = await server.waitFor('session/read', 2);
+  server.held.delete('session/read'); await act(async () => server.reply(other));
+  expect(hints().route).toEqual({kind:'session',sessionId:'B'});
+  await click(ui, 'Session actions for Session A');
+  await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Fork session'})));
+  expect(ui.getByRole('alert').textContent).toContain('completed response');
+  expect(document.querySelector('[data-shell-route="session-draft"]')).not.toBeNull();
+  expect(hints().route).toEqual({kind:'new-conversation'});
+});
+it('a stale transient restore failure cannot replace a newer page or its saved hint', async () => {
+  seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
+  const ui = await mount(); await act(async () => server.connect());
+  const pending = await server.waitFor('session/read', 1);
+  await click(ui, 'Workflows');
+  await act(async () => server.socket.deliver({jsonrpc:'2.0',id:pending.id,error:{code:-32000,message:'Obsolete restore failure',data:{kind:'operation_failed'}}}));
+  expect(document.querySelector('[data-workflows-level]')).not.toBeNull();
+  expect(hints().route).toEqual({kind:'workflows'});
+  expect(ui.queryByText('Obsolete restore failure')).toBeNull();
+});

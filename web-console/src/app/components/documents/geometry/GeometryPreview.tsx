@@ -27,11 +27,11 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   const locale = useLocale(), t = locale.active === 'zh' ? zh : en;
   const container = useRef<HTMLDivElement>(null), active = useRef<ReturnType<typeof mountGeometry>>(undefined), outlineAction = useRef(0);
   const latest = useRef({ viewState, onViewStateChange, t, visible }); latest.current = { viewState, onViewStateChange, t, visible };
-  const presentation = useRef<((visible: boolean) => void) | undefined>(undefined), deferredOutlines = useRef<boolean | undefined>(undefined);
+  const presentation = useRef<((visible: boolean) => void) | undefined>(undefined), deferredOutlines = useRef<boolean | undefined>(undefined), pendingOutlines = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
     presentation.current?.(visible);
     if (!visible) setMenu(false);
-    if (visible && deferredOutlines.current !== undefined) requestOutlines(deferredOutlines.current);
+    if (visible && deferredOutlines.current !== undefined && pendingOutlines.current === undefined) requestOutlines(deferredOutlines.current);
   }, [visible]);
   const [state, setState] = useState<{ stage?: GeometryImportStage; preview?: boolean; parts?: Part[]; dimensions?: number[]; error?: GeometryFailure; selected?: string; hidden?: string[]; isolation?: string; projection?: Projection; navigationMode?: NavigationMode; inspection?: Inspection; outlineStatus?: OutlineStatus | 'loading' }>({});
   const [menu, setMenu] = useState(false);
@@ -51,7 +51,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
     const present = (shown: boolean) => { progressive?.setVisible(shown); mounted?.setVisible(shown); };
     presentation.current = present;
     const retire = () => {
-      if (presentation.current === present) { presentation.current = undefined; deferredOutlines.current = undefined; }
+      if (presentation.current === present) { presentation.current = undefined; deferredOutlines.current = undefined; pendingOutlines.current = undefined; }
       if (mounted && active.current === mounted) outlineAction.current++;
       // The visible-body signal may already be aborted. Only the owner can
       // authorize saving inert metadata for this exact retained content copy.
@@ -131,12 +131,21 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   const partCount = useMemo(() => state.parts?.filter(part => part.kind === 'mesh').length, [state.parts]);
   const closeParts = () => { setPartsOpen(false); container.current?.querySelector<HTMLButtonElement>('[data-geometry-parts-toggle]')?.focus(); };
   function requestOutlines(enabled: boolean) {
-    if (!latest.current.visible) { deferredOutlines.current = enabled; return; }
+    const action = ++outlineAction.current;
+    deferredOutlines.current = enabled; pendingOutlines.current = undefined;
+    setState(value => ({ ...value, outlineStatus: enabled ? 'loading' : 'off' }));
+    if (!latest.current.visible) return;
     const owner = active.current; if (!owner) return;
-    deferredOutlines.current = undefined;
-    const action = ++outlineAction.current; setState(value => ({ ...value, outlineStatus: enabled ? 'loading' : 'off' }));
+    pendingOutlines.current = action;
     void owner.setOutlines(enabled).catch((): OutlineStatus => 'failed').then(status => {
-      if (active.current === owner && outlineAction.current === action) setState(value => ({ ...value, outlineStatus: status }));
+      if (active.current !== owner || outlineAction.current !== action) return;
+      pendingOutlines.current = undefined;
+      // A visible request can suspend while waiting for surface preparation.
+      // Keep its demand until it finishes, and avoid restarting running work
+      // when the body is shown before that wait has settled.
+      deferredOutlines.current = enabled && status === 'off' ? true : undefined;
+      if (deferredOutlines.current) { if (latest.current.visible) requestOutlines(true); return; }
+      setState(value => ({ ...value, outlineStatus: status }));
     });
   }
   function changeNavigationMode(mode: NavigationMode) {

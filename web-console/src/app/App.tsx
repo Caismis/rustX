@@ -262,7 +262,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       if (!client.getSnapshot().views[id]?.target && (!firstSubmissions(client).session(id) || ['admitted', 'discarded'].includes(firstSubmissions(client).session(id)!.phase))) void client.attach(id).catch(() => {});
     }
   }, [client, shell, endpoint, preferences, state.connection, settingsOpen, preferencesApplied]);
-  const resumeRoute = JSON.stringify(saveRoute(center, JSON.parse(resumeViews)));
+  const resumeRoute = JSON.stringify(saveRoute(routeState.context, JSON.parse(resumeViews)));
   useEffect(() => {
     try {
       // Initialization cannot overwrite the saved route before restoration has
@@ -270,10 +270,10 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       // Read the actor now: an earlier effect may have started restoration
       // after this render captured its placeholder route.
       const current = shell.getSnapshot().context;
-      if (current.route !== center || current.pending?.destination.kind === 'restore-session') return;
+      if (current !== routeState.context || current.pending?.destination.kind === 'restore-session') return;
       if (endpoint && preferencesApplied) localStorage.setItem(navigationPreferencesKey, json({ endpoint, openViews: JSON.parse(resumeViews), route: JSON.parse(resumeRoute) }));
     } catch { /* Storage may be disabled in a trusted browser. */ }
-  }, [shell, center, endpoint, resumeViews, resumeRoute, preferencesApplied]);
+  }, [shell, routeState.context, endpoint, resumeViews, resumeRoute, preferencesApplied]);
   /** Navigation away from the Workflows area asks the Workflows surface
    * first, so unsaved semantic edits are never dropped silently. */
   const leaveWorkflows = (proceed: () => void) => {
