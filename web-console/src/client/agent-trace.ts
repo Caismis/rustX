@@ -83,7 +83,7 @@ export class AgentTraceReader {
     if (!result.location) throw new Error('This tool occurrence has no native execution record.');
     this.pageCut(result.location.page);
     const cache = {...replaceTrace(result.location.page, this.cache),fields:this.fields};
-    const repaired = refreshTrace({ ...cache, located: true }, result.location.page, result.location.page.updates);
+    const repaired = refreshTrace({ ...cache, located: true }, result.location.page, result.location.page.updates, undefined, true);
     this.publish(selectTrace(repaired, result.location.record_id));
     return true;
   };

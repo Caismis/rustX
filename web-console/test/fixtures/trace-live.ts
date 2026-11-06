@@ -1,7 +1,30 @@
 import type { Request } from '../../../protocol/app-server/v72';
 import { checkpoint, type Server } from '../fixture';
 import { nativeTraceFixture } from '../native-trace-fixture';
-import { requestDetail, traceRecord } from '../trace-fixture';
+import { requestDetail, traceRecord, traceTool } from '../trace-fixture';
+
+/** Native tool location followed by TraceChanged-only tail publications. */
+export function traceFollowing(server: Server) {
+  const tool = traceTool(7, { state: 'running', has_detail: false });
+  const records = [traceRecord(6, { kind: 'user', request: null, has_detail: false, preview: { text: 'Run the command and report the result', truncated: false } }), tool];
+  const saved = server.snapshots.get('A')!;
+  saved.trace = { records: [...records], next_cursor: null };
+  let revision = 1;
+  const page = () => ({ read_cut: { ...checkpoint(saved).read_cut, revision: String(revision) }, records: [...records], next_cursor: null });
+  const locator = { occurrence: { locator: { type: 'by_message_id' as const, message_id: 'assistant-7' }, block_index: 0 }, call_id: 'call-7', tool_id: 'tool-bash' };
+  server.handlers.set('session/traceLocateTool', () => ({ type: 'trace_tool_location', location: { record_id: tool.id, page: page() } }));
+  server.handlers.set('session/trace', () => ({ type: 'trace', page: page() }));
+  window.traceFollowingFixture = {
+    locate: () => server.client.locateToolTrace('A', locator),
+    append(text: string) {
+      records[1] = { ...tool, state: 'completed' };
+      records.push(traceRecord(records.length + 6, { kind: 'assistant', request: null, has_detail: false, preview: { text, truncated: false } }));
+      revision++;
+      server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++server.cursor), event: { type: 'trace_changed' } } });
+    },
+  };
+}
+declare global { interface Window { traceFollowingFixture: { locate(): Promise<boolean>; append(text: string): void } } }
 
 /** Real App/Trace cache with controlled native events and deferred field reads. */
 export function liveTrace(server: Server) {

@@ -11,7 +11,7 @@ import { childMessageContinuation } from './child-message-continuation';
 import { childObservationRecovery } from './child-observation-recovery';
 import { childParentMessages } from './child-parent-messages';
 import { messageAttachments } from './message-attachments';
-import { liveTrace } from './trace-live';
+import { liveTrace, traceFollowing } from './trace-live';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { ComposerDraft } from '../../src/app/composer/draft';
@@ -194,6 +194,7 @@ const releaseChildObservation = new URL(location.href).searchParams.has('subagen
 if (new URL(location.href).searchParams.has('parent-messages')) childParentMessages(server);
 if (new URL(location.href).searchParams.has('message-attachments')) messageAttachments(server);
 if (new URL(location.href).searchParams.has('trace-live')) liveTrace(server);
+if (new URL(location.href).searchParams.has('trace-following')) traceFollowing(server);
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 if (new URL(location.href).searchParams.has('child-message-continuation')) childMessageContinuation(server);
 let nativeDefault = 'fixture/native';

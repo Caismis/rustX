@@ -1,6 +1,38 @@
 import { test, expect } from '@playwright/test';
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 
+for (const [width, locale] of [[1440, 'en'], [390, 'zh']] as const) test(`tool location keeps following new Trace rows without a page reload (${width}, ${locale})`, async ({ page }) => {
+  const zh = locale === 'zh', errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await page.clock.setFixedTime(new Date('2026-09-15T00:00:05Z'));
+  await page.setViewportSize({ width, height: 1000 });
+  await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
+  await page.goto(`${origin}/test/fixtures/startup.html?existing&trace-following`);
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  if (zh) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click();
+  await page.locator('button[data-session-id=A]').click();
+  await expect(page).toHaveTitle('Session A — rustX');
+  await page.getByRole('tab', { name: zh ? '轨迹' : 'Trajectory', exact: true }).click();
+  await page.evaluate(() => window.traceFollowingFixture.locate());
+  const latest = page.getByRole('button', { name: zh ? '返回最新' : 'Return to latest', exact: true });
+  await expect(latest).toBeVisible();
+  const inspector = page.getByRole('complementary', { name: zh ? '事件详情' : 'Event details', exact: true });
+  await expect(inspector).toBeVisible();
+  const row = page.locator('[data-display-type="RecordRow"][data-owner="trace:7"]');
+  await row.evaluate(element => element.setAttribute('data-retained-live-tool', ''));
+  for (const text of ['First live response', 'The next turn is visible', 'The tool result has settled']) {
+    await page.evaluate(text => window.traceFollowingFixture.append(text), text);
+    await expect(page.getByText(text, { exact: true })).toBeVisible();
+    await expect(latest).toHaveCount(0);
+    await expect(page.locator('[data-retained-live-tool]')).toHaveCount(1);
+    await expect(inspector).toBeVisible();
+  }
+  await page.screenshot({ path: `/tmp/rustx-trace-following-${width}-${locale}.png` });
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390]) test(`running inspector keeps content, focus and scroll ${theme} ${width}`, async ({ page }) => {
   const zh = width === 390, errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));

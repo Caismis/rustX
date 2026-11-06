@@ -96,3 +96,46 @@ it('located records still receive native lifecycle repairs without concatenating
   expect(next.selection?.state).toBe('completed');
   expect(next.page.records.map(row => row.id)).toEqual(['trace:7']);
 });
+it('a root tool landing resumes live updates when the latest page overlaps its interval', async () => {
+  await setup();
+  const running = traceTool(7, { state: 'running' });
+  let records = [running];
+  server.handlers.set('session/traceLocateTool', () => ({ type: 'trace_tool_location', location: { record_id: running.id, page: { read_cut: rootCut(), records: [running], next_cursor: null } } }));
+  server.handlers.set('session/trace', () => ({ type: 'trace', page: { read_cut: rootCut(), records, next_cursor: null } }));
+  await server.client.locateToolTrace('A', locator);
+  const epoch = server.client.getSnapshot().views.A.trace!.epoch;
+  const publish = async () => {
+    server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++server.cursor), event: { type: 'trace_changed' } } });
+    await server.client['traces']['traceReads'].get('A')!.work;
+  };
+  records = [traceTool(7), traceTool(8)];
+  await publish();
+  const next = server.client.getSnapshot().views.A.trace!;
+  expect(next.page.records.map(row => row.id)).toEqual(['trace:7', 'trace:8']);
+  expect(next.selection).toMatchObject({ id: running.id, state: 'completed' });
+  expect(next.epoch).toBe(epoch); expect(next.located).toBeUndefined();
+  records = [traceTool(99)];
+  await publish();
+  expect(server.client.getSnapshot().views.A.trace!.page.records.map(row => row.id)).toEqual(['trace:99']);
+  expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
+});
+it('a child tool landing resumes live updates through the same native overlap', async () => {
+  const proof = await setup(), reader = new AgentTraceReader(server.client, 'A', proof, child);
+  server.handlers.set('agent/traceLocateTool', () => ({ type: 'trace_tool_location', location: { record_id: 'trace:7', page: { read_cut: childCut, records: [traceTool(7)], next_cursor: null } } }));
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut: childCut, records: [traceTool(7), traceTool(8)], next_cursor: null } }));
+  try {
+    await reader.locate(locator);
+    expect(reader.snapshot().located).toBe(true);
+    await reader.refresh();
+    expect(reader.snapshot().page.records.map(row => row.id)).toEqual(['trace:7', 'trace:8']);
+    expect(reader.snapshot().selection?.id).toBe('trace:7');
+    expect(reader.snapshot().located).toBeUndefined();
+  } finally { reader.retire(); }
+});
+it('lifecycle-only interest pages cannot resume or extend a historical landing', () => {
+  const record = traceTool(7, { state: 'running' });
+  const cache = selectTrace({ ...replaceTrace({ records: [record] }), located: true as const }, record.id);
+  const next = refreshTrace(cache, { records: [traceTool(7), traceTool(8)] }, [{ ...record, state: 'completed' }], undefined, true);
+  expect(next.page.records.map(row => row.id)).toEqual(['trace:7']);
+  expect(next.selection?.state).toBe('completed'); expect(next.located).toBe(true);
+});

@@ -55,7 +55,7 @@ export interface TraceFieldReader {
  page(cut:CheckpointReadCut,domain:string,offset:number,current:()=>boolean):Promise<CheckpointPage>;
 }
 export interface TraceCache {
-  /** A native tool landing retains its historical interval until explicitly released. */
+  /** A tool landing retains a disjoint historical interval until the live tail overlaps or the user returns to latest. */
   located?: true;
   page: TracePage;
   /** Issued for each represented row; renewed only by that row's native head. */
@@ -257,8 +257,13 @@ function contentIdentity(record: TraceRecord | undefined) {
 
 export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = [],outerCut?:CheckpointReadCut,lifecycleOnly=false): TraceCache {
   if (!previous) return replaceTrace(page,undefined,outerCut);
+  const overlap = new Set(previous.page.records.map(record => record.id));
+  // A tool landing rejoins live updates once a shared native row proves that
+  // the latest page continues its interval.
+  const retainPage = lifecycleOnly || !!previous.located && !page.records.some(record => overlap.has(record.id));
+  const located = retainPage ? previous.located : undefined;
   const cut=page.read_cut??outerCut;
-  const readCuts={...previous.readCuts,...(lifecycleOnly||previous.located?{}:pageCuts(page,outerCut)),...(cut?Object.fromEntries(updates.map(update=>[update.id,cut])):{})};
+  const readCuts={...previous.readCuts,...(retainPage?{}:pageCuts(page,outerCut)),...(cut?Object.fromEntries(updates.map(update=>[update.id,cut])):{})};
   const repairs = new Map(updates.map(update => [update.id, update]));
   const repair = (record: TraceRecord): TraceRecord => {
     const update = repairs.get(record.id);
@@ -276,12 +281,11 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
       tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
     };
   };
-  if (previous.located||lifecycleOnly) page = { ...previous.page, records: previous.page.records.map(repair) };
+  if (retainPage) page = { ...previous.page, records: previous.page.records.map(repair) };
   const selection = previous.selection
     ? repair(page.records.find(record => record.id === previous.selection!.id) ?? previous.selection)
     : undefined;
-  if (previous.page.records.length === 0) return { ...previous, page, selection,readCuts:retainedCuts(readCuts,page.records,selection) };
-  const overlap = new Set(previous.page.records.map(record => record.id));
+  if (previous.page.records.length === 0) return { ...previous, located, page, selection,readCuts:retainedCuts(readCuts,page.records,selection) };
   // A flat ledger describes one server-proven interval. No shared anchor means
   // unknown intervening history, never permission to concatenate two ranges.
   if (!page.records.some(record => overlap.has(record.id))) {
@@ -303,7 +307,7 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
     [id, unchanged(id) && !(entry.error && old.get(id)?.state !== latest.get(id)?.state)
       ? entry : { ...entry, stale: true, error: undefined }],
   ));
-  return { ...previous, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
+  return { ...previous, located, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
 }
 
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {

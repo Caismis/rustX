@@ -1,3 +1,13 @@
+## Trace location and live continuation (2026-11-06)
+
+Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-trajectory/src/client/TrajectoryTable.tsx`: location and reading position
+remain independent of live appends. Root and child rustX Trace caches resume
+following when the native latest page overlaps a located interval, retaining
+selection, detail readers and the interval epoch. Disjoint historical pages
+remain intact until an explicit return to latest; lifecycle-only interest pages
+repair existing rows without extending the interval or releasing that location.
+
 ## Bash execution-reason summaries (2026-11-06)
 
 Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
