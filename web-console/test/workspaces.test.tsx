@@ -15,7 +15,8 @@ import { WorkspaceAssociations } from '../src/workspaces/associations';
 import { selectShell } from '../src/client/selectors';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog, type WorkspaceAuthorityScope } from '../src/workspaces/host';
 import { configurationSystem } from '../src/app/settings/machines/system';
-import { Server, endpoint, snapshot } from './fixture';
+import { Server, endpoint, snapshot, boundedSettings } from './fixture';
+import { cfg3Source } from './cfg3-data';
 let server: Server;
 beforeEach(() => {
   server = new Server(); localStorage.clear();
@@ -912,4 +913,56 @@ it.each(['admission', 'reply'] as const)('delayed initialization recovery %s can
   expect(methods().filter(method => method === 'session/retryInitialization')).toHaveLength(boundary === 'reply' ? 1 : 0);
   expect(methods().filter(method => method === 'session/attach')).toHaveLength(1);
   expect(methods().filter(method => ['session/create', 'turn/start'].includes(method))).toEqual([]);
+});
+
+
+it.each(['ready', 'failed', 'disconnected'] as const)('shows Send preparation only while the selected Workspace read is pending: %s', async outcome => {
+  const host = hostFixture();
+  const source = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace/A' }, prospective_approval_mode: 'policy' as const };
+  server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(source) }));
+  // Hold the actual native read independently of the Product Host and React.
+  host.configureWorkspace = vi.fn<NonNullable<ProductHostWorkspaces['configureWorkspace']>>(async (_id, _endpoint, operation) => {
+    if (operation.kind !== 'read') throw new Error('Unexpected write');
+    await server.client.request({ method: 'configuration/sourcesRead', params: { target: source.target } }, 'source_settings');
+    return { kind: 'read', projection: source };
+  });
+  server.held.add('configuration/sourcesRead');
+  await mount(host);
+  expect(screen.queryByRole('button', { name: 'Preparing to send…' })).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  const read = await server.waitFor('configuration/sourcesRead', 1);
+  const preparing = await screen.findByRole('button', { name: 'Preparing to send…' });
+  expect(preparing).toHaveProperty('disabled', true);
+  expect(preparing.getAttribute('aria-busy')).toBe('true');
+  expect(preparing.querySelector('svg circle')).not.toBeNull();
+  expect(screen.queryByText('Awaiting authoritative Workspace permissions.')).toBeNull();
+  expect(screen.queryByText('等待权威工作区权限。')).toBeNull();
+  const input = screen.getByRole('textbox', { name: 'Message' });
+  expect(input).toHaveProperty('value', '');
+  expect(input).toHaveProperty('disabled', false);
+  expect(input).toHaveProperty('readOnly', false);
+  input.focus();
+  fireEvent.change(input, { target: { value: 'Keep editing while preparing' } });
+  expect(document.activeElement).toBe(input);
+  await act(async () => {
+    fireEvent.click(preparing);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+  });
+  const submissions = () => methods().filter(method => ['session/create', 'session/attach', 'turn/start'].includes(method));
+  expect(submissions()).toEqual([]);
+  if (outcome === 'disconnected') await act(async () => server.client.disconnect());
+  else {
+    if (outcome === 'failed') server.handlers.set('configuration/sourcesRead', () => { throw new RpcFailure({ code: -32000, message: 'Workspace read unavailable' }); });
+    await act(async () => server.reply(read));
+  }
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Preparing to send…' })).toBeNull());
+  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', outcome !== 'ready');
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', 'Keep editing while preparing');
+  expect(submissions()).toEqual([]);
+  if (outcome === 'failed') {
+    expect(screen.getByRole('alert').textContent).toContain('Workspace read unavailable');
+    expect(screen.getByRole('button', { name: 'Reread Workspace' })).toBeTruthy();
+  }
 });
