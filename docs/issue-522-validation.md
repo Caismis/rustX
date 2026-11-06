@@ -57,15 +57,12 @@ usage components explicitly unknown.
 ## Recorded verification
 
 Verification uses Rust 1.98.1, the locked provider emulator and the repository's
-FULL profile. The [current PR checks](https://github.com/Caismis/rustX/pull/531/checks)
-are the final-head merge authority, including Linux and macOS native suites,
-generated protocol, complete clients and real-browser acceptance.
-
-The [current implementation run](https://github.com/Caismis/rustX/actions/runs/42136608086)
-passed format/strict Clippy, Linux deterministic contracts and boundary suites,
-generated v73 protocol, complete TUI and Web/Host/launcher suites, production
-browser inputs and macOS Desktop adapter/Host. The full macOS and browser jobs
-remain required gates; an interrupted local build is not a passing test run.
+FULL profile. The [PR checks](https://github.com/Caismis/rustX/pull/531/checks)
+record the required results for the final head: formatting, strict Clippy,
+Linux contracts and boundaries, full native macOS boundaries, generated v73
+protocol, complete TUI/Web/Host/launcher tests, production browser inputs,
+both real-browser shards and their coverage check. A selected, unfinished or
+unexecuted gate is not a passing result.
 
 Real HTTP conformance covers more than twelve accepted chunks, one authorized
 Native-to-Prompt downgrade, cross-Provider/Profile selection, repeated compaction
@@ -73,11 +70,9 @@ and cancellation. The provider emulator has 58 passing Python tests. Source and
 fixture hashes use canonical tracked bytes, independently of Windows checkout
 line endings; actual request and provenance bytes retain their native authority.
 
-The response-loss browser test waits for the actual MCP page before inspecting a
-retained editor. The unchanged original flow reproduced its navigation race;
-the corrected helper passed eight repeated gated runs and a final run using the
-repository fixture configuration. The strict shell screenshot comparator also
-passed four repetitions without changing its baseline or tolerance.
+The response-loss browser test waits for the actual MCP page before inspecting
+a retained editor. Browser acceptance uses the repository's production build,
+native process boundaries and strict screenshot comparators.
 
 The semantic corpus is maintained separately in
 [`tests/fixtures/compaction-quality`](../tests/fixtures/compaction-quality/README.md).
