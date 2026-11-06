@@ -138,7 +138,7 @@ describe("initialization", () => {
     assert.ok(transport.closed, "failed initialization releases its physical transport");
   });
 
-  it("refuses a v56 server before using the v73 protocol contract", async () => {
+  it("refuses a v56 server before using the current protocol contract", async () => {
     const transport = new FakeTransport();
     const pending = AppServerClient.initialize({ transport });
     const [request] = await transport.log.awaitMethod("initialize");
@@ -147,7 +147,9 @@ describe("initialization", () => {
       protocol_version: 56,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 56, this client speaks 72/);
+    await assert.rejects(pending, {
+      message: `the App Server negotiated protocol 56, this client speaks ${APP_SERVER_PROTOCOL_VERSION}`,
+    });
     assert.equal(transport.log.count("initialize"), 1);
     assert.ok(transport.closed, "invalid initialization does not retain a listener slot");
   });
