@@ -148,12 +148,16 @@ fn revision_walk(
     bytes_left: &mut u64,
     depth: usize,
     cancellation: &crate::runtime::CancellationSignal,
+    scope: crate::runtime::resources::SourceScope,
 ) -> Result<(), String> {
     crate::package_io::check_cancelled(cancellation).map_err(|e| e.to_string())?;
     if *remaining == 0 || depth > 68 {
         return Err("resource traversal incomplete".into());
     }
     *remaining -= 1;
+    if depth == 1 && path.file_name().is_some_and(|name| name == "skills") {
+        return evidence::include_skills(hash, path, scope, cancellation);
+    }
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -183,6 +187,7 @@ fn revision_walk(
                     bytes_left,
                     1,
                     cancellation,
+                    scope,
                 )?;
             }
             return Ok(());
@@ -208,6 +213,7 @@ fn revision_walk(
                 bytes_left,
                 depth + 1,
                 cancellation,
+                scope,
             )?;
         }
     } else if metadata.is_file() {
@@ -254,6 +260,7 @@ pub(crate) fn revision_with_cancellation(
         &mut (64 * 1024 * 1024),
         0,
         cancellation,
+        scope,
     ) {
         Ok(()) => format!("sha256:{:x}", hash.finalize()),
         // An incomplete inspection is explicitly not evidence of equality.
@@ -278,7 +285,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join(".agents");
         std::fs::create_dir_all(root.join("skills/guide")).unwrap();
-        std::fs::write(root.join("skills/guide/SKILL.md"), b"A").unwrap();
+        std::fs::write(
+            root.join("skills/guide/SKILL.md"),
+            b"---\nname: guide\ndescription: A\n---\n",
+        )
+        .unwrap();
         let initial = revision(&root);
         let uploads = root.join("uploads/ses_1/batch");
         std::fs::create_dir_all(&uploads).unwrap();
@@ -288,8 +299,50 @@ mod tests {
         std::fs::write(root.join("AGENTS.md"), b"guidance").unwrap();
         let guided = revision(&root);
         assert_ne!(guided, initial, "a guidance file is configuration");
-        std::fs::write(root.join("skills/guide/SKILL.md"), b"B").unwrap();
+        std::fs::write(
+            root.join("skills/guide/SKILL.md"),
+            b"---\nname: guide\ndescription: B\n---\n",
+        )
+        .unwrap();
         assert_ne!(revision(&root), guided, "a source entry is configuration");
+    }
+
+    #[test]
+    fn skill_revision_reads_only_frontmatter_and_preserves_runtime_resource_edits() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap().join(".agents");
+        let package = root.join("skills/guide");
+        std::fs::create_dir_all(package.join("assets/deep")).unwrap();
+        let header = "---\nname: guide\ndescription: Guide\n---\n";
+        std::fs::write(package.join("SKILL.md"), header).unwrap();
+        let before = revision(&root);
+        std::fs::File::create(package.join("assets/deep/huge.bin"))
+            .unwrap()
+            .set_len(10 * 1024 * 1024 * 1024)
+            .unwrap();
+        let markdown = std::fs::OpenOptions::new()
+            .write(true)
+            .open(package.join("SKILL.md"))
+            .unwrap();
+        markdown.set_len(4 * 1024 * 1024 * 1024).unwrap();
+        crate::package_io::OPENED_FILES.with(|v| v.borrow_mut().clear());
+        crate::package_io::DIRECTORY_LISTS.with(|v| v.set(0));
+        assert_eq!(revision(&root), before);
+        crate::package_io::OPENED_FILES
+            .with(|v| assert_eq!(*v.borrow(), [Path::new("SKILL.md"), Path::new("SKILL.md")]));
+        crate::package_io::DIRECTORY_LISTS.with(|v| assert_eq!(v.get(), 0));
+        std::fs::write(
+            package.join("SKILL.md"),
+            "---\n# presentation only\ndescription: 'Guide'\nname: guide\n---\nnew body",
+        )
+        .unwrap();
+        assert_eq!(
+            revision(&root),
+            before,
+            "YAML presentation and body changes are inert"
+        );
+        std::fs::write(package.join("SKILL.md"), header.replace("Guide", "Changed")).unwrap();
+        assert!(!same_capture(&before, &revision(&root)));
     }
 
     /// On a case-sensitive volume the loaders never open `Skills`, so its
@@ -415,11 +468,13 @@ mod revision_tests {
         use crate::runtime::{CancellationSignal, resources::SourceScope};
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap().join(".agents");
-        let mut invalid = root.join("skills/unused");
-        for _ in 0..70 {
-            invalid.push("deep");
-        }
-        std::fs::create_dir_all(invalid).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        // A non-Skill malformed source exhausts generic byte observation;
+        // Skill asset depth is deliberately no longer an observation input.
+        std::fs::File::create(root.join("AGENTS.md"))
+            .unwrap()
+            .set_len(65 * 1024 * 1024)
+            .unwrap();
         for scope in [SourceScope::User, SourceScope::Workspace] {
             for family in ["agents", "tools", "workflows"] {
                 let path = root.join(family);
@@ -474,11 +529,8 @@ mod revision_tests {
         )
         .unwrap();
         std::fs::write(root.join("tools/large/requirements.txt"), "").unwrap();
-        for name in [
-            "skills/large/SKILL.md",
-            "skills/large/asset.bin",
-            "tools/large/asset.bin",
-        ] {
+        {
+            let name = "tools/large/asset.bin";
             let path = root.join(name);
             let mut file = std::fs::OpenOptions::new()
                 .write(true)

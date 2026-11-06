@@ -1303,10 +1303,9 @@ async fn external_workspace_edit_commits_through_the_bounded_source_watch() {
     .await;
 }
 
-/// Editing only a selected Skill's body keeps its catalog entry byte-identical
-/// but replaces its content version: the commit records it as `changed`.
+/// Body edits stay inert; frontmatter edits publish exactly one definition change.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn body_only_skill_edit_records_one_changed_fact() {
+async fn skill_resources_stay_inert_and_frontmatter_changes_are_recorded() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
@@ -1318,6 +1317,7 @@ async fn body_only_skill_edit_records_one_changed_fact() {
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         select_all_skills(&fixture).await;
         let before = configuration_changes(&runtime).len();
+        let revision = runtime.runtime_resources().capability().revision();
         let entries = runtime
             .runtime_resources()
             .capability()
@@ -1349,12 +1349,32 @@ async fn body_only_skill_edit_records_one_changed_fact() {
                 .model_skill_entries(),
             entries.as_slice()
         );
+        assert_eq!(configuration_changes(&runtime).len(), before);
+        assert_eq!(
+            runtime.runtime_resources().capability().revision(),
+            revision
+        );
+        // Only a changed definition, including a preserved metadata field,
+        // starts configuration preparation and publishes a new version.
+        let frontmatter = "---\nname: guide\ndescription: Project guide\nlicense: MIT\n---\n";
+        std::fs::write(skill.join("SKILL.md"), frontmatter).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        applied(&fixture, 0).await;
         let changes = configuration_changes(&runtime);
         assert_eq!(changes.len(), before + 1, "{changes:?}");
         assert_eq!(changes[before].skills.changed.names, ["guide"]);
         assert!(
             changes[before].skills.added.is_empty() && changes[before].skills.removed.is_empty()
         );
+        let frontmatter = frontmatter.replace("license: MIT", "license: Apache-2.0");
         // A third version with no request between them: each fact keeps the
         // version it installed, readable after the file moved on and the
         // runtime that recorded them is gone.
@@ -1595,7 +1615,9 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
             std::fs::create_dir_all(skills.join(name)).unwrap();
             std::fs::write(
                 skills.join(name).join("SKILL.md"),
-                format!("---\nname: {name}\ndescription: Guide {name}\n---\n{body}\n"),
+                format!(
+                    "---\nname: {name}\ndescription: Guide {name}\nlicense: {body}\n---\nbody\n"
+                ),
             )
             .unwrap();
         };

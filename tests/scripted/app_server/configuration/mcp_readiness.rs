@@ -2476,7 +2476,7 @@ async fn a_lazy_child_source_hides_neither_its_skills_nor_its_binding() {
             std::fs::create_dir_all(&guide).unwrap();
             std::fs::write(
                 guide.join("SKILL.md"),
-                format!("---\nname: guide\ndescription: Guide\n---\n{body}\n"),
+                format!("---\nname: guide\ndescription: Guide\nlicense: {body}\n---\nbody\n"),
             )
             .unwrap();
         };

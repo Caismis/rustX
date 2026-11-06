@@ -115,9 +115,32 @@ impl ProspectiveSessionConfig {
         }) {
             return false;
         }
-        // Skill dependencies are materialized as a shared environment, so even
-        // non-advertised discovered packages participate in this closure today.
-        self.skill_discovery.packages == other.skill_discovery.packages
+        let selected = |source: &Self| {
+            let activation = crate::capabilities::AgentActivation {
+                profile: source.config.agent.clone(),
+                delegated_skills: super::super::composition::delegated_skill_selections(
+                    &source.config,
+                    &source.subagents,
+                    &source.workflows,
+                ),
+                ..Default::default()
+            };
+            source
+                .skill_discovery
+                .packages
+                .iter()
+                .filter(|package| activation.selects_skill(package))
+                .map(|package| {
+                    (
+                        package.id().clone(),
+                        package.version_id().clone(),
+                        package.source(),
+                        package.location().to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        selected(self) == selected(other)
     }
 
     pub(crate) fn same_context(&self, other: &Self) -> bool {

@@ -1,12 +1,23 @@
-# CFG3 Skill regression contract
+# Skill definition regression contract
 
-The current tests live in `src/skills/package.rs`, `src/skills/catalog.rs`,
-`src/local_runtime/launch_tests.rs`, Agent profile resolution tests and runtime
-publication tests. They cover both canonical roots, whole-package shadowing,
-malformed higher duplicates, bounded ordered diagnostics, exact/all/empty prompt
-visibility, absolute root guidance, progressive reads and immutable admitted
-versions. Filesystem aliases resolve through the native resource owner.
+See [frontmatter-only discovery](skill-discovery.md) for the authoritative
+architecture, four-path I/O proof, measurement procedure and current limitations.
 
-No Skill source-policy layer or explicit extra-root precedence exists. A Skill
-selection changes prompt visibility, never filesystem authorization. See
-[configuration](configuration.md) and [Agent profiles](agent-profiles.md).
+Coverage lives in `src/skills/tests.rs`, `package.rs`, `catalog.rs`,
+`local_runtime/resource_directory.rs`, the native source-watch tests, capability
+coordinator lease/commit tests, real child composition tests and
+`tests/scripted/app_server/configuration/{automatic_commit,mcp_readiness}.rs`.
+
+The suite exercises canonical User/Workspace roots, definition precedence,
+invalid higher duplicates, bounded malformed prefixes and diagnostics, normalized
+frontmatter versions, metadata/dependencies, body/script/asset non-inputs, exact/
+all/none selection, live child locations, immutable admitted definitions, source
+replacement, atomic writes, directory recovery, notification overflow/coalescing,
+unselected dependency isolation and precise Journal change facts. Large resources
+are sparse and deterministic I/O counters prove assets are neither opened nor
+recursively listed. Native Tool tests preserve ordinary authorization/progressive
+read behavior. Concurrency tests use leases and gates, never elapsed sleep.
+
+No extra roots, compatibility mode, full-package identity or ordinary child
+package materializer exists. Skill visibility never changes Tool filesystem
+permission. Managed Python packages retain their separate complete-source contract.

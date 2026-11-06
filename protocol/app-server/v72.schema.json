@@ -27913,7 +27913,7 @@
       "type": "string"
     },
     "SkillVersionId": {
-      "description": "Identifies an immutable skill version.\n\nM6 derives `SkillVersionId` deterministically from the complete\naccepted Skill package content (SHA-256 over the stable textual form\n`sha256:<64 lowercase hex characters>`). Any package-content change\nyields a new version id.",
+      "description": "Identifies an immutable skill version.\n\nSHA-256 of the normalized validated frontmatter definition, under\n`rustx-skill-definition-v1`, rendered as `sha256:<64 lowercase hex>`.\nBodies, assets, host paths and provenance do not enter this digest.",
       "type": "string"
     },
     "CapabilitySourceView": {
@@ -29475,7 +29475,7 @@
           ]
         },
         {
-          "description": "A symlinked package root or a symlink entry inside the package was\nfound. Package-internal symlinks are rejected; this is Skill-package\nvalidation, not a change to normal Workspace semantics.",
+          "description": "A symlinked package root was found. Internal resources are validated\nby the Tool that actually opens them, never by discovery.",
           "type": "object",
           "properties": {
             "path": {

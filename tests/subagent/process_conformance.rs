@@ -9,7 +9,7 @@
 //! handshake into the real child composition. The named definition is
 //! resolved from the invoking resource snapshot and selects both a frozen
 //! Builtin and a Skill, so the child crosses the current #144 resolver and
-//! #145 child-owned Skill materialization boundary before it reaches the
+//! child-owned frozen-definition installation boundary before it reaches the
 //! Agent Loop. A fully observed child request reaches a never-released header
 //! gate; the inherited 300ms deadline must settle the child before the outer
 //! guard, which is below the default 30s response-start timeout. HTTP bodies
@@ -131,7 +131,7 @@ async fn spawn_parent(
 
         std::fs::File::create(skill.join("large-asset.bin"))
             .unwrap()
-            .set_len(17 * 1024 * 1024)
+            .set_len(2 * 1024 * 1024 * 1024)
             .unwrap();
     }
     let mut document: serde_json::Value = rustx::toml_authoring::parse(session.as_bytes()).unwrap();
@@ -191,10 +191,22 @@ async fn a_real_child_inherits_the_frozen_timeout_policy_and_retries_locally() {
 /// Large-resource work has its own process contract; its I/O must not consume
 /// the timeout-inheritance test's deliberately sub-default 27-second guard.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_real_child_materializes_large_skill_without_injecting_its_body() {
+async fn a_real_child_reuses_large_skill_resources_without_copying_or_prompt_injection() {
+    fn assert_no_skill_copy(root: &std::path::Path) {
+        for entry in std::fs::read_dir(root).unwrap() {
+            let entry = entry.unwrap();
+            assert!(
+                entry.file_name() != "SKILL.md" && entry.file_name() != "large-asset.bin",
+                "unexpected Skill copy: {:?}",
+                entry.path()
+            );
+            if entry.file_type().unwrap().is_dir() {
+                assert_no_skill_copy(&entry.path());
+            }
+        }
+    }
     tokio::time::timeout(std::time::Duration::from_secs(90), async {
         let gate = crate::common::HeaderGate::new();
-        gate.release();
         let routing = Arc::clone(&gate);
         let server = crate::common::FixtureServer::start_with_body(move |_attempt, _head, body| {
             route(body, &routing)
@@ -212,6 +224,11 @@ async fn a_real_child_materializes_large_skill_without_injecting_its_body() {
         .await;
         process.attach().await;
         process.start_turn("please delegate").await;
+        gate.wait_entered().await;
+        // The child is alive at its first provider request, so cleanup cannot
+        // conceal a copied package. Inspect only its private controlled tree.
+        assert_no_skill_copy(&root.path().join("private"));
+        gate.release();
         loop {
             let snapshot = process.snapshot().await;
             if snapshot.agents.iter().any(|agent| {
@@ -234,12 +251,13 @@ async fn a_real_child_materializes_large_skill_without_injecting_its_body() {
             })
             .expect("real child provider invocation");
         assert!(child.contains("<name>conformance</name>"));
+        assert!(child.contains("workspace/.agents/skills"));
         assert!(!child.contains("LARGE_SKILL_BODY_NOT_PROMPT"));
         let (status, stderr) = process.shutdown().await;
         assert!(status.success(), "{stderr}");
     })
     .await
-    .expect("large Skill child materialization physically settles");
+    .expect("large Skill child initialization physically settles");
 }
 
 #[allow(clippy::too_many_lines)]
@@ -424,7 +442,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         .expect("the child request body");
     assert!(
         first_child_request.contains("Workspace Skill root")
-            && first_child_request.contains("skills/workspace")
+            && first_child_request.contains("workspace/.agents/skills")
             && first_child_request.contains("<name>conformance</name>"),
         "the named child request uses the captured roots and progressive disclosure metadata: {first_child_request}"
     );

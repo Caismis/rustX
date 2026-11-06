@@ -402,43 +402,57 @@ fn validate_node_exact_version(version: &str) -> Result<(), ()> {
 pub fn merge_dependency_manifests(
     packages: &[SkillPackage],
 ) -> Result<DependencyManifest, DependencyConflict> {
+    merge_named_manifests(
+        packages
+            .iter()
+            .map(|package| (package.id(), package.dependencies())),
+    )
+}
+
+/// Merge already-frozen declarations without reading any resource file.
+pub(crate) fn merge_named_manifests<'a>(
+    declarations: impl Iterator<
+        Item = (
+            &'a crate::runtime::identity::SkillId,
+            &'a DependencyManifest,
+        ),
+    >,
+) -> Result<DependencyManifest, DependencyConflict> {
+    let declarations: Vec<_> = declarations.collect();
     let mut merged = DependencyManifest::default();
-    let mut candidates: Vec<(&SkillPackage, Ecosystem, &BTreeMap<String, String>)> = Vec::new();
-    for package in packages {
-        candidates.push((package, Ecosystem::Python, &package.dependencies().python));
-        candidates.push((package, Ecosystem::Node, &package.dependencies().node));
-    }
-    for (package, ecosystem, map) in candidates {
-        let _ = package;
-        for (name, version) in map {
-            let slot = match ecosystem {
-                Ecosystem::Python => &mut merged.python,
-                Ecosystem::Node => &mut merged.node,
-            };
-            match slot.get(name) {
-                Some(existing) if existing == version => {}
-                Some(_) => {
-                    let mut declarations = packages
-                        .iter()
-                        .filter_map(|candidate| {
-                            let candidate_map = match ecosystem {
-                                Ecosystem::Python => &candidate.dependencies().python,
-                                Ecosystem::Node => &candidate.dependencies().node,
-                            };
-                            candidate_map
-                                .get(name)
-                                .map(|declared| (candidate.id().clone(), declared.clone()))
-                        })
-                        .collect::<Vec<_>>();
-                    declarations.sort_by(|left, right| left.0.cmp(&right.0));
-                    return Err(DependencyConflict {
-                        ecosystem,
-                        package: name.clone(),
-                        declarations,
-                    });
-                }
-                None => {
-                    slot.insert(name.clone(), version.clone());
+    for (_, manifest) in &declarations {
+        for (ecosystem, map) in [
+            (Ecosystem::Python, &manifest.python),
+            (Ecosystem::Node, &manifest.node),
+        ] {
+            for (name, version) in map {
+                let slot = match ecosystem {
+                    Ecosystem::Python => &mut merged.python,
+                    Ecosystem::Node => &mut merged.node,
+                };
+                match slot.get(name) {
+                    Some(existing) if existing == version => {}
+                    Some(_) => {
+                        let mut conflicts: Vec<_> = declarations
+                            .iter()
+                            .filter_map(|(id, manifest)| {
+                                let map = match ecosystem {
+                                    Ecosystem::Python => &manifest.python,
+                                    Ecosystem::Node => &manifest.node,
+                                };
+                                map.get(name).map(|value| ((*id).clone(), value.clone()))
+                            })
+                            .collect();
+                        conflicts.sort_by(|a, b| a.0.cmp(&b.0));
+                        return Err(DependencyConflict {
+                            ecosystem,
+                            package: name.clone(),
+                            declarations: conflicts,
+                        });
+                    }
+                    None => {
+                        slot.insert(name.clone(), version.clone());
+                    }
                 }
             }
         }
