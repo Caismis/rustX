@@ -344,8 +344,11 @@ impl Driver {
                             return;
                         }
                     }
-                    NotificationMethod::Closed { .. }
-                    | NotificationMethod::ResyncRequired { .. } => break,
+                    ending @ (NotificationMethod::Closed { .. }
+                    | NotificationMethod::ResyncRequired { .. }) => {
+                        eprintln!("conformance attachment stopped: {ending:?}");
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -659,7 +662,15 @@ impl Driver {
             .await
             {
                 Ok(Some(record)) => record,
-                Ok(other) => panic!("the observation stream ended early: {other:?}"),
+                Ok(other) => panic!(
+                    "the observation stream ended early: {other:?}; native state: {:?}",
+                    self.snapshot().map(|(snapshot, cursor)| (
+                        cursor,
+                        snapshot
+                            .attempt
+                            .map(|attempt| (attempt.attempt_id, attempt.phase))
+                    ))
+                ),
                 Err(elapsed) => panic!(
                     "the attempt never settled ({elapsed}); {} complete records, cursor={}, owner={owner:?}",
                     observed.records.len(),
