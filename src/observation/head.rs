@@ -17,7 +17,7 @@ pub struct RuntimeClientProjectionHeadView {
     pub destination_installation: Option<crate::runtime::identity::LineageInstallationId>,
     pub original_items: u32,
     pub derived_items: u32,
-    pub summary_preview: Option<super::trace::TraceText>,
+    pub summary_preview: Option<crate::observation::trace::TraceText>,
 }
 /// Public metadata for one committed compaction.
 ///

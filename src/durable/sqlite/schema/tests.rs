@@ -271,7 +271,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 85);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 97);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -336,7 +336,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 85);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 97);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -356,10 +356,8 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
 #[test]
 fn trace_schema_indexes_are_required_and_queries_use_them() {
     use crate::durable::presentation::{FactQuery, FactScope};
-    let store = SqliteConversationStore::in_memory(ConversationId::new(
-        "conv_ab18a567-5190-73a5-8156-2e8693be6392",
-    ))
-    .unwrap();
+    let id = ConversationId::new("conv_ab18a567-5190-73a5-8156-2e8693be6392");
+    let store = SqliteConversationStore::in_memory(id).unwrap();
     let connection = store.conn.lock().unwrap();
     verify_schema_shape(&connection).unwrap();
     let scopes = [
@@ -374,6 +372,10 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
             "events_step_kind_idx",
         ),
         (FactScope::Request("r".into()), "events_request_id_kind_idx"),
+        (
+            FactScope::Compaction(crate::runtime::identity::CompactionOperationId::new("o")),
+            "events_compaction_operation_kind_idx",
+        ),
         (FactScope::Message("m".into()), "events_message_id_kind_idx"),
         (FactScope::ContextReading, "events_context_reading_idx"),
         (
@@ -431,7 +433,7 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
             }
         }
     }
-    for (name, expression) in PRESENTATION_INDEXES {
+    for (name, definition) in PRESENTATION_INDEXES {
         connection
             .execute_batch(&format!("DROP INDEX {name}"))
             .unwrap();
@@ -448,7 +450,7 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
         );
         connection
             .execute_batch(&format!(
-                "DROP INDEX {name}; CREATE INDEX {name} ON events({expression})"
+                "DROP INDEX {name}; CREATE INDEX {name} ON events{definition}"
             ))
             .unwrap();
         verify_schema_shape(&connection).unwrap();
@@ -514,7 +516,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 85);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 97);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -571,7 +573,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 85);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 97);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");

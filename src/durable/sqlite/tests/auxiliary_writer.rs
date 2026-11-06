@@ -27,7 +27,7 @@ fn required_writer_cancellation_wakes_its_connection_wait_without_releasing_the_
     writer.cancel_auxiliary_writer();
     assert!(task.join().unwrap().is_err());
     assert!(
-        store.conn.available.lock().unwrap().is_none(),
+        store.conn.available.lock().unwrap().connection.is_none(),
         "cancelling a waiter cannot release somebody else's lease"
     );
     drop(held);

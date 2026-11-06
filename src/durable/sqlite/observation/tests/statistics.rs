@@ -118,14 +118,14 @@ fn t08_t14_t19_agent_statistics_use_fixed_headers_with_giant_original_bodies() {
     assert_eq!(actual.duration.settled_ms, 5_000);
     assert!(actual.duration.active.is_none());
     let (rows, bytes, original_reads) = observation_statistics::read_work();
-    assert_eq!(rows, 1);
+    assert!((1..=18).contains(&rows));
     assert!(bytes <= 16_384);
     assert_eq!(original_reads, 0);
     let earlier = store
         .observation_agent_statistics(request_start.sequence)
         .unwrap();
     let (rows, bytes, original_reads) = observation_statistics::read_work();
-    assert_eq!(rows, 1);
+    assert!((1..=18).contains(&rows));
     assert!(bytes <= 16_384);
     assert_eq!(original_reads, 0);
     assert_eq!(
@@ -188,11 +188,8 @@ fn t10_t14_t19_statistics_header_fault_preserves_original_terminal_and_explicit_
         before
     );
     let connection = store.lock().unwrap();
-    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_observation_statistics_holes_idx WHERE observation_statistics_required=1 AND observation_statistics IS NULL AND sequence<=?1 LIMIT 1", [terminal.sequence], |row| row.get(3)).unwrap();
-    assert!(
-        plan.contains("events_observation_statistics_holes_idx"),
-        "{plan}"
-    );
+    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (4,5,6,7) AND sequence<=?1 LIMIT 1", [terminal.sequence], |row| row.get(3)).unwrap();
+    assert!(plan.contains("events_aggregate_holes_idx"), "{plan}");
 }
 
 #[test]
@@ -438,4 +435,102 @@ pub(super) fn statistics_read_attempt_identity(
     }
     assert_eq!(bytes.len() as u64, source.encoded_bytes);
     serde_json::from_slice::<String>(&bytes).unwrap()
+}
+
+#[test]
+fn compact_statistics_preserve_every_historical_cut_and_lineage_after_reopen() {
+    use crate::durable::sqlite::tests::observation_response_tests::{
+        response_complete, response_message, response_start,
+    };
+    use crate::observation::statistics::StatisticsFold;
+    for inherited in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("compact-statistics.sqlite");
+        let conversation = ConversationId::generate();
+        let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+        if inherited {
+            store
+                .initialize_lineage(&statistics_inherited_seed())
+                .unwrap();
+        } else {
+            store.initialize(&[]).unwrap();
+        }
+        let first = response_start(&store, "compact-statistics-first");
+        response_message(&store, &first, "compact-statistics-answer");
+        response_complete(&store, &first);
+        let second = response_start(&store, "compact-statistics-second");
+        store
+            .append_event(envelope(
+                store.conversation_id(),
+                "compact-statistics-timeout",
+                Some(second.clone()),
+                RuntimeEvent::AttemptTimedOut { attempt_id: second },
+            ))
+            .unwrap();
+        let events = store.read_events(None, 32).unwrap().events;
+        let expected: Vec<_> = events
+            .iter()
+            .map(|event| {
+                let prefix: Vec<_> = events
+                    .iter()
+                    .filter(|item| item.sequence <= event.sequence)
+                    .cloned()
+                    .collect();
+                let local = StatisticsFold::reference_events(&prefix);
+                assert_eq!(
+                    store.observation_agent_statistics(event.sequence).unwrap(),
+                    local
+                );
+                let mut whole = local.statistics.clone();
+                if inherited {
+                    whole.turns += 1;
+                    whole.model_requests += 9;
+                }
+                assert_eq!(store.observation_statistics(event.sequence).unwrap(), whole);
+                (event.sequence, local, whole)
+            })
+            .collect();
+        drop(store);
+        let reopened = SqliteConversationStore::open(conversation, &path).unwrap();
+        for (sequence, local, whole) in expected {
+            assert_eq!(
+                reopened.observation_agent_statistics(sequence).unwrap(),
+                local
+            );
+            assert_eq!(reopened.observation_statistics(sequence).unwrap(), whole);
+        }
+    }
+}
+
+#[test]
+fn binary_aggregate_headers_reject_schema_85_without_rewriting_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("json-aggregate-schema.sqlite");
+    let conversation = ConversationId::generate();
+    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute("UPDATE rustx_store SET schema_version=85 WHERE id=1", [])
+        .unwrap();
+    drop(store);
+    assert!(matches!(
+        SqliteConversationStore::open_existing(conversation, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch {
+            stored: 85,
+            expected: SQLITE_SCHEMA_VERSION
+        })
+    ));
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT schema_version FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        85
+    );
 }

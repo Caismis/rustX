@@ -16,7 +16,7 @@ use chrono::Utc;
 use rusqlite::params;
 
 // These tests use native writes; public observation is denied original J/C/R columns.
-pub(super) fn inspection_request(
+pub(in crate::durable::sqlite) fn inspection_request(
     store: &SqliteConversationStore,
     retry: u32,
     description: &str,
@@ -33,19 +33,19 @@ pub(super) fn inspection_request(
             id: ToolId::new("different-original-tool"),
             name: "Other".into(),
             description: "Other original schema".into(),
-            input_schema: serde_json::json!({"type":"null"}),
+            input_schema: serde_json::json!({"type":"null"}).into(),
         },
         crate::tools::types::ModelToolDefinition {
             id: ToolId::new("same-original-tool"),
             name: format!("Original {retry}"),
             description: description.into(),
-            input_schema: serde_json::json!({"opaque":u64::MAX,"zero":-0.0,"retry":retry}),
+            input_schema: serde_json::json!({"opaque":u64::MAX,"zero":-0.0,"retry":retry}).into(),
         },
         crate::tools::types::ModelToolDefinition {
             id: ToolId::new("same-original-tool"),
             name: "Later duplicate".into(),
             description: "Must never replace the native first definition".into(),
-            input_schema: serde_json::json!({"duplicate":true}),
+            input_schema: serde_json::json!({"duplicate":true}).into(),
         },
     ];
     freeze_test_input(store, &mut request, &[]);
@@ -56,7 +56,7 @@ pub(super) fn inspection_request(
         .sequence;
     (request, start)
 }
-pub(super) fn inspection_assistant(
+pub(in crate::durable::sqlite) fn inspection_assistant(
     store: &SqliteConversationStore,
     request: &RequestSnapshot,
 ) -> (
@@ -96,7 +96,10 @@ pub(super) fn inspection_assistant(
 }
 // Complete the original physical C batch before a later actual request. C
 // result content is independent of ToolExecution terminal Journal settlement.
-pub(super) fn inspection_result(store: &SqliteConversationStore, request: &RequestSnapshot) {
+pub(in crate::durable::sqlite) fn inspection_result(
+    store: &SqliteConversationStore,
+    request: &RequestSnapshot,
+) {
     store
         .append_canonical(&MessageBlock::Tool(ToolMessageBlock {
             id: MessageId::new(format!("result:{}", request.provisional_message_id)),
@@ -121,7 +124,7 @@ pub(super) fn inspection_result(store: &SqliteConversationStore, request: &Reque
         .unwrap();
 }
 
-pub(super) fn deny_inspection_original_columns(
+pub(in crate::durable::sqlite) fn deny_inspection_original_columns(
     context: rusqlite::hooks::AuthContext<'_>,
 ) -> rusqlite::hooks::Authorization {
     use rusqlite::hooks::{AuthAction, Authorization};
@@ -562,7 +565,7 @@ fn t12_t19_trace_definition_rejects_another_real_request_and_later_matching_ordi
     );
 }
 
-pub(super) fn inspection_definition_bytes(
+pub(in crate::durable::sqlite) fn inspection_definition_bytes(
     store: &SqliteConversationStore,
     start: u64,
     through: u64,
@@ -598,7 +601,7 @@ fn t10_t12_t19_missing_request_body_layout_never_hides_own_assistant_tool_facts(
     use base64::Engine as _;
     let store = store();
     store.initialize(&[]).unwrap();
-    store.lock().unwrap().execute_batch("CREATE TRIGGER fail_entire_request_layout BEFORE INSERT ON request_observation_fields BEGIN SELECT RAISE(FAIL,'optional entire request layout'); END;").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TRIGGER fail_entire_request_layout BEFORE INSERT ON request_source_roots BEGIN SELECT RAISE(FAIL,'optional entire request layout'); END;").unwrap();
     let (request, start) = inspection_request(&store, 0, "original native schema");
     let (message, committed, occurrence) = inspection_assistant(&store, &request);
     let mut tool = envelope(
@@ -688,5 +691,142 @@ fn t10_t12_t19_missing_request_body_layout_never_hides_own_assistant_tool_facts(
             )
             .unwrap()
             .is_some()
+    );
+}
+
+fn assert_context_index_damage(
+    connection: &Connection,
+    snapshot: &RequestSnapshot,
+    start: u64,
+    context: &[MessageBlock],
+    damage: &str,
+) {
+    connection
+        .execute_batch("SAVEPOINT context_damage")
+        .unwrap();
+    connection
+        .execute(
+            "DELETE FROM request_trace_contexts WHERE source_sequence=?1",
+            [start],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE request_snapshots SET observation_context_total=NULL WHERE started_sequence=?1",
+            [start],
+        )
+        .unwrap();
+    let mut candidate = snapshot.clone();
+    match damage {
+        "missing_row" => {
+            let missing = MessageId::new("absent-context");
+            candidate.request_context_ids[1] = missing.clone();
+            candidate.contributions[1].message_id = missing;
+        }
+        "missing_summary" => {
+            connection
+                .execute(
+                    "UPDATE message_ledger SET observation_trace_summary=NULL WHERE message_id=?1",
+                    [context[1].id().as_str()],
+                )
+                .unwrap();
+        }
+        "corrupt_summary" => {
+            connection
+                .execute(
+                    "UPDATE message_ledger SET observation_trace_summary=x'7b' WHERE message_id=?1",
+                    [context[1].id().as_str()],
+                )
+                .unwrap();
+        }
+        _ => unreachable!(),
+    }
+    assert!(
+        optional_display_layout(connection, || {
+            observation_trace::index_context(connection, start, &candidate, context)
+        })
+        .unwrap()
+        .is_none(),
+        "{damage}"
+    );
+    let (rows, total): (u64, Option<u64>) = connection.query_row(
+        "SELECT (SELECT count(*) FROM request_trace_contexts WHERE source_sequence=?1),observation_context_total FROM request_snapshots WHERE started_sequence=?1",
+        [start], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(
+        (rows, total),
+        (0, None),
+        "{damage}: partial context cannot publish"
+    );
+    connection
+        .execute_batch("ROLLBACK TO context_damage; RELEASE context_damage")
+        .unwrap();
+}
+
+#[test]
+fn request_context_index_rebinds_order_and_rolls_back_missing_or_corrupt_evidence() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let context = [
+        request_context_message("context-first", "first original context"),
+        request_context_message("context-second", "second original context"),
+    ];
+    let mut snapshot = context_start_snapshot(
+        store.load_head().unwrap().revision.next().next(),
+        context.iter().map(|message| message.id().clone()).collect(),
+    );
+    freeze_test_input(&store, &mut snapshot, &context);
+    let start = store
+        .commit_model_turn_start(&context, &snapshot, Utc::now())
+        .unwrap()
+        .started
+        .sequence;
+    let cut = store.observation_read_cut().unwrap();
+    let expected = store
+        .observation_request_context_at(&cut, start, 0, 16)
+        .unwrap();
+    assert_eq!(expected.items.len(), 2);
+    assert_ne!(expected.items[0].preview, expected.items[1].preview);
+    let connection = store.lock().unwrap();
+    connection
+        .execute_batch("SAVEPOINT context_rebind")
+        .unwrap();
+    connection
+        .execute(
+            "DELETE FROM request_trace_contexts WHERE source_sequence=?1",
+            [start],
+        )
+        .unwrap();
+    let mut reversed = snapshot.clone();
+    reversed.request_context_ids.reverse();
+    assert!(
+        optional_display_layout(&connection, || {
+            observation_trace::index_context(&connection, start, &reversed, &context)
+        })
+        .unwrap()
+        .is_some()
+    );
+    let actual = observation_trace::context(&connection, &cut, start, 0, 16).unwrap();
+    assert_eq!(
+        actual.items,
+        expected.items.iter().rev().cloned().collect::<Vec<_>>()
+    );
+    connection
+        .execute_batch("ROLLBACK TO context_rebind; RELEASE context_rebind")
+        .unwrap();
+    for damage in ["missing_row", "missing_summary", "corrupt_summary"] {
+        assert_context_index_damage(&connection, &snapshot, start, &context, damage);
+    }
+    drop(connection);
+    assert_eq!(
+        store
+            .observation_request_context_at(&cut, start, 0, 16)
+            .unwrap()
+            .items,
+        expected.items
+    );
+    assert_eq!(
+        store.load_request_snapshot(&snapshot.request_id).unwrap(),
+        snapshot
     );
 }

@@ -1,8 +1,8 @@
 //! Bounded immutable request inspection over native commit-owned field indexes.
-use super::checkpoint::{CheckpointPage, CheckpointValueChunk};
-use super::types::{RuntimeClientCursor, RuntimeClientError};
 use crate::durable::ConversationStore;
 use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
+use crate::runtime_client::checkpoint::{CheckpointPage, CheckpointValueChunk};
+use crate::runtime_client::types::{RuntimeClientCursor, RuntimeClientError};
 use base64::Engine as _;
 mod inspection;
 mod workflow;
@@ -491,13 +491,13 @@ pub(crate) fn history_store_cut(
     Ok(CheckpointReadCut {
         canonical_foreground: None,
         live_publication: None,
-        collection_cuts: std::collections::BTreeMap::new(),
+        collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         conversation_id: store.conversation_id().clone(),
         activation_id: None,
         revision: 0,
         through: source.read.journal,
         source_cut: Some(source),
-        domain_revisions: std::collections::BTreeMap::new(),
+        domain_revisions: crate::observation::metadata::MetadataFragment::default(),
     })
 }
 pub(crate) fn validate_history_cut(
@@ -569,8 +569,8 @@ pub(crate) fn history_page(
     if context_selection(domain).is_some() {
         return context_page(store, cut, domain, offset, limit);
     }
-    if super::delivery::selection(domain).is_some() {
-        return super::delivery::page(store, cut, domain, offset, limit);
+    if crate::runtime_client::delivery::selection(domain).is_some() {
+        return crate::runtime_client::delivery::page(store, cut, domain, offset, limit);
     }
     if super::occupancy::selection(domain).is_some() {
         return super::occupancy::page(store, cut, domain, offset, limit);
@@ -620,8 +620,8 @@ pub(crate) fn history_value_read(
     if super::projection_history::selection(domain).is_some() {
         return super::projection_history::value_read(store, cut, domain, item_offset, path, range);
     }
-    if super::delivery::selection(domain).is_some() {
-        return super::delivery::value_read(
+    if crate::runtime_client::delivery::selection(domain).is_some() {
+        return crate::runtime_client::delivery::value_read(
             store,
             cut,
             domain,

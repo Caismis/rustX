@@ -22,10 +22,9 @@ fn t08_t15_native_schema_initializes_all_bounded_read_indexes_before_reopen() {
     drop(store);
     let connection = rusqlite::Connection::open(&path).unwrap();
     for name in [
-        "events_observation_statistics_idx",
+        "events_aggregate_heads_idx",
         "events_observation_tool_idx",
-        "events_observation_members_idx",
-        "events_observation_execution_idx",
+        "events_attempt_heads_idx",
     ] {
         let table: String = connection
             .query_row(
@@ -461,7 +460,7 @@ fn t15_t19_canonical_block_pages_advance_and_binary_does_not_alias_artifacts() {
 }
 
 #[test]
-fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
+fn t15_t20_journal_witness_and_statistics_use_bounded_native_evidence() {
     use crate::events::types::{
         AttemptFailure, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
     };
@@ -581,59 +580,57 @@ fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
             },
         }
     );
-    let headers = store
-        .latest_observation_events(through, &["attempt_started".into()], None, 32)
-        .unwrap();
-    assert_eq!(headers.len(), 32);
-    assert_eq!(headers.first().unwrap().sequence, 10);
-    assert_eq!(headers.last().unwrap().sequence, 41);
-    assert!(
-        headers
-            .iter()
-            .all(|header| header.display.is_some() && !header.deferred)
-    );
-    assert!(serde_json::to_vec(&headers).unwrap().len() < 786_432);
     let failed = store
-        .latest_observation_events(through, &["attempt_failed".into()], Some(&attempt), 1)
+        .observation_event_witness(42, through)
+        .unwrap()
         .unwrap();
-    assert_eq!(failed.len(), 1);
-    assert_eq!(failed[0].sequence, 42);
-    assert!(failed[0].deferred);
-    assert!(failed[0].display.is_none());
-    assert_eq!(failed[0].attempt_id, Some(attempt));
+    assert_eq!(failed.sequence, 42);
+    assert!(failed.deferred);
+    assert_eq!(failed.attempt_id, Some(attempt));
+    assert!(serde_json::to_vec(&failed).unwrap().len() <= 16_384);
+    let source = store
+        .event_value_read(
+            42,
+            through,
+            &[
+                "event".into(),
+                "error".into(),
+                "error".into(),
+                "message".into(),
+            ],
+            0,
+            64,
+        )
+        .unwrap();
+    let original = serde_json::to_vec(&"diagnostic".repeat(300_000)).unwrap();
+    assert_eq!(source.bytes, original[..64]);
+    assert_eq!(source.readable_end, original.len() as u64);
+    assert_eq!(source.next_offset, Some(64));
+    assert!(store.observation_event_witness(42, start_cut).is_err());
     let connection = rusqlite::Connection::open(&path).unwrap();
     assert!(
         connection
-            .execute("UPDATE events SET observation_json=zeroblob(16385)", [])
+            .execute("UPDATE events SET observation_witness=zeroblob(49153)", [])
             .is_err()
     );
-    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence,event_id,attempt_id,turn_id,observation_json FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=42 AND sequence<41 ORDER BY sequence DESC LIMIT 1",[],|row|row.get(3)).unwrap();
-    assert!(
-        plan.contains("SEARCH events USING INDEX events_kind_idx"),
-        "{plan}"
-    );
-    assert!(!plan.contains("SCAN"));
-    let stats_plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT observation_statistics FROM events INDEXED BY events_observation_statistics_idx WHERE observation_statistics IS NOT NULL AND sequence<=42 ORDER BY sequence DESC LIMIT 1",[],|row|row.get(3)).unwrap();
-    assert!(
-        stats_plan.contains("SEARCH events USING INDEX events_observation_statistics_idx"),
-        "{stats_plan}"
-    );
-    assert!(!stats_plan.contains("SCAN"));
+    // Each exact mask seeks independently; combining two singleton results
+    // must never turn this bounded lookup into a historical scan or sort.
+    for mask in [2, 3] {
+        let stats_plan: String = connection.query_row(
+            "EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_aggregate_heads_idx WHERE observation_aggregate_heads>0 AND observation_aggregate_heads=?1 AND sequence<=42 ORDER BY sequence DESC LIMIT 1",
+            [mask], |row| row.get(3),
+        ).unwrap();
+        assert!(
+            stats_plan.contains("SEARCH events USING INDEX events_aggregate_heads_idx"),
+            "{stats_plan}"
+        );
+        assert!(!stats_plan.contains("SCAN"));
+    }
     assert!(
         connection
             .execute(
-                "UPDATE events SET observation_statistics=zeroblob(16385)",
+                "UPDATE events SET observation_statistics=zeroblob(98341)",
                 []
-            )
-            .is_err()
-    );
-    assert!(
-        store
-            .latest_observation_events(
-                through,
-                &["attempt_started".into(), "attempt_started".into()],
-                None,
-                32
             )
             .is_err()
     );
@@ -641,7 +638,7 @@ fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
 
 #[test]
 fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
-    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    use crate::durable::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
     use crate::message::types::{InboundKind, UserContentBlock, UserSource};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pending-content.sqlite");
@@ -1136,7 +1133,7 @@ fn assert_request_source_point_indexes(connection: &rusqlite::Connection, sequen
             format!("SEARCH request_source_pages USING INDEX {hash_index} (hash=?)"),
         ),
         (
-            "EXPLAIN QUERY PLAN SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
+            "EXPLAIN QUERY PLAN SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",
             rusqlite::types::Value::Text(sequence.to_string()),
             "SEARCH request_source_roots USING PRIMARY KEY (source_id=?)".into(),
         ),
@@ -1762,7 +1759,7 @@ fn t08_t12_t15_t20_giant_canonical_identity_uses_finite_native_ledger_locator() 
     let connection = rusqlite::Connection::open(&path).unwrap();
     let maximum: u64 = connection
         .query_row(
-            "SELECT MAX(length(source_id)) FROM content_segments WHERE source_kind='canonical'",
+            "SELECT MAX(length(source_id)) FROM content_frontiers WHERE source_kind='canonical'",
             [],
             |row| row.get(0),
         )
@@ -2033,7 +2030,7 @@ fn t08_t14_t15_many_blocks_keep_original_metadata_and_advancing_frontiers() {
 
 #[test]
 fn t08_t12_t15_t20_pending_sequence_reads_giant_identity_without_body_deserialization() {
-    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    use crate::durable::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
     use crate::message::types::{InboundKind, UserContentBlock, UserSource};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pending-giant-id.sqlite");
@@ -2093,7 +2090,7 @@ fn t08_t12_t15_t20_pending_sequence_reads_giant_identity_without_body_deserializ
 
 #[test]
 fn t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit() {
-    use crate::durable::inbox::InboundDraft;
+    use crate::durable::InboundDraft;
     use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
     use crate::observation::content::CanonicalContentLocator;
     let directory = tempfile::tempdir().unwrap();
@@ -2720,7 +2717,7 @@ fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
     );
     assert_eq!(store.observation_read_cut().unwrap(), cut);
     let plan: String = connection.query_row(
-        "EXPLAIN QUERY PLAN SELECT t.position,h.header_json FROM transcript_order t LEFT JOIN observation_headers h INDEXED BY observation_headers_transcript_idx ON h.transcript_position=t.position WHERE t.position<4 ORDER BY t.position DESC LIMIT 33",
+        "EXPLAIN QUERY PLAN SELECT t.position,h.header_json FROM transcript_order t LEFT JOIN observation_headers h ON h.transcript_position=t.position WHERE t.position<4 ORDER BY t.position DESC LIMIT 33",
         [], |row| row.get(3),
     ).unwrap();
     assert!(plan.contains("INTEGER PRIMARY KEY"), "{plan}");

@@ -3,6 +3,7 @@ use super::{
     Arc, AttachmentId, ClientInner, EventDelivery, EventSubscription, RuntimeClientCursor,
     RuntimeClientError, RuntimeClientResult, SubscriberPoll, SubscriptionInner,
 };
+use crate::runtime::observation::ConversationObservation;
 
 impl Drop for SubscriptionInner {
     fn drop(&mut self) {
@@ -160,6 +161,10 @@ impl ClientInner {
                 .subscriber_id = Some(subscriber_id);
         }
         drop(state);
+        // Registration creates display demand without doing Store I/O under
+        // the attachment lock. Retained semantic replay is unchanged.
+        self.pending
+            .push(ConversationObservation::JournalSourceReady);
         Ok((
             EventSubscription {
                 inner: Arc::new(SubscriptionInner {

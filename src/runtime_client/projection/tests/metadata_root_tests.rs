@@ -26,6 +26,38 @@ fn leaf_pins(root: &super::super::ContentMetadata) -> usize {
 }
 
 #[test]
+fn retained_checkpoints_share_capability_capture_until_its_owner_changes() {
+    let (projection, _store) = initialized_source_projection();
+    let seed = projection.checkpoint_seed();
+    let first = seed.checkpoint_candidate().unwrap();
+    let original = serde_json::to_vec(&first.snapshot.capabilities).unwrap();
+    let repeated = seed.checkpoint_candidate().unwrap();
+    assert!(Arc::ptr_eq(
+        &first.snapshot.capabilities,
+        &repeated.snapshot.capabilities
+    ));
+
+    let mut changed = projection.capture_working_seed();
+    let mut header = changed.capability_head.header();
+    header.revision = crate::runtime::identity::CapabilityRevision::new(42);
+    changed.capability_head =
+        crate::observation::capability_source::PreparedCapabilityHead::new(&header, Vec::new());
+    changed.snapshot.capabilities = Arc::new(header);
+    changed.prepared =
+        super::super::prepared_capture::PreparedCaptures::inherit(&changed, Some(&seed));
+    let updated = changed.checkpoint_candidate().unwrap();
+    assert!(!Arc::ptr_eq(
+        &first.snapshot.capabilities,
+        &updated.snapshot.capabilities
+    ));
+    assert_eq!(updated.snapshot.capabilities.revision.get(), 42);
+    assert_eq!(
+        serde_json::to_vec(&first.snapshot.capabilities).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn issued_metadata_roots_do_not_clone_historical_leaves_and_survive_working_eviction() {
     let (mut projection, _store) = initialized_source_projection();
     projection.install_content_metadata((1..=4096).map(reference).collect());
@@ -91,7 +123,7 @@ fn context_source(count: u64) -> Arc<super::super::super::domain::DomainSource> 
 fn published_source_root_keeps_exact_owner_while_working_root_changes_and_evicts() {
     let (mut projection, _store) = initialized_source_projection();
     let original = context_source(1);
-    projection.domain_revisions.insert("context", 1);
+    projection.domain_revisions.insert("context".into(), 1);
     projection.install_domain_sources(vec![(
         "context".into(),
         Arc::clone(&original),
@@ -103,7 +135,7 @@ fn published_source_root_keeps_exact_owner_while_working_root_changes_and_evicts
     assert!(issued.ptr_eq(&projection.domain_sources));
     assert_eq!(Arc::strong_count(&original), 2);
     let replacement = context_source(2);
-    projection.domain_revisions.insert("context", 2);
+    projection.domain_revisions.insert("context".into(), 2);
     projection.install_domain_sources(vec![(
         "context".into(),
         Arc::clone(&replacement),
@@ -134,7 +166,7 @@ fn published_source_root_keeps_exact_owner_while_working_root_changes_and_evicts
     ));
     let published = projection.published_sources.as_ref().unwrap().clone();
     let unpublished = context_source(3);
-    projection.domain_revisions.insert("context", 3);
+    projection.domain_revisions.insert("context".into(), 3);
     projection.install_domain_sources(vec![(
         "context".into(),
         Arc::clone(&unpublished),
@@ -217,4 +249,164 @@ fn metadata_root_updates_clone_and_release_only_changed_paths() {
         drop(issued);
         assert_eq!(drops.load(Ordering::Relaxed), size + 1 + copied);
     }
+}
+
+#[test]
+fn auxiliary_metadata_seed_maps_share_roots_and_keep_issued_cuts() {
+    use crate::observation::cut::CollectionFrontier;
+    use crate::observation::metadata::MetadataFragment;
+    use crate::runtime::identity::ObservationCollectionCut;
+    let (mut projection, _store) = initialized_source_projection();
+    for index in 0..128 {
+        let domain = format!("auxiliary-{index:03}");
+        projection.source_frontiers.insert(
+            domain.clone(),
+            CollectionFrontier {
+                domain: domain.clone(),
+                revision: 1,
+                total: index,
+                loaded: index,
+                next_offset: None,
+            },
+        );
+        projection.collection_cuts.insert(
+            domain.clone().into(),
+            ObservationCollectionCut {
+                generation: 1,
+                total: index,
+            },
+        );
+        projection
+            .domain_revisions
+            .insert(domain.clone().into(), index);
+        projection
+            .head_bindings
+            .insert(MessageId::new(domain), Vec::new().into());
+    }
+    let seed = projection.capture_working_seed();
+    let old_wire = serde_json::to_vec(&seed.read_cut).unwrap();
+    assert!(seed.head_bindings.ptr_eq(&projection.head_bindings));
+    assert!(seed.source_frontiers.ptr_eq(&projection.source_frontiers));
+    assert!(seed.live_frontiers.ptr_eq(&projection.live_frontiers));
+    assert!(seed.collection_cuts.same_owner(&projection.collection_cuts));
+    assert!(
+        seed.domain_revisions
+            .same_owner(&projection.domain_revisions)
+    );
+    assert!(
+        seed.read_cut
+            .collection_cuts
+            .same_owner(&projection.collection_cuts)
+    );
+    assert!(
+        seed.read_cut
+            .domain_revisions
+            .same_owner(&projection.domain_revisions)
+    );
+    let unchanged = projection.capture_working_seed();
+    assert!(
+        seed.read_cut
+            .collection_cuts
+            .same_owner(&unchanged.read_cut.collection_cuts)
+    );
+    projection.collection_cuts.insert(
+        "auxiliary-000".into(),
+        ObservationCollectionCut {
+            generation: 2,
+            total: 999,
+        },
+    );
+    projection
+        .domain_revisions
+        .insert("auxiliary-000".into(), 999);
+    projection
+        .source_frontiers
+        .get_mut("auxiliary-000")
+        .unwrap()
+        .total = 999;
+    projection
+        .head_bindings
+        .remove(&MessageId::new("auxiliary-000"));
+    let updated = projection.capture_working_seed();
+    assert!(!seed.collection_cuts.same_owner(&updated.collection_cuts));
+    assert!(!seed.domain_revisions.same_owner(&updated.domain_revisions));
+    assert!(!seed.source_frontiers.ptr_eq(&updated.source_frontiers));
+    assert!(
+        seed.head_bindings
+            .contains_key(&MessageId::new("auxiliary-000"))
+    );
+    assert_eq!(seed.source_frontiers.get("auxiliary-000").unwrap().total, 0);
+    assert_eq!(
+        updated
+            .read_cut
+            .collection_cuts
+            .get("auxiliary-000")
+            .unwrap()
+            .total,
+        999
+    );
+    assert_eq!(serde_json::to_vec(&seed.read_cut).unwrap(), old_wire);
+    // Replacing a current owner must not change an issued root either.
+    projection.collection_cuts = MetadataFragment::default();
+    assert_eq!(serde_json::to_vec(&seed.read_cut).unwrap(), old_wire);
+}
+
+#[test]
+fn indexed_source_frontier_merge_preserves_linear_oracle_with_duplicate_domains() {
+    use crate::observation::cut::CollectionFrontier;
+    for sources_len in [0, 1, 2, 17, 128] {
+        for current_len in [0, 1, 4, 65] {
+            let sources: imbl::OrdMap<String, CollectionFrontier> = (0..sources_len)
+                .map(|index| {
+                    (
+                        format!("key-{index:03}"),
+                        CollectionFrontier {
+                            domain: format!("domain-{}", index % 13),
+                            revision: index,
+                            total: 100 + index,
+                            loaded: index % 7,
+                            next_offset: (index % 2 == 0).then_some(index),
+                        },
+                    )
+                })
+                .collect();
+            let current: Vec<_> = (0..current_len)
+                .map(|index| CollectionFrontier {
+                    domain: format!("domain-{}", index * 7 % 17),
+                    revision: u64::MAX,
+                    total: 9,
+                    loaded: index % 5,
+                    next_offset: Some(77),
+                })
+                .collect();
+            let mut expected = current.clone();
+            // Original ordered, first-match implementation is the oracle.
+            for original in sources.values() {
+                if let Some(frontier) = expected.iter_mut().find(|f| f.domain == original.domain) {
+                    frontier.total = original.total;
+                    frontier.next_offset = if frontier.loaded < original.loaded {
+                        Some(0)
+                    } else {
+                        original.next_offset
+                    };
+                } else {
+                    expected.push(original.clone());
+                }
+            }
+            let mut actual = current;
+            super::super::merge_source_frontiers(&sources, &mut actual);
+            assert_eq!(
+                actual, expected,
+                "sources={sources_len},current={current_len}"
+            );
+        }
+    }
+}
+
+#[test]
+fn replay_event_layout_does_not_inline_large_optional_read_heads() {
+    assert!(
+        std::mem::size_of::<RuntimeClientEvent>() <= 600,
+        "large read heads must not inflate every scalar replay fact"
+    );
 }

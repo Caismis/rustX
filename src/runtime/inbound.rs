@@ -58,7 +58,7 @@ pub trait InboundObserver: Send + Sync {
     /// Missing derived evidence fences display reads without changing commitment.
     fn on_pending(
         &self,
-        receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+        receipt: Option<&Arc<crate::durable::PendingObservationReceipt>>,
         cut: &crate::durable::reading::ConversationReadCut,
     );
 }
@@ -1274,29 +1274,26 @@ impl ConversationInboundMailbox {
     /// durable reread. Storage errors are uncertain and must never be replayed.
     pub(crate) fn edit_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
+        expected: &crate::durable::PendingInboundRef,
         text: &str,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, MailboxError> {
+    ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
         self.pending_mutation(|| self.inbound.edit_pending(expected, text))
     }
     /// Removes pending user work without touching execution cancellation.
     pub(crate) fn remove_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, MailboxError> {
+        expected: &crate::durable::PendingInboundRef,
+    ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
         self.pending_mutation(|| self.inbound.remove_pending(expected))
     }
     fn pending_mutation(
         &self,
-        commit: impl FnOnce() -> Result<
-            crate::durable::inbox::PendingMutationOutcome,
-            ConversationStoreError,
-        >,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, MailboxError> {
+        commit: impl FnOnce() -> Result<crate::durable::PendingMutationOutcome, ConversationStoreError>,
+    ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
         self.with_running_commit(|| {
             let _publication = self.publication.lock().expect("inbound publication lock");
             let outcome = commit()?;
-            let crate::durable::inbox::PendingMutationOutcome::Applied {
+            let crate::durable::PendingMutationOutcome::Applied {
                 read_cut,
                 pending_observation,
             } = &outcome
@@ -1313,6 +1310,15 @@ impl ConversationInboundMailbox {
             }
             Ok::<_, MailboxError>(outcome)
         })?
+    }
+
+    /// Holds the existing pending publication ordering while the Agent owner
+    /// commits a final-output boundary. This lease owns no model semantics.
+    pub(crate) fn pending_publication(&self) -> PendingPublication<'_> {
+        PendingPublication {
+            mailbox: self,
+            _guard: self.publication.lock().expect("inbound publication lock"),
+        }
     }
 
     /// Claims current pending rows through the selected watermark and publishes
@@ -1334,10 +1340,21 @@ impl ConversationInboundMailbox {
                 actual: batch.conversation_id().clone(),
             });
         }
-        let _publication = self.publication.lock().expect("inbound publication lock");
+        let publication = self.pending_publication();
         let adopted = self
             .inbound
             .adopt_pending_batch(batch.watermark(), attempt_id)?;
+        Ok(publication.publish_adoption(adopted))
+    }
+}
+
+/// Pending observation publication ordering, borrowed only for a native commit.
+pub(crate) struct PendingPublication<'a> {
+    mailbox: &'a ConversationInboundMailbox,
+    _guard: std::sync::MutexGuard<'a, ()>,
+}
+impl PendingPublication<'_> {
+    pub(crate) fn publish_adoption(&self, adopted: crate::durable::AdoptedBatch) -> AdoptedInbound {
         let adoption = adopted.adoption;
         let items: Vec<_> = adopted
             .items
@@ -1350,16 +1367,20 @@ impl ConversationInboundMailbox {
             })
             .collect();
         if !items.is_empty() {
-            let state = self.state.lock().expect("inbound mailbox lock poisoned");
+            let state = self
+                .mailbox
+                .state
+                .lock()
+                .expect("inbound mailbox lock poisoned");
             if let Some(observer) = &state.observer {
                 observer.on_pending(adopted.pending_observation.as_ref(), &adopted.read_cut);
             }
         }
-        Ok(AdoptedInbound {
+        AdoptedInbound {
             items,
             adoption,
             canonical_receipts: adopted.canonical_receipts,
-        })
+        }
     }
 }
 
@@ -1395,12 +1416,12 @@ mod tests {
 
     #[derive(Default)]
     struct PendingObserver {
-        receipts: std::sync::Mutex<Vec<Arc<crate::durable::inbox::PendingObservationReceipt>>>,
+        receipts: std::sync::Mutex<Vec<Arc<crate::durable::PendingObservationReceipt>>>,
     }
     impl super::InboundObserver for PendingObserver {
         fn on_pending(
             &self,
-            receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+            receipt: Option<&Arc<crate::durable::PendingObservationReceipt>>,
             _cut: &crate::durable::reading::ConversationReadCut,
         ) {
             self.receipts
@@ -1418,13 +1439,13 @@ mod tests {
         let sequence = mailbox.enqueue(human("edited", "old")).unwrap();
         let removed = mailbox.enqueue(human("removed", "gone")).unwrap();
         let selected = mailbox.select_pending_batch().unwrap().unwrap();
-        let expected = crate::durable::inbox::PendingInboundRef {
+        let expected = crate::durable::PendingInboundRef {
             sequence,
             revision: 0,
         };
         mailbox.edit_pending(&expected, "committed").unwrap();
         mailbox
-            .remove_pending(&crate::durable::inbox::PendingInboundRef {
+            .remove_pending(&crate::durable::PendingInboundRef {
                 sequence: removed,
                 revision: 0,
             })
@@ -1452,7 +1473,7 @@ mod tests {
         assert!(mailbox.select_pending_batch().unwrap().is_none());
         assert_eq!(
             mailbox.edit_pending(&expected, "too late").unwrap(),
-            crate::durable::inbox::PendingMutationOutcome::NotPending
+            crate::durable::PendingMutationOutcome::NotPending
         );
         assert_eq!(observer.receipts.lock().unwrap().last().unwrap().total, 0);
     }

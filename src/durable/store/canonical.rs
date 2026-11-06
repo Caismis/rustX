@@ -1,10 +1,14 @@
 //! Store contract for the Message Ledger, Conversation Surface, and transcript spine.
 
 use crate::conversation::{SurfaceOp, SurfaceRevision};
+use crate::durable::AdoptedBatch;
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{MessageBlock, UserMessageBlock};
 use crate::publication::PublicationAudit;
+use crate::publication::PublicationFrame;
+use crate::publication::PublicationStreamStart;
 use crate::runtime::identity::{ConversationId, EventId, MessageId, PublicationStreamId};
+use crate::runtime::inbound::InboundSequence;
 use serde::{Deserialize, Serialize};
 
 use crate::durable::ConversationStoreError;
@@ -68,8 +72,60 @@ pub struct TranscriptCommitReceipt {
     pub observation: std::sync::Arc<CanonicalObservationBatch>,
 }
 
+/// One accepted model output and its optional no-tool inbox boundary.
+/// The native store commits these facts together before any receipt is released.
+pub struct ModelTurnSettlement<'a> {
+    /// Exact request generation, admitted with its first durable output.
+    pub start: &'a PublicationStreamStart,
+    /// Structurally validated completion of that stream's request.
+    pub provider: RuntimeEventEnvelope,
+    /// Final pending frames, including a terminal-only frame when empty.
+    pub frames: &'a [PublicationFrame],
+    /// Prepared canonical Assistant.
+    pub assistant: &'a MessageBlock,
+    /// Canonical acceptance event for that Assistant.
+    pub canonical: RuntimeEventEnvelope,
+    /// No-tool final boundary; absent when tools must still execute.
+    pub boundary: Option<ModelTurnBoundary>,
+}
+
+/// Finite pending selection protected by the mailbox publication owner.
+pub struct ModelTurnBoundary {
+    /// Selected finite watermark; None asserts an empty native inbox.
+    pub pending_watermark: Option<InboundSequence>,
+    /// Completion of the accepted model turn.
+    pub turn_completed: RuntimeEventEnvelope,
+    /// Candidate terminal, committed only if there is no selected inbound work.
+    pub attempt_completed: RuntimeEventEnvelope,
+}
+
+/// Receipts from one successful native model-output COMMIT.
+pub struct CommittedModelTurn {
+    /// Ordered provider completion fact.
+    pub provider: RuntimeEventEnvelope,
+    /// Ordered canonical acceptance fact.
+    pub canonical: RuntimeEventEnvelope,
+    /// Exact canonical content receipt.
+    pub canonical_receipt: TranscriptCommitReceipt,
+    /// Optional committed no-tool boundary.
+    pub boundary: Option<CommittedModelTurnBoundary>,
+}
+
+/// The same transaction either adopted a finite batch or completed the Attempt.
+pub struct CommittedModelTurnBoundary {
+    /// Ordered turn completion fact.
+    pub turn_completed: RuntimeEventEnvelope,
+    /// Native adopted content and exact observation receipts.
+    pub adopted: Option<AdoptedBatch>,
+    /// Present only for the empty-inbox completion winner.
+    pub attempt_completed: Option<RuntimeEventEnvelope>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CanonicalObservationBatch {
+    /// A shared native family publishes these canonical headers at this final
+    /// Journal member. Independent canonical callbacks must not release a part.
+    pub native_release_sequence: Option<u64>,
     pub ready_through: Option<u64>,
     /// Existing owner-published T prefix captured in this native transaction.
     pub ready_t_through: Option<u64>,

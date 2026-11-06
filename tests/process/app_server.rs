@@ -164,7 +164,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":72,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":73,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -234,9 +234,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v72"),
+            Some("rustx.app-server.v73"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v72, rustx-token.wrong"),
+            Some("rustx.app-server.v73, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -346,26 +346,47 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
             )
             .await
             .unwrap();
-        let reply: serde_json::Value =
-            serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
-        assert_eq!(reply["id"], 1);
+        // Initialization admits the User source before its reply is physically
+        // written. Correlate the reply and the one owed empty repair level in
+        // either order; neither an unrelated record nor a duplicate is allowed.
+        let (mut initialized, mut level) = (false, false);
+        while !initialized || !level {
+            let record: serde_json::Value =
+                serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(record["jsonrpc"], "2.0", "{record}");
+            if record.get("id").is_some() {
+                assert!(!initialized, "duplicate initialize response: {record}");
+                assert_eq!(record["id"], 1, "{record}");
+                assert!(record.get("error").is_none(), "{record}");
+                assert_eq!(record["result"]["type"], "initialized", "{record}");
+                assert_eq!(record["result"]["protocol_version"], 73, "{record}");
+                initialized = true;
+            } else {
+                assert!(!level, "duplicate repair level: {record}");
+                assert_eq!(
+                    record["method"], "configuration/sourceRepairChanged",
+                    "{record}"
+                );
+                assert_eq!(
+                    record["params"],
+                    serde_json::json!({
+                        "target": { "kind": "user" },
+                        "receipt": null,
+                        "sequence": "0",
+                    }),
+                    "{record}"
+                );
+                level = true;
+            }
+        }
         drop(input);
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
-        // The only record a negotiated connection may still owe is the User
-        // source's repair level, which is empty here (Issue #464).
-        let mut levels = 0;
-        while let Some(line) = output.next_line().await.unwrap() {
-            let record: serde_json::Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(
-                record["method"], "configuration/sourceRepairChanged",
-                "{record}"
-            );
-            assert_eq!(record["params"]["target"]["kind"], "user", "{record}");
-            assert!(record["params"]["receipt"].is_null(), "{record}");
-            levels += 1;
-        }
-        assert!(levels <= 1);
+        assert_eq!(
+            output.next_line().await.unwrap(),
+            None,
+            "unexpected extra record"
+        );
         for bytes in [
             vec![0xff, b'\n'],
             b"{}".to_vec(),
@@ -794,7 +815,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v72".parse().unwrap(),
+                            "rustx.app-server.v73".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -1996,7 +2017,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         let trusted = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v72, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v73, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )
@@ -2006,7 +2027,7 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v72, rustx-delivery-access.{secret}")
+                &format!("rustx.app-server.v73, rustx-delivery-access.{secret}")
             )
             .await
             .is_err(),
@@ -2514,7 +2535,7 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
         let client = driver::websocket_offering(
             &url,
             &format!(
-                "rustx.app-server.v72, rustx-token.{}, rustx-delivery-access.{secret}",
+                "rustx.app-server.v73, rustx-token.{}, rustx-delivery-access.{secret}",
                 driver::TOKEN
             ),
         )

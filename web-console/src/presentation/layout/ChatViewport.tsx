@@ -248,6 +248,9 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   getSnapshotBeforeUpdate() {
     const el = this.scroller();
     if (!el || el.closest('[hidden]')) return {};
+    // A shorter projection may clamp layout before the browser's scroll event.
+    const floor = Math.max(0, el.scrollHeight - el.clientHeight);
+    if (floor < this.writtenTop && el.scrollTop === floor) this.writtenTop = floor;
     // Preserve the original anchor across multiple commits before the frame.
     const position = this.position();
     if (!this.following && this.frame === undefined) this.reading = position;

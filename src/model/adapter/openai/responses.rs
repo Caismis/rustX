@@ -2038,7 +2038,7 @@ mod tests {
             id: crate::runtime::identity::ToolId::new("tool-ask-user"),
             name: "ask_user".to_owned(),
             description: "structured questionnaire".to_owned(),
-            input_schema: schema.clone(),
+            input_schema: schema.clone().into(),
         }]);
         assert_eq!(encoded[0]["type"], "function");
         assert_eq!(encoded[0]["name"], "ask_user");

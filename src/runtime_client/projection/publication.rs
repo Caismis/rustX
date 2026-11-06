@@ -3,6 +3,7 @@
 use super::PublicationEncodingProfile;
 #[cfg(test)]
 use super::ReplayWeight;
+use super::prepared_capture;
 #[cfg(test)]
 use super::views::accumulate_transition;
 use super::{
@@ -13,6 +14,7 @@ use super::{
 
 impl PublicationDraft {
     /// CPU-only encoding of a frozen transition, outside every native state lock.
+    #[allow(clippy::too_many_lines)] // Keep capture, admission, and replacement ordering explicit.
     pub(crate) fn encode(mut self) -> Result<EncodedPublication, RuntimeClientError> {
         #[cfg(test)]
         let mut timing = self.encoding_profile.as_ref().map(|_| {
@@ -29,65 +31,137 @@ impl PublicationDraft {
             .ok_or(RuntimeClientError::ProjectionExhausted)?;
         self.seed.cursor = RuntimeClientCursor::new(next);
         self.seed.read_cut.revision = next;
-        stamp_trace_cut(&mut self.seed.snapshot.trace, &self.seed.read_cut);
+        if let Some(cut) = &mut self.seed.read_domains {
+            cut.revision = next;
+        }
+        self.seed.snapshot.trace.stamp_cut(&self.seed.read_cut);
         for event in &mut self.events {
             stamp_event_trace_cut(event, &self.seed.read_cut);
         }
-        let (mut checkpoint, captured_eviction) = self.seed.checkpoint_unfitted()?;
-        #[cfg(test)]
-        encoding_phase(&mut timing, |profile, elapsed| {
-            profile.capture_us += elapsed;
-        });
-        let fitted = super::super::checkpoint::fit_checkpoint(&mut checkpoint)?;
-        #[cfg(test)]
-        encoding_phase(&mut timing, |profile, elapsed| {
-            profile.fit_us += elapsed;
-        });
-        let metadata = super::super::checkpoint::ProjectionMetadata {
-            read_cut: checkpoint.read_cut.clone(),
-            collections: checkpoint.collections.clone(),
-            content: checkpoint.content.clone(),
-        };
-        let mut event = RuntimeClientEvent::ProjectionTransition {
-            events: self.events,
-            metadata: metadata.clone(),
-        };
-        set_checkpoint_transition_cursor(&mut event, self.seed.cursor);
-        let encoded = if fitted || captured_eviction || self.replacement {
-            None
-        } else {
-            encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES)
-        };
-        if encoded.is_none() {
-            let transition = event_kind(&event).to_owned();
-            let mut replacement = checkpoint;
-            replacement.content.clear();
-            replacement.collections.clear();
-            event = RuntimeClientEvent::ProjectionTransition {
-                events: vec![RuntimeClientEvent::CheckpointAdvanced {
-                    transition,
-                    checkpoint: Box::new(replacement),
-                }],
+        let (event, encoded) = {
+            use crate::observation::bounded::CHECKPOINT_TARGET_BYTES;
+            use crate::runtime_client::checkpoint::{
+                ProjectionMetadata, RuntimeClientCheckpoint, certified_checkpoint_fit,
+            };
+            use prepared_capture::{CapturedCheckpoint, FitBudget};
+            let CapturedCheckpoint {
+                snapshot,
+                mut metadata,
+                cursor,
+                evicted,
+                fit_budget,
+                mut metadata_budget,
+                prepared_metadata,
+            } = self.seed.capture_checkpoint()?;
+            let mut prepared_metadata = Some(prepared_metadata);
+            let mut snapshot = Some(snapshot);
+            #[cfg(test)]
+            encoding_phase(&mut timing, |profile, elapsed| {
+                profile.capture_us += elapsed;
+            });
+            let mut checkpoint = None;
+            let fitted = if certified_checkpoint_fit(fit_budget) {
+                prepared_metadata
+                    .as_ref()
+                    .expect("captured metadata")
+                    .sort_into(&mut metadata);
+                false
+            } else {
+                let mut owned = RuntimeClientCheckpoint {
+                    snapshot: snapshot.take().expect("capture materialized once")(),
+                    cursor,
+                    read_cut: metadata.read_cut,
+                    content: metadata.content,
+                    collections: metadata.collections,
+                };
+                let fitted = super::checkpoint::fit_checkpoint_with_budget(&mut owned, fit_budget)?;
+                metadata = ProjectionMetadata {
+                    read_cut: owned.read_cut.clone(),
+                    content: std::mem::take(&mut owned.content),
+                    collections: std::mem::take(&mut owned.collections),
+                };
+                // Eviction may change frontier option tags/charges. The original
+                // certificate describes the unmodified capture only.
+                metadata_budget = None;
+                prepared_metadata = None;
+                checkpoint = Some(owned);
+                fitted
+            };
+            #[cfg(test)]
+            encoding_phase(&mut timing, |profile, elapsed| {
+                profile.fit_us += elapsed;
+            });
+            let mut event = RuntimeClientEvent::ProjectionTransition {
+                events: self.events,
                 metadata,
             };
-        }
-        #[cfg(test)]
-        encoding_phase(&mut timing, |profile, elapsed| {
-            profile.probe_us += elapsed;
-        });
-        let encoded = encoded
-            .or_else(|| {
-                encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES)
-            })
-            .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
-                message: "finite display transition exceeds its encoded budget".into(),
-            })?;
+            set_checkpoint_transition_cursor(&mut event, cursor);
+            let encoded = if fitted || evicted || self.replacement {
+                None
+            } else {
+                let RuntimeClientEvent::ProjectionTransition { events, .. } = &event else {
+                    unreachable!("publication draft is a projection transition");
+                };
+                let events_budget = metadata_budget.and_then(|_| {
+                    crate::observation::preflight::required_safe_integer_budget(
+                        events,
+                        CHECKPOINT_TARGET_BYTES,
+                    )
+                });
+                super::checkpoint::metadata_fragment::transition_length(
+                    &event,
+                    events_budget,
+                    FitBudget::transition(events_budget, metadata_budget),
+                    CHECKPOINT_TARGET_BYTES,
+                    prepared_metadata.as_ref(),
+                )
+            };
+            if encoded.is_none() {
+                let transition = event_kind(&event).to_owned();
+                // Descriptors belong to the outer transition in both paths.
+                let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event else {
+                    unreachable!("publication draft is a projection transition");
+                };
+                let checkpoint = checkpoint.unwrap_or_else(|| RuntimeClientCheckpoint {
+                    snapshot: snapshot.take().expect("capture materialized once")(),
+                    cursor,
+                    read_cut: metadata.read_cut.clone(),
+                    content: Vec::new(),
+                    collections: Vec::new(),
+                });
+                event = RuntimeClientEvent::ProjectionTransition {
+                    events: vec![RuntimeClientEvent::CheckpointAdvanced {
+                        transition,
+                        checkpoint: Box::new(checkpoint),
+                    }],
+                    metadata,
+                };
+            }
+            #[cfg(test)]
+            encoding_phase(&mut timing, |profile, elapsed| {
+                profile.probe_us += elapsed;
+            });
+            let encoded = encoded
+                .or_else(|| {
+                    super::checkpoint::metadata_fragment::transition_length(
+                        &event,
+                        None,
+                        FitBudget::replacement(fit_budget, metadata_budget),
+                        CHECKPOINT_TARGET_BYTES,
+                        prepared_metadata.as_ref(),
+                    )
+                })
+                .ok_or_else(|| RuntimeClientError::ObservationUnavailable {
+                    message: "finite display transition exceeds its encoded budget".into(),
+                })?;
+            (event, encoded)
+        };
         #[cfg(test)]
         if let Some((mut measured, started)) = timing {
             measured.encode_us += started.elapsed().as_micros();
             let mut total = self.encoding_profile.as_ref().unwrap().lock().unwrap();
             total.records += 1;
-            total.bytes += encoded.len();
+            total.bytes += encoded;
             total.capture_us += measured.capture_us;
             total.fit_us += measured.fit_us;
             total.probe_us += measured.probe_us;
@@ -96,11 +170,32 @@ impl PublicationDraft {
         Ok(EncodedPublication {
             seed: Arc::new(self.seed),
             event,
-            bytes: encoded.len(),
+            bytes: encoded,
             sources: self.sources,
         })
     }
 }
+/// Freeze only owned vector storage. Shared row bodies and every encoded
+/// value/cut/budget remain unchanged; no published owner is mutated.
+pub(super) fn compact_replay_storage(event: &mut RuntimeClientEvent) {
+    match event {
+        RuntimeClientEvent::ProjectionTransition { events, metadata } => {
+            for event in events.iter_mut() {
+                compact_replay_storage(event);
+            }
+            events.shrink_to_fit();
+            metadata.content.shrink_to_fit();
+            metadata.collections.shrink_to_fit();
+        }
+        RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+            checkpoint.content.shrink_to_fit();
+            checkpoint.collections.shrink_to_fit();
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
 pub(super) fn encoded_event_bytes(event: &RuntimeClientEvent, limit: usize) -> Option<Vec<u8>> {
     let schema = crate::observation::structural_json::root::<RuntimeClientEvent>();
     crate::observation::bounded::bounded_bytes(
@@ -125,7 +220,9 @@ pub(super) fn stamp_event_trace_cut(
     cut: &crate::observation::cut::CheckpointReadCut,
 ) {
     match event {
-        RuntimeClientEvent::ReadDomainsUpdated { trace, .. } => stamp_trace_cut(trace, cut),
+        RuntimeClientEvent::ReadDomainsUpdated {
+            trace: Some(trace), ..
+        } => stamp_trace_cut(trace, cut),
         RuntimeClientEvent::ProjectionTransition { events, .. } => {
             for event in events {
                 stamp_event_trace_cut(event, cut);
@@ -378,17 +475,44 @@ impl RuntimeClientProjection {
     }
 
     pub(crate) fn finish_publication(&mut self) -> Option<PublicationDraft> {
-        let (events, _, replacement) = self
+        let mut publication = self
             .staged_publication
             .take()
             .expect("native publication reservation");
         if self.native_source_pending() {
-            for event in events {
+            for event in publication.0 {
                 accumulate_finite_facts(&mut self.deferred_events, event);
             }
-            self.deferred_events.2 |= replacement;
+            self.deferred_events.2 |= publication.2;
             return None;
         }
+        // Native receipts can advance J or C without the worker's JournalBatch.
+        // Invalidate independent Trace readers in this same encoded publication,
+        // only after the complete represented Source prefix is readable.
+        if self.source_cut.is_some()
+            && self.validate_source_prefix().is_ok()
+            && self.published_seed.as_ref().is_some_and(|published| {
+                published.read_cut.source_cut.is_none()
+                    || published.read_cut.through != self.read_through
+                    || published.source_cut != self.source_cut
+            })
+            && !publication
+                .0
+                .iter()
+                .any(|event| matches!(event, RuntimeClientEvent::TraceChanged))
+        {
+            accumulate_finite_facts(&mut publication, RuntimeClientEvent::TraceChanged);
+            // Invalidation belongs to this same native cut, before its terminal
+            // settlement. Consumers may stop after that terminal fact.
+            if let Some(terminal) = publication
+                .0
+                .iter()
+                .position(|event| matches!(event, RuntimeClientEvent::AttemptSettled { .. }))
+            {
+                publication.0[terminal..].rotate_right(1);
+            }
+        }
+        let (events, _, replacement) = publication;
         if events.is_empty() && !replacement {
             return None;
         }
@@ -583,7 +707,7 @@ impl RuntimeClientProjection {
         };
         let mut cut = self.working_read_cut();
         cut.revision = next_value;
-        stamp_trace_cut(&mut self.snapshot.trace, &cut);
+        self.snapshot.trace.stamp_cut(&cut);
         let mut event = event;
         stamp_event_trace_cut(&mut event, &cut);
         let mut event = if crate::observation::bounded::bounded_bytes(
@@ -665,7 +789,8 @@ impl RuntimeClientProjection {
         }
     }
 
-    pub(super) fn retain_replay(&mut self, event: RuntimeClientEvent, bytes: usize) {
+    pub(super) fn retain_replay(&mut self, mut event: RuntimeClientEvent, bytes: usize) {
+        compact_replay_storage(&mut event);
         if let Some(cut) = Self::retained_event_cut(&event) {
             self.replay_cut_cursors.insert(cut.revision, self.cursor);
         }

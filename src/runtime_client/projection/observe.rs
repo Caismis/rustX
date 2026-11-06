@@ -8,6 +8,8 @@ use super::{
     ConversationObservation, ForegroundToolState, RuntimeClientAttemptFailure, RuntimeClientError,
     RuntimeClientEvent, RuntimeClientProjection, bounded_diagnostic,
 };
+use crate::runtime::identity::AttemptId;
+use std::sync::Arc;
 
 /// Closed observation classification. Trace invalidation belongs separately to
 /// `JournalBatch`, whose source vocabulary is owned by `PendingObservations`.
@@ -314,14 +316,14 @@ impl RuntimeClientProjection {
     ) {
         let before_cursor = self.cursor;
         let before_count = self.batch_events.as_ref().map(|batch| batch.0.len());
-        let changed = self
-            .collection_cuts
-            .get(owner)
-            .is_none_or(|current| cut.generation > current.generation);
-        let observed = self.collection_cuts.entry(owner.into()).or_insert(cut);
-        if cut.generation > observed.generation {
-            *observed = cut;
-        }
+        let current = self.collection_cuts.get(owner).copied();
+        let changed = current.is_none_or(|current| cut.generation > current.generation);
+        let observed = if changed {
+            self.collection_cuts.insert(owner.into(), cut);
+            cut
+        } else {
+            current.expect("existing collection proof")
+        };
         let adjusted = ordinal
             .and_then(|ordinal| ordinal.checked_add(observed.total.saturating_sub(cut.total)))
             .unwrap_or(u64::MAX);
@@ -469,6 +471,7 @@ impl RuntimeClientProjection {
 
     /// Installs only finite source-owned receipts. Source I/O and original body
     /// materialization happened at the native write owner, before this boundary.
+    #[allow(clippy::too_many_lines)] // Fold every closed native family before one shared cut/publication update.
     pub(crate) fn apply_native_batch(
         &mut self,
         batch: &crate::durable::observation::NativeObservationBatch,
@@ -477,65 +480,31 @@ impl RuntimeClientProjection {
         self.observe_released_journal_prefix(batch.ready_before);
         let mut observations = Vec::with_capacity(34);
         self.install_native_trace_total(batch.trace_total);
-        if let Some(pending) = &batch.pending {
-            self.apply_pending_receipt(Some(pending));
-        }
-        self.prepare_native_canonical(batch, &mut observations);
-        let mut witness = |witness: &crate::durable::observation::ObservationEventWitness| {
-            let field = match witness.event_kind.as_str() {
-                "tool_execution_completed" => Some("result"),
-                "tool_execution_failed" => Some("error"),
-                _ => None,
+        let model_turn = matches!(
+            batch.transition,
+            NativeObservationTransition::ModelTurnSettlement { .. }
+        );
+        if !model_turn {
+            if let Some(pending) = &batch.pending {
+                self.apply_pending_receipt(Some(pending));
             }
-            .and_then(|field| {
-                witness
-                    .fields
-                    .iter()
-                    .find(|entry| entry.path == ["event", field])
-                    .map(|entry| crate::observation::tool::JournalFieldRef {
-                        sequence: witness.sequence,
-                        path: entry.path.clone(),
-                        encoded_bytes: entry.encoded_bytes,
-                    })
-            });
-            self.prepare_journal_fact(witness.sequence, batch.failure.clone(), field);
-            self.prepared_outcomes.insert(
-                witness.sequence,
-                (
-                    batch.failure_deferred,
-                    batch
-                        .failure_sequence
-                        .filter(|_| batch.failure_deferred && batch.failure_readable_end > 0)
-                        .map(|sequence| crate::observation::tool::JournalFieldRef {
-                            sequence,
-                            path: vec!["normalized_failure".into()],
-                            encoded_bytes: batch.failure_readable_end,
-                        }),
-                    batch.finish_reason_deferred,
-                    batch.finish_reason.as_ref().map(|source| {
-                        crate::observation::tool::JournalFieldRef {
-                            sequence: source.sequence,
-                            path: source.path.clone(),
-                            encoded_bytes: source.encoded_bytes,
-                        }
-                    }),
-                ),
-            );
-            observations.push(ConversationObservation::JournalFact(witness.clone()));
-        };
+            self.prepare_native_canonical(batch, &mut observations);
+        }
         match &batch.transition {
             NativeObservationTransition::Single(value)
             | NativeObservationTransition::Adoption(value)
-            | NativeObservationTransition::Compaction(value) => witness(value),
+            | NativeObservationTransition::Compaction(value) => {
+                self.prepare_native_witness(batch, value, &mut observations);
+            }
             NativeObservationTransition::RequestStart {
                 started,
                 contributions,
                 statuses,
                 ..
             } => {
-                witness(started);
+                self.prepare_native_witness(batch, started, &mut observations);
                 for contribution in contributions {
-                    witness(contribution);
+                    self.prepare_native_witness(batch, contribution, &mut observations);
                 }
                 observations.extend(
                     statuses
@@ -544,9 +513,55 @@ impl RuntimeClientProjection {
                         .map(ConversationObservation::Status),
                 );
             }
-            NativeObservationTransition::WorkflowTerminal { terminal, output } => {
-                witness(terminal);
-                witness(output);
+            NativeObservationTransition::AttemptFirstTurn {
+                attempt: first,
+                turn: second,
+            }
+            | NativeObservationTransition::WorkflowTerminal {
+                terminal: first,
+                output: second,
+            } => {
+                self.prepare_native_witness(batch, first, &mut observations);
+                self.prepare_native_witness(batch, second, &mut observations);
+            }
+            NativeObservationTransition::ModelTurnSettlement {
+                provider,
+                canonical,
+                assistant,
+                boundary,
+            } => {
+                use crate::durable::observation::ModelTurnObservationBoundary;
+                self.prepare_native_witness(batch, provider, &mut observations);
+                self.prepare_native_canonical_headers(
+                    assistant,
+                    canonical.attempt_id.clone(),
+                    &mut observations,
+                );
+                self.prepare_native_witness(batch, canonical, &mut observations);
+                match boundary {
+                    Some(ModelTurnObservationBoundary::Completed { turn, attempt }) => {
+                        self.prepare_native_witness(batch, turn, &mut observations);
+                        self.prepare_native_witness(batch, attempt, &mut observations);
+                    }
+                    Some(ModelTurnObservationBoundary::Adopted {
+                        turn,
+                        adoption,
+                        canonical,
+                    }) => {
+                        self.prepare_native_witness(batch, turn, &mut observations);
+                        if let Some(pending) = &batch.pending {
+                            observations
+                                .push(ConversationObservation::PendingReceipt(pending.clone()));
+                        }
+                        self.prepare_native_canonical_headers(
+                            canonical,
+                            adoption.attempt_id.clone(),
+                            &mut observations,
+                        );
+                        self.prepare_native_witness(batch, adoption, &mut observations);
+                    }
+                    None => {}
+                }
             }
             NativeObservationTransition::ToolResults { loaded_results, .. } => {
                 observations.extend(
@@ -577,6 +592,98 @@ impl RuntimeClientProjection {
         }
     }
 
+    fn prepare_native_witness(
+        &mut self,
+        batch: &crate::durable::observation::NativeObservationBatch,
+        witness: &crate::durable::observation::ObservationEventWitness,
+        observations: &mut Vec<ConversationObservation>,
+    ) {
+        let field = match witness.event_kind.as_str() {
+            "tool_execution_completed" => Some("result"),
+            "tool_execution_failed" => Some("error"),
+            _ => None,
+        }
+        .and_then(|field| {
+            witness
+                .fields
+                .iter()
+                .find(|entry| entry.path == ["event", field])
+                .map(|entry| crate::observation::tool::JournalFieldRef {
+                    sequence: witness.sequence,
+                    path: entry.path.clone(),
+                    encoded_bytes: entry.encoded_bytes,
+                })
+        });
+        self.prepare_journal_fact(witness.sequence, batch.failure.clone(), field);
+        self.prepared_outcomes.insert(
+            witness.sequence,
+            (
+                batch.failure_deferred,
+                batch
+                    .failure_sequence
+                    .filter(|_| batch.failure_deferred && batch.failure_readable_end > 0)
+                    .map(|sequence| crate::observation::tool::JournalFieldRef {
+                        sequence,
+                        path: vec!["normalized_failure".into()],
+                        encoded_bytes: batch.failure_readable_end,
+                    }),
+                batch.finish_reason_deferred,
+                batch.finish_reason.as_ref().map(|source| {
+                    crate::observation::tool::JournalFieldRef {
+                        sequence: source.sequence,
+                        path: source.path.clone(),
+                        encoded_bytes: source.encoded_bytes,
+                    }
+                }),
+            ),
+        );
+        observations.push(ConversationObservation::JournalFact(witness.clone()));
+    }
+
+    fn prepare_native_canonical_headers(
+        &mut self,
+        canonical: &Arc<crate::durable::CanonicalObservationBatch>,
+        attempt_id: Option<AttemptId>,
+        observations: &mut Vec<ConversationObservation>,
+    ) {
+        self.install_content_metadata(
+            canonical
+                .head
+                .iter()
+                .flat_map(|header| {
+                    header
+                        .content
+                        .iter()
+                        .map(|binding| binding.content_ref.clone())
+                })
+                .collect(),
+        );
+        self.prepare_message_headers(
+            canonical
+                .head
+                .iter()
+                .filter_map(|header| {
+                    header.identity.as_ref().map(|identity| {
+                        (
+                            identity.clone(),
+                            header.clone(),
+                            Some(canonical.read_cut.surface_revision),
+                        )
+                    })
+                })
+                .collect(),
+        );
+        observations.push(ConversationObservation::CanonicalCommitted {
+            attempt_id,
+            receipt: crate::durable::TranscriptCommitReceipt {
+                transcript_cursor: canonical.last_transcript,
+                ledger_position: canonical.last_position,
+                ordinal: canonical.count.saturating_sub(1),
+                observation: canonical.clone(),
+            },
+        });
+    }
+
     pub(super) fn prepare_native_canonical(
         &mut self,
         batch: &crate::durable::observation::NativeObservationBatch,
@@ -584,52 +691,16 @@ impl RuntimeClientProjection {
     ) {
         use crate::durable::observation::NativeObservationTransition;
         if let Some(canonical) = &batch.canonical {
-            self.install_content_metadata(
-                canonical
-                    .head
-                    .iter()
-                    .flat_map(|header| {
-                        header
-                            .content
-                            .iter()
-                            .map(|binding| binding.content_ref.clone())
-                    })
-                    .collect(),
-            );
-            self.prepare_message_headers(
-                canonical
-                    .head
-                    .iter()
-                    .filter_map(|header| {
-                        header.identity.as_ref().map(|identity| {
-                            (
-                                identity.clone(),
-                                header.clone(),
-                                Some(canonical.read_cut.surface_revision),
-                            )
-                        })
-                    })
-                    .collect(),
-            );
-            observations.push(ConversationObservation::CanonicalCommitted {
-                attempt_id: match &batch.transition {
-                    NativeObservationTransition::Single(witness)
-                    | NativeObservationTransition::Adoption(witness)
-                    | NativeObservationTransition::Compaction(witness) => {
-                        witness.attempt_id.clone()
-                    }
-                    NativeObservationTransition::RequestStart { started, .. } => {
-                        started.attempt_id.clone()
-                    }
-                    _ => None,
-                },
-                receipt: crate::durable::TranscriptCommitReceipt {
-                    transcript_cursor: canonical.last_transcript,
-                    ledger_position: canonical.last_position,
-                    ordinal: canonical.count.saturating_sub(1),
-                    observation: canonical.clone(),
-                },
-            });
+            let attempt_id = match &batch.transition {
+                NativeObservationTransition::Single(witness)
+                | NativeObservationTransition::Adoption(witness)
+                | NativeObservationTransition::Compaction(witness) => witness.attempt_id.clone(),
+                NativeObservationTransition::RequestStart { started, .. } => {
+                    started.attempt_id.clone()
+                }
+                _ => None,
+            };
+            self.prepare_native_canonical_headers(canonical, attempt_id, observations);
         }
     }
 
@@ -708,10 +779,10 @@ impl RuntimeClientProjection {
             }
         }
         let previous = self.snapshot.workflows.revision.0;
-        if workflows.revision.0 < previous || workflows == self.snapshot.workflows {
+        if workflows.revision.0 < previous || workflows == *self.snapshot.workflows {
             return;
         }
-        self.snapshot.workflows.clone_from(&workflows);
+        self.snapshot.workflows.replace_from(&workflows);
         self.publish(RuntimeClientEvent::WorkflowsUpdated { workflows });
     }
 
@@ -784,12 +855,10 @@ impl RuntimeClientProjection {
             _ => &["attempt", "context", "trace"],
         };
         for owner in owners {
-            let revision = self.domain_revisions.entry(owner).or_default();
-            let Some(next) = revision.checked_add(1) else {
+            let Some(revision) = self.domain_revisions.advance_revision(owner) else {
                 self.publication_failed(&RuntimeClientError::ProjectionExhausted);
                 return;
             };
-            *revision = next;
             if *owner == "jobs" {
                 let keys: Vec<_> = self
                     .domain_sources
@@ -798,7 +867,7 @@ impl RuntimeClientProjection {
                     .map(|(key, _)| key.clone())
                     .collect();
                 for key in keys {
-                    self.domain_sources.get_mut(&key).unwrap().2 = *revision;
+                    self.domain_sources.get_mut(&key).unwrap().2 = revision;
                 }
             }
         }

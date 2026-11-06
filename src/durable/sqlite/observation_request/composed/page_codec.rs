@@ -1,30 +1,46 @@
-//! Development-layout compact pages. Limits are checked before allocation.
+//! Bounded binary pages with independent, full UTF-8 keys.
 use super::{ConversationStoreError, FANOUT, Hash, PAGE_BYTES, Page, Reference, storage};
-const MAGIC: &[u8; 5] = b"RXSP\x01";
+const MAGIC: &[u8; 5] = b"RXSP\x03";
 const KEY_BYTES: usize = 4160;
 const VALUE_BYTES: usize = 40_960;
 pub(super) const HEADER: usize = 8;
+
 pub(super) fn leaf_size(key: &str, value: &[u8]) -> usize {
-    6 + key.len() + value.len()
+    6_usize
+        .saturating_add(key.len())
+        .saturating_add(value.len())
 }
 pub(super) fn branch_size(reference: &Reference) -> usize {
-    35 + reference.last.len()
+    35_usize.saturating_add(reference.last.len())
 }
-
 pub(super) fn encode(page: &Page) -> Result<Vec<u8>, ConversationStoreError> {
-    let (tag, count, size) = match page {
-        Page::Leaf { entries } => (
-            0,
-            entries.len(),
-            HEADER + entries.iter().map(|(k, v)| leaf_size(k, v)).sum::<usize>(),
-        ),
-        Page::Branch { children } => (
-            1,
-            children.len(),
-            HEADER + children.iter().map(branch_size).sum::<usize>(),
-        ),
+    let (tag, count) = match page {
+        Page::Leaf { entries } => (0, entries.len()),
+        Page::Branch { children } => (1, children.len()),
     };
-    if count == 0 || count > FANOUT || size > PAGE_BYTES {
+    if count == 0 || count > FANOUT {
+        return Err(storage("fragment page geometry exceeds bound"));
+    }
+    let mut size = HEADER;
+    match page {
+        Page::Leaf { entries } => {
+            for (key, value) in entries {
+                if key.len() > KEY_BYTES || value.len() > VALUE_BYTES {
+                    return Err(storage("fragment fact exceeds bound"));
+                }
+                size = size.saturating_add(leaf_size(key, value));
+            }
+        }
+        Page::Branch { children } => {
+            for child in children {
+                if child.last.len() > KEY_BYTES {
+                    return Err(storage("fragment key exceeds bound"));
+                }
+                size = size.saturating_add(branch_size(child));
+            }
+        }
+    }
+    if size > PAGE_BYTES {
         return Err(storage("fragment page geometry exceeds bound"));
     }
     let mut bytes = Vec::with_capacity(size);
@@ -32,31 +48,20 @@ pub(super) fn encode(page: &Page) -> Result<Vec<u8>, ConversationStoreError> {
     bytes.push(tag);
     bytes.extend_from_slice(
         &u16::try_from(count)
-            .map_err(|_| storage("fragment page count"))?
+            .expect("bounded page count")
             .to_le_bytes(),
     );
-    let put_key = |bytes: &mut Vec<u8>, key: &str| -> Result<(), ConversationStoreError> {
-        if key.len() > KEY_BYTES {
-            return Err(storage("fragment key exceeds bound"));
-        }
-        bytes.extend_from_slice(
-            &u16::try_from(key.len())
-                .map_err(|_| storage("fragment key size"))?
-                .to_le_bytes(),
-        );
+    let put_key = |bytes: &mut Vec<u8>, key: &str| {
+        bytes.extend_from_slice(&u16::try_from(key.len()).expect("bounded key").to_le_bytes());
         bytes.extend_from_slice(key.as_bytes());
-        Ok(())
     };
     match page {
         Page::Leaf { entries } => {
             for (key, value) in entries {
-                put_key(&mut bytes, key)?;
-                if value.len() > VALUE_BYTES {
-                    return Err(storage("fragment fact exceeds bound"));
-                }
+                put_key(&mut bytes, key);
                 bytes.extend_from_slice(
                     &u32::try_from(value.len())
-                        .map_err(|_| storage("fragment value size"))?
+                        .expect("bounded fact")
                         .to_le_bytes(),
                 );
                 bytes.extend_from_slice(value);
@@ -64,12 +69,13 @@ pub(super) fn encode(page: &Page) -> Result<Vec<u8>, ConversationStoreError> {
         }
         Page::Branch { children } => {
             for child in children {
-                put_key(&mut bytes, &child.last)?;
+                put_key(&mut bytes, &child.last);
                 bytes.push(child.depth);
                 bytes.extend_from_slice(&child.hash);
             }
         }
     }
+    debug_assert_eq!(bytes.len(), size);
     Ok(bytes)
 }
 struct Cursor<'a> {

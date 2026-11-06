@@ -117,7 +117,7 @@ impl CapabilityReadSource {
                 [key] if key == "name" => Some(&tool.name),
                 [key] if key == "description" => Some(&tool.description),
                 [key, rest @ ..] if key == "input_schema" => {
-                    let mut value = &tool.input_schema;
+                    let mut value = tool.input_schema.as_ref();
                     for component in rest {
                         value = if let Some(index) = component.strip_prefix('@') {
                             value.as_array()?.get(index.parse::<usize>().ok()?)?
@@ -304,13 +304,13 @@ fn source_view<'a>(
         },
         state: match state {
             crate::capabilities::CapabilitySourceState::Unprepared => {
-                super::capability_source::CapabilitySourceStateView::Unprepared
+                crate::observation::capability_source::CapabilitySourceStateView::Unprepared
             }
             crate::capabilities::CapabilitySourceState::Ready => {
-                super::capability_source::CapabilitySourceStateView::Ready
+                crate::observation::capability_source::CapabilitySourceStateView::Ready
             }
             crate::capabilities::CapabilitySourceState::Unavailable { .. } => {
-                super::capability_source::CapabilitySourceStateView::Unavailable
+                crate::observation::capability_source::CapabilitySourceStateView::Unavailable
             }
         },
     }
@@ -336,7 +336,7 @@ enum SourceDescriptor<'a> {
 #[derive(Serialize)]
 pub(crate) struct SourceReadView<'a> {
     source: SourceDescriptor<'a>,
-    state: super::capability_source::CapabilitySourceStateView,
+    state: crate::observation::capability_source::CapabilitySourceStateView,
 }
 // Opaque iterator types need not be Clone: repeat the native iterator only while serializing.
 impl Serialize for CapabilityReadSource {
@@ -490,7 +490,7 @@ pub struct RuntimeClientTool {
     /// The human-readable description.
     pub description: String,
     /// The canonical JSON Schema of accepted arguments.
-    pub input_schema: serde_json::Value,
+    pub input_schema: std::sync::Arc<serde_json::Value>,
     /// Who owns an invocation: attempt (foreground) or conversation
     /// (background).
     pub execution_policy: ToolExecutionPolicy,

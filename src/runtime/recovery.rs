@@ -1291,10 +1291,8 @@ pub struct RecoveryPlan {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicationRecoveryClass {
-    /// The unsettled stream.
-    pub stream_id: PublicationStreamId,
-    /// The owning attempt of the stream.
-    pub attempt_id: AttemptId,
+    /// The exact unsettled stream generation.
+    pub start: crate::publication::PublicationStreamStart,
     /// The audit settlement this stream must reach.
     pub kind: PublicationAuditKind,
 }
@@ -1397,8 +1395,7 @@ impl RecoveryPlan {
                 .unsettled_publications
                 .iter()
                 .map(|record| PublicationRecoveryClass {
-                    stream_id: record.start.stream_id.clone(),
-                    attempt_id: record.start.attempt_id.clone(),
+                    start: record.start.clone(),
                     kind: record.audit_kind(),
                 })
                 .collect(),
@@ -1729,7 +1726,7 @@ impl RecoveryPlan {
         committed: &mut RecoveryReconciliation,
     ) -> Result<(), RecoveryError> {
         for class in &self.publications {
-            let (audit, _) = store.terminalize_publication_audit(&class.stream_id, clock.now())?;
+            let (audit, _) = store.terminalize_publication_audit(&class.start, clock.now())?;
             committed
                 .publication_audits
                 .push((audit.stream_id.clone(), audit.kind));

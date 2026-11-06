@@ -199,6 +199,14 @@ impl RuntimeInner {
         &self,
         state: &CoordinatorState,
     ) -> Result<u64, IdleBusyReason> {
+        self.idle_epoch_probed(state, IdleProbe::Durable)
+    }
+
+    pub(super) fn idle_epoch_probed(
+        &self,
+        state: &CoordinatorState,
+        probe: IdleProbe,
+    ) -> Result<u64, IdleBusyReason> {
         use IdleBusyReason as Busy;
         let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
         if (state.current_attempt.is_some() || state.scheduled.is_some())
@@ -231,14 +239,18 @@ impl RuntimeInner {
         // Paused, Blocked, Complete, absent, an uncomposed extension, and an
         // Active Goal whose budget is exhausted all own nothing — an
         // exhausted Goal therefore cannot spin to pin residency forever.
-        if admissible
+        if matches!(probe, IdleProbe::Durable)
+            && admissible
             && self
                 .goal_owns_future_work(state)
                 .map_err(|_| Busy::Durability)?
         {
             return Err(Busy::AutonomousExtension);
         }
-        if admissible && self.mailbox.has_pending().map_err(|_| Busy::Durability)? {
+        if matches!(probe, IdleProbe::Durable)
+            && admissible
+            && self.mailbox.has_pending().map_err(|_| Busy::Durability)?
+        {
             return Err(Busy::Inbound);
         }
         if self.interaction.pending_count() != 0 {
@@ -320,7 +332,7 @@ impl RuntimeInner {
             Some(generation) => generation
                 .config
                 .extension_composition()
-                .agent_status_engine(Arc::new(crate::context::SystemClock)),
+                .agent_status_engine(Arc::clone(&self.context.status_clock)),
             None => self
                 .context
                 .status_engine
@@ -680,7 +692,7 @@ impl RuntimeInner {
                 .as_ref()
                 .expect("the coordinator owns the conversation state while idle");
             for item in batch.items() {
-                let block = crate::durable::inbox::canonical_block(item.message());
+                let block = crate::durable::canonical_block(item.message());
                 match conversation.prepare_commit(&block) {
                     Ok(_) => {}
                     Err(error) => {
@@ -727,7 +739,7 @@ impl RuntimeInner {
             .iter()
             .map(|item| {
                 conversation
-                    .prepare_commit(&crate::durable::inbox::canonical_block(item.message()))
+                    .prepare_commit(&crate::durable::canonical_block(item.message()))
                     .expect("adopted identity was validated under exclusive ownership")
             })
             .collect();
@@ -1193,3 +1205,10 @@ impl ConversationRuntime {
 
 #[cfg(test)]
 mod tests;
+
+/// Advisory cache release never acquires persistence evidence or idle authority.
+#[derive(Clone, Copy)]
+pub(super) enum IdleProbe {
+    Durable,
+    InMemory,
+}

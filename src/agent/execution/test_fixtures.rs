@@ -2,11 +2,16 @@
 
 use crate::agent::execution::AgentExecutionRequest;
 use crate::agent::observer::AgentExecutionObserver;
+use crate::agent::{AgentCancellation, AgentExecution};
 use crate::context::ContextRuntime;
 use crate::conversation::ConversationState;
 use crate::durable::ConversationStore;
+#[cfg(test)]
+use crate::durable::{CanonicalStore, JournalStore, PublicationStore};
+use crate::events::AttemptOutcome;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{ContentBlockIndex, MessageBlock};
+use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
 use crate::model::adapter::{ModelAdapter, ModelStream, ModelStreamItem};
 use crate::model::chat_protocol;
 use crate::model::error::ModelErrorKind;
@@ -14,11 +19,15 @@ use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelProtocol, ModelRequest};
 use crate::publication::{PublicationFrame, PublicationStreamStart};
+use crate::runtime::MessageId;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, ToolCallId, ToolId};
 use crate::runtime::inbound::InitialTurnTrigger;
+use crate::runtime::types::CancellationReason;
+use crate::scripted_suites::common::{capability_lease, tool_runtime_with_store};
 use crate::scripted_suites::support::model::scripted_session_model;
 use crate::tools::executor::ToolExecutor;
+use crate::tools::executor::ToolRegistry;
 use crate::tools::types::{
     ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
@@ -78,8 +87,248 @@ impl ModelAdapter for ScriptedAdapter {
     }
 }
 
+pub(super) struct FinalPublicationProbe {
+    mailbox: crate::runtime::inbound::ConversationInboundMailbox,
+    terminal: std::sync::atomic::AtomicBool,
+    producer: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+/// Cancellation at the first post-commit notification cannot reclassify
+/// the already committed empty-inbox completion winner.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // Complete execution fixture and exact publication oracle.
+async fn cancellation_after_atomic_final_commit_preserves_completed_winner() {
+    let adapter = Arc::new(ScriptedAdapter::new(vec![vec![
+        ModelEvent::Started,
+        ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "done".to_owned(),
+        },
+        ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        },
+    ]]));
+    let store = Arc::new(
+        crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .expect("in-memory store"),
+    );
+    let tool_runtime = tool_runtime_with_store(
+        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        Some(store.clone()),
+    );
+    let (lease, _coordinator) = capability_lease(ToolRegistry::new(), &tool_runtime)
+        .await
+        .into_lease_and_coordinator();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let probe = Arc::new(FinalPublicationProbe {
+        mailbox: tool_runtime.mailbox(),
+        terminal: std::sync::atomic::AtomicBool::new(false),
+        producer: Mutex::new(None),
+    });
+    let observer = RecordingObserver {
+        cancel_after_completion: Some(cancellation.clone()),
+        final_publication_probe: Some(Arc::clone(&probe)),
+        ..Default::default()
+    };
+    let mut execution = AgentExecution::new(
+        request(&adapter),
+        lease,
+        &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
+        runtime(&adapter),
+        &tool_runtime,
+        crate::agent::AttemptLifecycle::inert(),
+    )
+    .expect("execution construction");
+    execution.observe(&observer);
+
+    let result = execution.run().await;
+    probe
+        .producer
+        .lock()
+        .unwrap()
+        .take()
+        .expect("concurrent producer")
+        .join()
+        .unwrap();
+    let pending = probe
+        .mailbox
+        .with_pending_snapshot(|items| items)
+        .unwrap()
+        .expect("publication lease released");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message().id.as_str(), "late-after-final");
+    assert_eq!(
+        adapter.request_count(),
+        1,
+        "later input did not reopen the committed winner"
+    );
+    assert!(
+        cancellation.is_cancelled(),
+        "outcome: {:?}; durable error: {:?}",
+        result.outcome,
+        result.durable_failure
+    );
+    assert_eq!(
+        result.outcome,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop
+        }
+    );
+    assert!(result.durable_failure.is_none());
+    let durable: Vec<_> = store
+        .read_events(None, 64)
+        .unwrap()
+        .events
+        .into_iter()
+        .map(|envelope| envelope.event)
+        .collect();
+    let published = observer.events();
+    assert_eq!(
+        published, durable,
+        "every committed event is published once in native order"
+    );
+    assert!(matches!(
+        durable.last(),
+        Some(RuntimeEvent::AttemptCompleted { .. })
+    ));
+    assert_eq!(
+        durable
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::AssistantMessageCommitted { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        durable
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::AttemptCompleted { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        !durable
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::AttemptCancelled { .. }))
+    );
+    assert_eq!(
+        store
+            .load_canonical()
+            .unwrap()
+            .iter()
+            .filter(|message| matches!(message, MessageBlock::Assistant(_)))
+            .count(),
+        1
+    );
+    assert!(
+        store
+            .load_unsettled_publication_streams()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Failing the final Attempt terminal rolls back the entire accepted answer.
+/// A failure terminal/audit may subsequently describe the durable error;
+/// neither canonical success nor a successful terminal may be fabricated.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn final_terminal_failure_rolls_back_answer_and_never_publishes_success() {
+    let adapter = Arc::new(ScriptedAdapter::new(vec![vec![
+        ModelEvent::Started,
+        ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "done".to_owned(),
+        },
+        ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        },
+    ]]));
+    let store = Arc::new(
+        crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .expect("in-memory store"),
+    );
+    store.arm_fail_next_terminal_event();
+    let tool_runtime = tool_runtime_with_store(
+        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        Some(store.clone()),
+    );
+    let (lease, _coordinator) = capability_lease(ToolRegistry::new(), &tool_runtime)
+        .await
+        .into_lease_and_coordinator();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let observer = RecordingObserver::default();
+    let mut execution = AgentExecution::new(
+        request(&adapter),
+        lease,
+        &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
+        runtime(&adapter),
+        &tool_runtime,
+        crate::agent::AttemptLifecycle::inert(),
+    )
+    .expect("execution construction");
+    execution.observe(&observer);
+
+    let result = execution.run().await;
+
+    assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
+    assert_eq!(
+        result.durable_failure_kind,
+        Some(super::DurableFailureKind::CanonicalCommit)
+    );
+    assert!(result.durable_failure.is_some());
+    let events = event_history(store.as_ref());
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::AttemptStarted { .. }))
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::AttemptCompleted { .. }
+                | RuntimeEvent::AssistantMessageCommitted { .. }
+                | RuntimeEvent::ModelRequestCompleted { .. }
+        )),
+        "the rejected final transaction leaves no accepted final facts"
+    );
+    assert!(
+        !observer.events().iter().any(|event| matches!(
+            event,
+            RuntimeEvent::AttemptCompleted { .. }
+                | RuntimeEvent::AssistantMessageCommitted { .. }
+                | RuntimeEvent::ModelRequestCompleted { .. }
+        )),
+        "observers cannot acknowledge rolled-back final facts"
+    );
+    assert!(
+        !store
+            .load_canonical()
+            .unwrap()
+            .iter()
+            .any(|message| matches!(message, MessageBlock::Assistant(_)))
+    );
+    assert_eq!(
+        store.terminal_event_attempts(),
+        2,
+        "one rejected final boundary and one honest failure terminal"
+    );
+}
+
 #[derive(Default)]
 pub(super) struct RecordingObserver {
+    pub(super) cancel_after_completion: Option<AgentCancellation>,
+    pub(super) cancel_on_admission: Option<(
+        AgentCancellation,
+        Arc<crate::durable::SqliteConversationStore>,
+    )>,
+    pub(super) final_publication_probe: Option<Arc<FinalPublicationProbe>>,
     pub(super) start_gap: Option<(
         Arc<crate::runtime::monotonic::ManualMonotonicClock>,
         Arc<crate::durable::SqliteConversationStore>,
@@ -116,10 +365,40 @@ impl AgentExecutionObserver for RecordingObserver {
         &self,
         _attempt_id: &AttemptId,
         event: &RuntimeEvent,
-        _journal_sequence: u64,
+        journal_sequence: u64,
         _tool_occurrence: Option<&crate::events::types::ToolObservationOccurrence>,
-        _receipt: Option<&crate::durable::observation::NativeObservationBatch>,
+        receipt: Option<&crate::durable::observation::NativeObservationBatch>,
     ) {
+        if matches!(event, RuntimeEvent::AttemptStarted { .. })
+            && let Some((cancellation, store)) = &self.cancel_on_admission
+        {
+            let committed = event_history(store.as_ref());
+            assert!(matches!(
+                committed.as_slice(),
+                [
+                    RuntimeEvent::AttemptStarted { .. },
+                    RuntimeEvent::TurnStarted
+                ]
+            ));
+            let receipt = receipt.expect("first admission receipt");
+            assert_eq!(
+                receipt.journal_range,
+                Some((journal_sequence, journal_sequence + 1))
+            );
+            cancellation.cancel();
+        }
+        if let Some(probe) = &self.final_publication_probe {
+            match event {
+                RuntimeEvent::ModelRequestCompleted { .. } => probe.completion(),
+                RuntimeEvent::AttemptCompleted { .. } => probe.terminal(),
+                _ => {}
+            }
+        }
+        if matches!(event, RuntimeEvent::ModelRequestCompleted { .. })
+            && let Some(cancellation) = &self.cancel_after_completion
+        {
+            cancellation.cancel();
+        }
         if matches!(event, RuntimeEvent::ModelRequestStarted { .. })
             && let Some((clock, store)) = &self.start_gap
         {
@@ -213,7 +492,7 @@ impl InstantTool {
             id: ToolId::new(id),
             name: name.to_owned(),
             description: String::new(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -450,3 +729,53 @@ pub(super) fn request_snapshot_history(
     }
     snapshots
 }
+
+impl FinalPublicationProbe {
+    fn completion(self: &Arc<Self>) {
+        let probe = Arc::clone(self);
+        let (checked, wait_checked) = std::sync::mpsc::sync_channel(0);
+        let producer = std::thread::spawn(move || {
+            assert!(
+                probe
+                    .mailbox
+                    .with_pending_snapshot(|_| ())
+                    .unwrap()
+                    .is_none(),
+                "the final publication lease excludes a concurrent pending reader"
+            );
+            checked.send(()).unwrap();
+            probe
+                .mailbox
+                .enqueue(UserMessageBlock {
+                    id: MessageId::new("late-after-final"),
+                    content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                        text: "late input".into(),
+                    })],
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    timestamp: Some(chrono::Utc::now()),
+                })
+                .unwrap();
+            assert!(
+                probe.terminal.load(std::sync::atomic::Ordering::SeqCst),
+                "pending acceptance cannot overtake final terminal publication"
+            );
+        });
+        *self.producer.lock().unwrap() = Some(producer);
+        wait_checked.recv().unwrap();
+    }
+
+    fn terminal(&self) {
+        assert!(
+            self.mailbox
+                .with_pending_snapshot(|_| ())
+                .unwrap()
+                .is_none(),
+            "the same publication lease remains held through the terminal callback"
+        );
+        self.terminal
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+include!("../execution_attempt_start_tests.rs");

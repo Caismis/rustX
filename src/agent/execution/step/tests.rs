@@ -831,7 +831,7 @@ impl ParkingBackgroundTool {
                     id: ToolId::new("tool-bg"),
                     name: "bg".to_owned(),
                     description: String::new(),
-                    input_schema: serde_json::json!({"type": "object"}),
+                    input_schema: serde_json::json!({"type": "object"}).into(),
                     execution_policy: ToolExecutionPolicy::ModelSelectable,
                     concurrency_policy: ToolConcurrencyPolicy::Sequential,
                     approval_policy: crate::tools::types::ToolApprovalPolicy::Never,

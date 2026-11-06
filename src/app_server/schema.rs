@@ -337,7 +337,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     fixtures.push(
         serde_json::from_value(serde_json::json!({
             "jsonrpc": "2.0", "id": "trace-tool-summary", "result": {
-                "type": "trace", "page": { "records": [{
+                "type": "trace", "refreshed": 0, "page": { "records": [{
                     "id": "trace:7", "position": "trace:7", "fields": [], "collections": [],
                     "location": { "attempt_id": "attempt-a", "step_id": "1" },
                     "kind": "tool", "state": "completed",
@@ -456,7 +456,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
         Method::InboundEdit {
             target: target.clone(),
-            expected: crate::durable::inbox::PendingInboundRef {
+            expected: crate::durable::PendingInboundRef {
                 sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
                 revision: EXACT,
             },
@@ -464,7 +464,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
         Method::InboundRemove {
             target: target.clone(),
-            expected: crate::durable::inbox::PendingInboundRef {
+            expected: crate::durable::PendingInboundRef {
                 sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
                 revision: EXACT,
             },
@@ -560,13 +560,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 read_cut: crate::observation::cut::CheckpointReadCut {
                     canonical_foreground: None,
                     live_publication: None,
-                    collection_cuts: std::collections::BTreeMap::new(),
+                    collection_cuts: crate::observation::metadata::MetadataFragment::default(),
                     conversation_id: target.conversation_id.clone(),
                     activation_id: None,
                     revision: EXACT,
                     through: EXACT,
                     source_cut: None,
-                    domain_revisions: std::collections::BTreeMap::default(),
+                    domain_revisions: crate::observation::metadata::MetadataFragment::default(),
                 },
                 domain: "jobs".into(),
                 total: 0,
@@ -578,7 +578,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             metrics: crate::observation::statistics::AgentStatistics::default(),
         },
         MethodResult::InboundMutation {
-            outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
+            outcome: crate::durable::PendingMutationOutcome::Conflict,
         },
         MethodResult::ConfigurationReceipt {
             scope: "session-fixture".into(),
@@ -616,13 +616,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 target_cursor: None,
                 page: crate::observation::transcript::RuntimeClientTranscriptPage {
                     source_cut: None,
-                    content: Vec::new(),
-                    collections: Vec::new(),
-                    deferred_entries: Vec::new(),
+                    content: Vec::new().into(),
+                    collections: Vec::new().into(),
+                    deferred_entries: Vec::new().into(),
                     inherited_through: Some(
                         crate::observation::transcript::RuntimeClientTranscriptCursor::new(0),
                     ),
-                    entries: Vec::new(),
+                    entries: Vec::new().into(),
                     next_cursor: None,
                     statistics: None,
                 },
@@ -951,7 +951,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                     tools: vec![crate::runtime::workflow::WorkflowToolChoice {
                         name: "search_issues".into(),
                         description: "Search issues.".into(),
-                        input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}),
+                        input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}).into(),
                         result: crate::runtime::workflow::WorkflowToolResult::Text {},
                     }],
                 }],
@@ -1574,9 +1574,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v72.schema.json", "v72.ts"]);
+        assert_eq!(generations, ["v73.schema.json", "v73.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v72.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v73.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

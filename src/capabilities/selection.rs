@@ -496,7 +496,7 @@ mod tests {
             id: crate::runtime::identity::ToolId::new(format!("{origin:?}")),
             name: "check".into(),
             description: "check".into(),
-            input_schema: serde_json::json!({"type":"object","additionalProperties":false}),
+            input_schema: serde_json::json!({"type":"object","additionalProperties":false}).into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: ToolApprovalPolicy::Never,

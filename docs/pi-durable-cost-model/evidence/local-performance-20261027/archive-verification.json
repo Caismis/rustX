@@ -1,0 +1,91 @@
+{
+  "verified_at_utc": "2026-10-26T18:32:49.324295+00:00",
+  "verifier": "Independent recovery_audit agent; Python standard library; no producer extraction helper",
+  "archive": {
+    "path": "docs/pi-durable-cost-model/evidence/local-performance-20261027/raw.tar.xz",
+    "bytes": 6391804,
+    "sha256": "4f406110811a7d82a440f4187cc18a9fab42575a6e70cb16bdc932b4104bffa1"
+  },
+  "manifest": {
+    "path": "docs/pi-durable-cost-model/evidence/local-performance-20261027/raw.tar.manifest.json",
+    "sha256": "a08176a846249389ad9492d7c4910230fd3ead330335b06760eca77ac62b1e47",
+    "listed_payload_files": 1559,
+    "listed_payload_bytes": 1802272609
+  },
+  "extraction": {
+    "root": "/home/capi/.cache/rustx-pr485-archive-verification-ap8jsetu/raw",
+    "method": "Python tarfile r|xz streaming; initial exclusive xb extraction into a fresh tempfile.mkdtemp directory; complete second-pass archive and extracted-copy hashes; embedded MANIFEST.json explicitly verified against external manifest",
+    "safety_checks": [
+      "fresh directory outside repository",
+      "reject absolute/dot/dot-dot/empty/noncanonical path components",
+      "reject symlinks/hardlinks/devices and other special member types",
+      "reject duplicate member paths",
+      "payload member set equals manifest key set; only additional permitted regular member is identical MANIFEST.json",
+      "declared member sizes checked before stream read; actual size and SHA256 checked after bounded 1 MiB reads",
+      "exclusive creation, no overwrites, no archive permissions or owners restored"
+    ],
+    "verified_payload_files": 1559,
+    "verified_payload_bytes": 1802272609,
+    "tar_regular_files": 1560,
+    "tar_members": 1560,
+    "directory_members": 0,
+    "embedded_manifest": {
+      "member": "MANIFEST.json",
+      "bytes": 237835,
+      "sha256": "a08176a846249389ad9492d7c4910230fd3ead330335b06760eca77ac62b1e47",
+      "exact_external_manifest_equality": true
+    },
+    "status": "passed",
+    "verification_elapsed_seconds": 4.5446295159636065,
+    "initial_attempt_note": "First conservative pass validated/extracted all 1559 payload files, then rejected the unlisted MANIFEST.json metadata member. Second complete pass verified every archive member and extracted file with that sole explicitly checked metadata allowance."
+  },
+  "reader": {
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.codex/worktrees/pr485-pi-performance/rustX/docs/pi-durable-cost-model/evidence/local-performance-20261027/recompute.py",
+      "--root",
+      "/home/capi/.cache/rustx-pr485-archive-verification-ap8jsetu/raw"
+    ],
+    "cwd": "/home/capi/.codex/worktrees/pr485-pi-performance/rustX",
+    "script_sha256": "ababde4f325c0891ced98aec7311a12b77b547a76c719d5aa82d1570e4856ff3",
+    "exit_code": 0,
+    "stderr_bytes": 0,
+    "stderr_file": "/home/capi/.cache/rustx-pr485-archive-verification-ap8jsetu/recompute.stderr",
+    "output_file": "/home/capi/.cache/rustx-pr485-archive-verification-ap8jsetu/recomputed.json",
+    "output_bytes": 538473,
+    "output_sha256": "a72dd01b0b989d12878cbef82ffd20d2d1bb1326de995bdb4d28d54e68f917bf",
+    "reference_file": "docs/pi-durable-cost-model/evidence/local-performance-20261027/recomputed.json",
+    "reference_bytes": 538473,
+    "reference_sha256": "a72dd01b0b989d12878cbef82ffd20d2d1bb1326de995bdb4d28d54e68f917bf",
+    "exact_byte_equality": true,
+    "verified": true,
+    "accepted_products": 144,
+    "request_comparisons": 1692,
+    "comparison_records": 72,
+    "paired_metric_records": 576,
+    "summary_records": 192,
+    "elapsed_seconds": 4.2492795248981565
+  },
+  "append_audit_snapshot": {
+    "archive_member": "append-audit.json",
+    "archive_bytes": 217831,
+    "archive_sha256": "c450322cf9d9fbbf8b43d32593b72b3f5b4eb7282906be41dc961427e4d2a0ed",
+    "outside_final_path": "docs/pi-durable-cost-model/evidence/local-performance-20261027/append-audit.json",
+    "outside_bytes": 221281,
+    "outside_sha256": "a41d70c4416e8c072a0a1e1e5c066053c7f3b1c9664ce37f79b96b4e52a7f64e",
+    "exact_equality": false,
+    "added_top_level_keys": [
+      "other_retained_outliers"
+    ],
+    "removed_top_level_keys": [],
+    "changed_shared_top_level_keys": [
+      "outlier"
+    ],
+    "interpretation": "Archive retains an earlier audit snapshot. The final audit outside the archive adds symmetric warm-outlier phase evidence and corrects rounded narrative text; raw append records are unchanged.",
+    "append_members_verified_unchanged_against_original_cache": 146
+  },
+  "result": "passed",
+  "archive_rewritten": false,
+  "source_edits": false,
+  "benchmarks_or_tests_rerun": false
+}

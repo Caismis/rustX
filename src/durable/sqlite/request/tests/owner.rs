@@ -377,7 +377,15 @@ fn request_owner_rejects_duplicate_start_in_transaction_and_corrupt_duplicate_fa
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
-        assert!(persist_event_tx(&transaction, store.conversation_id(), started.clone()).is_err());
+        assert!(
+            persist_event_tx(
+                &store.conn.event_guard,
+                &transaction,
+                store.conversation_id(),
+                started.clone()
+            )
+            .is_err()
+        );
     }
     assert_eq!(store.read_events(None, 4).unwrap().events.len(), 1);
     let mut duplicate = started;
@@ -429,7 +437,7 @@ fn request_owner_rejects_auxiliary_start_without_call_transaction() {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .unwrap();
     assert!(
-        matches!(persist_event_tx(&transaction, store.conversation_id(), started), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("requires active Call"))
+        matches!(persist_event_tx(&store.conn.event_guard, &transaction, store.conversation_id(), started), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("requires active Call"))
     );
 }
 

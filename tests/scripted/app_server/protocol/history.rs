@@ -4,10 +4,10 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 use crate::durable::CanonicalStore;
+use crate::durable::ConversationInboundCapability;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
 use crate::durable::ProjectionStore;
-use crate::durable::inbox::ConversationInboundCapability;
 
 fn trace_content_references(
     value: &serde_json::Value,
@@ -511,7 +511,7 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
             },
         )
         .await;
-        let MethodResult::Trace { page } = read else {
+        let MethodResult::Trace { page, .. } = read else {
             panic!("Trace page");
         };
         assert!(

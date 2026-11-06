@@ -6,18 +6,24 @@ use crate::durable::observation::{
     HEADER_PAGE_MAX, ObservationValueChunk, RequestObservationField, RequestObservationHeader,
     RequestObservationPage,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::runtime::identity::RequestId;
 use std::io::Write;
 pub(in crate::durable::sqlite) mod composed;
+#[cfg(test)]
+pub(super) use composed::exercise_workspace_spill;
 mod input;
 pub(super) mod provenance;
+pub(in crate::durable::sqlite) mod state_preview;
+#[cfg(test)]
+mod state_preview_tests;
 const SEGMENT: usize = 65_536;
 struct SourceWriter<'a> {
     connection: &'a Connection,
     id: &'a str,
     kind: &'static str,
-    table: &'static str,
     buffer: Vec<u8>,
+    first: Vec<u8>,
     written: u64,
     segment: u64,
     failure: Option<ConversationStoreError>,
@@ -25,13 +31,18 @@ struct SourceWriter<'a> {
 impl SourceWriter<'_> {
     fn drain(&mut self) -> std::io::Result<()> {
         if !self.buffer.is_empty() {
-            self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'canonical_json_v1',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(|error| {
-                self.failure = Some(sqlite_error(&error, error.to_string()));
-                std::io::Error::other("native observation source write failed")
-            })?;
+            if self.segment == 0 {
+                self.first = std::mem::take(&mut self.buffer);
+            } else {
+                self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'j',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(|error| { self.failure = Some(sqlite_error(&error,error.to_string())); std::io::Error::other("native observation source write failed") })?;
+            }
             self.written = self
                 .written
-                .checked_add(self.buffer.len() as u64)
+                .checked_add(if self.segment == 0 {
+                    self.first.len()
+                } else {
+                    self.buffer.len()
+                } as u64)
                 .filter(|value| *value <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
                 .ok_or_else(|| {
                     std::io::Error::other("native structural source exceeds safe offsets")
@@ -50,6 +61,11 @@ impl Write for SourceWriter<'_> {
         for part in bytes.chunks(SEGMENT) {
             let mut at = 0;
             while at < part.len() {
+                if self.buffer.capacity() == 0 {
+                    // The first chunk owns the old allocation. Do not let
+                    // fragmented writes grow the overflow buffer past 64 KiB.
+                    self.buffer.reserve_exact(SEGMENT);
+                }
                 let count = (SEGMENT - self.buffer.len()).min(part.len() - at);
                 self.buffer.extend_from_slice(&part[at..at + count]);
                 at += count;
@@ -64,6 +80,7 @@ impl Write for SourceWriter<'_> {
         self.drain()
     }
 }
+
 fn encoded_path(path: &[String]) -> Result<String, ConversationStoreError> {
     serde_json::to_string(path).map_err(|error| storage(error.to_string()))
 }
@@ -74,6 +91,7 @@ pub(in crate::durable::sqlite) fn index_selection(
     messages: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
     selection: &super::manifest::Selection,
+    configuration: &super::native_request::FreshConfiguration,
 ) -> Result<(), ConversationStoreError> {
     composed::index_selection(
         connection,
@@ -82,6 +100,7 @@ pub(in crate::durable::sqlite) fn index_selection(
         messages,
         snapshot,
         selection,
+        configuration,
     )
 }
 pub(super) fn index_state<T: serde::Serialize + schemars::JsonSchema>(
@@ -90,23 +109,22 @@ pub(super) fn index_state<T: serde::Serialize + schemars::JsonSchema>(
     id: &str,
     value: &T,
 ) -> Result<(), ConversationStoreError> {
-    index_stream(connection, kind, id, "state_observation_fields", value)
+    let source =
+        crate::runtime::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
+    index_state_source(connection, kind, id, &source)
 }
-fn index_stream<T: serde::Serialize + schemars::JsonSchema>(
+pub(super) fn index_state_source(
     connection: &Connection,
     kind: &'static str,
     id: &str,
-    table: &'static str,
-    value: &T,
+    source: &crate::runtime::read_layout::SeekableObservationSource,
 ) -> Result<(), ConversationStoreError> {
-    let source =
-        crate::runtime::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
     let mut writer = SourceWriter {
         connection,
         id,
         kind,
-        table,
         buffer: Vec::with_capacity(SEGMENT),
+        first: Vec::new(),
         written: 0,
         segment: 0,
         failure: None,
@@ -125,15 +143,16 @@ fn index_stream<T: serde::Serialize + schemars::JsonSchema>(
             .take()
             .unwrap_or_else(|| storage(error.to_string()))
     })?;
-    index_fields(&writer, &source)?;
+    state_preview::index_fields(&writer, source)?;
     connection
         .execute(
-            "INSERT INTO content_frontiers VALUES(?1,?2,0,'canonical_json_v1',1,?3)",
-            params![kind, id, writer.written],
+            "INSERT INTO content_frontiers VALUES(?1,?2,0,'j',1,?3,?4)",
+            params![kind, id, writer.written, writer.first],
         )
         .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
+#[cfg(test)]
 fn stored_preview(
     source: &crate::runtime::read_layout::SeekableObservationSource,
     path: &[String],
@@ -161,52 +180,6 @@ fn stored_preview(
         16_384,
     )
     .unwrap_or_else(|| b"null".to_vec()))
-}
-fn index_fields(
-    writer: &SourceWriter<'_>,
-    source: &crate::runtime::read_layout::SeekableObservationSource,
-) -> Result<(), ConversationStoreError> {
-    let (connection, id, table) = (writer.connection, writer.id, writer.table);
-    let insert = format!(
-        "INSERT INTO {table}(source_id,path_json,parent_path,ordinal,start,end,children,header_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)"
-    );
-    let mut fields = connection
-        .prepare_cached(&insert)
-        .map_err(|error| sqlite_error(&error, error.to_string()))?;
-    let mut failure = None;
-    source
-        .visit_fields_selecting_previews(
-            |_| crate::runtime::read_layout::FieldPreviewPolicy::Inline,
-            |path, path_json, parent, start, end, children, key_span, preview| {
-                let result = (|| {
-                    let header = stored_preview(source, path, start, end, preview)?;
-                    fields
-                        .execute(params![
-                            id,
-                            path_json,
-                            parent.map(|(path, _)| path),
-                            parent.map(|(_, ordinal)| ordinal),
-                            start,
-                            end,
-                            children,
-                            header
-                        ])
-                        .map_err(|error| sqlite_error(&error, error.to_string()))?;
-                    if let Some((start, end)) = key_span
-                        && path.last().is_some_and(|part| part.starts_with('@'))
-                    {
-                        index_key(writer, path, "", start, end)?;
-                    }
-                    Ok(())
-                })();
-                result.map_err(|error| {
-                    failure = Some(error);
-                    "native persistent layout unavailable"
-                })
-            },
-        )
-        .map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
-    Ok(())
 }
 fn provenance_source(
     sequence: u64,
@@ -415,7 +388,7 @@ fn started(
     request: &RequestId,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let sequence:Option<u64>=connection.query_row("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|sqlite_error(&error, error.to_string()))?;
+    let sequence:Option<u64>=connection.query_row_cached("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     sequence.ok_or_else(|| {
         ConversationStoreError::InvalidReference("request is outside native read cut".into())
     })
@@ -423,7 +396,7 @@ fn started(
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     composed::verify_schema(connection)
 }
-fn field_path(path: &[String]) -> Result<String, ConversationStoreError> {
+pub(super) fn field_path(path: &[String]) -> Result<String, ConversationStoreError> {
     if path.len() > 256
         || path.iter().any(|part| part.len() > 256)
         || encoded_path(path)?.len() > 4096
@@ -440,7 +413,7 @@ pub(super) fn field_coordinates(
     id: &str,
     path: &[String],
 ) -> Result<(u64, u64, u64), ConversationStoreError> {
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::coordinates(connection, id, path);
     }
@@ -462,32 +435,7 @@ pub(super) fn field_coordinates(
     }
     Ok(coordinates)
 }
-struct StoredField {
-    start: u64,
-    end: u64,
-    children: u64,
-    bytes: Option<Vec<u8>>,
-}
-impl StoredField {
-    fn row(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Self> {
-        Ok(Self {
-            start: row.get(offset)?,
-            end: row.get(offset + 1)?,
-            children: row.get(offset + 2)?,
-            bytes: row.get(offset + 3)?,
-        })
-    }
-    fn materialize(self) -> Result<(u64, u64, u64, Vec<u8>), ConversationStoreError> {
-        if self.start > self.end || self.end > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
-        {
-            return Err(storage("native field coordinates unavailable"));
-        }
-        let bytes = self
-            .bytes
-            .ok_or_else(|| storage("native state field header unavailable"))?;
-        Ok((self.start, self.end, self.children, bytes))
-    }
-}
+use state_preview::Field as StoredField;
 // Count original entries, including duplicate object keys. Value normalization
 // remains last-wins, exactly as the previous inline-preview producer.
 fn original_node_count(bytes: &[u8]) -> Result<u64, ConversationStoreError> {
@@ -551,9 +499,7 @@ fn header_columns(table: &str) -> Result<&'static str, ConversationStoreError> {
     if table != "state_observation_fields" {
         return Err(storage("unknown native state header table"));
     }
-    Ok(
-        "start,end,children,CASE WHEN typeof(header_json)='blob' AND length(header_json)<=16384 THEN header_json END",
-    )
+    Ok(state_preview::COLUMNS)
 }
 type FieldWithKey = (u64, u64, u64, Vec<u8>, Option<Vec<u8>>);
 fn field_with_key(
@@ -563,13 +509,14 @@ fn field_with_key(
     path: &[String],
 ) -> Result<FieldWithKey, ConversationStoreError> {
     field_path(path)?;
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         return composed::field(connection, id, path);
     }
-    let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|sqlite_error(&error, error.to_string()))?
-        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(4)?))).optional().map_err(|error|sqlite_error(&error, error.to_string()))?
+    let (field,key)=connection.prepare_cached(&format!("SELECT {},CASE WHEN typeof(key_header)='blob' AND length(key_header)<=4096 THEN key_header END FROM {table} WHERE source_id=?1 AND path_json=?2",header_columns(table)?)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
+        .query_row(params![id,field_path(path)?],|row|Ok((StoredField::row(row,0)?,row.get::<_,Option<Vec<u8>>>(6)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
         .ok_or_else(||ConversationStoreError::InvalidReference("request field is unavailable".into()))?;
-    let (start, end, children, bytes) = field.materialize()?;
+    let source = state_preview::Source::load(connection, id)?;
+    let (start, end, children, bytes) = field.materialize(connection, id, path, &source)?;
     Ok((start, end, children, bytes, key))
 }
 pub(super) fn field_from(
@@ -611,11 +558,11 @@ pub(super) fn header_at(
     validate_start(connection, sequence, through)?;
     let key = sequence.to_string();
     let (start, end, children_total, bytes) =
-        field_from(connection, "request_observation_fields", &key, &[])?;
+        field_from(connection, "request_source_roots", &key, &[])?;
     let summary = super::observation_trace::summary(connection, sequence, through)?;
     let count = field_coordinates(
         connection,
-        "request_observation_fields",
+        "request_source_roots",
         &key,
         &["messages".into()],
     )?
@@ -656,7 +603,7 @@ pub(super) fn page_at(
     validate_start(connection, sequence, through)?;
     page_from(
         connection,
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         path,
         offset,
@@ -704,7 +651,7 @@ pub(super) fn page_from(
     if limit == 0 || limit > HEADER_PAGE_MAX {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::page(connection, id, path, offset, limit);
     }
@@ -715,13 +662,15 @@ pub(super) fn page_from(
     let rows=connection.prepare_cached(&format!("SELECT {},{} FROM {table} WHERE source_id=?1 AND parent_path=?2 AND ordinal>=?3 ORDER BY ordinal LIMIT ?4",page_metadata_columns(),header_columns(table)?))
         .map_err(|error|sqlite_error(&error, error.to_string()))?.query_map(params![id,field_path(path)?,offset,limit],
             |row| {let (path,key)=page_metadata(row,0)?;Ok((path,StoredField::row(row,2)?,key))})
-        .map_err(|error|sqlite_error(&error, error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|sqlite_error(&error, error.to_string()))?;
+        .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
+    let source = state_preview::Source::load(connection, id)?;
     let mut fields = rows
         .into_iter()
         .map(|(path, field, key)| {
-            let (start, end, children_total, bytes) = field.materialize()?;
             let path: Vec<String> =
                 serde_json::from_str(&path).map_err(|error| storage(error.to_string()))?;
+            let (start, end, children_total, bytes) =
+                field.materialize(connection, id, &path, &source)?;
             let content = metadata_list(table, &path, &bytes, "content")?;
             let collections = metadata_list(table, &path, &bytes, "collections")?;
             let value: serde_json::Value =
@@ -775,7 +724,7 @@ pub(super) fn read_at(
     read_from(
         connection,
         "trace_request",
-        "request_observation_fields",
+        "request_source_roots",
         &sequence.to_string(),
         path,
         offset,
@@ -808,7 +757,7 @@ pub(super) fn read_from(
     offset: u64,
     max_bytes: u32,
 ) -> Result<ObservationValueChunk, ConversationStoreError> {
-    if table == "request_observation_fields" {
+    if table == "request_source_roots" {
         field_path(path)?;
         return composed::range(connection, id, path, offset, max_bytes);
     }
@@ -822,7 +771,7 @@ pub(super) fn read_from(
         .filter(|value| *value <= crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(readable_end);
-    let bytes = super::content::range_bytes(
+    let bytes = crate::durable::sqlite::content::range_bytes(
         connection,
         (
             kind,
@@ -854,11 +803,11 @@ pub(super) fn field_header_at(
     validate_start(connection, sequence, through)?;
     let key = sequence.to_string();
     let (start, end, children_total, bytes, name) =
-        field_with_key(connection, "request_observation_fields", &key, path)?;
+        field_with_key(connection, "request_source_roots", &key, path)?;
     let value: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|_| storage("native request field corrupt"))?;
     let deferred = end - start > bytes.len() as u64
-        || message_descriptor_deferred("request_observation_fields", path, &value);
+        || message_descriptor_deferred("request_source_roots", path, &value);
     Ok(RequestObservationField {
         path: path.to_vec(),
         key: name
@@ -868,8 +817,8 @@ pub(super) fn field_header_at(
             })
             .transpose()?,
         value,
-        content: metadata_list("request_observation_fields", path, &bytes, "content")?,
-        collections: metadata_list("request_observation_fields", path, &bytes, "collections")?,
+        content: metadata_list("request_source_roots", path, &bytes, "content")?,
+        collections: metadata_list("request_source_roots", path, &bytes, "collections")?,
         encoded_bytes: end - start,
         children_total,
         deferred,
@@ -920,7 +869,7 @@ pub(super) fn terminal(
     // input source is unavailable. Display indexing must not reject that
     // execution fact or invent a frozen source to make it readable.
     let retained: bool = connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
             [request.as_str()],
             |row| row.get(0),
@@ -934,7 +883,7 @@ pub(super) fn terminal(
     let source = crate::observation::trace::frozen_request_outcome(&event.event)
         .expect("matched native request terminal");
     let encode = |field, value: &_| {
-        super::content::index_structural_value(
+        crate::durable::sqlite::content::index_structural_value(
             connection,
             "trace_terminal",
             &source_key,
@@ -943,14 +892,14 @@ pub(super) fn terminal(
         )
     };
     let encoded_bytes = encode(0, &source)?;
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "trace_terminal",
         &source_key,
         1,
         &source.failure,
     )?;
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "trace_terminal",
         &source_key,
@@ -960,14 +909,14 @@ pub(super) fn terminal(
             .as_ref()
             .map(crate::observation::trace::frozen::BorrowedFailure::message),
     )?;
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "trace_terminal",
         &source_key,
         3,
         &source.usage,
     )?;
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "trace_terminal",
         &source_key,
@@ -993,7 +942,7 @@ pub(super) fn terminal(
     };
     let bytes = crate::observation::bounded::bounded_bytes(&header, 16_384)
         .ok_or_else(|| storage("native request outcome header exceeds bound"))?;
-    let changed=connection.execute("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|sqlite_error(&error, error.to_string()))?;
+    let changed=connection.execute_cached("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if changed != 1 {
         return Err(storage(
             "native request terminal header owner missing or duplicated",
@@ -1049,7 +998,7 @@ pub(super) fn outcome_read_at(
             ));
         }
     };
-    super::content::structural_field_read(
+    crate::durable::sqlite::content::structural_field_read(
         connection,
         "trace_terminal",
         &source_sequence.to_string(),
@@ -1087,7 +1036,7 @@ pub(super) fn outcome_read(
 // Only a native request-message producer owns this descriptor flag. An
 // identically named property inside arbitrary original JSON stays opaque.
 fn message_descriptor_deferred(table: &str, path: &[String], value: &serde_json::Value) -> bool {
-    table == "request_observation_fields"
+    table == "request_source_roots"
         && path.len() == 2
         && path[0] == "messages"
         && path[1].parse::<u64>().is_ok()
@@ -1102,7 +1051,7 @@ fn metadata_list<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
 ) -> Result<Vec<T>, ConversationStoreError> {
     // Only message_value appends these typed fields. Original Journal, state
     // and arbitrary request JSON retain their own property-name semantics.
-    if table != "request_observation_fields"
+    if table != "request_source_roots"
         || path.len() != 2
         || path[0] != "messages"
         || path[1].parse::<u64>().is_err()
@@ -1369,26 +1318,18 @@ fn index_key(
         encoded_bytes: end - start,
     };
     let header = serde_json::to_vec(&descriptor).map_err(|error| storage(error.to_string()))?;
-    let key_value =
-        serde_json::to_vec(&descriptor.preview).map_err(|error| storage(error.to_string()))?;
-    let insert = format!(
-        "INSERT INTO {}(source_id,path_json,parent_path,ordinal,start,end,children,header_json) VALUES(?1,?2,NULL,NULL,?3,?4,0,?5)",
-        writer.table
-    );
+    let insert = "INSERT INTO state_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,preview_nodes,preview_kind) VALUES(?1,?2,NULL,NULL,?3,?4,0,1,3)";
     writer
         .connection
         .execute(
-            &insert,
-            params![writer.id, encoded_path(&key_path)?, start, end, key_value],
+            insert,
+            params![writer.id, encoded_path(&key_path)?, start, end],
         )
         .map_err(|error| sqlite_error(&error, error.to_string()))?;
     writer
         .connection
         .execute(
-            &format!(
-                "UPDATE {} SET key_path=?3,key_header=?4 WHERE source_id=?1 AND path_json=?2",
-                writer.table
-            ),
+            "UPDATE state_observation_fields SET key_path=?3,key_header=?4 WHERE source_id=?1 AND path_json=?2",
             params![
                 writer.id,
                 encoded_path(path)?,
@@ -1398,4 +1339,34 @@ fn index_key(
         )
         .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod source_buffer_tests {
+    use super::*;
+
+    #[test]
+    fn state_source_lazily_allocates_a_bounded_second_buffer() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
+        let mut writer = SourceWriter {
+            connection: &connection,
+            failure: None,
+            id: "fragmented-source",
+            kind: "state",
+            buffer: Vec::with_capacity(SEGMENT),
+            first: Vec::new(),
+            written: 0,
+            segment: 0,
+        };
+        writer.write_all(&vec![b'a'; SEGMENT]).unwrap();
+        assert_eq!(writer.buffer.capacity(), 0);
+        for _ in 0..12_000 {
+            writer.write_all(b"01234567890").unwrap();
+            assert!(writer.buffer.capacity() <= SEGMENT);
+            assert!(writer.first.capacity() <= SEGMENT);
+        }
+        writer.flush().unwrap();
+        assert_eq!(writer.written, (SEGMENT + 12_000 * 11) as u64);
+    }
 }

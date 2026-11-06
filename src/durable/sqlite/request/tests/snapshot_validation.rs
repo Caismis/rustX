@@ -128,12 +128,29 @@ pub(super) fn take_snapshot_work() -> (usize, usize) {
     REQUEST_SNAPSHOT_READ_WORK.with(|work| work.replace((0, 0)))
 }
 
+fn take_configuration_decodes() -> usize {
+    native_request::CONFIGURATION_DECODES.with(|count| count.replace(0))
+}
+
+fn assert_snapshot_and_configuration_work(metadata_bytes: usize) {
+    // The byte counter covers only the normalized metadata row. Shared payload
+    // bytes are still fetched and fully typed-decoded; assert that work once too.
+    assert_eq!(take_snapshot_work(), (1, metadata_bytes));
+    assert_eq!(take_configuration_decodes(), 1);
+}
+
 #[test]
 fn t14_t19_t20_provider_outcomes_decode_the_same_transaction_snapshot_once() {
     let (store, snapshot, mut event) = snapshot_fixture();
     let mut connection = store.lock().unwrap();
     let transaction = connection.transaction().unwrap();
-    let bytes = encode_snapshot(&snapshot).unwrap().len();
+    let bytes: usize = transaction
+        .query_row(
+            "SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1",
+            [snapshot.request_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
     for failed in [false, true] {
         if failed {
             event.event = RuntimeEvent::ModelRequestFailed {
@@ -149,10 +166,12 @@ fn t14_t19_t20_provider_outcomes_decode_the_same_transaction_snapshot_once() {
             };
         }
         take_snapshot_work();
+        take_configuration_decodes();
         original_provider_validation(&transaction, &event).unwrap();
         assert_eq!(take_snapshot_work(), (2, 2 * bytes));
+        assert_eq!(take_configuration_decodes(), 2);
         validate_event_reference(&transaction, &event).unwrap();
-        assert_eq!(take_snapshot_work(), (1, bytes));
+        assert_snapshot_and_configuration_work(bytes);
     }
 }
 
@@ -219,11 +238,19 @@ pub(super) fn publication_start(snapshot: &RequestSnapshot) -> PublicationStream
 fn t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot() {
     for audit in [false, true] {
         let (store, snapshot, outcome) = snapshot_fixture();
-        let bytes = encode_snapshot(&snapshot).unwrap().len();
+        let bytes: usize = store
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1",
+                [snapshot.request_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
         let start = publication_start(&snapshot);
         take_snapshot_work();
-        store.open_publication_stream(&start).unwrap();
-        assert_eq!(take_snapshot_work(), (1, bytes));
+        take_configuration_decodes();
+
         let frame = PublicationFrame {
             stream_id: start.stream_id.clone(),
             message_id: start.message_id.clone(),
@@ -235,20 +262,22 @@ fn t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot() {
         };
         let before = store.presentation_frontier().unwrap();
         assert!(matches!(
-            store.commit_publication_terminal(&start.stream_id, std::slice::from_ref(&frame)),
+            store.commit_publication_terminal(&start, std::slice::from_ref(&frame)),
             Err(ConversationStoreError::PublicationViolation(message)) if message.contains("no durable provider outcome")
         ));
-        assert_eq!(take_snapshot_work(), (1, bytes));
+        // First-write admission and the terminal boundary each recheck the
+        // small row; only one exact configuration payload is decoded.
+        assert_eq!(take_snapshot_work(), (2, 2 * bytes));
+        assert_eq!(take_configuration_decodes(), 1);
         assert_eq!(store.presentation_frontier().unwrap(), before);
         store.append_event(outcome).unwrap();
-        assert_eq!(take_snapshot_work(), (1, bytes));
-        store
-            .commit_publication_terminal(&start.stream_id, &[frame])
-            .unwrap();
-        assert_eq!(take_snapshot_work(), (1, bytes));
+        assert_snapshot_and_configuration_work(bytes);
+        store.commit_publication_terminal(&start, &[frame]).unwrap();
+        assert_eq!(take_snapshot_work(), (2, 2 * bytes));
+        assert_eq!(take_configuration_decodes(), 1);
         if audit {
             store
-                .terminalize_publication_audit(&start.stream_id, Utc::now())
+                .terminalize_publication_audit(&start, Utc::now())
                 .unwrap();
         } else {
             let message = MessageBlock::Assistant(AssistantMessageBlock {
@@ -271,7 +300,7 @@ fn t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot() {
                 .unwrap();
             assert_eq!(store.load_canonical().unwrap(), vec![message]);
         }
-        assert_eq!(take_snapshot_work(), (1, bytes));
+        assert_snapshot_and_configuration_work(bytes);
         assert_eq!(
             store.load_request_snapshot(&snapshot.request_id).unwrap(),
             snapshot
@@ -333,7 +362,18 @@ fn normalized_request_metadata_publication_never_hydrates_selected_input_bodies(
         );
     }
     store
-        .open_publication_stream(&publication_start(&snapshot))
+        .stage_publication_frames(
+            &publication_start(&snapshot),
+            &[PublicationFrame {
+                stream_id: publication_start(&snapshot).stream_id,
+                message_id: snapshot.provisional_message_id.clone(),
+                sequence: 0,
+                payload: crate::publication::PublicationPayload::TextSuffix {
+                    block_index: ContentBlockIndex::new(0),
+                    suffix: "output".into(),
+                },
+            }],
+        )
         .unwrap();
     assert!(store.load_request_snapshot(&snapshot.request_id).is_err());
     store
@@ -383,6 +423,13 @@ fn normalized_request_metadata_budget_rejects_before_returning_any_owned_json() 
     let metadata_bytes = encode_snapshot(&snapshot).unwrap().len();
     let full_bytes = serde_json::to_vec(&snapshot).unwrap().len();
     let connection = store.lock().unwrap();
+    let stored_bytes: usize = connection
+        .query_row(
+            "SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1",
+            [snapshot.request_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
     take_snapshot_work();
     assert!(
         load_request_snapshot_bounded(
@@ -405,7 +452,7 @@ fn normalized_request_metadata_budget_rejects_before_returning_any_owned_json() 
         )
         .is_err()
     );
-    assert_eq!(take_snapshot_work(), (1, metadata_bytes));
+    assert_eq!(take_snapshot_work(), (1, stored_bytes));
     assert_eq!(
         load_request_snapshot_bounded(
             &connection,
@@ -416,7 +463,7 @@ fn normalized_request_metadata_budget_rejects_before_returning_any_owned_json() 
         .unwrap(),
         snapshot
     );
-    assert_eq!(take_snapshot_work(), (1, metadata_bytes));
+    assert_eq!(take_snapshot_work(), (1, stored_bytes));
 }
 
 pub(super) fn assert_manifest_digest_rejected<T>(result: &Result<T, ConversationStoreError>) {
@@ -438,9 +485,16 @@ fn normalized_request_digest_guards_every_reader_before_materializing_malformed_
     let (digest, started) = {
         let mut connection = store.lock().unwrap();
         let transaction = connection.transaction().unwrap();
+        let json: String = transaction
+            .query_row(
+                "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+                [snapshot.request_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
         (
             stored_snapshot_digest(
-                &encode_snapshot(&snapshot).unwrap(),
+                &json,
                 read_stored_snapshot_root(&transaction, &snapshot.request_id).unwrap(),
             ),
             find_request_start_event(&transaction, &snapshot.request_id)

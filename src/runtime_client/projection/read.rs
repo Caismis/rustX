@@ -6,6 +6,9 @@ use super::AttemptId;
 use super::ContentBlockIndex;
 #[cfg(test)]
 use super::ForegroundToolState;
+use super::ReadDomainCut;
+use super::prepared_attempt;
+use super::prepared_capture;
 use super::{
     Arc, CheckpointSeed, InboundDrainView, InboundItemView, MessageBlock, MessageId,
     RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientProjection,
@@ -26,7 +29,37 @@ impl RuntimeClientProjection {
     }
 
     pub(super) fn capture_working_seed(&self) -> CheckpointSeed {
-        CheckpointSeed {
+        let read_cut = self.working_read_cut();
+        let mut seed = CheckpointSeed {
+            prepared: prepared_capture::PreparedCaptures::empty(),
+            attempt_bindings: self
+                .published_seed
+                .as_ref()
+                .map_or_else(prepared_capture::PreparedAttemptBindings::default, |seed| {
+                    seed.attempt_bindings.clone()
+                }),
+            prepared_attempt: self
+                .published_seed
+                .as_ref()
+                .map_or_else(prepared_attempt::PreparedAttemptItems::default, |seed| {
+                    seed.prepared_attempt.clone()
+                }),
+            metadata_frontiers: prepared_capture::MetadataFrontiers::inherit(
+                self.published_seed.as_deref(),
+            ),
+            metadata_arrays: self.published_seed.as_ref().map_or_else(
+                super::checkpoint::metadata_fragment::MetadataArrays::default,
+                |seed| seed.metadata_arrays.clone(),
+            ),
+            read_domains: (self.read_domains_dirty
+                || self.snapshot.trace.read_cut.as_ref().is_none_or(|trace| {
+                    trace.through != read_cut.through || trace.source_cut != read_cut.source_cut
+                }))
+            .then(|| ReadDomainCut {
+                revision: read_cut.revision,
+                through: read_cut.through,
+                source_cut: read_cut.source_cut.clone(),
+            }),
             snapshot: self.snapshot.clone(),
             workflow_source: self
                 .domain_sources
@@ -40,7 +73,7 @@ impl RuntimeClientProjection {
             capability_head: self.capability_head.clone(),
             trace_head: self.trace_head.clone(),
             cursor: self.cursor,
-            read_cut: self.working_read_cut(),
+            read_cut,
             exhausted: self.exhausted,
             journal_failure: self.source_state.journal_failure,
             source_pending: !self.source_state.source_layout_failure
@@ -49,6 +82,8 @@ impl RuntimeClientProjection {
                     || (self.source_state.source_unavailable && self.source_cut.is_some())),
             source_cut: self.source_cut.clone(),
             head_bindings: self.head_bindings.clone(),
+            transcript_bindings: self.transcript_bindings.clone(),
+            transcript_head: self.transcript_head.clone(),
             foreground_content: self.foreground_content.clone(),
             source_frontiers: self.source_frontiers.clone(),
             collection_cuts: self.collection_cuts.clone(),
@@ -59,7 +94,10 @@ impl RuntimeClientProjection {
             live_block_total: self.live_block_total,
             live_tool_total: self.live_tool_total,
             canonical_foreground: self.canonical_foreground.clone(),
-        }
+        };
+        seed.prepared =
+            prepared_capture::PreparedCaptures::inherit(&seed, self.published_seed.as_deref());
+        seed
     }
 
     pub(crate) fn checkpoint_candidate(
@@ -83,11 +121,7 @@ impl RuntimeClientProjection {
             revision: self.cursor.get(),
             through: self.read_through,
             collection_cuts: self.collection_cuts.clone(),
-            domain_revisions: self
-                .domain_revisions
-                .iter()
-                .map(|(key, revision)| ((*key).to_owned(), *revision))
-                .collect(),
+            domain_revisions: self.domain_revisions.clone(),
             source_cut: (!self.source_state.source_unavailable
                 && self.validate_source_prefix().is_ok())
             .then_some(self.source_cut.as_ref())
@@ -176,27 +210,38 @@ impl RuntimeClientProjection {
             .headers
             .iter()
             .filter_map(|header| {
-                header
-                    .identity
-                    .as_ref()
-                    .map(|identity| (identity.clone(), header.content.clone()))
+                header.identity.as_ref().map(|identity| {
+                    (
+                        identity.clone(),
+                        prepared_capture::PreparedBindingHead::from(header.content.clone()),
+                    )
+                })
             })
             .collect();
-        self.snapshot.message_descriptors = messages
+        self.snapshot.message_descriptors = (messages
             .headers
             .iter()
             .filter_map(crate::observation::transcript::RuntimeClientMessageDescriptor::from_header)
-            .collect();
-        self.snapshot.messages = messages
+            .map(Arc::new)
+            .collect::<super::snapshot::RuntimeClientMessageDescriptorHead>())
+        .into();
+        self.snapshot.messages = (messages
             .headers
             .iter()
             .filter_map(|header| header.display.clone())
-            .collect();
+            .collect::<Vec<_>>())
+        .into();
         self.snapshot.transcript =
-            crate::observation::transcript::transcript_header_view(transcript);
-        self.snapshot.publication_settlements = store
+            (crate::observation::transcript::transcript_header_view(transcript)).into();
+        self.transcript_bindings = self.snapshot.transcript.content.clone().into();
+        self.transcript_head = crate::observation::transcript::PreparedTranscriptHead::from_entries(
+            &self.snapshot.conversation_id,
+            &self.snapshot.transcript.entries,
+        );
+        self.snapshot.publication_settlements = (store
             .publication_settlement_head(&cut)
-            .map_err(RuntimeClientError::observation_store_error)?;
+            .map_err(RuntimeClientError::observation_store_error)?)
+        .into();
         let references = messages
             .headers
             .iter()
@@ -286,7 +331,7 @@ impl RuntimeClientProjection {
 
     pub(super) fn install_pending_receipt_head(
         &mut self,
-        receipt: &crate::durable::inbox::PendingObservationReceipt,
+        receipt: &crate::durable::PendingObservationReceipt,
     ) {
         let mut pending = Vec::with_capacity(receipt.head.len());
         for header in &receipt.head {
@@ -312,7 +357,7 @@ impl RuntimeClientProjection {
 
     pub(crate) fn apply_pending_receipt(
         &mut self,
-        receipt: Option<&crate::durable::inbox::PendingObservationReceipt>,
+        receipt: Option<&crate::durable::PendingObservationReceipt>,
     ) {
         let Some(receipt) = receipt else {
             self.mark_observation_unavailable("native pending display source unavailable".into());
@@ -349,12 +394,10 @@ impl RuntimeClientProjection {
         };
         self.read_revision = revision;
         for owner in ["inbound", "transcript"] {
-            let revision = self.domain_revisions.entry(owner).or_default();
-            let Some(next) = revision.checked_add(1) else {
+            let Some(_) = self.domain_revisions.advance_revision(owner) else {
                 self.publication_failed(&RuntimeClientError::ProjectionExhausted);
                 return;
             };
-            *revision = next;
         }
         let loaded = self.snapshot.inbound.pending.len() as u64;
         self.source_frontiers.insert(
@@ -642,7 +685,7 @@ impl RuntimeClientProjection {
         &mut self,
         header: crate::observation::resource_source::RuntimeClientResourcesView,
     ) {
-        self.snapshot.resources = header;
+        self.snapshot.resources = (header).into();
     }
 
     pub(crate) fn install_source_frontiers(

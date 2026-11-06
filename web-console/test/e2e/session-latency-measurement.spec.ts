@@ -2,7 +2,7 @@ import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, closeSessionView } from './shell-actions';
-import { supersededHistoryReads, type RequestTiming } from '../session-latency';
+import { supersededHistoryReads, supersededTraceReads, type RequestTiming } from '../session-latency';
 
 type HttpTiming = { path: string; start: number; end?: number };
 type Mark = { kind: 'click' | 'selected' | 'phase'; name: string; time: number };
@@ -40,9 +40,9 @@ async function observeLatency(page: Page) {
       }
       send(data: Parameters<WebSocket['send']>[0]) {
         if (typeof data === 'string') {
-          const call = JSON.parse(data) as { id?: unknown; method?: string; params?: { session_id?: string; node_id?: string; target?: Record<string, unknown>; at?: { type?: string } } };
+          const call = JSON.parse(data) as { id?: unknown; method?: string; params?: { session_id?: string; node_id?: string; target?: Record<string, unknown>; at?: { type?: string }; before?: string | null } };
           if (call.id !== undefined && call.method) {
-            const row: RequestTiming = { method: call.method, start: performance.now(), historyAt: call.method === 'session/history' ? call.params?.at?.type : undefined, sessionId: call.params?.session_id, nodeId: call.params?.node_id, target: attachmentIdentity(call.params?.target) };
+            const row: RequestTiming = { method: call.method, start: performance.now(), historyAt: call.method === 'session/history' ? call.params?.at?.type : undefined, traceBefore: call.method === 'session/trace' ? call.params?.before : undefined, sessionId: call.params?.session_id, nodeId: call.params?.node_id, target: attachmentIdentity(call.params?.target) };
             evidence.rpc.push(row); this.calls.set(call.id, row);
           }
         }
@@ -75,7 +75,9 @@ async function report(page: Page, info: TestInfo) {
   // Native rejects optional cold history while attach owns a Loading runtime.
   // Keep the rejection in the evidence and require its exact successful live
   // handoff; unrelated reads and every required operation must still succeed.
-  const superseded = new Set(supersededHistoryReads(evidence.rpc));
+  // Independent Trace head repair may also outlive a native cut. Require its
+  // successful later head read on the same attachment and keep the raw refusal.
+  const superseded = new Set([...supersededHistoryReads(evidence.rpc), ...supersededTraceReads(evidence.rpc)]);
   expect(evidence.rpc.filter(row => row.error !== undefined && !superseded.has(row))).toEqual([]);
   return evidence;
 }

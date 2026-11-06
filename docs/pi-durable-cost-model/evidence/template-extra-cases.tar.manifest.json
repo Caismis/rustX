@@ -1,0 +1,542 @@
+{
+  "pi-template-complete-summary.json": {
+    "bytes": 93429,
+    "sha256": "78871a2d1123a3f25951683bdbacc1a2afdac9dc07e358925a84a50dffde4de4"
+  },
+  "pi-template-extra-matrix/0-cancel-after.json": {
+    "bytes": 126092,
+    "sha256": "c91e1ef7d2be6bf31b9be056b51251c25992b999c0ba5ab5eb0b7a4b3601b558"
+  },
+  "pi-template-extra-matrix/0-cancel-after.log": {
+    "bytes": 320,
+    "sha256": "4dc91cba834e1c4a52deda45e7eb9269256d5ba4d2ceaf99818d71a42548e9ee"
+  },
+  "pi-template-extra-matrix/0-cancel-after.process.json": {
+    "bytes": 22653,
+    "sha256": "76207513c80efceb7077c6b5ceff9116669b111538a0afa3a8c192e49c625e3f"
+  },
+  "pi-template-extra-matrix/0-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "7c08142000d39c0672bc64758d7507c24f83321d2a7f3e94f0d485905b3fae43"
+  },
+  "pi-template-extra-matrix/0-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "cae0cbaed585535f0bda6deb6782a28d74946b01013ba24a6f32bd4b237195d1"
+  },
+  "pi-template-extra-matrix/0-cancel-before.json": {
+    "bytes": 126092,
+    "sha256": "ad72ea74f8861926b009d232bb079fd0319c0a95a1989fb4388b13093e8e9e82"
+  },
+  "pi-template-extra-matrix/0-cancel-before.log": {
+    "bytes": 320,
+    "sha256": "4d1c3c101105a4a1794f8f17098ca82425dc85ed691ced655df14dd89a871a93"
+  },
+  "pi-template-extra-matrix/0-cancel-before.process.json": {
+    "bytes": 22658,
+    "sha256": "e88cc8219fdb5305ed8d9b50d3c56aa6e7275bbdcefcd31af88e7df3d5b4377b"
+  },
+  "pi-template-extra-matrix/0-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "35992417a5eb7012baf2995098119a57a54f42ccb814ef8284ca61815c79707a"
+  },
+  "pi-template-extra-matrix/0-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "0109e1aba5a195a8b8e390b9102d3bdb52b622bd1b0b1a8c0e34b75e04c79116"
+  },
+  "pi-template-extra-matrix/0-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-template-extra-matrix/0-large-after.json": {
+    "bytes": 159095,
+    "sha256": "831777e615cd19b847f7973b8824eae175385c203b0b6f7991b351e7f1581dd5"
+  },
+  "pi-template-extra-matrix/0-large-after.log": {
+    "bytes": 319,
+    "sha256": "33b6464c7cd96098cf91e5394b7ede97b45e30ba8735f9195816c9896a9f6aa0"
+  },
+  "pi-template-extra-matrix/0-large-after.process.json": {
+    "bytes": 44421,
+    "sha256": "049ce64ed9ac5274a77edc3a40c6d7e053c4157e0506e4da7702399e861b9780"
+  },
+  "pi-template-extra-matrix/0-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "f46a688fe6ce7883efc36210251e77bf07ca3c434bf41582411f5be266930ac6"
+  },
+  "pi-template-extra-matrix/0-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "25d64d5c3d95a834c229c49cdda9871d231fc54022dcb02c1719c099c33453d4"
+  },
+  "pi-template-extra-matrix/0-large-before.json": {
+    "bytes": 159093,
+    "sha256": "fe6ec6fbe6fd1ba32f72086c1aa910cb90b95c0b9374bd8fb8ef9d1bf33df64c"
+  },
+  "pi-template-extra-matrix/0-large-before.log": {
+    "bytes": 319,
+    "sha256": "3b338f1461448683cf9466899d04d3480d44c1a3309587d0af89470fc8afb561"
+  },
+  "pi-template-extra-matrix/0-large-before.process.json": {
+    "bytes": 44426,
+    "sha256": "d44c99a1e3d01d7183acc2d812a3d029b78ca3e7b071e6a60213e9b9e5079efd"
+  },
+  "pi-template-extra-matrix/0-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "cb16189eb6929477eb92cd4b3c2bb39a1fe4b0a2f04d4921438f07f5b2dfff5a"
+  },
+  "pi-template-extra-matrix/0-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "25d64d5c3d95a834c229c49cdda9871d231fc54022dcb02c1719c099c33453d4"
+  },
+  "pi-template-extra-matrix/0-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-template-extra-matrix/0-stream-after.json": {
+    "bytes": 128625,
+    "sha256": "c6a77a904f5c82ab87c25f7655be3ba8c77b89d533a0914dbd1bb0c076b00255"
+  },
+  "pi-template-extra-matrix/0-stream-after.log": {
+    "bytes": 320,
+    "sha256": "b1e0cc3449b0a1c66a3da0a37845f9d969542ca1136558140b37ce354cfa9802"
+  },
+  "pi-template-extra-matrix/0-stream-after.process.json": {
+    "bytes": 66865,
+    "sha256": "8af7724b7395d7d53b58cc75432840090841fd161b75297e6e891a244b1c4d58"
+  },
+  "pi-template-extra-matrix/0-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "dee9bb9ed450d4757adbfd99ea80583ef38abb8d5ba5a6b4c95eb347649c1150"
+  },
+  "pi-template-extra-matrix/0-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "cd6bc03305a188175f324e03c1630af4b1541ce976742a6e109850cf6d227c04"
+  },
+  "pi-template-extra-matrix/0-stream-before.json": {
+    "bytes": 128625,
+    "sha256": "b7fc97c5cf199fe797c90639dbeca38038971c99bf072d08f313c7a4884c9a60"
+  },
+  "pi-template-extra-matrix/0-stream-before.log": {
+    "bytes": 320,
+    "sha256": "585fb050f69c253b692a93c48db27e31831e593dc2cc69dadacf8fe28a9e8adb"
+  },
+  "pi-template-extra-matrix/0-stream-before.process.json": {
+    "bytes": 66870,
+    "sha256": "8afdd610762e374c70588cdf37cfd3d470e920c7310658346a5272834792bb24"
+  },
+  "pi-template-extra-matrix/0-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "21a1541a6a8cce92f2a5a5a3a79ae82644ce3c3f7222b42575a2d0cdb677b955"
+  },
+  "pi-template-extra-matrix/0-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "b79ac2cb5a6ded52329ffdc38a11695717efb7233fced4f0ec42997d62c2c32b"
+  },
+  "pi-template-extra-matrix/0-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-template-extra-matrix/0-tool-after.json": {
+    "bytes": 232819,
+    "sha256": "9eba9492aba32a4fb95b9bf53b26b24ee5a2802c09a6c0c80d8aaa06bc570ed9"
+  },
+  "pi-template-extra-matrix/0-tool-after.log": {
+    "bytes": 318,
+    "sha256": "440c08d651eeaf8c90cb0b61d0034860652208eed7bbffb5fddfed2a588c74ea"
+  },
+  "pi-template-extra-matrix/0-tool-after.process.json": {
+    "bytes": 45170,
+    "sha256": "3e94b340bfafa8abd97e3f676c51e9f614fcf23ca69412140c3bb71622074b33"
+  },
+  "pi-template-extra-matrix/0-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "f4a82bf5f8c38f420c34f669d11ac64e3ada115b9ed72285426265df87388e61"
+  },
+  "pi-template-extra-matrix/0-tool-after.provider.stdout": {
+    "bytes": 26203,
+    "sha256": "feb489913cac2a27832950bdb702acbc66e5ad9ef95f81017bd0d9ee0ccc3526"
+  },
+  "pi-template-extra-matrix/0-tool-before.json": {
+    "bytes": 232819,
+    "sha256": "20bacdee0fa64145093a4770cc8724a68dfe1cb65788069e44f5ee7d30d39632"
+  },
+  "pi-template-extra-matrix/0-tool-before.log": {
+    "bytes": 318,
+    "sha256": "c9b3542f222c6b0c65c81bcbe2006dad1c81cd41f7a31170560fc1cc2c4b99be"
+  },
+  "pi-template-extra-matrix/0-tool-before.process.json": {
+    "bytes": 45175,
+    "sha256": "183b9750ca1be91db4a7dc2c50e36c46719013c722ee920e502e69d6bc14c203"
+  },
+  "pi-template-extra-matrix/0-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "8c7310558708b7659624f7dd0e564743c4551a394da09b5c8fc231075be8a24a"
+  },
+  "pi-template-extra-matrix/0-tool-before.provider.stdout": {
+    "bytes": 26203,
+    "sha256": "3f1aef304ef029fd4b20c4c0b5478eb1627741d68aaa07f8c96851af4b2aa60b"
+  },
+  "pi-template-extra-matrix/0-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-template-extra-matrix/1-cancel-after.json": {
+    "bytes": 126094,
+    "sha256": "ac5e16f894dd2521ff67cd85112cda48e64e450a3a3687b869a83eb435e70977"
+  },
+  "pi-template-extra-matrix/1-cancel-after.log": {
+    "bytes": 320,
+    "sha256": "42b7222fe308d4d20f3b4647e3e08b0e129e20ebdab20fb645cf1b9649d59bee"
+  },
+  "pi-template-extra-matrix/1-cancel-after.process.json": {
+    "bytes": 22653,
+    "sha256": "6500ab23c07b4035bd58eef462100d5d13029f88f822553191fd557ce1d2b083"
+  },
+  "pi-template-extra-matrix/1-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "efe2ae510cd9285fa0565ee2800a2f30a2060e56840009dd8d07f6a30074f551"
+  },
+  "pi-template-extra-matrix/1-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "ac998fd1d7c090e0f71f29c0029e09264f3e08fa0e394f20c10b6fe0b65a2246"
+  },
+  "pi-template-extra-matrix/1-cancel-before.json": {
+    "bytes": 126100,
+    "sha256": "a3a005081bda6dd168eb5828ffac38f91c8fa88342999fbcdf906ed0144f6082"
+  },
+  "pi-template-extra-matrix/1-cancel-before.log": {
+    "bytes": 320,
+    "sha256": "d786d66b4dbc8563df7fb735fd7ae7735d229785ad3e696c99c3fd6f5f1ca534"
+  },
+  "pi-template-extra-matrix/1-cancel-before.process.json": {
+    "bytes": 22658,
+    "sha256": "e9a225f2b6bd78bbae41675ac5d4cb3e08b9cb203a1b713a43c3eab51a28d552"
+  },
+  "pi-template-extra-matrix/1-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "23d3b874008c0e0e770d3fe601dff2dfc0e58fd23d636b3aef121c5ea421c02f"
+  },
+  "pi-template-extra-matrix/1-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "780dfa25437096ff56554291b9816f7e7984d7d17f823628ff4950986239140a"
+  },
+  "pi-template-extra-matrix/1-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-template-extra-matrix/1-large-after.json": {
+    "bytes": 159101,
+    "sha256": "6fae02c125f1a5356e7424124b1cad0a8c99bc6af49b735916948cc8daba6d9c"
+  },
+  "pi-template-extra-matrix/1-large-after.log": {
+    "bytes": 319,
+    "sha256": "a9291568084ec54b31826a385be01b6a53a944f8beb24017a30214bd7e8ee510"
+  },
+  "pi-template-extra-matrix/1-large-after.process.json": {
+    "bytes": 44421,
+    "sha256": "e19d469f98176e1237e17d4b4394a0d9478a6732dfbcfe87301becd4cac360af"
+  },
+  "pi-template-extra-matrix/1-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "b789c670c52174df9e87c6c122b9c85125006346a6d320b7808a6fd536d6aa39"
+  },
+  "pi-template-extra-matrix/1-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "d71e7c09e6e70a0f6d8380b9db529a96643f254a62e652ec13d406b92c3a35fc"
+  },
+  "pi-template-extra-matrix/1-large-before.json": {
+    "bytes": 159095,
+    "sha256": "86bdf7f84c27edaa184ede85f556a327a7fa877c432979e30ae6aa53002626a2"
+  },
+  "pi-template-extra-matrix/1-large-before.log": {
+    "bytes": 319,
+    "sha256": "bfb4d2a9e77c8d43e758738d301d8a9c3b94f3610b0a5b200a60c07c317881a5"
+  },
+  "pi-template-extra-matrix/1-large-before.process.json": {
+    "bytes": 44426,
+    "sha256": "79208c45f3348422aaf5505abc947c1f8448cb8c97fec1add7312b57f51d532f"
+  },
+  "pi-template-extra-matrix/1-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "bd55dfe16be077ad21f3b3d2e07260c40bab64b5a7fa76f2c9d4bbe51d14222e"
+  },
+  "pi-template-extra-matrix/1-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "d71e7c09e6e70a0f6d8380b9db529a96643f254a62e652ec13d406b92c3a35fc"
+  },
+  "pi-template-extra-matrix/1-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-template-extra-matrix/1-stream-after.json": {
+    "bytes": 128618,
+    "sha256": "126885c761e54783717e5d6896cdddacdf2bcd561f104f540727e1eee6cf5bc3"
+  },
+  "pi-template-extra-matrix/1-stream-after.log": {
+    "bytes": 320,
+    "sha256": "df37c7d9b723185a9988c4547893d35ce03144bcf8004f86c4f342e2bbf80890"
+  },
+  "pi-template-extra-matrix/1-stream-after.process.json": {
+    "bytes": 66865,
+    "sha256": "e471344a8dd4007359718b36bbec4c3dba39ba6c1a33c35dc2dfa159a57c7f04"
+  },
+  "pi-template-extra-matrix/1-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "2678a276af1085c44d7e6d084739def1833f6af120fd2e721575b9fa9c1f3248"
+  },
+  "pi-template-extra-matrix/1-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "1789b911cdba4d34f57a61b26d1184137110a6b2b55362b4bceadfe2be6a5ff0"
+  },
+  "pi-template-extra-matrix/1-stream-before.json": {
+    "bytes": 128618,
+    "sha256": "63821c93a3dc5ef5870b49f2624963431fa9fb41edc4f71577d80106ba42c38a"
+  },
+  "pi-template-extra-matrix/1-stream-before.log": {
+    "bytes": 320,
+    "sha256": "3b8ac1aa8d9a6be5e6c0d95f208f9e333e498412f974ef840a2e342c11fb8f24"
+  },
+  "pi-template-extra-matrix/1-stream-before.process.json": {
+    "bytes": 66870,
+    "sha256": "2c71b14f47aa58be5f0039ae7ce4ae0ce958bf304d24428ce1e4119bdf5028f2"
+  },
+  "pi-template-extra-matrix/1-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "818a386e005ec73db417c0cc4abf6aab935cc62a9c4fe821d63f8dd0e877ae1f"
+  },
+  "pi-template-extra-matrix/1-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "2afb93cbb82b261990903ac2b6543f09db140a100aac2d079b3ed33c46c518ad"
+  },
+  "pi-template-extra-matrix/1-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-template-extra-matrix/1-tool-after.json": {
+    "bytes": 232827,
+    "sha256": "5f8ac8e190a5b575b9a465e815a9d8a35b879bfc05ad9c498b161cf55b7bd675"
+  },
+  "pi-template-extra-matrix/1-tool-after.log": {
+    "bytes": 318,
+    "sha256": "d0c1d49390494573c0caf61c14ccb422710360ca23448e5c1295b3f087119202"
+  },
+  "pi-template-extra-matrix/1-tool-after.process.json": {
+    "bytes": 45170,
+    "sha256": "e6b249c0af5cb7c40179699763e1c37a86927609e38ec5955fe8f0b204b5f248"
+  },
+  "pi-template-extra-matrix/1-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "1b382b8c4b932b301732e8b7c98606917f86b1f7451652c6938f6544e83d83ca"
+  },
+  "pi-template-extra-matrix/1-tool-after.provider.stdout": {
+    "bytes": 26203,
+    "sha256": "83abdc3b329c855ce44a71aad024fddae5a901d29f47711096ec712b8b4b3470"
+  },
+  "pi-template-extra-matrix/1-tool-before.json": {
+    "bytes": 232819,
+    "sha256": "cb1465ebdb667758680ff2fed0cb3680b3858b5d7011b29c4368a449cbf4cb26"
+  },
+  "pi-template-extra-matrix/1-tool-before.log": {
+    "bytes": 318,
+    "sha256": "fc8e52734990f4ebfbad09842d2fb86cb0c53a01ffe7c76e7d8180739b285bfe"
+  },
+  "pi-template-extra-matrix/1-tool-before.process.json": {
+    "bytes": 45175,
+    "sha256": "47b7d9999642bc7ef0114f31700a89248240a1addbf2dd9701c747dba852ebe9"
+  },
+  "pi-template-extra-matrix/1-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "620866d4efa3777f0290af6e849aff60040a984a034452edc0e0f216bc332767"
+  },
+  "pi-template-extra-matrix/1-tool-before.provider.stdout": {
+    "bytes": 26203,
+    "sha256": "8e85f231bc18d4509d2a1e127198d1ad7c3d7803df3f8ba11c4245bd6230839a"
+  },
+  "pi-template-extra-matrix/1-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-template-extra-matrix/2-cancel-after.json": {
+    "bytes": 126092,
+    "sha256": "76fc658567ad13e23160b1bab1af26c068b9b413b1b8f175746ec91e8af8cdbd"
+  },
+  "pi-template-extra-matrix/2-cancel-after.log": {
+    "bytes": 320,
+    "sha256": "e9c0864b7f485f355af89924285693c280b1d9aa56d3a1066394083360e39fd4"
+  },
+  "pi-template-extra-matrix/2-cancel-after.process.json": {
+    "bytes": 22653,
+    "sha256": "72ef010dc77ec6abdefcba83f9162706e9be810bb8a8cb4bd4d55cd4b621cb57"
+  },
+  "pi-template-extra-matrix/2-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "e531ad3c24e1c76d9d341012713e1ca73c5788c36dbf22237a7134be77b4969b"
+  },
+  "pi-template-extra-matrix/2-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "9942d6d3e63a596eae46bdddc73c20a4171874e5c8e45ad41d85fb9f446e579e"
+  },
+  "pi-template-extra-matrix/2-cancel-before.json": {
+    "bytes": 126092,
+    "sha256": "1fd45e77bf5b871bae1f2ba135260acab3e1944c86cafc116b1beea9f6e6f7bb"
+  },
+  "pi-template-extra-matrix/2-cancel-before.log": {
+    "bytes": 320,
+    "sha256": "e485f354be9c802d3ec9534d942284a01688f75fdaaf1ee29466182fc58f1ac8"
+  },
+  "pi-template-extra-matrix/2-cancel-before.process.json": {
+    "bytes": 22658,
+    "sha256": "202f4d7affd9955a26a304b4889ef1cf3242fe0afb90167adb3728d413016c00"
+  },
+  "pi-template-extra-matrix/2-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "58ab68273aaa21e7da3c47eb6628fc45301eb80070d957f1c4d3d13c148c5363"
+  },
+  "pi-template-extra-matrix/2-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "d54ba209d6c18233c76e5aeb9654bf0ef77eb0f578ec223d88f0b71e2fb14c64"
+  },
+  "pi-template-extra-matrix/2-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-template-extra-matrix/2-large-after.json": {
+    "bytes": 159093,
+    "sha256": "28c09a155c983ecda142ecee1c6bebc94064c599c57d88092ca0ca3e94416227"
+  },
+  "pi-template-extra-matrix/2-large-after.log": {
+    "bytes": 319,
+    "sha256": "d0465c92a1acf3a7b6b00e5bc4fcf4bbd2fd895f7d78c9b01338382090c6d00f"
+  },
+  "pi-template-extra-matrix/2-large-after.process.json": {
+    "bytes": 44421,
+    "sha256": "e58afb442b59f58d3d718f93d9c3895a9c7ecdcec13d3afbcd91bb6f31447dca"
+  },
+  "pi-template-extra-matrix/2-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "2014dd5d3b3f6beef6f2c4dc2ea7972913edca810a9963e889fb1419761b005b"
+  },
+  "pi-template-extra-matrix/2-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "141e897be36550c692134b3476710ee98a953c3f10371aff220668b56952fa3a"
+  },
+  "pi-template-extra-matrix/2-large-before.json": {
+    "bytes": 159093,
+    "sha256": "fb74f611610976405ddacfcc6f2bdd9fd3a54175728b2479ea61eba0861dbcbb"
+  },
+  "pi-template-extra-matrix/2-large-before.log": {
+    "bytes": 319,
+    "sha256": "b015a1bd790ee61db49612f2792b07083f4414fc6b6422e87c909680c65c3c52"
+  },
+  "pi-template-extra-matrix/2-large-before.process.json": {
+    "bytes": 44426,
+    "sha256": "8f6ec75242e4665971bb82e80f23745ffb8484d6725afc04e86319add7c84a61"
+  },
+  "pi-template-extra-matrix/2-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "99b9ccbe9944c4d1f6de5f2f90fbe11a4e09d82279e74e1ba7ae1968a4362063"
+  },
+  "pi-template-extra-matrix/2-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "141e897be36550c692134b3476710ee98a953c3f10371aff220668b56952fa3a"
+  },
+  "pi-template-extra-matrix/2-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-template-extra-matrix/2-stream-after.json": {
+    "bytes": 128631,
+    "sha256": "d2c7f842426768724ca9c30a26ca87526213bc7ca7b49ee8fec8d8fdb927b497"
+  },
+  "pi-template-extra-matrix/2-stream-after.log": {
+    "bytes": 320,
+    "sha256": "a1ede3eef1095de3ad2cd9d3ca71097fe52c078f99bab80e6cc53653bd9883aa"
+  },
+  "pi-template-extra-matrix/2-stream-after.process.json": {
+    "bytes": 66865,
+    "sha256": "e68a725169f2ba45c21f381a535208ff0cf099913fe538c9587701c8743b0c79"
+  },
+  "pi-template-extra-matrix/2-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "4f6dbcfd70bc40a2addc1876536a821c28b706a841e8ae11e0d47ca3852b20c0"
+  },
+  "pi-template-extra-matrix/2-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "8bff9d295b709c95132a749952d7f9d35aef664c204c697959358b175da1060e"
+  },
+  "pi-template-extra-matrix/2-stream-before.json": {
+    "bytes": 128632,
+    "sha256": "3cf27db70a7f0171abd3fa1d39557bbbf30ee7eeb63a028ecfec2a6736e8baae"
+  },
+  "pi-template-extra-matrix/2-stream-before.log": {
+    "bytes": 320,
+    "sha256": "f92e03a49e2d0bfe0c6139c64689a8cecf6ed21680f6458707f3c649c5dcfe94"
+  },
+  "pi-template-extra-matrix/2-stream-before.process.json": {
+    "bytes": 66870,
+    "sha256": "afda33fa5b0003f97308a43231afb41ac90a59f6ebf541717261659d12f4e8a4"
+  },
+  "pi-template-extra-matrix/2-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "db964fc75cd9f2dfc911e197cb4561a68d0ee6402e79413d1ec812be79d75838"
+  },
+  "pi-template-extra-matrix/2-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "b77550e0a34bd3e4a0b01e4de921058aa54c008ba690f4876649da9165919fc3"
+  },
+  "pi-template-extra-matrix/2-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-template-extra-matrix/2-tool-after.json": {
+    "bytes": 232819,
+    "sha256": "aa7280276c1a2a593bffd3e19c7cacaeb8300032c7229d3258b083bd6833f96c"
+  },
+  "pi-template-extra-matrix/2-tool-after.log": {
+    "bytes": 318,
+    "sha256": "5e41da762231d5c74aaaa450baf2bb969197cf2322f693504f70efa62a6c484f"
+  },
+  "pi-template-extra-matrix/2-tool-after.process.json": {
+    "bytes": 45170,
+    "sha256": "6a7f9034a096e4d35d3e5074fbfd6ae3fcb3387f7426d0e069ce667b208041d2"
+  },
+  "pi-template-extra-matrix/2-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "fb3bffd3ed03f7b0063e9b9e80e713938eab8de9e8cf2a3f7b5d00faf2f34eea"
+  },
+  "pi-template-extra-matrix/2-tool-after.provider.stdout": {
+    "bytes": 26203,
+    "sha256": "487e14c020efec3ffad7c6273230fecace18b50c14e33caa4e38962c6db8fdee"
+  },
+  "pi-template-extra-matrix/2-tool-before.json": {
+    "bytes": 232825,
+    "sha256": "654bb9e4096d2dce0a84c8f77cc8cd6a3021351635b889e6596700dfd3153f3c"
+  },
+  "pi-template-extra-matrix/2-tool-before.log": {
+    "bytes": 318,
+    "sha256": "012eb8d450dedafa2e8cbcf2d4d7a51dd8fa59da7e5b4cc7fb09087654e7d99d"
+  },
+  "pi-template-extra-matrix/2-tool-before.process.json": {
+    "bytes": 45175,
+    "sha256": "dd44c40bfcdb404add37d199b405235c48da7b0ef8e9219230e0f2eb1bafd2ab"
+  },
+  "pi-template-extra-matrix/2-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "194cfafb30dc7a91896b7b3ce9341e5f25c8c81de8458466d6af0d4d7b1a7a8a"
+  },
+  "pi-template-extra-matrix/2-tool-before.provider.stdout": {
+    "bytes": 26203,
+    "sha256": "a85760d429be1f6f242155405eaa0b26b35691486853f53c7c7d75a477da108a"
+  },
+  "pi-template-extra-matrix/2-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-template-extra-matrix/manifest.json": {
+    "bytes": 754,
+    "sha256": "815a495abffb41a1f0f5d951cb3529cd5bf48625d7abd42b90dfcb66b71d3fc6"
+  },
+  "pi-template-extra-matrix.log": {
+    "bytes": 9894,
+    "sha256": "488bd3be3abd8eea4138e19cdc7ba5164fb62cb7a8240cc1c0e054fb880b4ea9"
+  }
+}

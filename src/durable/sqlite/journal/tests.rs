@@ -1630,7 +1630,7 @@ fn t10_t19_derived_journal_body_failure_preserves_native_terminal_witness() {
             },
         ))
         .unwrap();
-    store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_segments WHEN NEW.source_kind='observation_journal' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='oj' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
     let event = store
         .append_event(envelope(
             &id,

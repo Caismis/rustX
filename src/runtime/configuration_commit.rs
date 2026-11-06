@@ -387,7 +387,7 @@ impl ConfigurationChange {
 #[derive(Debug, PartialEq, serde::Serialize)]
 struct ToolEntry {
     definition: crate::tools::types::ToolDefinition,
-    model_input_schema: serde_json::Value,
+    model_input_schema: std::sync::Arc<serde_json::Value>,
     /// Compared whole, retained only as `server_binding_digest`.
     #[serde(skip)]
     binding: Option<crate::tools::mcp::McpServerBinding>,

@@ -1,0 +1,24 @@
+{
+  "target": {
+    "kind": [
+      "lib"
+    ],
+    "crate_types": [
+      "lib"
+    ],
+    "name": "rustx",
+    "src_path": "/workspace/rustX-pi-auth-restored/src/lib.rs",
+    "edition": "2024",
+    "doc": true,
+    "doctest": true,
+    "test": true
+  },
+  "profile": {
+    "opt_level": "3",
+    "debuginfo": 0,
+    "debug_assertions": false,
+    "overflow_checks": false,
+    "test": false
+  },
+  "scope": "Measured auth-restored library is a non-test production build. Missing helper was only in cfg(test) state_preview_tests; native parser and formal conformance oracles are unaffected. Measured head remains b8ce4cb6."
+}

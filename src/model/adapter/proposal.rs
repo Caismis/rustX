@@ -183,7 +183,7 @@ mod tests {
                 id: ToolId::new("tool-write"),
                 name: "write_file".to_owned(),
                 description: "d".to_owned(),
-                input_schema: serde_json::json!({"type": "object"}),
+                input_schema: serde_json::json!({"type": "object"}).into(),
             }],
             effective_system_prompt: String::new(),
             continuation: None,

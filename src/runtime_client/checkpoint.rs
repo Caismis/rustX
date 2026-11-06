@@ -6,6 +6,8 @@ use crate::observation::bounded::{
     CHECKPOINT_ITEM_BYTES, CHECKPOINT_PAGE_ITEMS, CHECKPOINT_TARGET_BYTES, bounded_bytes,
     bounded_item_bytes, bounded_json_value,
 };
+#[cfg(test)]
+use crate::observation::capture::{Capture, record_capture_work, take_item_work};
 use crate::observation::content::ContentRef;
 use crate::observation::cut::{
     CheckpointPageItem, CheckpointReadCut, CollectionFrontier, ContentBinding,
@@ -25,8 +27,8 @@ pub const CHECKPOINT_MATERIALIZATION_SECONDS: u64 = 5;
 #[serde(deny_unknown_fields)]
 pub struct ProjectionMetadata {
     pub read_cut: CheckpointReadCut,
-    pub collections: Vec<CollectionFrontier>,
-    pub content: Vec<ContentBinding>,
+    pub collections: Vec<MetadataFragment<CollectionFrontier>>,
+    pub content: Vec<MetadataFragment<ContentBinding>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -34,23 +36,43 @@ pub struct RuntimeClientCheckpoint {
     pub snapshot: RuntimeClientSnapshot,
     pub cursor: RuntimeClientCursor,
     pub read_cut: CheckpointReadCut,
-    pub content: Vec<ContentBinding>,
-    pub collections: Vec<CollectionFrontier>,
+    pub content: Vec<MetadataFragment<ContentBinding>>,
+    pub collections: Vec<MetadataFragment<CollectionFrontier>>,
 }
-/// Final complete checkpoint budget, after off-lock source enrichment. Only
-/// loaded read caches are evicted; authoritative cuts, descriptors, current
-/// execution and interaction authority remain in the candidate.
-pub(crate) fn fit_checkpoint(
+pub(super) fn sort_metadata(
+    collections: &mut [MetadataFragment<CollectionFrontier>],
+    content: &mut [MetadataFragment<ContentBinding>],
+) {
+    collections.sort_by(|left, right| left.domain.cmp(&right.domain));
+    content.sort_by(|left, right| left.path.cmp(&right.path));
+}
+
+pub(super) fn certified_checkpoint_fit(budget: Option<usize>) -> bool {
+    budget.is_some_and(|budget| budget <= CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES)
+}
+
+pub(super) fn fit_checkpoint_with_budget(
     checkpoint: &mut RuntimeClientCheckpoint,
+    prepared_budget: Option<usize>,
 ) -> Result<bool, super::types::RuntimeClientError> {
     fn fits(checkpoint: &RuntimeClientCheckpoint) -> bool {
+        #[cfg(test)]
+        record_capture_work(3);
+        let limit = CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES;
+        // The raw admission charges 24 bytes per number. Safe integers can
+        // gain at most two quotes in the structural codec (at most 18 bytes),
+        // with every other token unchanged. Ambiguous keys and wide native
+        // quantities still require the existing structural admission below.
+        if crate::observation::preflight::bounded_safe_integer_fit(checkpoint, limit) == Some(true)
+        {
+            return true;
+        }
         let schema = crate::observation::structural_json::root::<RuntimeClientCheckpoint>();
         let encoded = crate::observation::structural_json::Encoded {
             value: checkpoint,
             schema: &schema,
             root: &schema,
         };
-        let limit = CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES;
         crate::observation::preflight::bounded_fit(&encoded, limit)
             .unwrap_or_else(|| bounded_bytes(&encoded, limit).is_some())
     }
@@ -69,13 +91,8 @@ pub(crate) fn fit_checkpoint(
             frontier.next_offset = next;
         }
     }
-    checkpoint
-        .collections
-        .sort_by(|left, right| left.domain.cmp(&right.domain));
-    checkpoint
-        .content
-        .sort_by(|left, right| left.path.cmp(&right.path));
-    if fits(checkpoint) {
+    sort_metadata(&mut checkpoint.collections, &mut checkpoint.content);
+    if certified_checkpoint_fit(prepared_budget) || fits(checkpoint) {
         return Ok(false);
     }
     defer_pending_bodies(checkpoint);
@@ -132,6 +149,15 @@ pub(crate) fn fit_checkpoint(
     })
 }
 
+/// Final complete checkpoint budget, after off-lock source enrichment. Only
+/// loaded read caches are evicted; authoritative cuts, descriptors, current
+/// execution and interaction authority remain in the candidate.
+pub(crate) fn fit_checkpoint(
+    checkpoint: &mut RuntimeClientCheckpoint,
+) -> Result<bool, super::types::RuntimeClientError> {
+    fit_checkpoint_with_budget(checkpoint, None)
+}
+
 /// Evict optional body caches while retaining every native decision header.
 fn defer_pending_bodies(checkpoint: &mut RuntimeClientCheckpoint) {
     // Headers keep every actionable identity and native source ordinal. Only
@@ -158,18 +184,21 @@ fn defer_pending_bodies(checkpoint: &mut RuntimeClientCheckpoint) {
             frontier.loaded = 0;
             frontier.next_offset = Some(0);
         } else {
-            checkpoint.collections.push(CollectionFrontier {
-                domain,
-                revision: checkpoint
-                    .read_cut
-                    .domain_revisions
-                    .get("pending_interactions")
-                    .copied()
-                    .unwrap_or(checkpoint.read_cut.revision),
-                total: 1,
-                loaded: 0,
-                next_offset: Some(0),
-            });
+            checkpoint.collections.push(
+                CollectionFrontier {
+                    domain,
+                    revision: checkpoint
+                        .read_cut
+                        .domain_revisions
+                        .get("pending_interactions")
+                        .copied()
+                        .unwrap_or(checkpoint.read_cut.revision),
+                    total: 1,
+                    loaded: 0,
+                    next_offset: Some(0),
+                }
+                .into(),
+            );
         }
     }
     checkpoint
@@ -668,6 +697,113 @@ mod budget_tests {
     use super::*;
     use crate::observation::interaction::interaction_request_header;
 
+    fn aggregate_texts(checkpoint: &mut RuntimeClientCheckpoint) -> Vec<&mut String> {
+        let mut result = Vec::new();
+        for header in &mut checkpoint.snapshot.pending_interactions {
+            let crate::runtime::interaction::InteractionKind::Review { review, .. } =
+                &mut header.body.as_mut().unwrap().kind
+            else {
+                panic!("native review fixture");
+            };
+            result.push(&mut review.questionnaire.questions[0].question);
+        }
+        for message in &mut checkpoint.snapshot.messages {
+            let crate::message::types::MessageBlock::Assistant(message) = message else {
+                panic!("native assistant fixture");
+            };
+            let crate::message::types::AssistantContentBlock::Text(text) = &mut message.content[0]
+            else {
+                panic!("native assistant text");
+            };
+            result.push(&mut text.text);
+        }
+        result
+    }
+
+    #[test]
+    fn checkpoint_proof_matches_structural_eviction_and_bytes_at_the_aggregate_limit() {
+        let limit = CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES;
+        let schema = crate::observation::structural_json::root::<RuntimeClientCheckpoint>();
+        let encode = |checkpoint: &RuntimeClientCheckpoint| {
+            bounded_bytes(
+                &crate::observation::structural_json::Encoded {
+                    value: checkpoint,
+                    schema: &schema,
+                    root: &schema,
+                },
+                2 * CHECKPOINT_TARGET_BYTES,
+            )
+            .unwrap()
+        };
+        for wide in [false, true] {
+            for delta in [-1_isize, 0, 1] {
+                let mut original = aggregate_checkpoint();
+                for text in aggregate_texts(&mut original) {
+                    text.clear();
+                }
+                if wide {
+                    original.read_cut.through = u64::MAX;
+                    original.read_cut.revision = u64::MAX;
+                    original
+                        .read_cut
+                        .domain_revisions
+                        .insert("wide".into(), u64::MAX);
+                    original.collections[0].total = u64::MAX;
+                }
+                let empty_budget = crate::observation::preflight::required_budget(
+                    &crate::observation::structural_json::Encoded {
+                        value: &original,
+                        schema: &schema,
+                        root: &schema,
+                    },
+                    usize::MAX,
+                )
+                .unwrap();
+                let target = limit.checked_add_signed(delta).unwrap();
+                let remaining = target.checked_sub(empty_budget).unwrap();
+                let mut texts = aggregate_texts(&mut original);
+                let count = texts.len();
+                for (index, text) in texts.iter_mut().enumerate() {
+                    **text = "x".repeat(remaining / count + usize::from(index < remaining % count));
+                }
+                drop(texts);
+                for header in &original.snapshot.pending_interactions {
+                    assert!(bounded_bytes(header, CHECKPOINT_ITEM_BYTES).is_some());
+                }
+                let mut expected = original.clone();
+                let mut actual = original;
+                let legacy = crate::observation::preflight::with_structural_admission_only(|| {
+                    fit_checkpoint(&mut expected)
+                });
+                let candidate = fit_checkpoint(&mut actual);
+                assert_eq!(legacy.unwrap(), delta > 0);
+                assert_eq!(candidate.unwrap(), delta > 0);
+                assert_eq!(actual, expected, "wide={wide}, delta={delta}");
+                assert_eq!(encode(&actual), encode(&expected));
+                if wide {
+                    assert!(
+                        String::from_utf8(encode(&actual))
+                            .unwrap()
+                            .contains("\"18446744073709551615\"")
+                    );
+                }
+            }
+        }
+        let mut expected = aggregate_checkpoint();
+        expected
+            .read_cut
+            .domain_revisions
+            .insert("x".repeat(CHECKPOINT_TARGET_BYTES).into(), 1);
+        let mut actual = expected.clone();
+        let legacy = crate::observation::preflight::with_structural_admission_only(|| {
+            fit_checkpoint(&mut expected)
+        });
+        let candidate = fit_checkpoint(&mut actual);
+        assert_eq!(legacy.unwrap_err(), candidate.unwrap_err());
+        assert_eq!(actual, expected);
+        assert_eq!(encode(&actual), encode(&expected));
+    }
+
     fn aggregate_checkpoint() -> RuntimeClientCheckpoint {
         let mut checkpoint = super::super::projection::RuntimeClientProjection::new(
             crate::runtime::identity::ConversationId::new(
@@ -719,13 +855,16 @@ mod budget_tests {
                     },
                 ));
         }
-        checkpoint.collections.push(CollectionFrontier {
-            domain: "pending_interactions".into(),
-            revision: 0,
-            total: 32,
-            loaded: 32,
-            next_offset: None,
-        });
+        checkpoint.collections.push(
+            CollectionFrontier {
+                domain: "pending_interactions".into(),
+                revision: 0,
+                total: 32,
+                loaded: 32,
+                next_offset: None,
+            }
+            .into(),
+        );
         checkpoint
     }
 
@@ -812,3 +951,22 @@ mod budget_tests {
 
 #[cfg(test)]
 mod prepared_trace_tests;
+
+pub(crate) mod metadata_fragment;
+
+#[cfg(test)]
+mod structural_length_tests;
+
+#[cfg(test)]
+mod native_length_tests;
+
+#[cfg(test)]
+mod incremental_capture_tests;
+
+#[cfg(test)]
+mod live_capture_tests;
+
+#[cfg(test)]
+mod metadata_fragment_tests;
+
+pub use crate::observation::metadata::{MetadataFragment, ReadCutMap};

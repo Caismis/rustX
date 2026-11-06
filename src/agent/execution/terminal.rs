@@ -208,6 +208,13 @@ impl AgentExecution<'_> {
         settlement.expect("the execution state machine must accept the settlement");
     }
 
+    pub(super) fn record_event_failure(&mut self, error: &crate::durable::ConversationStoreError) {
+        self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+        self.durable_failure = Some(format!(
+            "runtime event could not be persisted before publication: {error}"
+        ));
+    }
+
     pub(super) fn emit_terminal(&mut self, terminal: &Terminal) {
         let event = match terminal {
             Terminal::Completed { finish_reason } => RuntimeEvent::AttemptCompleted {
@@ -223,6 +230,17 @@ impl AgentExecution<'_> {
                 error: failure.clone(),
             },
         };
+        if let Some(committed) = self.precommitted_terminal.take() {
+            assert_eq!(
+                committed, event,
+                "the native final-commit winner cannot be reclassified"
+            );
+            debug_assert!(
+                self.terminal_emitted,
+                "committed terminal published under mailbox ownership"
+            );
+            return;
+        }
         debug_assert!(!self.terminal_emitted, "exactly one terminal event");
         if matches!(
             self.logical_step.terminal_commit_state,

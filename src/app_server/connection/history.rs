@@ -465,8 +465,8 @@ fn history_checkpoint_cut(
         revision: 0,
         through: cut.read.journal,
         source_cut: Some(cut),
-        domain_revisions: std::collections::BTreeMap::new(),
-        collection_cuts: std::collections::BTreeMap::new(),
+        domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+        collection_cuts: crate::observation::metadata::MetadataFragment::default(),
     }
 }
 

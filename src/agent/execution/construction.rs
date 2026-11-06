@@ -256,6 +256,7 @@ impl<'a> AgentExecution<'a> {
             pauses: test_sync::ExecutionPauses::default(),
             turn: 0,
             terminal_emitted: false,
+            precommitted_terminal: None,
         })
     }
 

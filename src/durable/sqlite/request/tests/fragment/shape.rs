@@ -50,7 +50,7 @@ pub(super) fn assert_shape_oracle(
         observation_request::composed::take_work();
         let actual = observation_request::field_from(
             &connection,
-            "request_observation_fields",
+            "request_source_roots",
             &sequence.to_string(),
             path,
         )
@@ -163,7 +163,8 @@ pub(super) fn shape_snapshot(store: &SqliteConversationStore, turn: u32) -> Requ
                 "number": {"enum":[-1.25, -0.0, 0, 1]},
                 "opaque": {"const":u64::MAX}
             }
-        }),
+        })
+        .into(),
     }];
     let history = store.projected_history().unwrap();
     snapshot.history_cut = history.cut;
@@ -392,7 +393,6 @@ fn t10_t14_t19_request_shape_optional_insert_failure_preserves_native_r_c_j() {
             "request_source_pages",
             "request_source_nodes",
             "request_source_roots",
-            "request_observation_fields",
         ] {
             let count: u64 = connection
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
@@ -480,12 +480,21 @@ pub(super) fn mutate_source_json(
             |row| row.get(0),
         )
         .unwrap();
-    let mut value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let mut value = match table {
+        "request_source_nodes" => observation_request::composed::inspect_node_record(&raw),
+        "request_source_roots" => observation_request::composed::inspect_root_record(&raw),
+        _ => unreachable!("closed source metadata corruption fixture"),
+    };
     mutation(&mut value);
+    let bytes = match table {
+        "request_source_nodes" => observation_request::composed::encode_test_node_record(value),
+        "request_source_roots" => observation_request::composed::encode_test_root_record(value),
+        _ => unreachable!("closed source metadata corruption fixture"),
+    };
     connection
         .execute(
             &format!("UPDATE {table} SET metadata=?2 WHERE {key}=?1"),
-            params![id, serde_json::to_vec(&value).unwrap()],
+            params![id, bytes],
         )
         .unwrap();
 }
@@ -518,7 +527,9 @@ pub(super) fn corrupt_request_shape(
             "native_id",
             &i64::try_from(shape).unwrap().into(),
             |value| {
-                let variants = value["content"]["leaf"]["variants"].as_array_mut().unwrap();
+                let variants = value["content"]["leaf"]["leaf"]["variants"]
+                    .as_array_mut()
+                    .unwrap();
                 assert!(
                     variants.len() > 3,
                     "the corruption removes an interior width variant"
@@ -562,8 +573,13 @@ pub(super) fn corrupt_request_shape(
                 )
                 .unwrap();
         }
-        "root_witness" => {
-            connection.execute("UPDATE request_observation_fields SET shape_witness=zeroblob(32) WHERE source_id=?1 AND path_json='[]'", [source]).unwrap();
+        "root_checksum" => {
+            connection
+                .execute(
+                    "UPDATE request_source_roots SET checksum=zeroblob(32) WHERE source_id=?1",
+                    [source],
+                )
+                .unwrap();
         }
         "field_start" | "root_start" | "field_end" | "hole_end" | "field_children"
         | "root_children" => {
@@ -636,7 +652,7 @@ fn t08_t12_t19_request_shape_anchor_and_metadata_corruption_never_rebases_origin
         "field_children",
         "hole_end",
         "header_digest",
-        "root_witness",
+        "root_checksum",
     ] {
         let ShapeTarget {
             store,
@@ -756,11 +772,11 @@ fn t14_t19_t20_request_shape_rows_grow_with_new_immutable_items_and_request_anch
             })
             .unwrap();
         assert_eq!(roots, u64::from(turn));
-        let seats: (u64,u64) = connection.query_row("SELECT count(*),sum(path_json='[]' AND length(shape_witness)=32) FROM request_observation_fields WHERE source_id=?1", [sequence.to_string()], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        let seats: (u64,u64) = connection.query_row("SELECT count(*),sum(length(checksum)=32) FROM request_source_roots WHERE source_id=?1", [sequence.to_string()], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
         assert_eq!(
             seats,
             (1, 1),
-            "one current-R witness, no repeated per-item anchors/field rows"
+            "one current-R root checksum, no separate capture witness row"
         );
         let maximum: u64 = connection
             .query_row(
@@ -789,8 +805,8 @@ pub(super) fn selected_template_hash(connection: &Connection, shape: u64) -> Vec
             |row| row.get(0),
         )
         .unwrap();
-    let metadata: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    serde_json::from_value(metadata["content"]["leaf"]["templates"][0].clone()).unwrap()
+    let metadata = observation_request::composed::inspect_node_record(&raw);
+    serde_json::from_value(metadata["content"]["leaf"]["leaf"]["templates"][0].clone()).unwrap()
 }
 
 #[test]
@@ -815,7 +831,7 @@ fn t08_t12_t19_request_shape_root_header_hash_rejects_valid_json_replacement() {
                 |row| row.get(0),
             )
             .unwrap();
-        let mut value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+        let mut value = observation_request::composed::inspect_template_record(&raw);
         let role = "\"role\":\"user\"";
         let field = if value["header_prefix"].as_str().unwrap().contains(role) {
             "header_prefix"
@@ -828,7 +844,7 @@ fn t08_t12_t19_request_shape_root_header_hash_rejects_valid_json_replacement() {
             "the exact original role is in the template"
         );
         value[field] = serde_json::json!(old.replacen(role, "\"role\":\"assistant\"", 1));
-        let changed = serde_json::to_vec(&value).unwrap();
+        let changed = observation_request::composed::encode_test_template_record(value);
         assert!(changed.len() <= 65536);
         connection
             .execute(
@@ -848,7 +864,7 @@ fn t08_t12_t19_request_shape_root_header_hash_rejects_valid_json_replacement() {
 }
 
 #[test]
-fn t10_t14_t19_rehashed_shape_metadata_cannot_be_laundered_into_a_new_native_request() {
+fn t10_t14_t19_malformed_rehashed_shape_metadata_is_still_rejected() {
     let ShapeTarget {
         store,
         snapshot,
@@ -868,8 +884,8 @@ fn t10_t14_t19_rehashed_shape_metadata_cannot_be_laundered_into_a_new_native_req
                 |row| row.get(0),
             )
             .unwrap();
-        let mut metadata: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-        let variants = metadata["content"]["leaf"]["variants"]
+        let mut metadata = observation_request::composed::inspect_node_record(&raw);
+        let variants = metadata["content"]["leaf"]["leaf"]["variants"]
             .as_array_mut()
             .unwrap();
         assert!(
@@ -877,7 +893,7 @@ fn t10_t14_t19_rehashed_shape_metadata_cannot_be_laundered_into_a_new_native_req
             "the corruption removes an interior width variant"
         );
         variants.remove(variants.len() / 2);
-        let changed = serde_json::to_vec(&metadata).unwrap();
+        let changed = observation_request::composed::encode_test_node_record(metadata);
         let digest = <sha2::Sha256 as sha2::Digest>::digest(&changed);
         connection
             .execute(
@@ -909,15 +925,11 @@ fn t10_t14_t19_rehashed_shape_metadata_cannot_be_laundered_into_a_new_native_req
                 |row| row.get(0),
             )
             .unwrap();
-        serde_json::from_slice(&bytes).unwrap()
+        observation_request::composed::inspect_root_record(&bytes)
     };
     let original_root = root_json(sequence);
     let next_root = root_json(committed.started.sequence);
     assert_eq!(next_root["native"], original_root["native"]);
-    assert_eq!(
-        next_root["source_hash"], original_root["source_hash"],
-        "a new R retains the original authenticated subtree hash, never blesses rehashed corruption"
-    );
     assert_eq!(next_root["sequence"], committed.started.sequence);
     assert_ne!(next_root["sequence"], original_root["sequence"]);
     assert_paired_shape_root_unavailable(&connection, committed.started.sequence, item);

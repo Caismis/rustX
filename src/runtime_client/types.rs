@@ -286,7 +286,7 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 83;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 84;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -898,6 +898,8 @@ pub enum RuntimeClientResult {
     /// Bounded read-only Trace page of summary records.
     TracePage {
         page: crate::observation::trace::TracePage,
+        /// Complete input prefix examined, including missing and duplicate interests.
+        refreshed: usize,
     },
     TraceToolLocation {
         location: Option<super::trace::TraceToolLocation>,
@@ -952,11 +954,8 @@ pub enum RuntimeClientResult {
         after_cursor: RuntimeClientCursor,
     },
     /// `capability_get` succeeded: the active capability projection.
-
     /// `model_catalog_get` succeeded: the safe selectable-model view.
-
     /// `model_get` succeeded: the authoritative session model state.
-
     /// Standalone model selection committed; durable Sessions use their native Session owner.
     ///
     /// This finite receipt confirms commitment. Read the current model through
@@ -1243,7 +1242,7 @@ pub struct RuntimeClientProtocolEvent {
 }
 
 // Re-exported for use by the public protocol docs.
-pub use super::snapshot::{RuntimeClientAgent, RuntimeClientJob};
+pub use crate::runtime_client::snapshot::{RuntimeClientAgent, RuntimeClientJob};
 
 #[cfg(test)]
 mod tests {
@@ -1384,7 +1383,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 83);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 84);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

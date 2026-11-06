@@ -4,11 +4,11 @@
 use super::super::{LineageSide, lineage_cut};
 use super::*;
 use crate::durable::CanonicalStore;
+use crate::durable::ConversationInboundCapability;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
 use crate::durable::ProjectionStore;
 use crate::durable::RequestStore;
-use crate::durable::inbox::ConversationInboundCapability;
 
 #[test]
 fn historical_fork_excludes_checkpoint_activated_after_selected_ledger() {
@@ -276,7 +276,7 @@ fn same_surface_revision_newer_native_cut_changes_inherited_running_outcome() {
 /// own message identity, so the destination outline previews it unchanged.
 #[test]
 fn copied_turn_keeps_its_prompt_under_destination_identity() {
-    use crate::durable::inbox::InboundDraft;
+    use crate::durable::InboundDraft;
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     use crate::message::types::{InboundKind, UserContentBlock, UserSource};
     use crate::runtime::identity::{AttemptId, EventId};

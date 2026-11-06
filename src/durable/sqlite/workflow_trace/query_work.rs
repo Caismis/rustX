@@ -97,7 +97,8 @@ fn work(connection: &Connection, sql: &str, values: &[rusqlite::types::Value], i
         "{plan}"
     );
     assert!(
-        plan.contains("sequence>?") && plan.contains("sequence<?"),
+        (plan.contains("sequence>?") && plan.contains("sequence<?"))
+            || (plan.contains("rowid>?") && plan.contains("rowid<?")),
         "{plan}"
     );
     assert!(

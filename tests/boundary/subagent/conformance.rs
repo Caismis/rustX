@@ -302,6 +302,7 @@ async fn child_fixture_scoped_at(
             model_timeout_policy: inherited_policy(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(rustx::context::SystemClock),
                 policy: rustx::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -428,7 +429,8 @@ fn child_approval_tools() -> (
             "properties": {"target": {"type": "string"}},
             "required": ["target"],
             "additionalProperties": false
-        }),
+        })
+        .into(),
         execution_policy: rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         approval_policy: rustx::tools::types::ToolApprovalPolicy::Always,
@@ -640,6 +642,7 @@ async fn compose_parent_runtime_plane(
         model_timeout_policy: inherited_policy(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(rustx::context::SystemClock),
             policy: rustx::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -3114,7 +3117,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
                         )
                     {
                         assert!(interactions.iter().all(|known: &crate::observation::interaction::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
-                        interactions.push(interaction.clone());
+                        interactions.push(*interaction.clone());
                     }
                     }
                 }
@@ -3391,7 +3394,7 @@ async fn child_death_removes_only_its_routed_interactions() {
                         )
                     {
                         assert!(interactions.iter().all(|known: &crate::observation::interaction::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
-                        interactions.push(interaction.clone());
+                        interactions.push(*interaction.clone());
                     }
                     }
                 }

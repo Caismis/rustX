@@ -903,3 +903,18 @@ impl SessionRuntimeManager {
 #[cfg(test)]
 #[path = "../../tests/scripted/app_server/mod.rs"]
 pub(crate) mod tests;
+
+/// Cache frees can stay resident in the system allocator. Return whole unused
+/// pages once after a maintenance batch, with no native/store/registry lock held.
+/// Other system allocators retain their own normal release policy.
+fn release_allocator_pages() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        #[allow(unsafe_code)]
+        // SAFETY: glibc documents malloc_trim as MT-Safe. It takes no pointers
+        // and releases only unused allocator pages, never live Rust/SQLite data.
+        unsafe {
+            libc::malloc_trim(0);
+        }
+    }
+}

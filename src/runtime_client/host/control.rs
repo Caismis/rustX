@@ -267,29 +267,29 @@ impl ClientInner {
 
     pub(crate) fn edit_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
+        expected: &crate::durable::PendingInboundRef,
         text: &str,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, RuntimeClientError> {
+    ) -> Result<crate::durable::PendingMutationOutcome, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         let runtime = self.runtime.as_ref().expect("writable runtime");
         Ok(runtime
             .tool_runtime()
             .mailbox()
             .edit_pending(expected, text)
-            .unwrap_or(crate::durable::inbox::PendingMutationOutcome::DurabilityUncertain))
+            .unwrap_or(crate::durable::PendingMutationOutcome::DurabilityUncertain))
     }
 
     pub(crate) fn remove_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, RuntimeClientError> {
+        expected: &crate::durable::PendingInboundRef,
+    ) -> Result<crate::durable::PendingMutationOutcome, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         let runtime = self.runtime.as_ref().expect("writable runtime");
         Ok(runtime
             .tool_runtime()
             .mailbox()
             .remove_pending(expected)
-            .unwrap_or(crate::durable::inbox::PendingMutationOutcome::DurabilityUncertain))
+            .unwrap_or(crate::durable::PendingMutationOutcome::DurabilityUncertain))
     }
 
     pub(crate) fn submit_session_inbound(

@@ -1,0 +1,938 @@
+{
+  "pi-lazy-build/build.stderr": {
+    "bytes": 116,
+    "sha256": "734e787935089f400d661803b0c86cead3ac62e42b9ee752ebe83517a9510b66"
+  },
+  "pi-lazy-build/build.stdout": {
+    "bytes": 461301,
+    "sha256": "5ea984f071ef777af52d5e6caa00a4965b27f7c1cc01b6d60616f19bedbd2fd0"
+  },
+  "pi-lazy-build/clean.stderr": {
+    "bytes": 38,
+    "sha256": "cec4c47ca8b0e2137709606eb91ea089edc5d31cf1c829eae1d64c0b076034e7"
+  },
+  "pi-lazy-build/clean.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "pi-lazy-build/identity.json": {
+    "bytes": 2313,
+    "sha256": "cf0470652391e4e90d1bfd1897480f9485397bbfca56ff0a2037519f11b83152"
+  },
+  "pi-lazy-matrix/0-cancel-after.json": {
+    "bytes": 125787,
+    "sha256": "e77170e65b9f43ba75071064de0f5e4cb671343c16ba5fd00715ffe829419a4c"
+  },
+  "pi-lazy-matrix/0-cancel-after.log": {
+    "bytes": 310,
+    "sha256": "6beff9e89f335a172412689f73fdc376d678d79e173454375d6932c41e1ea902"
+  },
+  "pi-lazy-matrix/0-cancel-after.process.json": {
+    "bytes": 22649,
+    "sha256": "b487ee817b2a65c453d3c2e7fe795dcaf8bf86bb2f94d6527e1d04a6a2583790"
+  },
+  "pi-lazy-matrix/0-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "9bf873dfaee97e2f34b3a1dff37beabc23431374cba070f62b864656f4cfdf19"
+  },
+  "pi-lazy-matrix/0-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "539a532d2c1d40a898ee9d6d479c118ea41f96834ea8cca5bf022fea44295f84"
+  },
+  "pi-lazy-matrix/0-cancel-before.json": {
+    "bytes": 125795,
+    "sha256": "aab73f054f8df80253fe358242b6e828d86a7bf5719bb26e26bb042b5094f7b3"
+  },
+  "pi-lazy-matrix/0-cancel-before.log": {
+    "bytes": 310,
+    "sha256": "ab47bd2c3a2b1b44876a73bacd0781e99d47b532bf19a44dc320410fec493d3c"
+  },
+  "pi-lazy-matrix/0-cancel-before.process.json": {
+    "bytes": 22650,
+    "sha256": "c87e9a1525780fdf03418a1844a56e63000728f8f2d3c89690eaa5ec19311ef6"
+  },
+  "pi-lazy-matrix/0-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "0325287446003ac93e781a59b316d21ca9a781bbdb8f4e1a3ce7b1f5d84b7e82"
+  },
+  "pi-lazy-matrix/0-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "539a532d2c1d40a898ee9d6d479c118ea41f96834ea8cca5bf022fea44295f84"
+  },
+  "pi-lazy-matrix/0-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-lazy-matrix/0-large-after.json": {
+    "bytes": 158792,
+    "sha256": "e601fa59e5fae0a4af60d5170b15da71efcc0fd8311843c6b5c0851e8536cdda"
+  },
+  "pi-lazy-matrix/0-large-after.log": {
+    "bytes": 309,
+    "sha256": "f67442289af9b21cdbb6f105d2f6d841a351ef476aa7906739e6246db245bddd"
+  },
+  "pi-lazy-matrix/0-large-after.process.json": {
+    "bytes": 44417,
+    "sha256": "4fa3e11e43fcb22aa9a2696c86912c740a55883f0650eed88062a8d88f845e24"
+  },
+  "pi-lazy-matrix/0-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "b71c391f7fa64e2c68e508bef35520b740314103829a6235d74fa92bbeed1c42"
+  },
+  "pi-lazy-matrix/0-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "f5fb295f5901de5abd1d01f141fbdaa61edc34f81415f45c6b14d737adca12c5"
+  },
+  "pi-lazy-matrix/0-large-before.json": {
+    "bytes": 158794,
+    "sha256": "cc3d075ed86023e2940aa710a1b4917ac4dcfa1e09e53cddb63ad11d4da68f35"
+  },
+  "pi-lazy-matrix/0-large-before.log": {
+    "bytes": 309,
+    "sha256": "18008ee1f0b4b39450d36be09b85995126340c501a168638bca1f90f8750eaa8"
+  },
+  "pi-lazy-matrix/0-large-before.process.json": {
+    "bytes": 44418,
+    "sha256": "1154388d9bf351e1d158c167f8d3391cc2a4360e59a715d0d4955b7609e49f30"
+  },
+  "pi-lazy-matrix/0-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "994403d0f4debffc432b2126d3e44938eddf130f439f9357dc3a9cc8f7471aca"
+  },
+  "pi-lazy-matrix/0-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "f5fb295f5901de5abd1d01f141fbdaa61edc34f81415f45c6b14d737adca12c5"
+  },
+  "pi-lazy-matrix/0-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-lazy-matrix/0-short-large-after.json": {
+    "bytes": 24763521,
+    "sha256": "e55fb9494db021f6c09c6f7b3761a60bbae8e15cd4b7e43c332ba6370ccc930b"
+  },
+  "pi-lazy-matrix/0-short-large-after.log": {
+    "bytes": 316,
+    "sha256": "248bcee7ac835f9673d96bda4fddcd64bd7f9bc793bffe4fda4aaac943fa2339"
+  },
+  "pi-lazy-matrix/0-short-large-after.process.json": {
+    "bytes": 4384550,
+    "sha256": "5e8d301a350f895c53ec281769505e2b1cff679f6bab66fcf0b459facc7bdf8c"
+  },
+  "pi-lazy-matrix/0-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "b429a1603777e6d3bf5c0d9849ab3320be21951d1c4289edf355baa9e0a01798"
+  },
+  "pi-lazy-matrix/0-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "d90056ef210aca4fb79fc314dfd0e2e8d94bf4e086434fb8afd7b9165b74fed3"
+  },
+  "pi-lazy-matrix/0-short-large-before.json": {
+    "bytes": 24763438,
+    "sha256": "b62a0116bc3b971defd8c3466557b5db487f2ded77e79e3ebbfddae08724bde9"
+  },
+  "pi-lazy-matrix/0-short-large-before.log": {
+    "bytes": 316,
+    "sha256": "a75008a2bff9429bc592236dc68f88a04c9051cd56c7791751f83191d0e3f128"
+  },
+  "pi-lazy-matrix/0-short-large-before.process.json": {
+    "bytes": 4384551,
+    "sha256": "e28fe9a875454969689f59284446fb5c6de052925845db28815d209b922855a0"
+  },
+  "pi-lazy-matrix/0-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "44dfef13f4e81db0fb31d4d15b218d3d1d726974a50e6c3619e8e1c93967cb4d"
+  },
+  "pi-lazy-matrix/0-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "16d58cdcf4b743ba6662db805d22e2d49fd60bf1a890e8636668c449f31e299b"
+  },
+  "pi-lazy-matrix/0-short-large-comparison.json": {
+    "bytes": 53988,
+    "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+  },
+  "pi-lazy-matrix/0-short-small-after.json": {
+    "bytes": 6678022,
+    "sha256": "f9050bd5b5b7a831b6e24ef570d1dfdc405368426926fc117088aa2f12b54cbb"
+  },
+  "pi-lazy-matrix/0-short-small-after.log": {
+    "bytes": 315,
+    "sha256": "0fbb8f0aa95ac9802b48e44689bf9dbfab8d9aca5c289b2678fb3dfd0e422119"
+  },
+  "pi-lazy-matrix/0-short-small-after.process.json": {
+    "bytes": 1262884,
+    "sha256": "59ea79288be970bce582515422fd06d8dec798d5410a390b8338ea47e13b2cc2"
+  },
+  "pi-lazy-matrix/0-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "4ee3cf0e2d667d9ae6201685755d02c7e59d63ab7d4d13787e961c7bc5e16728"
+  },
+  "pi-lazy-matrix/0-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "4676c646a0a1cc11e437ac1a149d760cb0d7464f4d6f2f808c0f4486a941e562"
+  },
+  "pi-lazy-matrix/0-short-small-before.json": {
+    "bytes": 6678133,
+    "sha256": "4c4673e21ceec7fe4d15b39b1b3bd91f82b2b5c073390364293bdc499a4c20d2"
+  },
+  "pi-lazy-matrix/0-short-small-before.log": {
+    "bytes": 315,
+    "sha256": "cdcaff4666ffddf207debabbacd639a1925d76b68572f202f37573ae3b4c1274"
+  },
+  "pi-lazy-matrix/0-short-small-before.process.json": {
+    "bytes": 1262886,
+    "sha256": "ebc0427549994bc25a4f13fb9633e36376f9f2965f706ac68312490a26fe2f66"
+  },
+  "pi-lazy-matrix/0-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "8e547a3c46bbce85b82bcc24ff2fcb319a50c56cee30c9ddace18bfbea82ffab"
+  },
+  "pi-lazy-matrix/0-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "5432749eca66bfb6ca78f49bc1972e62cf1353396ecf56c74ebcab9f156ae090"
+  },
+  "pi-lazy-matrix/0-short-small-comparison.json": {
+    "bytes": 22516,
+    "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+  },
+  "pi-lazy-matrix/0-stream-after.json": {
+    "bytes": 128319,
+    "sha256": "3ac4d85788292940f3f83eaa0b1f76fbb699b5ab2b38b1ae288d90b88db1ad9a"
+  },
+  "pi-lazy-matrix/0-stream-after.log": {
+    "bytes": 310,
+    "sha256": "9a13c21c9e3c990bef5c1d91a05375d3c695b89a8f620b7e6bfdcf9499da7e6e"
+  },
+  "pi-lazy-matrix/0-stream-after.process.json": {
+    "bytes": 66861,
+    "sha256": "1ebef6dd740c8f870b60dee7ecb970a6c6ef89726af656abdcd4fa754c22d077"
+  },
+  "pi-lazy-matrix/0-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "16a34ec21fd23aa9fed29d877a0835a7eb849896e5a97b9cd3ef52634bf99fbd"
+  },
+  "pi-lazy-matrix/0-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "b845aefda2f19ba24028e598844b7bc89d3502a50a09cbf8e99b919c9f7a1914"
+  },
+  "pi-lazy-matrix/0-stream-before.json": {
+    "bytes": 128327,
+    "sha256": "90bc1b21791dea23cda2e18bb86689184181516ad5f52fad6ea26bffe42859b8"
+  },
+  "pi-lazy-matrix/0-stream-before.log": {
+    "bytes": 310,
+    "sha256": "8cf848b8074f82e0bef6835d9dce3d5cf409e67f0ef657014ed207d54a4b4808"
+  },
+  "pi-lazy-matrix/0-stream-before.process.json": {
+    "bytes": 66862,
+    "sha256": "a877282b9a9193ee2f3e995e96a7b234efec0150ed9caafb0c5b181f5e6a4338"
+  },
+  "pi-lazy-matrix/0-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "b04275d52561e5a40f30ee4fe91d17ae0370b6e248f06e2dacba402bbbb9f606"
+  },
+  "pi-lazy-matrix/0-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "3ea636a360aec5d598607d2b83a1e1a184e737d75d888c6be9ee59b3ca305ddf"
+  },
+  "pi-lazy-matrix/0-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-lazy-matrix/0-tool-after.json": {
+    "bytes": 232468,
+    "sha256": "5174e167a320373346b2bae9b809eeceb87d87d7b49de463d739012e44c38ed9"
+  },
+  "pi-lazy-matrix/0-tool-after.log": {
+    "bytes": 308,
+    "sha256": "309c85f5ff02dab00502064c2e2af51f0cc1e9eca49fbf6da1ff18a496e8d60b"
+  },
+  "pi-lazy-matrix/0-tool-after.process.json": {
+    "bytes": 45156,
+    "sha256": "d203c0ce954ce9836e472ad4bf61c50a25cd57fb33023e4167ede0115f1b1ae7"
+  },
+  "pi-lazy-matrix/0-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "455a207804d5e7f12c9f6cca436f123d336447a437e95e95ef00bcb6eb03d58e"
+  },
+  "pi-lazy-matrix/0-tool-after.provider.stdout": {
+    "bytes": 26193,
+    "sha256": "43caa30a868e0c10f8c182db48609d3757f430dafa492c309ff06b0bb66d89ab"
+  },
+  "pi-lazy-matrix/0-tool-before.json": {
+    "bytes": 232478,
+    "sha256": "6dc541598c88e2d8bd152dd2aa67f3fb9a8f6c89bee237cb8c4742167bfd3ce3"
+  },
+  "pi-lazy-matrix/0-tool-before.log": {
+    "bytes": 308,
+    "sha256": "1a6e67327b7fc1742553e952b221ee3ef5a9461bd8c43efa7580d1d464dab776"
+  },
+  "pi-lazy-matrix/0-tool-before.process.json": {
+    "bytes": 45157,
+    "sha256": "ab9dd565ba3bd718d1d6a7d8d6f91b4b081512026af407959c32a6d5d1dce2e6"
+  },
+  "pi-lazy-matrix/0-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "3c98c0144cb30d0f0aee5ee39c8e4638e1dd3c13b585186cf45ba17dd5cd0136"
+  },
+  "pi-lazy-matrix/0-tool-before.provider.stdout": {
+    "bytes": 26193,
+    "sha256": "4668529317c12336c69ce73443c5461c5fcc2c09a72535ff5f62d1142c25242b"
+  },
+  "pi-lazy-matrix/0-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-lazy-matrix/1-cancel-after.json": {
+    "bytes": 125787,
+    "sha256": "0680aee27dbf4ef8aa0792efa77c5ddfec7ab0d12b36ea047e9ec3435d151492"
+  },
+  "pi-lazy-matrix/1-cancel-after.log": {
+    "bytes": 310,
+    "sha256": "511d7d543adf4d5b2a28161ba1b5337108caece05c15b62c1a85149cefb02148"
+  },
+  "pi-lazy-matrix/1-cancel-after.process.json": {
+    "bytes": 22649,
+    "sha256": "24fa08dbd46a014451b04dec5fa6501c0dfffd6fdf6e91f0fd982c71d5a8c196"
+  },
+  "pi-lazy-matrix/1-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "d9a7258e38507130864d41b11dae8f3d294e276e618c5471acc1072328900e73"
+  },
+  "pi-lazy-matrix/1-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "ec257ae8358b9ccc30143f049645cc921b802408dc9476b79bc71a767a3e53ca"
+  },
+  "pi-lazy-matrix/1-cancel-before.json": {
+    "bytes": 125787,
+    "sha256": "f08a68c366c2d2cb081e40fc5f49e86c64cce442207ae0361110341b3ad51a25"
+  },
+  "pi-lazy-matrix/1-cancel-before.log": {
+    "bytes": 310,
+    "sha256": "f5e9f1b15a99e36cb9375854448516773ddb2fdb74170fbafee139c92011a49c"
+  },
+  "pi-lazy-matrix/1-cancel-before.process.json": {
+    "bytes": 22650,
+    "sha256": "72031197e5876e9de323c40411f0bf9fa0d137eefee43ae4dc2aa788c63bba9b"
+  },
+  "pi-lazy-matrix/1-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "c3b644ed032d20178b8c3d78459eb7cabf6223385d7f1d5aa99eb90e1ca4006f"
+  },
+  "pi-lazy-matrix/1-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "bfe54ffb2780ed051a2aed43bd6d9d4a28981512dec0ca62d25e9ded80a37e03"
+  },
+  "pi-lazy-matrix/1-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-lazy-matrix/1-large-after.json": {
+    "bytes": 158801,
+    "sha256": "e450117a4e8cf2d96946f006a2c0f7ab5d5714f9e79e90359481f2666e505289"
+  },
+  "pi-lazy-matrix/1-large-after.log": {
+    "bytes": 309,
+    "sha256": "31e25f359e105f14615f74bd4d6f133f6ed91e28649102b6d24ebd84c85d6f3c"
+  },
+  "pi-lazy-matrix/1-large-after.process.json": {
+    "bytes": 44417,
+    "sha256": "48d22a065c1b6c457ac430c4a037aaddd57e7bd7d472791bf989e3cce77c87e7"
+  },
+  "pi-lazy-matrix/1-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "4801d6e1aa1be5fe6934d0caddd6d78188e88213c6609ee78cd1936918e2e5b2"
+  },
+  "pi-lazy-matrix/1-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "0299ceb6343807b9d282af64873798ee01b2a36052414c54c1afd6950000809b"
+  },
+  "pi-lazy-matrix/1-large-before.json": {
+    "bytes": 158793,
+    "sha256": "94bd260f3d036c4d0773ec8b4967892680b4977111b982edae81d31cca8155b8"
+  },
+  "pi-lazy-matrix/1-large-before.log": {
+    "bytes": 309,
+    "sha256": "ec6078fbe114d01de793bb17532d349443037ca40978c8dd5e8a7df1cf9de247"
+  },
+  "pi-lazy-matrix/1-large-before.process.json": {
+    "bytes": 44418,
+    "sha256": "2d97339c417f1518699ce7546677e082533540e75e47cb71de5da35b7f9bd54c"
+  },
+  "pi-lazy-matrix/1-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "4789e58cd18d4a3ed668bc35bedbba6bb4c698acf3636cbedad0f31e2c5106a4"
+  },
+  "pi-lazy-matrix/1-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "0299ceb6343807b9d282af64873798ee01b2a36052414c54c1afd6950000809b"
+  },
+  "pi-lazy-matrix/1-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-lazy-matrix/1-short-large-after.json": {
+    "bytes": 24763484,
+    "sha256": "48e59f653e8ece7204e9080ca47d9b120a3337716cca296c5bded373d3d5bb5a"
+  },
+  "pi-lazy-matrix/1-short-large-after.log": {
+    "bytes": 316,
+    "sha256": "85b626a522de7924180d0c3a1dee8ee51175848807c915bb779be9276fe9ff9c"
+  },
+  "pi-lazy-matrix/1-short-large-after.process.json": {
+    "bytes": 4384550,
+    "sha256": "cc78cd601dfb9ff5ee6196ac4d3c089f929b37bafa21c568e6e39976afbfbb28"
+  },
+  "pi-lazy-matrix/1-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "043029bba46a12f72b1a46f3353b2013e1b7fa4dcde057daf17cf3ba891382be"
+  },
+  "pi-lazy-matrix/1-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "506735ed018f5028018d6dbdedcd3145e8be6be5eee84eeeab198c5c5c35e45a"
+  },
+  "pi-lazy-matrix/1-short-large-before.json": {
+    "bytes": 24763456,
+    "sha256": "74cbbdbe0b81cfa7ad79bbecf2ebd41d9e80bd2c0ba7420f1e22db85622e0062"
+  },
+  "pi-lazy-matrix/1-short-large-before.log": {
+    "bytes": 316,
+    "sha256": "e085100a21083adc047c234a1b11629b17714d1ecfb4894d3a2c14f7aa578a00"
+  },
+  "pi-lazy-matrix/1-short-large-before.process.json": {
+    "bytes": 4384551,
+    "sha256": "487510d0f34d7919b2f3d50e2f1e2828d75e9bc756020ebfe07577cc6e10ae13"
+  },
+  "pi-lazy-matrix/1-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "83dda0e031d6cf43a65811c685962d59ac0553aa139b2b484980ebb8fd9cede2"
+  },
+  "pi-lazy-matrix/1-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "b5927709e92388430b99b8ec3fbb2fc79213a214e2a90e25db1127fc9e854b66"
+  },
+  "pi-lazy-matrix/1-short-large-comparison.json": {
+    "bytes": 53988,
+    "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+  },
+  "pi-lazy-matrix/1-short-small-after.json": {
+    "bytes": 6678137,
+    "sha256": "6fab8f00ef1386f635085f082c1b09147513d046e9ccfbfb01c53c279b12f64b"
+  },
+  "pi-lazy-matrix/1-short-small-after.log": {
+    "bytes": 315,
+    "sha256": "0fd879ad02a7da33b7fa96e53daebe6e61c3ab942eb83e289c69615fa85eac1a"
+  },
+  "pi-lazy-matrix/1-short-small-after.process.json": {
+    "bytes": 1262884,
+    "sha256": "43507b66ef54478d934b02cbc92450488cba7abe210859d4e48ad9909e7aa520"
+  },
+  "pi-lazy-matrix/1-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "879411bfe2f4ee8f1a536c05d142c7982e4359e1736decbb663c4bf44219b99a"
+  },
+  "pi-lazy-matrix/1-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "c1181fef1c88704aaa3e9190780cb265b9a95e96b739bc544f743cf6bd1fac29"
+  },
+  "pi-lazy-matrix/1-short-small-before.json": {
+    "bytes": 6678128,
+    "sha256": "9052a2a17877e0f1125d58abd2030eecde8668b1514d6618fc732d90dc79df1b"
+  },
+  "pi-lazy-matrix/1-short-small-before.log": {
+    "bytes": 315,
+    "sha256": "7cdce005aae7536f72d46a93ed34504e0ea8c60b07b0dc2efed4408d796e4f80"
+  },
+  "pi-lazy-matrix/1-short-small-before.process.json": {
+    "bytes": 1262885,
+    "sha256": "d9ffe67795ca636738a6b938f514caf30e54dbd9cc8a5f6f784ae0a40083f58e"
+  },
+  "pi-lazy-matrix/1-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "236375ccae523ec49b22e84fd8f69a56b42a74fc76cf0013e9c13b297a3c4980"
+  },
+  "pi-lazy-matrix/1-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "59d1f6d5befdf2768ae6bd87e67efd71ca4378a99f539614844c53259879b105"
+  },
+  "pi-lazy-matrix/1-short-small-comparison.json": {
+    "bytes": 22516,
+    "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+  },
+  "pi-lazy-matrix/1-stream-after.json": {
+    "bytes": 128319,
+    "sha256": "e76602c1e8e30a50a2465854df33fc5d966dfa219c01eadf9f6ef1354db62d25"
+  },
+  "pi-lazy-matrix/1-stream-after.log": {
+    "bytes": 310,
+    "sha256": "f18201c54d1872c2899cc375337adbb80426a22f9ddb38c092e3c96540f0fb59"
+  },
+  "pi-lazy-matrix/1-stream-after.process.json": {
+    "bytes": 66861,
+    "sha256": "d57ff337bc543b7de0c4e187ffe0e664411fb69e6a05f5dcd99406e169e8d9a5"
+  },
+  "pi-lazy-matrix/1-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "87fe868b896646e278e9f959ccb25d9b3aae2b12173ca5d61ddbdeb2641c08d8"
+  },
+  "pi-lazy-matrix/1-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f0807c617185dddf0ef2e739e2103ea2f3c8cb8348f7f45d1bcadc778de853da"
+  },
+  "pi-lazy-matrix/1-stream-before.json": {
+    "bytes": 128327,
+    "sha256": "b2ed8b3190dd9205e032ec95529ef769340da231ed9760b00211c2e98ef8bb1e"
+  },
+  "pi-lazy-matrix/1-stream-before.log": {
+    "bytes": 310,
+    "sha256": "2722ec8d7d9a9e116f7ac0b0bf4f036820a06b42b9d49936a368bc8ff7f5f243"
+  },
+  "pi-lazy-matrix/1-stream-before.process.json": {
+    "bytes": 66862,
+    "sha256": "365c2c7bab4901754b5c46a7cb67a55831adac01694861a397f10a791ec2b574"
+  },
+  "pi-lazy-matrix/1-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "7c7254598f8019156b20d0375fb2c1f4806b9838d4cf4590cc63016c47909409"
+  },
+  "pi-lazy-matrix/1-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "f9585c337ac3181a0eed81649526917cb047436d2ee6ce648eba6744863cc9d5"
+  },
+  "pi-lazy-matrix/1-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-lazy-matrix/1-tool-after.json": {
+    "bytes": 232476,
+    "sha256": "308f6cebfc697320c4e8893a873ce7549714203316fc7ad79381b547826967fb"
+  },
+  "pi-lazy-matrix/1-tool-after.log": {
+    "bytes": 308,
+    "sha256": "1a2cbfa6554f091e20f431808a66795f243f77278ee4a13f63448fc87b7f56e0"
+  },
+  "pi-lazy-matrix/1-tool-after.process.json": {
+    "bytes": 45156,
+    "sha256": "82fc543d95aa0514fc81a893154dc38622a3cf2a550538d7c9d68d624cacb08f"
+  },
+  "pi-lazy-matrix/1-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "fc8fccc49014a95f86a6636124b58dd09653c8f6b0b829ddb1e0bf24217f1981"
+  },
+  "pi-lazy-matrix/1-tool-after.provider.stdout": {
+    "bytes": 26193,
+    "sha256": "5c970a513e5ba4af5fedd5a3be1a0a48c0fbd29243fde70a4870e4b02dd8699b"
+  },
+  "pi-lazy-matrix/1-tool-before.json": {
+    "bytes": 232468,
+    "sha256": "a1ff252e67fc292e89777516a3c98a1d5d73cca5f859cb04ed34486506187eb8"
+  },
+  "pi-lazy-matrix/1-tool-before.log": {
+    "bytes": 308,
+    "sha256": "42bed621a9eca5d199aed9ed0634ae732ff2b8aa3ad463cd9426ae9a991b945f"
+  },
+  "pi-lazy-matrix/1-tool-before.process.json": {
+    "bytes": 45157,
+    "sha256": "29cd2053c6e4653b7adcdf36b688229b76e71bf1137bef618c84b4d35d063562"
+  },
+  "pi-lazy-matrix/1-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "16df5832ed73d434a400a3772b61666830fa548b6b9af808184e97a1b2be0c46"
+  },
+  "pi-lazy-matrix/1-tool-before.provider.stdout": {
+    "bytes": 26193,
+    "sha256": "c624e36bdeaaad70e8e6b85b5a022f93c5dd4adb7032c197422dbe166728a255"
+  },
+  "pi-lazy-matrix/1-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-lazy-matrix/2-cancel-after.json": {
+    "bytes": 125787,
+    "sha256": "1ae94d1399634dff35ebc9c93f23d0cab848c9738b82e3a428d502b291196687"
+  },
+  "pi-lazy-matrix/2-cancel-after.log": {
+    "bytes": 310,
+    "sha256": "9fbb609c1e6105da633fcb5f6d8c3fba98f9243fcb66cd21d8830660a9d431d9"
+  },
+  "pi-lazy-matrix/2-cancel-after.process.json": {
+    "bytes": 22649,
+    "sha256": "3a7bf28f61014da33d8bfebde7259c4c7d2897f4df1a2e9a1a858245a6a59896"
+  },
+  "pi-lazy-matrix/2-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "2eb190adba958ca849f8cc8930e64b072bbe97def108ee2b1940d50ed7262e21"
+  },
+  "pi-lazy-matrix/2-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "4e0b9a4aa498e50612baa2cd28095f0c007390aee0862da1bd1c3c3c4db87f6c"
+  },
+  "pi-lazy-matrix/2-cancel-before.json": {
+    "bytes": 125787,
+    "sha256": "9af4e2306b679763c118791222ec33483b69e134aa9c40feb2f20f84e6a48596"
+  },
+  "pi-lazy-matrix/2-cancel-before.log": {
+    "bytes": 310,
+    "sha256": "da93ed01c343f4721b0ea193183a81452e1cd856b7077cbc48d408d065ff0bb1"
+  },
+  "pi-lazy-matrix/2-cancel-before.process.json": {
+    "bytes": 22650,
+    "sha256": "52b34a62116abac0561e4b6e9be9c1558a58bdb11a9d0715b7c647e002115ced"
+  },
+  "pi-lazy-matrix/2-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "e8533b3a1fe1ff3d71439bca25eafcaaff6fa545302971d602be4e16c57f4d49"
+  },
+  "pi-lazy-matrix/2-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "4e0b9a4aa498e50612baa2cd28095f0c007390aee0862da1bd1c3c3c4db87f6c"
+  },
+  "pi-lazy-matrix/2-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-lazy-matrix/2-large-after.json": {
+    "bytes": 158793,
+    "sha256": "b22aede19ffcb1553ba95fb75db390b96c5596ab33e5fac4a22e385485315af0"
+  },
+  "pi-lazy-matrix/2-large-after.log": {
+    "bytes": 309,
+    "sha256": "99a2d799ab756c477384741cd11748cfb90386dffc1027987d92de0c33dedd53"
+  },
+  "pi-lazy-matrix/2-large-after.process.json": {
+    "bytes": 44417,
+    "sha256": "798d9c08765ab4d3f08aed207576aaad17cafb05cc01fb4515313f6a2627ea15"
+  },
+  "pi-lazy-matrix/2-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "b8933a365fd21b9c42e37c69a308d4ef21040b700993448c331a3e81ee87da53"
+  },
+  "pi-lazy-matrix/2-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "4bd901e5f280c59e4495bc167ebd87dfd9f0758bc7191c33ac8f4d0ad3f4bc07"
+  },
+  "pi-lazy-matrix/2-large-before.json": {
+    "bytes": 158802,
+    "sha256": "95f93b945d224c141cd86c0cc763893b36937142fd7a772075beeb5e3eaf2eca"
+  },
+  "pi-lazy-matrix/2-large-before.log": {
+    "bytes": 309,
+    "sha256": "e5ddda8adcfd823915a4640fc33e8f08415677c68525665271d1792f50348309"
+  },
+  "pi-lazy-matrix/2-large-before.process.json": {
+    "bytes": 44418,
+    "sha256": "282ede16149aed2bc1ec7e6b5cff32df16877a8352d0f6aa0a4d83916ec11cfe"
+  },
+  "pi-lazy-matrix/2-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "edd7ea421aa3cd58c9f51164d635afa74cc1decbdc6e4bd656a991de28bdb826"
+  },
+  "pi-lazy-matrix/2-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "4bd901e5f280c59e4495bc167ebd87dfd9f0758bc7191c33ac8f4d0ad3f4bc07"
+  },
+  "pi-lazy-matrix/2-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-lazy-matrix/2-short-large-after.json": {
+    "bytes": 24763427,
+    "sha256": "02a05674b96197c033de0758b3a9b40f526c2e7c62cabd41fb51f3e86f711fd9"
+  },
+  "pi-lazy-matrix/2-short-large-after.log": {
+    "bytes": 316,
+    "sha256": "09e45467b5a2dc5a280d123f2a0c9c64457e3cb178edcbbedb70785cac1eb302"
+  },
+  "pi-lazy-matrix/2-short-large-after.process.json": {
+    "bytes": 4384550,
+    "sha256": "c1f883b418172e36a844a92c66a9e344f5431f5331234e21d86655149d1a054c"
+  },
+  "pi-lazy-matrix/2-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "add0b6f76f40fad2d2202832dc3425d04ad9bfcf014714dc84522af10cb15c81"
+  },
+  "pi-lazy-matrix/2-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "119d7ffb045fae6c223e36ca78596cc5c150094faa69dd0f32573ef609397584"
+  },
+  "pi-lazy-matrix/2-short-large-before.json": {
+    "bytes": 24763448,
+    "sha256": "19ecd1c29f27a77fc97b4f844b2882ec88613f9c70f0adad525e042de560be3e"
+  },
+  "pi-lazy-matrix/2-short-large-before.log": {
+    "bytes": 316,
+    "sha256": "dea1a88772c1f4658f5303e0da4078851e799bbf85de73973a952ddffc204f0a"
+  },
+  "pi-lazy-matrix/2-short-large-before.process.json": {
+    "bytes": 4384551,
+    "sha256": "e907be075c448ec527e0545d3bbc2f17018af86f5a85f6ca841b33929aad4f18"
+  },
+  "pi-lazy-matrix/2-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "7bbf38765224dc880caa89f32328ee308311ee5ea1aab1e2cfe06e34dabd3b7d"
+  },
+  "pi-lazy-matrix/2-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "0d1cc4b75112ab5f4cb118359f11add8c5f217c184b7029f1f07dff4461ee89a"
+  },
+  "pi-lazy-matrix/2-short-large-comparison.json": {
+    "bytes": 53988,
+    "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+  },
+  "pi-lazy-matrix/2-short-small-after.json": {
+    "bytes": 6678129,
+    "sha256": "72564f16efb69d5739de48382a63b0fe6439b0d3b04db746336a93a6dd74d94a"
+  },
+  "pi-lazy-matrix/2-short-small-after.log": {
+    "bytes": 315,
+    "sha256": "36aca17206fe9b0ce779fbf34d32314831a8e9ecb39dd3b965080ad933d33f46"
+  },
+  "pi-lazy-matrix/2-short-small-after.process.json": {
+    "bytes": 1262884,
+    "sha256": "ed01d99aceec92b96320b1b9df7c03b3ca748f6301aa5baeb803f1683cad05a8"
+  },
+  "pi-lazy-matrix/2-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "f52930ad425e74a42c0c81e9b512747c1057bda4e7ee224ab3fb9a5829937a58"
+  },
+  "pi-lazy-matrix/2-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "a9c924ad94cfb493c0194b83c84dfbaaea876715cdcd6fad22e9e12069eaf860"
+  },
+  "pi-lazy-matrix/2-short-small-before.json": {
+    "bytes": 6678126,
+    "sha256": "91fca4d848789c14f70d78de2104b48045b0c291809aad4426168657bc322fc1"
+  },
+  "pi-lazy-matrix/2-short-small-before.log": {
+    "bytes": 315,
+    "sha256": "3208ff5a0792d172a8f43e6c792f7b16945c1e8b0208eb3fb0b2ccdf93e9e8a8"
+  },
+  "pi-lazy-matrix/2-short-small-before.process.json": {
+    "bytes": 1262885,
+    "sha256": "22cd17be167da986e4bcfedd79fa5310a90455ed6ee6b8313748ba01213f401e"
+  },
+  "pi-lazy-matrix/2-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "09cb02c95218766bdcb97837000aadf6bb55e8994362dac8e7eab3d42a1f3c5b"
+  },
+  "pi-lazy-matrix/2-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "d3cb58a829435ff5b5ab155fb968f247dfcbf5a197c7897ac5e02762e44c1e91"
+  },
+  "pi-lazy-matrix/2-short-small-comparison.json": {
+    "bytes": 22516,
+    "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+  },
+  "pi-lazy-matrix/2-stream-after.json": {
+    "bytes": 128319,
+    "sha256": "d45c699fb9bd4e288b7546d68b0d1376c73bee637b85651b8e9e3ff3b1b1c053"
+  },
+  "pi-lazy-matrix/2-stream-after.log": {
+    "bytes": 310,
+    "sha256": "96a058f3cad86bae12a7bc0c50e1f8285eb8281014966ff48105678a0c6e304f"
+  },
+  "pi-lazy-matrix/2-stream-after.process.json": {
+    "bytes": 66861,
+    "sha256": "104faa35704168922221f97c58c479e1b589546a62b185e28c2ce35ec7ad6e2d"
+  },
+  "pi-lazy-matrix/2-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "eb567b214565237533feb17eab072fd60be4b8606ac9f3443afc0804cc53e63d"
+  },
+  "pi-lazy-matrix/2-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "204ee99e821e977ce6ff09f5348b31c456a0129f4e3e0b43a0ab30d04468cd27"
+  },
+  "pi-lazy-matrix/2-stream-before.json": {
+    "bytes": 128319,
+    "sha256": "d20c2895ee6ee3dcf6a02de64e626713f722d134f43475b3253222f10c724f0d"
+  },
+  "pi-lazy-matrix/2-stream-before.log": {
+    "bytes": 310,
+    "sha256": "43bb6ae34835f4c9f72e1cf87a4774fd3a3c712c000db32090fca4c8a088c558"
+  },
+  "pi-lazy-matrix/2-stream-before.process.json": {
+    "bytes": 66862,
+    "sha256": "5dcc837b44f49ccfb5fd62a800c58da554738d834cbdc3f16acb8248992b75d6"
+  },
+  "pi-lazy-matrix/2-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "ceb4efc4e834da65fe7385fd9966eddab2cce7f5ae43cfd7ba344f744d8ff0b4"
+  },
+  "pi-lazy-matrix/2-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "c20854c93f74bc4b3ef1ae3f66401052c7727a3ff68d0970b08da0920637e434"
+  },
+  "pi-lazy-matrix/2-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-lazy-matrix/2-tool-after.json": {
+    "bytes": 232468,
+    "sha256": "3b50a7532d587d17eeddc44b3ddff658123001d3117bc8e3fb12ca4474000b28"
+  },
+  "pi-lazy-matrix/2-tool-after.log": {
+    "bytes": 308,
+    "sha256": "27174208e2b44aceff038cfaac139ad8c88014124ce647539311c6a9620e80e9"
+  },
+  "pi-lazy-matrix/2-tool-after.process.json": {
+    "bytes": 45156,
+    "sha256": "f74df62116ef480f351189c978b29f57ded9435b1461d9654cb2c4404f2e81a2"
+  },
+  "pi-lazy-matrix/2-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "d9301df8a826950d399edf7cee2af22499f43a41bda1ed34ad435f5adc8a46f1"
+  },
+  "pi-lazy-matrix/2-tool-after.provider.stdout": {
+    "bytes": 26193,
+    "sha256": "90155f2ea2e4f992d3f7825d430925479c96d27a47ef3a9ba16f271e5be158f2"
+  },
+  "pi-lazy-matrix/2-tool-before.json": {
+    "bytes": 232468,
+    "sha256": "2eedbb1eb78b34a2a4ffa92aae7dcdd05d83b41bc23813ccdb9c05de45384de9"
+  },
+  "pi-lazy-matrix/2-tool-before.log": {
+    "bytes": 308,
+    "sha256": "34612b885b6afb6aa30082ab6176fcad1eb7ab1708cbe1dac43fbadd9e80d539"
+  },
+  "pi-lazy-matrix/2-tool-before.process.json": {
+    "bytes": 45157,
+    "sha256": "3dcea90bb6b6f85bde8e1337b197187f981a37dd22933fe95ffe2d179ffb2ee3"
+  },
+  "pi-lazy-matrix/2-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "76ccf989206fdae23ea60e62d74abfdf3617759e0b4f34e9479dead860aaa16d"
+  },
+  "pi-lazy-matrix/2-tool-before.provider.stdout": {
+    "bytes": 26193,
+    "sha256": "55a0d23c9a66cd8047fcd9a2d60a70e6dc55d568f595bb7c00bbb348aba81c48"
+  },
+  "pi-lazy-matrix/2-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-lazy-matrix/manifest.json": {
+    "bytes": 780,
+    "sha256": "ea8f046591219752407dc9c90c7b3caf339441d4deac5a99ae608025f7bbf82f"
+  },
+  "pi-lazy-matrix.log": {
+    "bytes": 14725,
+    "sha256": "7bc977d2ed84c0d729178d1d14bff5da1cb0e1d81a93aee54878351c4c44edd9"
+  },
+  "pi-lazy-profile/analysis.log": {
+    "bytes": 12021,
+    "sha256": "dfd5adb291f541d88985cc1fc0b37d68482e2f67dbffd56e760b5275ccf9a47e"
+  },
+  "pi-lazy-profile/analyze.py": {
+    "bytes": 2874,
+    "sha256": "f4583f37c6e98072ccae099cee12614a4fcf17fbb4d2e6a2fa4705836b437bb7"
+  },
+  "pi-lazy-profile/comparison.json": {
+    "bytes": 22516,
+    "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+  },
+  "pi-lazy-profile/complete-after/after_turns-database.json": {
+    "bytes": 1979135,
+    "sha256": "8b97829f3253e53e521567ccd8d83f1beceb232779b1c36121facda379f9c518"
+  },
+  "pi-lazy-profile/complete-after/before_measured_turns-database.json": {
+    "bytes": 340307,
+    "sha256": "6243be678851afcbfd83252a12746b8ec002e5396e9a2fad488248e1162a382e"
+  },
+  "pi-lazy-profile/complete-after/calls.strace": {
+    "bytes": 19889647,
+    "sha256": "3469ba52025618152a5ebd4d19d053c78b4eeab540d557a87f057a8b7850f2d1"
+  },
+  "pi-lazy-profile/complete-after/phases.json": {
+    "bytes": 877,
+    "sha256": "59af640271acb9e957d2442d1c15ecb3ec3f2b18ec8b019615ff85ef2dfd0b57"
+  },
+  "pi-lazy-profile/complete-after/sample.json": {
+    "bytes": 6683746,
+    "sha256": "19156cd2795ee680fe16ae6ad379f20d05b92d2744e429473a24b56d2086cb0c"
+  },
+  "pi-lazy-profile/complete-after/sample.log": {
+    "bytes": 332,
+    "sha256": "a6cb14273b82d57669fe1f43e79ec7ecc649be8f88c68bb0daede91c7ca6dc06"
+  },
+  "pi-lazy-profile/complete-after/sample.process.json": {
+    "bytes": 1262887,
+    "sha256": "8bea0ce1a6f66658c194730fb7483e3bb8679dab146bcdefbc683933b185f57d"
+  },
+  "pi-lazy-profile/complete-after/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "5de2d62758240e321ad4d8f3b82173261d518806d6ecac0b4a60bf030ec39762"
+  },
+  "pi-lazy-profile/complete-after/sample.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "60f911657bc67c09a91fdf0461b541e457ecfb61482e2914d1b61958f56fb2e2"
+  },
+  "pi-lazy-profile/complete-after/tracer.log": {
+    "bytes": 279,
+    "sha256": "aaccf4667b2cec4a59fd7db3d55588068a8ed4788566b3b189c08456b98343fd"
+  },
+  "pi-lazy-profile/complete-before/after_turns-database.json": {
+    "bytes": 1984431,
+    "sha256": "d024be980e72cddc2bde3a7c3df08b8f061931b3647ed0411834a36bf6a82d8e"
+  },
+  "pi-lazy-profile/complete-before/before_measured_turns-database.json": {
+    "bytes": 340773,
+    "sha256": "efb5d77fd8c75baf272f201952702f660986180a4ebca5ceb995e00daea3628d"
+  },
+  "pi-lazy-profile/complete-before/calls.strace": {
+    "bytes": 20293072,
+    "sha256": "1d20ce44f8d8e259102384226ab7094e32d36035b2c9e361603e4371538675f6"
+  },
+  "pi-lazy-profile/complete-before/phases.json": {
+    "bytes": 877,
+    "sha256": "95a7e24170abc492c0437e15027e3f6211aa92cd008ee3cc67988f3dd2ce0736"
+  },
+  "pi-lazy-profile/complete-before/sample.json": {
+    "bytes": 6684088,
+    "sha256": "738e37820d064ef0ca3afea3c8a4f57b8f8ca876c592f0779a6c37d2216c3e60"
+  },
+  "pi-lazy-profile/complete-before/sample.log": {
+    "bytes": 333,
+    "sha256": "cb2bf1dcf48f2d6254898fa9c8a1580a99ef312f6b5c10c2a7261752285d40f8"
+  },
+  "pi-lazy-profile/complete-before/sample.process.json": {
+    "bytes": 1262888,
+    "sha256": "99aa5c75e172a47bee96780e8bbef7cbe85311db588725ace4b93f43fc3c7ff2"
+  },
+  "pi-lazy-profile/complete-before/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "ca46a4e1ddcff723f461ec4df40daa441e69b5f4e0d93886545204f76b826de2"
+  },
+  "pi-lazy-profile/complete-before/sample.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "0ee800d9a2544b8ae06700d5a8843284dea4e125712d146594e7fa9ff4f3badb"
+  },
+  "pi-lazy-profile/complete-before/tracer.log": {
+    "bytes": 279,
+    "sha256": "7361a7c3b62efb20027311138b6e6f3bbd20c5fe7975b2853388f83d431daf78"
+  },
+  "pi-lazy-profile/identity.json": {
+    "bytes": 619,
+    "sha256": "ad2f4a7f4f1c413fca8ad3e8b6018418e3bc8b706674ecc519ed4e68158247d2"
+  },
+  "pi-lazy-profile/run.log": {
+    "bytes": 27,
+    "sha256": "609ce4f32dcb5e3cf5f255fa787a92c583b38c3df46ebddf3e8f4cea639898d7"
+  },
+  "pi-lazy-profile/run.py": {
+    "bytes": 4316,
+    "sha256": "91c30a07c8fdee242ecb7dd4dfc8da4909d02fef31f8d2c3d73991048e51c32c"
+  },
+  "pi-lazy-profile/summary.json": {
+    "bytes": 24884,
+    "sha256": "c8823101f9446536807bb2774c62588c792ba4f5d91cb9acb5e8a01bb2b88e77"
+  },
+  "pi-lazy-provider-prewarm.log": {
+    "bytes": 592,
+    "sha256": "ad3374a14fb8293eb2fd1566fb810d447ea515792f4802a6be8ed7f9540809e3"
+  },
+  "pi-lazy-summary.json": {
+    "bytes": 93232,
+    "sha256": "5366bb29e94a0a6289425f4c5c0779fbfbdf13c6caafdf9101602e6a1810e3ba"
+  }
+}

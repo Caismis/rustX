@@ -42,9 +42,12 @@ impl SqliteConversationStore {
             )));
         }
         let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| storage(format!("auxiliary audit snapshot: {error}")))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary audit snapshot: {error}"),
+            )
+        })?;
         // Pin one WAL snapshot for the cut, cursor and related authority rows.
         let total = audit_total_at_connection(&transaction, cut)?;
         let after = after_offset.unwrap_or(0);
@@ -67,7 +70,12 @@ impl SqliteConversationStore {
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| storage(format!("auxiliary audit cursor anchor: {error}")))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("auxiliary audit cursor anchor: {error}"),
+                    )
+                })?;
             let anchor_sequence = anchor_sequence.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(
                     "auxiliary audit cursor does not name a visible dense record".into(),
@@ -131,7 +139,12 @@ impl SqliteConversationStore {
                  WHERE audit_offset>?1 AND audit_offset<=?4 AND sequence<=?2
                  ORDER BY audit_offset LIMIT ?3",
             )
-            .map_err(|error| storage(format!("auxiliary audit page query: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("auxiliary audit page query: {error}"),
+                )
+            })?;
         let rows = statement
             .query_map(
                 params![
@@ -151,7 +164,12 @@ impl SqliteConversationStore {
                     ))
                 },
             )
-            .map_err(|error| storage(format!("auxiliary audit page rows: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("auxiliary audit page rows: {error}"),
+                )
+            })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("collect auxiliary audit page: {error}")))?;
         let has_more = rows.len() > limit;
@@ -297,11 +315,11 @@ impl SqliteConversationStore {
 
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let call: Option<String> = transaction.query_row(
             "SELECT json_extract(event_json,'$.event.call_id') FROM events INDEXED BY events_auxiliary_submission_idx WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission' AND json_extract(event_json,'$.event.business_source.identity.correlation')=?1",
             [correlation], |row| row.get(0),
-        ).optional().map_err(|error| storage(error.to_string()))?;
+        ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let Some(call) = call else {
             return Ok(None);
         };
@@ -339,9 +357,12 @@ impl SqliteConversationStore {
         }
         let audit = call_audit_at_tx(&connection, &self.conversation_id, call_id, cut)?;
         if audit.is_none() {
-            let transaction = connection
-                .unchecked_transaction()
-                .map_err(|error| storage(format!("auxiliary Call audit probe: {error}")))?;
+            let transaction = connection.unchecked_transaction().map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("auxiliary Call audit probe: {error}"),
+                )
+            })?;
             if has_call_journal_fact_through_tx(&transaction, call_id, cut.journal)? {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "auxiliary Call {call_id} has Journal evidence without its audit index"
@@ -364,9 +385,12 @@ impl SqliteConversationStore {
             )));
         }
         let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| storage(format!("auxiliary Call request snapshot: {error}")))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary Call request snapshot: {error}"),
+            )
+        })?;
         if cut.journal > journal_prefix(&transaction)? {
             return Err(ConversationStoreError::InvalidReference(
                 "auxiliary audit cut is in the future".into(),
@@ -424,7 +448,12 @@ impl SqliteConversationStore {
         }
         let rows = transaction
             .prepare_cached(AUXILIARY_CALL_REQUESTS_SQL)
-            .map_err(|error| storage(format!("auxiliary Call request lookup: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("auxiliary Call request lookup: {error}"),
+                )
+            })?
             .query_map(
                 params![
                     call_id.as_str(),
@@ -441,7 +470,12 @@ impl SqliteConversationStore {
                     ))
                 },
             )
-            .map_err(|error| storage(format!("auxiliary Call request query: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("auxiliary Call request query: {error}"),
+                )
+            })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("auxiliary Call request row: {error}")))?;
         let mut requests = Vec::with_capacity(rows.len());
@@ -513,9 +547,12 @@ impl SqliteConversationStore {
         cut: AuxiliaryAuditCut,
     ) -> Result<Option<AuxiliaryRequestAudit>, ConversationStoreError> {
         let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| storage(format!("auxiliary request audit snapshot: {error}")))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary request audit snapshot: {error}"),
+            )
+        })?;
         // The request, Call and owner rows must describe one committed state.
         if cut.journal > journal_prefix(&transaction)? {
             return Err(ConversationStoreError::InvalidReference(

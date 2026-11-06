@@ -8,6 +8,17 @@
 //! The tables share transactions where rustX needs one semantic linearization
 //! point, but no table is a serialized `ConversationRecord` or transcript.
 
+#[cfg(test)]
+thread_local! { static OPTIONAL_LAYOUT_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+use crate::durable::TranscriptCommitReceipt;
+use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+use crate::model::RequestSnapshot;
+use crate::publication::{PublicationSettlement, PublicationStreamStart};
+use crate::runtime::inbound::InboundSequence;
+use crate::runtime::process_death;
+use idle_cache::ConnectionSlot;
+use rusqlite::TransactionBehavior;
+use statements::FixedStatements;
 use std::sync::{Arc, Condvar, Mutex};
 
 #[cfg(test)]
@@ -313,7 +324,28 @@ fn count_conversation_store_open() {
 /// Version 84 requires exact Workflow run/instance indexes for bounded historical reads.
 /// Version 85 records Session configuration commits as Journal facts with
 /// their own transcript positions.
-pub const SQLITE_SCHEMA_VERSION: i64 = 85;
+/// Version 70 removes the redundant serialized active history from the Surface head.
+/// Version 71 stores authenticated Source pages with a bounded binary codec.
+/// Version 72 excludes unrelated NULL-key rows from scoped event indexes.
+/// Version 73 derives state field previews lazily from retained geometry and bytes.
+/// Version 74 removes independent original-capture Source witness seats.
+/// Version 75 makes ordinary accepted model output and its no-tool boundary atomic.
+/// Version 77 shares eagerly indexed immutable request configuration suffixes.
+/// Version 79 uses compact private request-inspection records and removes obsolete event display copies.
+/// Version 80 keeps publication progress in connection-local memory, consolidates sparse event indexes,
+/// and derives request field previews from authenticated original bytes.
+/// Version 81 stores event quote overlays over native bytes and compact request width runs.
+/// Version 82 shares two sparse event head indexes across four independent read domains.
+/// Version 83 stores compact independent event evidence and prefix-compressed request pages.
+/// Version 84 merges chronological attempt reads through the shared attempt-kind index.
+/// Version 85 stores immutable first content chunks alongside their exact frontier.
+/// Version 86 stores bounded binary Statistics and Execution tuples with unchanged JSON admission.
+/// Version 87 removes redundant trailing sequence keys from rowid event indexes.
+/// Version 90 stores independent statistical contributions with sparse checkpoints.
+/// Version 91 binds shared Request Source preparation to frozen native configuration.
+/// Version 95 stores one fact-bound complete Statistics record per relevant event.
+/// Version 96 stores bounded full-key binary Request Source navigation pages.
+pub const SQLITE_SCHEMA_VERSION: i64 = 97;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -443,16 +475,19 @@ impl std::fmt::Debug for SqliteConversationStore {
     }
 }
 
-/// A connection lease owns SQL, not the condition mutex. Cancellation can
-/// therefore wake a waiting presentation reader without waiting for SQL.
 struct ConnectionOwner {
-    available: Mutex<Option<Connection>>,
+    available: Mutex<ConnectionSlot>,
     wake: Condvar,
     poisoned: AtomicBool,
     lease_generation: AtomicU64,
     active_interrupt: Mutex<Option<(u64, rusqlite::InterruptHandle)>>,
     manifest: Arc<manifest::Owner>,
     append_validation: Arc<append_validation::Owner>,
+    response: Arc<observation_response::Owner>,
+    event_guard: event_insert::Guard,
+    /// Main-database writes since the current transaction/lease boundary.
+    /// Read-only ROLLBACK must not invalidate committed immutable evidence.
+    transaction_writes: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -499,13 +534,13 @@ impl ConnectionOwner {
                     storage("presentation read cancelled")
                 });
             }
-            if let Some(connection) = slot.take() {
+            if let Some(connection) = slot.connection.take() {
                 let Ok(previous) = self.lease_generation.fetch_update(
                     Ordering::AcqRel,
                     Ordering::Acquire,
                     |current| current.checked_add(1),
                 ) else {
-                    *slot = Some(connection);
+                    slot.returned(Some(connection));
                     return Err(storage("connection lease generation exhausted"));
                 };
                 let generation = previous + 1;
@@ -639,13 +674,22 @@ impl Drop for ConnectionLease<'_> {
         if std::thread::panicking() {
             self.owner.poisoned.store(true, Ordering::Release);
         }
+        if self
+            .connection
+            .as_ref()
+            .is_some_and(Connection::is_autocommit)
+        {
+            self.owner
+                .transaction_writes
+                .store(false, Ordering::Release);
+        }
         let mut slot = self.owner.available.lock().expect("connection slot");
         *self
             .owner
             .active_interrupt
             .lock()
             .expect("connection interrupt owner") = None;
-        *slot = self.connection.take();
+        slot.returned(self.connection.take());
         self.owner.wake.notify_all();
     }
 }
@@ -659,6 +703,7 @@ struct StoreGuard<'a> {
     cancellable: bool,
     changes: u64,
     observer: &'a Mutex<JournalObserverBinding>,
+    event_guard: &'a event_insert::Guard,
 }
 impl std::ops::Deref for StoreGuard<'_> {
     type Target = Connection;
@@ -673,11 +718,8 @@ impl std::ops::DerefMut for StoreGuard<'_> {
 }
 fn journal_prefix(connection: &Connection) -> Result<u64, ConversationStoreError> {
     let through: i64 = connection
-        .query_row(
-            "SELECT next_event_sequence FROM rustx_store WHERE id=1",
-            [],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT next_event_sequence FROM rustx_store WHERE id=1")
+        .and_then(|mut statement| statement.query_row([], |row| row.get(0)))
         .map_err(|error| sqlite_error(&error, error.to_string()))?;
     sequence_from_i64(through)
 }
@@ -689,6 +731,7 @@ impl Drop for StoreGuard<'_> {
                 .expect("restore SQLite progress policy");
             writer_busy_policy(&self.connection).expect("restore SQLite busy policy");
         }
+        self.event_guard.publish_statistics(&self.connection);
         if self.connection.total_changes() == self.changes || !self.connection.is_autocommit() {
             return;
         }
@@ -847,6 +890,7 @@ impl SqliteConversationStore {
             cancellable,
             changes,
             observer: &self.journal_observer,
+            event_guard: &self.conn.event_guard,
         })
     }
     /// Runs `read` inside one native read snapshot: the leased connection opens
@@ -858,7 +902,7 @@ impl SqliteConversationStore {
         let connection = self.lock()?;
         let transaction = connection
             .unchecked_transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         read(&transaction)
     }
     /// The bounded observation read-cut lifecycle: validate the authentic
@@ -1145,7 +1189,7 @@ fn read_sequence(value: i64) -> Result<u64, rusqlite::Error> {
 }
 
 /// Preserve SQLite's typed interrupt cause before diagnostic formatting.
-fn sqlite_error(error: &rusqlite::Error, diagnostic: String) -> ConversationStoreError {
+fn sqlite_error(error: &rusqlite::Error, diagnostic: impl Into<String>) -> ConversationStoreError {
     if error.sqlite_error_code() == Some(rusqlite::ErrorCode::OperationInterrupted) {
         ConversationStoreError::OperationCancelled
     } else {
@@ -1223,6 +1267,26 @@ mod observation_tools;
 mod observation_trace;
 mod workflow_trace;
 
+#[cfg(test)]
+fn take_optional_layout_work() -> usize {
+    OPTIONAL_LAYOUT_WORK.with(|work| work.replace(0))
+}
+
+/// A missing derived value may be contained; cancellation and transaction
+/// loss must reach the native owner even in read-only preparation helpers.
+fn optional_display_value<T>(
+    result: Result<T, ConversationStoreError>,
+) -> Result<Option<T>, ConversationStoreError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(
+            error @ (ConversationStoreError::OperationCancelled
+            | ConversationStoreError::TransactionInvalid(_)),
+        ) => Err(error),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Optional immutable read layout belongs to the native source transaction.
 /// Only a failure contained by its savepoint may retire the optional layout.
 /// Cancellation and loss of transaction integrity must reach the write owner
@@ -1231,13 +1295,15 @@ fn optional_display_layout<T>(
     connection: &Connection,
     build: impl FnOnce() -> Result<T, ConversationStoreError>,
 ) -> Result<Option<T>, ConversationStoreError> {
+    #[cfg(test)]
+    OPTIONAL_LAYOUT_WORK.with(|work| work.set(work.get() + 1));
     if connection.is_autocommit() {
         return Err(ConversationStoreError::TransactionInvalid(
             "optional layout requires its original owning transaction".into(),
         ));
     }
     connection
-        .execute_batch("SAVEPOINT rustx_display_layout")
+        .execute_cached("SAVEPOINT rustx_display_layout", [])
         .map_err(|error| match sqlite_error(&error, error.to_string()) {
             ConversationStoreError::OperationCancelled => {
                 ConversationStoreError::OperationCancelled
@@ -1254,7 +1320,7 @@ fn optional_display_layout<T>(
                 ));
             }
             connection
-                .execute_batch("RELEASE rustx_display_layout")
+                .execute_cached("RELEASE rustx_display_layout", [])
                 .map_err(|error| match sqlite_error(&error, error.to_string()) {
                     ConversationStoreError::OperationCancelled => {
                         ConversationStoreError::OperationCancelled
@@ -1282,7 +1348,8 @@ fn optional_display_layout<T>(
         }
         Err(error) => {
             connection
-                .execute_batch("ROLLBACK TO rustx_display_layout; RELEASE rustx_display_layout")
+                .execute_cached("ROLLBACK TO rustx_display_layout", [])
+                .and_then(|_| connection.execute_cached("RELEASE rustx_display_layout", []))
                 .map_err(
                     |cleanup| match sqlite_error(&cleanup, cleanup.to_string()) {
                         ConversationStoreError::OperationCancelled => {
@@ -1312,3 +1379,38 @@ mod projection_publication;
 
 #[cfg(test)]
 pub(crate) use auxiliary::install_lookup_hook as install_auxiliary_lookup_hook;
+
+/// A connection lease owns SQL, not the condition mutex. Cancellation can
+/// therefore wake a waiting presentation reader without waiting for SQL.
+mod idle_cache;
+
+#[cfg(test)]
+mod scoped_event_index_tests;
+
+mod event_heads;
+
+mod event_holes;
+
+mod statements;
+
+mod observation_checkpoint;
+
+mod observation_codec;
+
+mod observation_response;
+
+mod append_facts;
+
+mod attempt_start;
+
+mod event_insert;
+
+mod native_request;
+
+#[cfg(test)]
+mod optional_layout_tests;
+
+mod final_settlement;
+
+#[cfg(test)]
+mod compact_lookup_tests;

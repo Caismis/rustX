@@ -532,7 +532,7 @@ fn published_read_cut_does_not_observe_a_later_completion() {
     finish(&store, "a");
     let mut old = page(&store, None, 64);
     for entry in &mut old.entries {
-        entry.completed_response = None;
+        std::sync::Arc::make_mut(entry).completed_response = None;
     }
     native_oracle_decorate_through(&store, &mut old, through).unwrap();
     assert!(tails(&old).is_empty());
@@ -943,7 +943,7 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
                 .all(|member| member.cursor != entry.cursor)
         );
         assert_eq!(members.entries[0].cursor, turn.control_cursor);
-        expected = page(&store, None, 64).entries;
+        expected = page(&store, None, 64).entries.into_owned();
     }
     // A later successful Attempt and a new running Attempt cannot rewrite history.
     assistant(&store, "later", "later-response");
@@ -972,7 +972,7 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
             }
         }
         paged.reverse();
-        assert_eq!(paged, full.entries);
+        assert_eq!(paged, *full.entries);
     }
     // Repeated resubscription reads are identical, with no live Attempt involved.
     assert_eq!(full, page(&reopened, None, 64));

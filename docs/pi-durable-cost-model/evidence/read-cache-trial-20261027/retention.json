@@ -1,0 +1,26 @@
+{
+  "decision": "reject and revert Stage C",
+  "rejected_source": "8760f570999a4693f59db5c446804afce34b74c8",
+  "rejected_src_tree": "807eb84ba5bfcb9d68ba6c39988aaff157e298a6",
+  "rejected_binary_sha256": "43310780974a2acdbc9b6b5c10eaa20682956d782053e7595587babb74379f4f",
+  "revert_commit": "caaab5f2b6d6c3ec9d0f19a35249c5fe70e367a8",
+  "retained_measured_source": "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+  "retained_src_tree": "e3f821550dbe5ba8d54c269251b6e0ce5152b3b4",
+  "retained_binary_sha256": "f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3",
+  "identity_check": {
+    "command": [
+      "git",
+      "diff",
+      "--exit-code",
+      "cb6e026b4ac84842703dfc6adbaec43d700bff24",
+      "HEAD"
+    ],
+    "exit": 0,
+    "stdout": "",
+    "stderr": "",
+    "scope": "all tracked files before adding the new evidence/report files"
+  },
+  "reason": "Direct n=3 paired cohort has clear no-live short-small wall/CPU gains and live short-large complete CPU gains, but all three no-live short-large wall ratios exceed one; live large/tool lifecycle wall intervals are also adverse. Conservatively reject under the predeclared wider-cost criterion. This is not a statistical causal proof that cache reuse caused every adverse delay. All data retained.",
+  "not_run": "Fresh C/recovery623, C/Pi, C append, and C profiling cohorts were not run because C was rejected; run-final.py was prepared but never executed.",
+  "recorded_utc": "2026-10-26T18:59:27.587647+00:00"
+}

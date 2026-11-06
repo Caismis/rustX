@@ -313,7 +313,8 @@ async fn assert_rejection_wire(protocol: ModelProtocol) {
         }
     };
     assert_eq!(
-        wire_schema, &schema,
+        wire_schema,
+        schema.as_ref(),
         "compiled native schema reaches the adapter unchanged"
     );
     assert_no_pattern(wire_schema);

@@ -1,0 +1,17 @@
+2026-10-27; before all new formal performance measurements.
+DeepSeek reference selected full official SDK, not sdk-minimal, after source
+inspection found native checkpoint-policy/projection-cache present only in SDK.
+The supported sdk-source patch is used as documented by the official launcher.
+Its completion, close, resume and notification differences are recorded in
+benchmarks/runtime/deepseek-reference.md and native result contracts. In
+particular SDK idle does not await final flush, so no equal-durability ratio or
+complete-lifecycle rank is allowed. This refines the preliminary experiment.txt
+selection; sdk-minimal functional/setup logs remain diagnostic only.
+
+Candidate E, separately staged after D: replace eagerly materialized scalar
+field pages for <=16KiB request scalar with existing authenticated original
+byte index. Retain eager validation and derive scalar inspection fields once
+per external operation. Larger scalar uses existing indexed path. Schema77,
+no migration. Must pass differential/invalid/corruption/reopen tests and same
+six-case/two-mode/three-alternating-pair matrix against retained stage. Apply
+the same predeclared retention criterion as D; preserve adverse outcomes.

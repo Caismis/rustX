@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { supersededHistoryReads, type RequestTiming } from './session-latency';
+import { supersededHistoryReads, supersededTraceReads, type RequestTiming } from './session-latency';
 
 const target = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 'attachment-1']);
 const otherTarget = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 'attachment-2']);
@@ -126,5 +126,38 @@ describe('latency evidence for a cold preview superseded by attachment', () => {
     const rows = evidence();
     rows.push({ ...rows[0], nodeId: 'node-b' });
     expect(supersededHistoryReads(rows)).toEqual([rows[0]]);
+  });
+});
+
+
+describe('latency evidence for a superseded standalone Trace head', () => {
+  const head = (): RequestTiming[] => [
+    { method: 'session/trace', traceBefore: null, target, start: 10, end: 20, error: 'read_cut_expired' },
+    { method: 'session/trace', traceBefore: null, target, start: 21, end: 30, resultType: 'trace' },
+  ];
+  it('retains the exact original refusal after the same attachment successfully rereads its head', () => {
+    const rows = head(), original = structuredClone(rows);
+    expect(supersededTraceReads([rows[1], rows[0]])).toEqual([rows[0]]);
+    expect(supersededTraceReads(rows)[0]).toBe(rows[0]);
+    expect(rows).toEqual(original);
+  });
+  it.each(['trace:4', undefined])('does not exempt pagination or unspecified head selection (%s)', before => {
+    const rows = head(); rows[0].traceBefore = before;
+    expect(supersededTraceReads(rows)).toEqual([]);
+  });
+  it('does not exempt an unrecovered final expiry or a different attachment', () => {
+    expect(supersededTraceReads(head().slice(0, 1))).toEqual([]);
+    const rows = head(); rows[1].target = otherTarget;
+    expect(supersededTraceReads(rows)).toEqual([]);
+  });
+  it.each(['observation_unavailable', 'stale_attachment', 'operation_failed'])('keeps unrelated failure %s', error => {
+    const rows = head(); rows[0].error = error;
+    expect(supersededTraceReads(rows)).toEqual([]);
+  });
+  it('requires a complete successful native head receipt after the refusal completes', () => {
+    for (const patch of [{ end: undefined }, { end: NaN }, { start: 19 }, { resultType: 'checkpoint' }, { error: 'read_cut_expired' }, { traceBefore: 'trace:4' }]) {
+      const rows = head(); Object.assign(rows[1], patch);
+      expect(supersededTraceReads(rows)).toEqual([]);
+    }
   });
 });

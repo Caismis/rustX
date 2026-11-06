@@ -92,4 +92,14 @@ pub trait JournalStore: Send + Sync + 'static {
         after_sequence: Option<u64>,
         limit: usize,
     ) -> Result<EventPage, ConversationStoreError>;
+
+    /// Commits an attempt's admission and its first logical turn together.
+    /// The two facts retain their native order and share one observation
+    /// receipt. Cancellation before turn preparation uses `append_event` for
+    /// the attempt alone; subsequent turns also use that standalone method.
+    fn commit_attempt_first_turn(
+        &self,
+        attempt: RuntimeEventEnvelope,
+        turn: RuntimeEventEnvelope,
+    ) -> Result<[RuntimeEventEnvelope; 2], ConversationStoreError>;
 }

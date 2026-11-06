@@ -89,12 +89,22 @@ use crate::durable::observation::{TraceFactHeader, TraceFactKind, TraceFactQuery
 use crate::durable::presentation::{FactQuery, FactScope};
 use crate::durable::{ConversationStore, ConversationStoreError};
 #[cfg(test)]
+thread_local! {
+    static PAGE_READ_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn take_page_read_work() -> usize {
+    PAGE_READ_WORK.with(|work| work.replace(0))
+}
+#[cfg(test)]
 use crate::events::types::RuntimeEventEnvelope;
 
 /// Largest page a client may request.
 pub const TRACE_PAGE_LIMIT: usize = 32;
-/// Most loaded records a client may ask the server to refresh at one cut.
+/// Most records resolved together during checkpoint or Agent enrichment.
 pub const TRACE_RECORD_LIMIT: usize = 8;
+/// Most loaded identities admitted by one standalone Root Trace repair.
+pub const TRACE_REFRESH_LIMIT: usize = 128;
 
 /// The closed anchor vocabulary. One anchor becomes one ledger record.
 #[cfg(test)]
@@ -170,8 +180,8 @@ impl<'a> TraceProjection<'a> {
             source_cut: Some(native),
             canonical_foreground: None,
             live_publication: None,
-            domain_revisions: std::collections::BTreeMap::new(),
-            collection_cuts: std::collections::BTreeMap::new(),
+            domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+            collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         })
     }
 
@@ -284,6 +294,8 @@ impl<'a> TraceProjection<'a> {
         before: Option<&TraceCursor>,
         limit: usize,
     ) -> Result<TracePage, ConversationStoreError> {
+        #[cfg(test)]
+        PAGE_READ_WORK.with(|work| work.set(work.get() + 1));
         if limit == 0 || limit > TRACE_PAGE_LIMIT {
             return Err(ConversationStoreError::InvalidReference(
                 "Trace limit must be 1..=32".into(),
@@ -491,17 +503,54 @@ impl<'a> TraceProjection<'a> {
             .collect::<Result<Vec<_>, _>>()
             .map(|updates| updates.into_iter().flatten().collect())
     }
+
+    /// Fill one bounded reply with a complete prefix of the supplied interests.
+    /// Missing anchors still consume their input position. Every lookup uses
+    /// this projection's captured Source cut; no publication is produced.
+    pub(crate) fn refresh_page(
+        &self,
+        page: &mut TracePage,
+        records: &[TraceCursor],
+        snapshot: Option<&super::snapshot::RuntimeClientSnapshot>,
+    ) -> Result<usize, ConversationStoreError> {
+        if records.len() > TRACE_REFRESH_LIMIT {
+            return Err(ConversationStoreError::InvalidReference(
+                "too many Trace refresh interests".into(),
+            ));
+        }
+        let mut refreshed = 0;
+        for batch in records.chunks(TRACE_RECORD_LIMIT) {
+            let previous = page.updates.len();
+            // A lookup failure is an explicit read failure, even when an
+            // earlier batch would have fitted. It is never hidden by paging.
+            page.updates.extend(self.refresh(batch, snapshot)?);
+            if let Err(error) = ensure_page_bound(page) {
+                page.updates.truncate(previous);
+                if refreshed == 0 {
+                    return Err(error);
+                }
+                break;
+            }
+            refreshed += batch.len();
+        }
+        Ok(refreshed)
+    }
 }
 
 pub(crate) fn ensure_page_bound(page: &TracePage) -> Result<(), ConversationStoreError> {
+    let limit = crate::observation::bounded::CHECKPOINT_TARGET_BYTES
+        - crate::observation::bounded::CHECKPOINT_ITEM_BYTES;
+    // A positive native structural proof includes the decimal-u64 headroom.
+    // Values requiring the schema codec retain its existing admission path.
+    if crate::observation::preflight::bounded_safe_integer_fit(page, limit) == Some(true) {
+        return Ok(());
+    }
     let schema = crate::observation::structural_json::root::<TracePage>();
     let encoded = crate::observation::structural_json::Encoded {
         value: page,
         schema: &schema,
         root: &schema,
     };
-    let limit = crate::observation::bounded::CHECKPOINT_TARGET_BYTES
-        - crate::observation::bounded::CHECKPOINT_ITEM_BYTES;
     if crate::observation::preflight::bounded_fit(&encoded, limit) == Some(true) {
         return Ok(());
     }

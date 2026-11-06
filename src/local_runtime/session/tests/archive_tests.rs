@@ -639,7 +639,7 @@ async fn archive_keeps_valid_auxiliary_audit_when_optional_request_source_is_abs
         .unwrap()
         .execute_batch(
             "CREATE TRIGGER omit_optional_request_source
-             BEFORE INSERT ON request_observation_fields
+             BEFORE INSERT ON request_source_roots
              BEGIN SELECT RAISE(FAIL,'optional request source absent'); END;",
         )
         .unwrap();
@@ -649,11 +649,9 @@ async fn archive_keeps_valid_auxiliary_audit_when_optional_request_source_is_abs
     let optional_rows: u64 =
         rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
             .unwrap()
-            .query_row(
-                "SELECT count(*) FROM request_observation_fields",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT count(*) FROM request_source_roots", [], |row| {
+                row.get(0)
+            })
             .unwrap();
     assert_eq!(optional_rows, 0);
     let files = decode(

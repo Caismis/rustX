@@ -1,76 +1,59 @@
 use super::{
     Augmentation, Connection, Content, ConversationStoreError, Leaf, Template, add, bounded,
-    fragments, hash, index, manifest, params, storage, weights,
+    fragments, hash, index, manifest, params, storage, weights, width_table::WidthTable,
 };
-pub(super) fn stored_hash(
+use rusqlite::OptionalExtension as _;
+
+fn find_stored_hash(
     connection: &Connection,
     native: &manifest::NodeRef,
-) -> Result<index::Hash, ConversationStoreError> {
+) -> Result<Option<index::Hash>, ConversationStoreError> {
     #[cfg(feature = "issue-387-profile")]
-    let _profile = super::profile::Timer::new(super::profile::Phase::Authenticate);
+    let _profile = super::profile::Timer::new(super::profile::Phase::Lookup);
     #[cfg(feature = "issue-387-profile")]
-    super::profile::auth_call();
+    super::profile::lookup_call();
     #[cfg(test)]
     let _measurement = super::measurement::Measurement::new(
-        crate::agent::execution::attribution::SourceScope::Authenticate,
+        crate::agent::execution::attribution::SourceScope::Lookup,
     );
-    let (digest,origin,rank):(Option<Vec<u8>>,Option<String>,u64)=connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END,CASE WHEN typeof(origin_source_id)='text' AND length(CAST(origin_source_id AS BLOB))<=20 THEN origin_source_id END,origin_rank FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(|error|storage(error.to_string()))?;
-    let digest: index::Hash = digest
-        .ok_or_else(|| storage("native selected Source augmentation unavailable"))?
-        .try_into()
-        .map_err(|_| storage("selected Source hash unavailable"))?;
-    let origin = origin.ok_or_else(|| storage("original Source node seat unavailable"))?;
-    #[cfg(feature = "issue-387-profile")]
-    super::profile::origin_root_load();
-    let root = super::load_root(connection, &origin)?;
-    let mut at = root
-        .native
-        .ok_or_else(|| storage("original Source native root unavailable"))?;
-    let mut expected = root
-        .source_hash
-        .ok_or_else(|| storage("original Source root hash unavailable"))?;
-    let mut first = 0;
-    for depth in 0..manifest::MAX_HEIGHT {
-        if at == *native {
-            if expected != digest {
-                return Err(storage("original Source node capture differs"));
-            }
-            #[cfg(feature = "issue-387-profile")]
-            super::profile::proof_visit(connection, at, expected, &root, true);
-            return Ok(expected);
-        }
-        #[cfg(feature = "issue-387-profile")]
-        super::profile::path_hop(depth + 1);
-        #[cfg(not(feature = "issue-387-profile"))]
-        let _ = depth;
-        let node = load(connection, at, expected)?;
-        #[cfg(feature = "issue-387-profile")]
-        super::profile::proof_visit(connection, at, expected, &root, false);
-        match node.content {
-            Content::Branch {
-                left,
-                left_hash,
-                right,
-                right_hash,
-            } => {
-                if rank < first + left.count {
-                    at = left;
-                    expected = left_hash;
-                } else {
-                    first += left.count;
-                    at = right;
-                    expected = right_hash;
-                }
-            }
-            Content::Leaf { .. } => break,
-        }
+    let digest: Option<Option<Vec<u8>>> = connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END FROM request_source_nodes WHERE native_id=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![native.id,native.digest.as_slice()], |row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    digest
+        .map(|digest| {
+            digest
+                .ok_or_else(|| storage("native selected Source augmentation unavailable"))?
+                .try_into()
+                .map_err(|_| storage("selected Source hash unavailable"))
+        })
+        .transpose()
+}
+
+/// A construction proof is owned by one recursive result, not the `created`
+/// map. At most one completed sibling per native tree level retains its bytes.
+pub(super) struct CapturedNode {
+    pub(super) digest: index::Hash,
+    prepared: Option<(Augmentation, Vec<u8>)>,
+}
+impl CapturedNode {
+    pub(super) fn into_node(
+        self,
+        connection: &Connection,
+        native: manifest::NodeRef,
+    ) -> Result<Augmentation, ConversationStoreError> {
+        load_reusing(connection, native, self.digest, self.prepared)
     }
-    Err(storage("Source node has no original capture path"))
 }
 pub(super) fn load(
     connection: &Connection,
     native: manifest::NodeRef,
     expected: index::Hash,
+) -> Result<Augmentation, ConversationStoreError> {
+    load_reusing(connection, native, expected, None)
+}
+fn load_reusing(
+    connection: &Connection,
+    native: manifest::NodeRef,
+    expected: index::Hash,
+    prepared: Option<(Augmentation, Vec<u8>)>,
 ) -> Result<Augmentation, ConversationStoreError> {
     #[cfg(feature = "issue-387-profile")]
     super::profile::source_node_load();
@@ -81,19 +64,35 @@ pub(super) fn load(
         work.set(value);
     });
     let actual = manifest::node(connection, &native)?;
-    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(metadata)='blob' AND length(metadata)<=65536 AND native_digest=?2 AND hash=?3 THEN metadata END FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice(),expected.as_slice()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(metadata)='blob' AND length(metadata)<=65536 AND native_digest=?2 AND hash=?3 THEN metadata END FROM request_source_nodes WHERE native_id=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![native.id,native.digest.as_slice(),expected.as_slice()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let bytes = bytes.ok_or_else(|| storage("captured Source augmentation unavailable"))?;
     #[cfg(test)]
     super::record_metadata(bytes.len());
-    if hash(&bytes) != expected {
-        return Err(storage("captured Source node digest differs"));
-    }
-    let node: Augmentation =
-        serde_json::from_slice(&bytes).map_err(|_| storage("captured Source node malformed"))?;
-    if node.native != native
-        || node.widths.len() != weights::CLASSES
-        || node.widths.iter().any(|length| *length > super::SAFE)
-    {
+    let node: Augmentation = match prepared {
+        Some((node, encoded)) if bytes == encoded => {
+            #[cfg(test)]
+            super::WORK.with(|work| {
+                let mut value = work.get();
+                value.node_reuses += 1;
+                work.set(value);
+            });
+            node
+        }
+        _ => {
+            if hash(&bytes) != expected {
+                return Err(storage("captured Source node digest differs"));
+            }
+            #[cfg(test)]
+            super::WORK.with(|work| {
+                let mut value = work.get();
+                value.node_decodes += 1;
+                work.set(value);
+            });
+            super::record::decode(&bytes)?
+        }
+    };
+    node.widths.validate(native.count)?;
+    if node.native != native {
         return Err(storage("captured Source node geometry differs"));
     }
     match &node.content {
@@ -120,26 +119,69 @@ pub(super) fn load(
     }
     Ok(node)
 }
-fn template_width(template: &Template, class: usize) -> Result<u64, ConversationStoreError> {
-    // A representative one-digit J/rank hole plus its exact width delta. The
-    // source label and encoded native u64 field retain their established codec.
-    let hole = hole(1, 0, template.provenance_bytes)?;
-    add(
-        add(template.prefix.length, template.suffix.length)?,
-        add(hole.len() as u64, weights::delta(class)?)?,
-    )
+#[cfg(test)]
+fn leaf_geometry(
+    connection: &Connection,
+    leaf: &Leaf,
+) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
+    leaf_geometry_reusing(connection, leaf, Vec::new())
 }
-fn leaf_widths(connection: &Connection, leaf: &Leaf) -> Result<Vec<u64>, ConversationStoreError> {
-    leaf.variants
+fn leaf_geometry_reusing(
+    connection: &Connection,
+    leaf: &Leaf,
+    captured: Vec<fragments::CapturedTemplate>,
+) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
+    if leaf.variants.len() != weights::CLASSES
+        || leaf.templates.is_empty()
+        || leaf.templates.len() > weights::CLASSES
+    {
+        return Err(storage("captured Source leaf geometry differs"));
+    }
+    #[cfg(test)]
+    super::WORK.with(|work| {
+        let mut value = work.get();
+        value.leaf_width_calls += 1;
+        work.set(value);
+    });
+    // Capture already deduplicates templates. Retain only one scalar base width
+    // per template (at most 80), not decoded metadata or a persistent cache.
+    let mut bases = Vec::with_capacity(leaf.templates.len());
+    let mut max_path = 0;
+    let mut max_key_path = 0;
+    let mut captured = captured.into_iter();
+    for digest in &leaf.templates {
+        let template = fragments::load_template_reusing(connection, *digest, captured.next())?;
+        let hole = hole(1, 0, template.provenance_bytes)?;
+        #[cfg(test)]
+        super::WORK.with(|work| {
+            let mut value = work.get();
+            value.width_hole_encodes += 1;
+            work.set(value);
+        });
+        bases.push(add(
+            add(template.prefix.length, template.suffix.length)?,
+            hole.len() as u64,
+        )?);
+        max_path = max_path.max(template.prefix.max_path.max(template.suffix.max_path));
+        max_key_path = max_key_path.max(
+            template
+                .prefix
+                .max_key_path
+                .max(template.suffix.max_key_path),
+        );
+    }
+    let selected = leaf
+        .variants
         .iter()
-        .enumerate()
-        .map(|(class, index)| {
-            template_width(
-                &fragments::load_template(connection, leaf.templates[usize::from(*index)])?,
-                class,
-            )
+        .map(|index| {
+            bases
+                .get(usize::from(*index))
+                .copied()
+                .ok_or_else(|| storage("captured Source leaf geometry differs"))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let widths = WidthTable::leaf(selected)?;
+    Ok((widths, max_path, max_key_path))
 }
 pub(super) fn hole(
     sequence: u64,
@@ -155,24 +197,24 @@ pub(super) fn hole(
 }
 fn store(
     connection: &Connection,
-    node: &Augmentation,
-    sequence: u64,
-    rank: u64,
-) -> Result<index::Hash, ConversationStoreError> {
+    node: Augmentation,
+) -> Result<CapturedNode, ConversationStoreError> {
     #[cfg(test)]
     super::WORK.with(|work| {
         let mut value = work.get();
         value.new_nodes += 1;
         work.set(value);
     });
-    let bytes = bounded(node, 65536)?;
+    let bytes = super::record::encode(&node, 65536)?;
     let digest = hash(&bytes);
-    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata,origin_source_id,origin_rank) VALUES(?1,?2,?3,?4,?5,?6)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes,sequence.to_string(),rank]).map_err(|error|storage(error.to_string()))?;
-    Ok(digest)
+    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata) VALUES(?1,?2,?3,?4)").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    Ok(CapturedNode {
+        digest,
+        prepared: Some((node, bytes)),
+    })
 }
 struct Capture<'a> {
     connection: &'a Connection,
-    sequence: u64,
     scope: &'a crate::runtime::identity::ConversationId,
     input: &'a crate::model::SelectedModelInput,
     snapshot: &'a crate::model::RequestSnapshot,
@@ -183,20 +225,21 @@ impl Capture<'_> {
         &mut self,
         native: manifest::NodeRef,
         rank: u64,
-    ) -> Result<index::Hash, ConversationStoreError> {
+    ) -> Result<CapturedNode, ConversationStoreError> {
         if let Some(digest) = self.created.get(&native.id) {
-            return Ok(*digest);
+            return Ok(CapturedNode {
+                digest: *digest,
+                prepared: None,
+            });
         }
         let connection = self.connection;
-        let exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM request_source_nodes WHERE native_id=?1)",
-                [native.id],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        if exists {
-            return stored_hash(connection, &native);
+        // A missing row can be captured. A present but invalid row must fail,
+        // never be mistaken for a cache miss and rebuilt from current input.
+        if let Some(digest) = find_stored_hash(connection, &native)? {
+            return Ok(CapturedNode {
+                digest,
+                prepared: None,
+            });
         }
         let node = manifest::node(connection, &native)?;
         let (content, widths, max_path, max_key_path) = match node.kind {
@@ -222,33 +265,27 @@ impl Capture<'_> {
                     .input
                     .get(at)
                     .ok_or_else(|| storage("actual frozen input missing new leaf"))?;
-                let leaf = fragments::capture(connection, self.scope, message, frozen)?;
-                let widths = leaf_widths(connection, &leaf)?;
-                let mut max_path = 0;
-                let mut max_key_path = 0;
-                for digest in &leaf.templates {
-                    let template = fragments::load_template(connection, *digest)?;
-                    max_path = max_path.max(template.prefix.max_path.max(template.suffix.max_path));
-                    max_key_path = max_key_path.max(
-                        template
-                            .prefix
-                            .max_key_path
-                            .max(template.suffix.max_key_path),
-                    );
-                }
-                (Content::Leaf { leaf }, widths, max_path, max_key_path)
+                let captured = fragments::capture(connection, self.scope, message, frozen)?;
+                let (widths, max_path, max_key_path) =
+                    leaf_geometry_reusing(connection, &captured.leaf, captured.templates)?;
+                (
+                    Content::Leaf {
+                        leaf: captured.leaf,
+                    },
+                    widths,
+                    max_path,
+                    max_key_path,
+                )
             }
             manifest::NodeKind::Branch { left, right } => {
-                let left_hash = self.ensure(left, rank)?;
-                let right_hash = self.ensure(right, rank + left.count)?;
-                let a = load(connection, left, left_hash)?;
-                let b = load(connection, right, right_hash)?;
-                let widths = a
-                    .widths
-                    .iter()
-                    .zip(b.widths)
-                    .map(|(a, b)| add(add(*a, b)?, 1))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let left_captured = self.ensure(left, rank)?;
+                let right_captured = self.ensure(right, rank + left.count)?;
+                let (left_hash, right_hash) = (left_captured.digest, right_captured.digest);
+                // Read after both recursive writes, so triggers on the right
+                // subtree cannot silently invalidate a prepared left sibling.
+                let a = left_captured.into_node(connection, left)?;
+                let b = right_captured.into_node(connection, right)?;
+                let widths = WidthTable::join(&a.widths, &b.widths)?;
                 (
                     Content::Branch {
                         left,
@@ -262,17 +299,15 @@ impl Capture<'_> {
                 )
             }
         };
-        let digest = store(
+        let captured = store(
             connection,
-            &Augmentation {
+            Augmentation {
                 native,
                 widths,
                 max_path,
                 max_key_path,
                 content,
             },
-            self.sequence,
-            rank,
         )?;
         if self.created.len()
             >= usize::try_from(manifest::MAX_ITEMS * 2)
@@ -280,21 +315,19 @@ impl Capture<'_> {
         {
             return Err(storage("Source capture metadata exceeds native node bound"));
         }
-        self.created.insert(native.id, digest);
-        Ok(digest)
+        self.created.insert(native.id, captured.digest);
+        Ok(captured)
     }
 }
 pub(super) fn capture(
     connection: &Connection,
-    sequence: u64,
     scope: &crate::runtime::identity::ConversationId,
     input: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
     selection: &manifest::Selection,
-) -> Result<Option<index::Hash>, ConversationStoreError> {
+) -> Result<Option<CapturedNode>, ConversationStoreError> {
     let mut capture = Capture {
         connection,
-        sequence,
         scope,
         input,
         snapshot,
@@ -313,21 +346,31 @@ pub(super) fn length(
     rank: u64,
     sequence: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let node = load(connection, native, digest)?;
+    length_from_node(
+        connection,
+        &load(connection, native, digest)?,
+        rank,
+        sequence,
+    )
+}
+/// The caller already read this node in the same transaction. Child traversals
+/// retain their independent native and stored-byte validation.
+pub(super) fn length_from_node(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+    sequence: u64,
+) -> Result<u64, ConversationStoreError> {
     let last = rank
-        .checked_add(native.count)
+        .checked_add(node.native.count)
         .and_then(|end| end.checked_sub(1))
         .ok_or_else(|| storage("native selected interval invalid"))?;
     let first_class = weights::class(sequence, rank)?;
     let last_class = weights::class(sequence, last)?;
     if first_class == last_class {
-        return node
-            .widths
-            .get(first_class)
-            .copied()
-            .ok_or_else(|| storage("Source width unavailable"));
+        return node.widths.length(first_class);
     }
-    match node.content {
+    match &node.content {
         Content::Branch {
             left,
             left_hash,
@@ -335,8 +378,8 @@ pub(super) fn length(
             right_hash,
         } => add(
             add(
-                length(connection, left, left_hash, rank, sequence)?,
-                length(connection, right, right_hash, rank + left.count, sequence)?,
+                length(connection, *left, *left_hash, rank, sequence)?,
+                length(connection, *right, *right_hash, rank + left.count, sequence)?,
             )?,
             1,
         ),
@@ -412,15 +455,81 @@ pub(super) fn select(
 
 // Full producer paths include the current occurrence prefix. Width crossings
 // recurse at most the fixed decimal thresholds through the native AVL tree.
-pub(super) fn validate_paths(
+/// Path and byte-width traversals split at exactly the same rank-digit boundaries
+/// for one fixed sequence. Read/authenticate each node once. Length errors stay
+/// deferred until every path check succeeds, preserving the staged error order.
+pub(super) fn geometry(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+    sequence: u64,
+) -> Result<u64, ConversationStoreError> {
+    geometry_paths(connection, node, rank, sequence)?
+}
+type CheckedLength = Result<u64, ConversationStoreError>;
+fn geometry_paths(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+    sequence: u64,
+) -> Result<CheckedLength, ConversationStoreError> {
+    let last = rank
+        .checked_add(node.native.count)
+        .and_then(|end| end.checked_sub(1))
+        .ok_or_else(|| storage("request rank range invalid"))?;
+    let width = weights::class(sequence, rank)
+        .and_then(|first| weights::class(sequence, last).map(|_| first));
+    if weights::digits(rank) == weights::digits(last) {
+        let prefix =
+            super::super::encoded_path(&["messages".into(), rank.to_string()])?.len() as u64;
+        if node.max_path + prefix - 1 > 3600
+            || node.max_key_path > 0 && node.max_key_path + prefix - 1 > 4096
+        {
+            return Err(storage("original request field path exceeds bound"));
+        }
+        return Ok(width.and_then(|class| node.widths.length(class)));
+    }
+    let Content::Branch {
+        left,
+        left_hash,
+        right,
+        right_hash,
+    } = &node.content
+    else {
+        return Err(storage("request path width interval invalid"));
+    };
+    let a = geometry_paths(
+        connection,
+        &load(connection, *left, *left_hash)?,
+        rank,
+        sequence,
+    )?;
+    let b = geometry_paths(
+        connection,
+        &load(connection, *right, *right_hash)?,
+        rank + left.count,
+        sequence,
+    )?;
+    Ok(width.and_then(|_| add(add(a?, b?)?, 1)))
+}
+
+#[cfg(test)]
+fn validate_paths(
     connection: &Connection,
     native: manifest::NodeRef,
     digest: index::Hash,
     rank: u64,
 ) -> Result<(), ConversationStoreError> {
-    let node = load(connection, native, digest)?;
+    validate_node_paths(connection, &load(connection, native, digest)?, rank)
+}
+#[cfg(test)]
+fn validate_node_paths(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+) -> Result<(), ConversationStoreError> {
     let last = rank
-        .checked_add(native.count)
+        .checked_add(node.native.count)
         .and_then(|end| end.checked_sub(1))
         .ok_or_else(|| storage("request rank range invalid"))?;
     if weights::digits(rank) == weights::digits(last) {
@@ -433,16 +542,24 @@ pub(super) fn validate_paths(
         }
         return Ok(());
     }
-    match node.content {
+    match &node.content {
         Content::Branch {
             left,
             left_hash,
             right,
             right_hash,
         } => {
-            validate_paths(connection, left, left_hash, rank)?;
-            validate_paths(connection, right, right_hash, rank + left.count)
+            validate_paths(connection, *left, *left_hash, rank)?;
+            validate_paths(connection, *right, *right_hash, rank + left.count)
         }
         Content::Leaf { .. } => Err(storage("request path width interval invalid")),
     }
 }
+
+#[cfg(test)]
+#[path = "template_metrics_tests.rs"]
+mod template_metrics_tests;
+
+#[cfg(test)]
+#[path = "root_geometry_tests.rs"]
+mod root_geometry_tests;

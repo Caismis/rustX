@@ -2221,8 +2221,8 @@ mod tests {
             revision: 0,
             through: 0,
             source_cut: None,
-            domain_revisions: BTreeMap::new(),
-            collection_cuts: BTreeMap::new(),
+            domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+            collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         };
         for (offset, next) in [(0, Some(32)), (32, Some(64)), (64, None)] {
             let page = source

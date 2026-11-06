@@ -17,6 +17,50 @@ pub use super::trace::{
 pub const HEADER_PAGE_MAX: usize = 32;
 pub const HEADER_ENCODED_MAX: usize = 16_384;
 
+/// The bounded transcript row whose response facts are needed at one native cut.
+#[derive(Debug, Clone)]
+pub struct ResponsePageSelection {
+    pub cursor: u64,
+    pub kind: ResponsePageSelectionKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResponsePageSelectionKind {
+    Process,
+    Message(MessageId),
+    /// The exact descriptor field; malformed or absent locators do not select a response.
+    Deferred(Option<serde_json::Value>),
+}
+
+/// Finite response facts assembled in the same read transaction as their native owners.
+#[derive(Debug, Clone)]
+pub struct ResponsePageItem {
+    pub process: Option<crate::observation::turn::TurnProcessView>,
+    pub response: Option<crate::observation::turn::CompletedResponseView>,
+    pub failure_deferred: bool,
+    pub models: Option<(u64, u64, Option<u64>)>,
+    pub identity_fields: Vec<ResponseIdentityField>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResponsePage {
+    /// Same length and order as the selections, including rows with no owner.
+    pub items: Vec<ResponsePageItem>,
+    pub statistics: crate::observation::statistics::ConversationStatistics,
+}
+
+/// Bounded live checkpoint domains observed together at one native read cut.
+/// Original source values and explicit trace pages remain independently readable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckpointHead {
+    pub transcript: crate::observation::transcript::RuntimeClientTranscriptPage,
+    /// Complete body plus response decoration, owned by native read evidence.
+    /// Internal only: page serialization and public cursor contracts are unchanged.
+    pub(crate) transcript_rows: Vec<crate::observation::transcript::PreparedTranscriptRow>,
+    pub occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
+    pub trace_total: u64,
+    pub projection_head: Option<crate::observation::head::RuntimeClientProjectionHeadView>,
+}
 /// Durable visit lifecycle; transient labels additionally require a live owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -565,6 +609,11 @@ pub struct NativeObservationFieldRef {
 #[derive(Debug, Clone)]
 pub enum NativeObservationTransition {
     Single(ObservationEventWitness),
+    /// Attempt admission and its first logical turn share one native commit.
+    AttemptFirstTurn {
+        attempt: Box<ObservationEventWitness>,
+        turn: Box<ObservationEventWitness>,
+    },
     RequestStart {
         statuses: Vec<crate::observation::status::AgentStatusView>,
         started: ObservationEventWitness,
@@ -583,6 +632,29 @@ pub enum NativeObservationTransition {
     WorkflowTerminal {
         terminal: Box<ObservationEventWitness>,
         output: Box<ObservationEventWitness>,
+    },
+    /// One accepted model output and its optional no-tool boundary share one
+    /// native transaction and become visible together at its final Journal fact.
+    ModelTurnSettlement {
+        provider: Box<ObservationEventWitness>,
+        canonical: Box<ObservationEventWitness>,
+        assistant: std::sync::Arc<super::CanonicalObservationBatch>,
+        boundary: Option<ModelTurnObservationBoundary>,
+    },
+}
+
+/// The existing no-tool boundary either finishes the Attempt or adopts pending
+/// input. Its fixed shape never substitutes a capped list for growing history.
+#[derive(Debug, Clone)]
+pub enum ModelTurnObservationBoundary {
+    Completed {
+        turn: Box<ObservationEventWitness>,
+        attempt: Box<ObservationEventWitness>,
+    },
+    Adopted {
+        turn: Box<ObservationEventWitness>,
+        adoption: Box<ObservationEventWitness>,
+        canonical: std::sync::Arc<super::CanonicalObservationBatch>,
     },
 }
 

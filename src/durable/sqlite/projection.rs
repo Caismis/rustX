@@ -15,6 +15,7 @@ use crate::context::resources::{JournalFrontier, LedgerFrontier, ResourceLimits}
 use crate::durable::projection::{
     ProjectionCheckpoint, ProjectionCommitInput, ProjectionCommitReceipt, ProjectionOwner,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{
     AttemptId, CheckpointId, CompactionOperationId, ConversationId, EventId,
@@ -233,7 +234,7 @@ fn inherited_count_digest(history: &str, count: u64) -> String {
     ))
 }
 fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreError> {
-    let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row(
+    let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row_cached(
         "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END,projection_count,CASE WHEN octet_length(projection_digest)=64 THEN projection_digest END FROM bootstrap_identity WHERE id=1", [],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
     ).optional().map_err(|e| sqlite_error(&e, e.to_string()))?;
@@ -256,10 +257,13 @@ pub(super) fn completion_index_sql() -> String {
         "CREATE INDEX events_projection_completion_idx ON events(sequence,{COMPLETION_FIELDS}) WHERE json_extract(event_json,'$.event.type')='compaction_completed'"
     )
 }
-pub(super) fn completion_query() -> String {
-    format!(
-        "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
-    )
+pub(super) fn completion_query() -> &'static str {
+    static QUERY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!(
+            "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
+        )
+    });
+    &QUERY
 }
 struct CompletionEvidence {
     sequence: u64,
@@ -281,7 +285,7 @@ fn completion_at(
 ) -> Result<Option<CompletionEvidence>, ConversationStoreError> {
     type Row = (u64, u16, Option<String>, u64, Option<String>, u64);
     let row: Option<Row> = connection
-        .query_row(&completion_query(), [seq_to_i64(through)?], |row| {
+        .query_row_cached(completion_query(), [seq_to_i64(through)?], |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -304,7 +308,7 @@ fn completion_at(
                 work.set((rows + 1, bytes + scope.len() + checkpoint.len() + 32));
             });
             let local: bool = connection
-                .query_row(
+                .query_row_cached(
                     "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
                     [scope.as_str()],
                     |row| row.get(0),
@@ -335,8 +339,64 @@ fn completion_at(
 /// The Journal and immutable installation count anchor visibility independently
 /// of selector columns. Neither query reads future activation payloads.
 fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, ConversationStoreError> {
+    journal_frontier_from_completion(connection, through, completion_at(connection, through)?)
+}
+
+/// The current append has not inserted its native row yet. Its typed completion
+/// replaces only that self-row extraction; all persisted activation, inherited
+/// installation and successor authority checks remain identical.
+pub(super) fn pending_completion_head_id(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<u64, ConversationStoreError> {
+    let RuntimeEvent::CompactionCompleted {
+        activation_id,
+        checkpoint_id,
+        generation,
+        ..
+    } = &event.event
+    else {
+        return Err(invalid("not a projection completion fact"));
+    };
+    let local: bool = connection
+        .query_row_cached(
+            "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
+            [event.conversation_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    if !local
+        || event.conversation_id.as_str().len() > 128
+        || checkpoint_id.as_str().len() > 1024
+        || event.schema_version != EVENT_SCHEMA_VERSION
+        || activation_id.0 != *generation
+        || activation_id.0 == 0
+    {
+        return Err(invalid(
+            "foreign or incompatible projection completion fact",
+        ));
+    }
+    journal_frontier_from_completion(
+        connection,
+        event.sequence,
+        Some(CompletionEvidence {
+            sequence: event.sequence,
+            schema_version: event.schema_version,
+            conversation_id: event.conversation_id.clone(),
+            activation_id: *activation_id,
+            checkpoint_id: checkpoint_id.clone(),
+            generation: *generation,
+        }),
+    )
+}
+
+fn journal_frontier_from_completion(
+    connection: &Connection,
+    through: u64,
+    completion: Option<CompletionEvidence>,
+) -> Result<u64, ConversationStoreError> {
     let inherited = inherited_count(connection)?;
-    let id = if let Some(event) = completion_at(connection, through)? {
+    let id = if let Some(event) = completion {
         let activation_id = event.activation_id;
         let checkpoint_id = event.checkpoint_id;
         if activation_id.0 <= inherited || event.sequence > through {
@@ -365,7 +425,7 @@ fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, Conver
         }
     }
     let last: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(activation),0) FROM projection_activations",
             [],
             |r| r.get(0),
@@ -542,7 +602,7 @@ pub(super) fn head(
     connection: &Connection,
 ) -> Result<Option<ProjectionCheckpoint>, ConversationStoreError> {
     let n: Option<i64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),
@@ -568,7 +628,7 @@ pub(super) fn current_checkpoint_id(
     connection: &Connection,
 ) -> Result<Option<CheckpointId>, ConversationStoreError> {
     let selected: Option<u64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),
@@ -904,19 +964,20 @@ fn activation_coordinates(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let ledger = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok((nonnegative(sequence, "completion sequence")? + 1, ledger))
 }
 
 #[allow(clippy::too_many_lines)] // Validate and commit one atomic projection transaction.
 pub(super) fn commit(
+    guard: &super::event_insert::Guard,
     transaction: &Transaction<'_>,
     scope: &ConversationId,
     input: ProjectionCommitInput,
@@ -1000,7 +1061,7 @@ pub(super) fn commit(
         &fingerprint,
         &activation,
     )?;
-    let completed = super::journal::persist_event_tx(transaction, scope, event)?.event;
+    let completed = super::journal::persist_event_tx(guard, transaction, scope, event)?.event;
     if completed.sequence != activation.origin.completed_journal.0 {
         return Err(invalid("completion Journal coordinate mismatch"));
     }
@@ -1060,7 +1121,7 @@ pub(super) fn auxiliary_history(
     let pending: Option<u64> = connection.query_row(
         "SELECT MIN(m.position) FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_pending JOIN message_ledger m ON m.message_id=c.assistant_message_id WHERE c.result_message_id IS NULL AND m.position>?1 AND m.position<=?2",
         params![seq_to_i64(base.0)?, seq_to_i64(cut.ledger.0)?], |row| row.get(0),
-    ).map_err(|error| storage(error.to_string()))?;
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if let Some(pending) = pending {
         cut.ledger = LedgerFrontier(
             pending
@@ -1081,7 +1142,7 @@ fn selected_history_cut(
     let epoch = owner.capture(connection)?;
     let published = journal_frontier(connection, i64::MAX as u64)?;
     let selected: Option<u64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),
@@ -1927,7 +1988,7 @@ pub(super) fn observation_head_id(
 pub(super) fn verify_completion_index(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
-    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name='events_projection_completion_idx'",[],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name='events_projection_completion_idx'",[],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if sql.flatten().as_deref() != Some(completion_index_sql().as_str()) {
         return Err(ConversationStoreError::IncompatibleSchema(
             "invalid original projection completion index".into(),

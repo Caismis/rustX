@@ -71,9 +71,12 @@ CREATE INDEX IF NOT EXISTS inherited_auxiliary_audits_call_idx
 ";
 
 pub(super) fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    connection
-        .execute_batch(CREATE_SQL)
-        .map_err(|error| storage(format!("create inherited auxiliary audit schema: {error}")))
+    connection.execute_batch(CREATE_SQL).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("create inherited auxiliary audit schema: {error}"),
+        )
+    })
 }
 
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
@@ -85,7 +88,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let sql = sql.flatten().ok_or_else(|| {
         ConversationStoreError::IncompatibleSchema("missing inherited auxiliary audit table".into())
     })?;
@@ -119,7 +122,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let index = index.flatten().ok_or_else(|| {
         ConversationStoreError::IncompatibleSchema("missing inherited auxiliary audit index".into())
     })?;
@@ -152,7 +155,12 @@ pub(super) fn bootstrap_coordinates(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("inherited Summary bootstrap count: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inherited Summary bootstrap count: {error}"),
+            )
+        })?;
     let count = u64::try_from(count).map_err(|_| invalid("negative inherited Summary count"))?;
     let limit = u64::try_from(ResourceLimits::default().total_items)
         .map_err(|_| storage("inherited Summary item limit overflow"))?;
@@ -168,7 +176,12 @@ pub(super) fn bootstrap_coordinates(
              FROM inherited_auxiliary_audits
              ORDER BY source_conversation_id,call_id,through_journal",
         )
-        .map_err(|error| storage(format!("inherited Summary bootstrap rows: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inherited Summary bootstrap rows: {error}"),
+            )
+        })?;
     let rows = statement
         .query_map([], |row| {
             Ok((
@@ -180,7 +193,12 @@ pub(super) fn bootstrap_coordinates(
                 row.get::<_, String>(5)?,
             ))
         })
-        .map_err(|error| storage(format!("read inherited Summary bootstrap: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("read inherited Summary bootstrap: {error}"),
+            )
+        })?;
     let mut hash = Sha256::new();
     hash.update(b"rustx-inherited-auxiliary-audits-v1\n");
     for row in rows {
@@ -243,7 +261,12 @@ fn event_at(
             |row| row.get::<_, Option<String>>(0),
         )
         .optional()
-        .map_err(|error| storage(format!("auxiliary lineage event lookup: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary lineage event lookup: {error}"),
+            )
+        })?
         .ok_or_else(|| invalid("auxiliary lineage event is absent"))?
         .ok_or_else(|| {
             ConversationStoreError::ResourceBoundExceeded(
@@ -316,7 +339,12 @@ fn local_snapshot(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
-        .map_err(|error| storage(format!("auxiliary Summary index lookup: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary Summary index lookup: {error}"),
+            )
+        })?;
     let (started_sequence, settled_sequence, indexed_outcome) =
         call.ok_or_else(|| invalid("named Summary generation Call is not local and visible"))?;
     let started_sequence = sequence_from_i64(started_sequence)?;
@@ -403,7 +431,12 @@ fn local_snapshot(
              ORDER BY ordinal
              LIMIT ?3",
         )
-        .map_err(|error| storage(format!("auxiliary Summary request query: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary Summary request query: {error}"),
+            )
+        })?;
     let record_limit = remaining_records.min(remaining_bytes / AUXILIARY_AUDIT_RECORD_ENCODED_MAX);
     if record_limit == 0 {
         return Err(ConversationStoreError::ResourceBoundExceeded(
@@ -430,7 +463,12 @@ fn local_snapshot(
                 ))
             },
         )
-        .map_err(|error| storage(format!("auxiliary Summary request rows: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary Summary request rows: {error}"),
+            )
+        })?
         .collect::<Result<Vec<RequestRow>, _>>()
         .map_err(|error| storage(format!("collect auxiliary Summary requests: {error}")))?;
     if request_rows.is_empty() {
@@ -468,7 +506,12 @@ fn local_snapshot(
                 },
             )
             .optional()
-            .map_err(|error| storage(format!("auxiliary request owner lookup: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("auxiliary request owner lookup: {error}"),
+                )
+            })?;
         if owner.as_ref().is_none_or(
             |(kind, call, owner_ordinal, start, terminal, terminal_kind)| {
                 kind != "auxiliary"
@@ -580,7 +623,7 @@ fn local_snapshot(
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let retry_evidence = if let Some(sequence) = retry_sequence {
             let retry = event_at(connection, sequence_from_i64(sequence)?)?;
             let RuntimeEvent::AuxiliaryRetryScheduled {
@@ -636,7 +679,12 @@ fn local_snapshot(
              ORDER BY sequence
              LIMIT ?3",
         )
-        .map_err(|error| storage(format!("auxiliary Summary audit query: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary Summary audit query: {error}"),
+            )
+        })?;
     let audit_rows = statement
         .query_map(
             params![
@@ -654,7 +702,12 @@ fn local_snapshot(
                 ))
             },
         )
-        .map_err(|error| storage(format!("auxiliary Summary audit rows: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("auxiliary Summary audit rows: {error}"),
+            )
+        })?
         .collect::<Result<Vec<AuditRow>, _>>()
         .map_err(|error| storage(format!("collect auxiliary Summary audit: {error}")))?;
     if audit_rows.len() > record_limit {
@@ -668,7 +721,7 @@ fn local_snapshot(
             params![reference.call_id.as_str(), seq_to_i64(cut.journal)?],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let expected_records = 1_usize
         .checked_add(
             requests
@@ -822,7 +875,12 @@ fn inherited_snapshot(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()
-        .map_err(|error| storage(format!("inherited auxiliary audit lookup: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inherited auxiliary audit lookup: {error}"),
+            )
+        })?;
     let (record_count, stored_completeness, payload, stored_digest) =
         row.ok_or_else(|| invalid("named inherited Summary generation is absent"))?;
     let payload = payload.ok_or_else(|| {
@@ -1542,9 +1600,12 @@ pub(super) fn install(
     if snapshots.is_empty() {
         return Ok(());
     }
-    transaction
-        .execute_batch(CREATE_SQL)
-        .map_err(|error| storage(format!("create inherited auxiliary audit schema: {error}")))?;
+    transaction.execute_batch(CREATE_SQL).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("create inherited auxiliary audit schema: {error}"),
+        )
+    })?;
     let mut total_bytes = 0_usize;
     for snapshot in snapshots {
         validate_snapshot_facts(snapshot)?;
@@ -1586,7 +1647,12 @@ pub(super) fn install(
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
-            .map_err(|error| storage(format!("probe inherited Summary audit: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("probe inherited Summary audit: {error}"),
+                )
+            })?;
         if let Some((stored, integrity)) = existing {
             if stored.is_none() || integrity.as_deref() != Some(payload_digest.as_str()) {
                 return Err(invalid("corrupted inherited Summary audit"));
@@ -1618,7 +1684,12 @@ pub(super) fn install(
                     payload_digest,
                 ],
             )
-            .map_err(|error| storage(format!("insert inherited Summary audit: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("insert inherited Summary audit: {error}"),
+                )
+            })?;
     }
     Ok(())
 }
@@ -1633,7 +1704,12 @@ pub(super) fn load_all(
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .map_err(|error| storage(format!("inherited Summary audit frontier: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inherited Summary audit frontier: {error}"),
+            )
+        })?;
     let count =
         usize::try_from(count).map_err(|_| invalid("negative inherited Summary audit count"))?;
     let bytes = usize::try_from(bytes)
@@ -1651,7 +1727,12 @@ pub(super) fn load_all(
              FROM inherited_auxiliary_audits
              ORDER BY source_conversation_id,call_id,through_journal",
         )
-        .map_err(|error| storage(format!("inherited Summary audit rows: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inherited Summary audit rows: {error}"),
+            )
+        })?;
     let rows = statement
         .query_map(
             [i64::try_from(PAYLOAD_MAX)
@@ -1666,7 +1747,12 @@ pub(super) fn load_all(
                 ))
             },
         )
-        .map_err(|error| storage(format!("read inherited Summary audit: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("read inherited Summary audit: {error}"),
+            )
+        })?;
     let mut snapshots = Vec::with_capacity(count);
     for row in rows {
         let (source, call_id, through, payload, payload_digest) =
@@ -1737,7 +1823,12 @@ pub(super) fn validate_store_closure(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("inherited Summary audit scope: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inherited Summary audit scope: {error}"),
+            )
+        })?;
     let scope = ConversationId::parse(scope).map_err(invalid)?;
     let limits = ResourceLimits::default();
     super::super::compaction_resources::validate(connection, &scope, cut, limits)?;

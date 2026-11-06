@@ -26,7 +26,7 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use super::host::{ClientInner, EventDelivery, EventSubscription};
-use super::types::{
+use crate::runtime_client::types::{
     AttachmentId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResponse,
     RuntimeClientResult,
 };

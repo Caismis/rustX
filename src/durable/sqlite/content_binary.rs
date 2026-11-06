@@ -2,7 +2,6 @@
 //! chunk digests additionally detect external changes without a whole-file read.
 use super::{
     Connection, ConversationStoreError, OptionalExtension, SEGMENT, SEGMENT_BYTES, invalid, params,
-    storage,
 };
 use crate::observation::content::CONTENT_SAFE_INTEGER_MAX;
 use crate::runtime::identity::ArtifactId;
@@ -30,7 +29,7 @@ pub(in crate::durable::sqlite) fn create_schema(
     for sql in [SOURCES_SQL, SEGMENTS_SQL] {
         connection
             .execute_batch(sql)
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
 }
@@ -45,7 +44,7 @@ pub(in crate::durable::sqlite) fn verify_schema(
         let actual: Option<String> = connection.query_row(
             "SELECT CASE WHEN typeof(sql)='text' AND octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name=?1",
             [table], |row| row.get(0),
-        ).optional().map_err(|error| storage(error.to_string()))?.flatten();
+        ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
         if actual.as_deref() != Some(expected.replace(" IF NOT EXISTS", "").as_str()) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "missing or invalid binary content table {table}"
@@ -70,13 +69,13 @@ pub(super) fn index(
     if reader.len > CONTENT_SAFE_INTEGER_MAX {
         return Err(invalid());
     }
-    connection.execute("INSERT INTO canonical_binary_sources(source_id,block_index,artifact_id,readable_end) VALUES(?1,?2,?3,?4)", params![id,block,artifact.as_str(),reader.len]).map_err(|error|storage(error.to_string()))?;
+    connection.execute("INSERT INTO canonical_binary_sources(source_id,block_index,artifact_id,readable_end) VALUES(?1,?2,?3,?4)", params![id,block,artifact.as_str(),reader.len]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     // One initial streaming pass, bounded scratch. Publication of the frontier
     // follows all digests inside the caller's optional-layout savepoint.
     let mut buffer = vec![0; SEGMENT_BYTES];
     let mut offset = 0;
     let mut verification = reader.verification();
-    let mut statement = connection.prepare_cached("INSERT INTO canonical_binary_segments(source_id,block_index,segment,digest) VALUES(?1,?2,?3,?4)").map_err(|error|storage(error.to_string()))?;
+    let mut statement = connection.prepare_cached("INSERT INTO canonical_binary_segments(source_id,block_index,segment,digest) VALUES(?1,?2,?3,?4)").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     while offset < reader.len {
         let length = usize::try_from((reader.len - offset).min(SEGMENT)).map_err(|_| invalid())?;
         reader
@@ -87,7 +86,7 @@ pub(super) fn index(
             .map_err(|_| invalid())?;
         statement
             .execute(params![id, block, offset / SEGMENT, digest.as_slice()])
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         offset += u64::try_from(length).map_err(|_| invalid())?;
     }
     reader
@@ -95,10 +94,10 @@ pub(super) fn index(
         .map_err(|_| invalid())?;
     connection
         .execute(
-            "INSERT INTO content_frontiers VALUES('canonical',?1,?2,'binary_bytes',1,?3)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'b',1,?3)",
             params![id, block, reader.len],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 
@@ -125,7 +124,7 @@ pub(super) fn range(
     let (artifact,length):(Option<String>,u64)=connection.query_row(
         "SELECT CASE WHEN typeof(artifact_id)='text' AND octet_length(artifact_id)<=256 THEN artifact_id END,readable_end FROM canonical_binary_sources WHERE source_id=?1 AND block_index=?2",
         params![key,block],|row|Ok((row.get(0)?,row.get(1)?)),
-    ).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(invalid)?;
+    ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(invalid)?;
     if length != frontier {
         return Err(invalid());
     }
@@ -147,7 +146,7 @@ pub(super) fn range(
         let expected: Option<Vec<u8>> = connection.query_row(
             "SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END FROM canonical_binary_segments WHERE source_id=?1 AND block_index=?2 AND segment=?3",
             params![key,block,start/SEGMENT],|row|row.get(0),
-        ).optional().map_err(|error|storage(error.to_string()))?.flatten();
+        ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
         let expected = expected.ok_or_else(invalid)?;
         reader
             .seek(std::io::SeekFrom::Start(start))

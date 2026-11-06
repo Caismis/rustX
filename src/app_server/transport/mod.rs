@@ -143,7 +143,7 @@ impl Outbound {
                     },
                 };
                 Ok(Outbound {
-                    record: serialize_record(&notification)?,
+                    record: serialize_envelope_record(&notification)?,
                     publication: None,
                     registration: Some(registration),
                     association: None,
@@ -199,7 +199,7 @@ impl Outbound {
                         data: Some(data),
                     },
                 );
-                (serialize_record(&response)?, false)
+                (serialize_envelope_record(&response)?, false)
             }
         };
         Ok(Self {
@@ -406,6 +406,10 @@ fn send(sender: &mpsc::Sender<Outbound>, outbound: Outbound) -> io::Result<()> {
         .map_err(|_| failure("outbound capacity exhausted"))
 }
 
+fn serialize_envelope_record(value: &impl super::wire::Envelope) -> io::Result<String> {
+    serialize_record(&super::wire::bounded_envelope(value))
+}
+
 pub(super) fn serialize_record(value: &impl Serialize) -> io::Result<String> {
     serialize_record_limit(value, MAX_MESSAGE_BYTES)
 }
@@ -509,7 +513,7 @@ pub(crate) mod notification_fault {
             ..
         } = &notification.notification
         else {
-            return serialize_record(notification);
+            return serialize_envelope_record(notification);
         };
         let canonical_user = event.facts().iter().any(|fact| match fact {
             RuntimeClientEvent::MessageCommitted { message, .. } => {
@@ -521,10 +525,10 @@ pub(crate) mod notification_fault {
             _ => false,
         });
         if !canonical_user {
-            return serialize_record(notification);
+            return serialize_envelope_record(notification);
         }
         let Some(fault) = faults().lock().unwrap().remove(registration_id) else {
-            return serialize_record(notification);
+            return serialize_envelope_record(notification);
         };
         fault.fired.store(true, Ordering::SeqCst);
         let mut record = Record(Vec::new(), MAX_MESSAGE_BYTES);
@@ -533,7 +537,7 @@ pub(crate) mod notification_fault {
                 inner: &mut record,
                 remaining: fault.limit,
             },
-            notification,
+            &super::super::wire::bounded_envelope(notification),
         )
         .map_err(|error| {
             io::Error::new(
@@ -755,6 +759,17 @@ mod tests {
     }
 
     #[test]
+    fn bounded_transport_encodes_once_with_identical_wire_bytes() {
+        let value = response("é\n\"\\".into());
+        crate::app_server::wire::take_native_passes();
+        let public = serialize_record(&value).unwrap();
+        assert_eq!(crate::app_server::wire::take_native_passes(), 2);
+        let transport = serialize_envelope_record(&value).unwrap();
+        assert_eq!(crate::app_server::wire::take_native_passes(), 1);
+        assert_eq!(transport, public);
+    }
+
+    #[test]
     fn t01_complete_envelope_exact_byte_limit_and_one_byte_overflow() {
         let overhead = serialize_record(&response(String::new())).unwrap().len();
         // Include multibyte UTF-8 and escaping in the actual complete envelope.
@@ -770,6 +785,18 @@ mod tests {
         );
         assert_eq!(
             serialize_record(&response(format!("{content}x")))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::FileTooLarge
+        );
+        assert_eq!(
+            serialize_envelope_record(&response(content.clone()))
+                .unwrap()
+                .len(),
+            MAX_MESSAGE_BYTES
+        );
+        assert_eq!(
+            serialize_envelope_record(&response(format!("{content}x")))
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::FileTooLarge

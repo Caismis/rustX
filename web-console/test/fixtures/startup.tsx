@@ -1,3 +1,4 @@
+import {traceRefreshed} from '../fixture';
 import{traceReceipt}from'../fixture';
 import { domainReceipt } from '../fixture';
 import { createActor } from 'xstate';
@@ -23,7 +24,7 @@ import { Server, snapshot, checkpoint, childConversation, readingWindow } from '
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/errors';
-import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v72';
+import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v73';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -96,7 +97,7 @@ if (new URL(location.href).searchParams.has('reading-window')) {
     const before = request.params.before;
     const rows = (before ? records.filter(record => Number(record.position.slice(6)) < Number(before.slice(6))) : records).slice(-request.params.limit);
     const read = { conversation_id: saved.conversation_id, activation_id: null, revision: '0', through: frontier, domain_revisions: {}, collection_cuts: {}, source_cut: { read: cut, ledger_through: cut.ledger_through, surface_revision: cut.surface_revision, transcript_total: cut.transcript_total, inherited_through: '0' } };
-    return { type: 'trace', page: { read_cut: read, records: rows, next_cursor: rows[0]?.id === 'trace:1' ? null : rows[0]?.position } };
+    return {refreshed:traceRefreshed(request), type: 'trace', page: { read_cut: read, records: rows, next_cursor: rows[0]?.id === 'trace:1' ? null : rows[0]?.position } };
   });
 }
 let advanceHistory: (() => Promise<void>) | undefined;
@@ -169,7 +170,7 @@ if (new URL(location.href).searchParams.has('subagents')) {
       : traceRecord(n + 1, { preview: { text: `${agent_id} request ${n + 1}`, truncated: false } }));
     const end = before ? records.findIndex(record => record.position === before) : records.length;
     const start = Math.max(0, end - limit);
-    return { type: 'trace', page: { read_cut: childTraceCut(agent_id), records: records.slice(start, end), next_cursor: start > 0 ? records[start]!.position : null } };
+    return {refreshed:traceRefreshed(request), type: 'trace', page: { read_cut: childTraceCut(agent_id), records: records.slice(start, end), next_cursor: start > 0 ? records[start]!.position : null } };
   });
   server.handlers.set('agent/traceDetail', request => {
     if (request.method !== 'agent/traceDetail') throw Error('Wrong method');

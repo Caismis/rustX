@@ -4,7 +4,7 @@ import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot } from './fixture';
 import { turnAnchor } from '../src/client/transcript';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v72';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v73';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
@@ -160,6 +160,21 @@ it('ordinary short detached reading exposes Return to latest and subsequently fo
   expect(v.top()).toBe(1200);
   v.grow(300); v.flush(); expect(v.top()).toBe(1500);
   v.scroll(210); v.grow(200); v.flush(); expect(v.top()).toBe(210);
+});
+
+it('tail following survives a layout clamp before content rebounds and its scroll event arrives', () => {
+  const v = coordinatedViewport();
+  expect(v.top()).toBe(800);
+  // A shorter native projection clamps the browser before its scroll event.
+  v.el.scrollTop = 729; v.grow(-71);
+  // The next React update can see that clamped layout before appending output.
+  v.replace(['a', 'b', 'turn:target']);
+  v.grow(99); v.flush();
+  expect(v.top()).toBe(828);
+  expect(v.ui.queryByRole('button', { name: 'Return to latest' })).toBeNull();
+  // A sampled upward gesture outside the native follow tolerance still detaches.
+  v.scroll(700); v.grow(40); v.flush(); expect(v.top()).toBe(700);
+  expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
 });
 
 it('newer native user scroll retires navigation both before reply and before its layout frame', () => {

@@ -1,0 +1,74 @@
+{
+  "parents": [
+    "2b2604103b11d43f525fe4b646619dccb5483482",
+    "a81d053f7fed8295d347149696430a2e26e6c26e"
+  ],
+  "protocol": {
+    "app_server": 73,
+    "runtime_client": 84,
+    "sqlite": 97
+  },
+  "rust": {
+    "core_passed": 5447,
+    "core_ignored": 9,
+    "boundary_passed": 262,
+    "boundary_ignored": 1,
+    "external_passed": 658,
+    "external_ignored": 10,
+    "bin_example_passed": 28,
+    "doc_passed": 9
+  },
+  "web": {
+    "unit_passed": 4049,
+    "unit_skipped": 4,
+    "browser_passed": 639,
+    "browser_unique_ids": 639,
+    "browser_shards": [
+      {
+        "startTime": "2026-11-06T04:01:13.486Z",
+        "duration": 566722.704,
+        "expected": 162,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      {
+        "startTime": "2026-11-06T04:01:13.619Z",
+        "duration": 649505.162,
+        "expected": 183,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      {
+        "startTime": "2026-11-06T04:01:13.322Z",
+        "duration": 400220.919,
+        "expected": 150,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      {
+        "startTime": "2026-11-06T04:01:13.488Z",
+        "duration": 712101.507,
+        "expected": 144,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      }
+    ]
+  },
+  "tui": {
+    "passed": 1323,
+    "skipped": 1
+  },
+  "pi_and_deepseek_rerun": false,
+  "input_count": 2840,
+  "archive_sha256": "84eb5ee43752bb3be4368a976f8417fbfbb9dc95246cdfa16f9e07e4a0d96abc",
+  "notes": [
+    "The external aggregate first failed its current-protocol documentation check. Only that documentation changed, then all 31 contracts passed on rerun. Other six suites passed unchanged.",
+    "Web full run uses four workers and a 15-second harness timeout, with product deadlines/assertions unchanged.",
+    "Local browser startup override only skips parallel node-gyp rebuilds and sets an absolute test directory/cwd. Browser image and every test/assertion/snapshot policy remain the repository configuration.",
+    "Comparative performance was not measured after main integration."
+  ]
+}

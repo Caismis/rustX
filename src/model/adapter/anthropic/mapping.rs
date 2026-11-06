@@ -401,7 +401,7 @@ fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<Wi
         .map(|tool| WireTool {
             name: tool.name.clone(),
             description: Some(tool.description.clone()),
-            input_schema: tool.input_schema.clone(),
+            input_schema: (*tool.input_schema).clone(),
         })
         .collect()
 }
@@ -785,7 +785,7 @@ mod questionnaire_schema_tests {
             id: crate::runtime::identity::ToolId::new("tool-ask-user"),
             name: "ask_user".to_owned(),
             description: "structured questionnaire".to_owned(),
-            input_schema: schema.clone(),
+            input_schema: schema.clone().into(),
         }]);
         assert_eq!(encoded[0].name, "ask_user");
         assert_eq!(encoded[0].input_schema, schema);

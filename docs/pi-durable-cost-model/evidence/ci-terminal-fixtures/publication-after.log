@@ -1,0 +1,18 @@
+
+running 14 tests
+test scripted_suites::agent::publication::a_failed_audit_terminalization_leaves_the_stream_unsettled ... ok
+test scripted_suites::agent::publication::assembler_finish_failure_after_published_frames_is_incomplete ... ok
+test scripted_suites::agent::publication::a_failed_publication_terminal_releases_no_final_payload ... ok
+test scripted_suites::agent::publication::a_canonically_accepted_turn_creates_no_audit_and_no_staging ... ok
+test scripted_suites::agent::publication::failed_overflow_audit_blocks_the_retry_request ... ok
+test scripted_suites::agent::publication::chatty_provider_cannot_postpone_the_oldest_publication_deadline ... ok
+test scripted_suites::agent::publication::many_provider_deltas_coalesce_into_few_publication_writes ... ok
+test scripted_suites::agent::publication::no_frame_is_released_before_its_staging_commit ... ok
+test scripted_suites::agent::publication::latency_flush_is_driven_by_the_injected_clock ... ok
+test scripted_suites::agent::publication::partial_block_order_and_final_canonical_content_are_both_exact ... ok
+test scripted_suites::agent::publication::preflight_failure_after_a_complete_proposal_is_unaccepted ... ok
+test scripted_suites::agent::publication::quiet_provider_is_woken_by_the_publication_deadline ... ok
+test scripted_suites::agent::publication::tool_proposal_boundaries_are_released_as_their_own_frames ... ok
+test scripted_suites::agent::publication::the_event_journal_is_independent_of_the_delta_count ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 4265 filtered out; finished in 0.58s

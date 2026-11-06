@@ -1,5 +1,8 @@
 //! The Event Journal domain: validated execution-fact persistence.
 
+use self::reference::validate_event_reference_with_requests;
+use super::{append_facts, attempt_start, event_insert, native_request};
+use crate::durable::sqlite::statements::FixedStatements;
 #[cfg(test)]
 mod tests;
 
@@ -50,7 +53,9 @@ impl JournalStore for SqliteConversationStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|_| storage("read private Agent authority"))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, "read private Agent authority")
+            })?;
         let encoded = encoded.ok_or_else(|| storage("missing admitted Agent authority"))?;
         let mut private: PrivateAgentAuthority = serde_json::from_str(&encoded)
             .map_err(|_| storage("decode private Agent authority"))?;
@@ -97,6 +102,14 @@ impl JournalStore for SqliteConversationStore {
         }
         self.append_event_internal(event, None)
     }
+    fn commit_attempt_first_turn(
+        &self,
+        attempt: RuntimeEventEnvelope,
+        turn: RuntimeEventEnvelope,
+    ) -> Result<[RuntimeEventEnvelope; 2], ConversationStoreError> {
+        attempt_start::commit(self, attempt, turn)
+    }
+
     fn commit_subagent_terminal(
         &self,
         event: RuntimeEventEnvelope,
@@ -119,7 +132,12 @@ impl JournalStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("Workflow child terminal transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("Workflow child terminal transaction: {error}"),
+                )
+            })?;
         if let Some(existing) = find_event_by_id(&transaction, &event.event_id)? {
             if same_event_ignoring_sequence(&existing, &event) {
                 transaction.commit().map_err(|error| {
@@ -136,13 +154,22 @@ impl JournalStore for SqliteConversationStore {
             return Err(storage("fault injected: Workflow child terminal commit"));
         }
         process_death::reach_event("before:workflow_child_terminal", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("Workflow child terminal commit: {error}")))?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("Workflow child terminal commit: {error}"),
+            )
+        })?;
         process_death::reach_event("after:workflow_child_terminal", &persisted.event.event);
         Ok(persisted.event)
     }
+    #[allow(clippy::too_many_lines)] // One atomic workflow terminal boundary validates and publishes both native facts.
     fn commit_workflow_agent_terminal(
         &self,
         terminal: RuntimeEventEnvelope,
@@ -181,7 +208,12 @@ impl JournalStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("Workflow terminal transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("Workflow terminal transaction: {error}"),
+                )
+            })?;
         validate_event_reference(&transaction, &output)?;
         let existing_terminal = find_event_by_id(&transaction, &terminal.event_id)?;
         let existing_output = find_event_by_id(&transaction, &output.event_id)?;
@@ -194,19 +226,30 @@ impl JournalStore for SqliteConversationStore {
                         "Workflow terminal retry conflicts with its durable facts".to_owned(),
                     ));
                 }
-                transaction
-                    .commit()
-                    .map_err(|error| storage(format!("Workflow terminal retry commit: {error}")))?;
+                transaction.commit().map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("Workflow terminal retry commit: {error}"),
+                    )
+                })?;
                 Ok((existing_terminal, existing_output))
             }
             (Some(_), None) | (None, Some(_)) => Err(ConversationStoreError::TerminalViolation(
                 "Workflow terminal facts are only valid as an atomic pair".to_owned(),
             )),
             (None, None) => {
-                let mut persisted_terminal =
-                    persist_event_tx_deferred(&transaction, &self.conversation_id, terminal)?;
-                let mut persisted_output =
-                    persist_event_tx_deferred(&transaction, &self.conversation_id, output)?;
+                let mut persisted_terminal = persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    &transaction,
+                    &self.conversation_id,
+                    terminal,
+                )?;
+                let mut persisted_output = persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    &transaction,
+                    &self.conversation_id,
+                    output,
+                )?;
                 #[cfg(test)]
                 if Self::consume(&self.fail_event_remaining) {
                     return Err(storage("fault injected: Workflow terminal commit"));
@@ -223,9 +266,12 @@ impl JournalStore for SqliteConversationStore {
                     "before:workflow_terminal",
                     &persisted_output.event.event,
                 );
-                transaction
-                    .commit()
-                    .map_err(|error| storage(format!("Workflow terminal commit: {error}")))?;
+                transaction.commit().map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("Workflow terminal commit: {error}"),
+                    )
+                })?;
                 process_death::reach_event(
                     "after:workflow_terminal",
                     &persisted_output.event.event,
@@ -249,17 +295,30 @@ impl JournalStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("interaction audit transaction: {error}")))?;
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("interaction audit transaction: {error}"),
+                )
+            })?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         let transcript_cursor = persisted.transcript_cursor.ok_or_else(|| {
             ConversationStoreError::InvalidReference(
                 "interaction audit did not receive a transcript cursor".to_owned(),
             )
         })?;
         process_death::reach_event("before:interaction", &persisted.event.event);
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("interaction audit commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("interaction audit commit: {error}"),
+            )
+        })?;
         process_death::reach_event("after:interaction", &persisted.event.event);
         Ok((persisted.event, transcript_cursor))
     }
@@ -281,12 +340,22 @@ impl JournalStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("configuration change transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("configuration change transaction: {error}"),
+                )
+            })?;
         #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: configuration change commit"));
         }
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         let transcript_cursor = persisted.transcript_cursor.ok_or_else(|| {
             ConversationStoreError::InvalidReference(
                 "configuration change did not receive a transcript cursor".to_owned(),
@@ -302,7 +371,7 @@ impl JournalStore for SqliteConversationStore {
                 catalog,
             ),
         ] {
-            super::content::index_utf8_field(
+            crate::durable::sqlite::content::index_utf8_field(
                 &transaction,
                 kind,
                 &persisted.event.sequence.to_string(),
@@ -310,9 +379,12 @@ impl JournalStore for SqliteConversationStore {
                 text,
             )?;
         }
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("configuration change commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("configuration change commit: {error}"),
+            )
+        })?;
         Ok((persisted.event, transcript_cursor))
     }
     fn observe_journal(
@@ -321,23 +393,16 @@ impl JournalStore for SqliteConversationStore {
     ) -> Result<u64, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(error.to_string()))?;
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let through = journal_prefix(&transaction)?;
-        // A newly installed Runtime owns recovery of already committed history.
-        // Previous process-local publication holes cannot survive this epoch.
+        // Committed history becomes this connection owner's baseline. No old
+        // direct claims survive, and no durable history is copied or updated.
         observation_readiness::recover_journal(&transaction)?;
-        observation_readiness::mark(&transaction, 1, through)?;
-        transaction
-            .execute(
-                "UPDATE event_observation_readiness SET direct=0 WHERE direct=1",
-                [],
-            )
-            .map_err(|error| storage(error.to_string()))?;
         observation_readiness::recover_transcript(&transaction)?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         *self.journal_observer.lock().expect("Journal observer lock") = Some((observer, through));
         Ok(through)
     }
@@ -347,7 +412,9 @@ impl JournalStore for SqliteConversationStore {
             .query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| {
                 row.get(0)
             })
-            .map_err(|_| storage("presentation frontier failed"))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, "presentation frontier failed")
+            })?;
         sequence_from_i64(value)
     }
     fn read_presentation_events(
@@ -358,14 +425,19 @@ impl JournalStore for SqliteConversationStore {
         let connection = self.lock()?;
         let mut events: Vec<RuntimeEventEnvelope> = Vec::new();
         for (sql, params) in statements {
-            let mut statement = connection
-                .prepare(&sql)
-                .map_err(|_| storage("presentation query preparation failed"))?;
+            let mut statement = connection.prepare(&sql).map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    "presentation query preparation failed",
+                )
+            })?;
             let rows = statement
                 .query_map(rusqlite::params_from_iter(params), |row| {
                     row.get::<_, String>(0)
                 })
-                .map_err(|_| storage("presentation query failed"))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(&error, "presentation query failed")
+                })?;
             for row in rows {
                 #[cfg(test)]
                 observation_statistics::original_read();
@@ -403,16 +475,15 @@ impl JournalStore for SqliteConversationStore {
                 "SELECT sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json
                  FROM events WHERE sequence > ?1 ORDER BY sequence LIMIT ?2",
             )
-            .map_err(|error| storage(format!("event page: {error}")))?;
-        let mut rows = statement
-            .query(params![after, limit])
-            .map_err(|error| storage(format!("event page query: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("event page: {error}")))?;
+        let mut rows = statement.query(params![after, limit]).map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("event page query: {error}"))
+        })?;
         let mut events = Vec::new();
         let mut next = None;
-        while let Some(row) = rows
-            .next()
-            .map_err(|error| storage(format!("event page row: {error}")))?
-        {
+        while let Some(row) = rows.next().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("event page row: {error}"))
+        })? {
             let sequence: i64 = row
                 .get(0)
                 .map_err(|error| storage(format!("event sequence: {error}")))?;
@@ -468,6 +539,7 @@ impl JournalStore for SqliteConversationStore {
 pub(super) struct PersistedEvent {
     pub(super) event: RuntimeEventEnvelope,
     pub(super) transcript_cursor: Option<TranscriptCursor>,
+    pub(in crate::durable::sqlite) facts: append_facts::Facts,
 }
 
 /// Private executable authority and every captured credential share one row.
@@ -515,7 +587,9 @@ pub(super) fn persist_agent_authority_tx(
                     "INSERT INTO agent_authorities(agent_id,authority_json) VALUES(?1,?2)",
                     params![child_agent_id.as_str(), encoded],
                 )
-                .map_err(|_| storage("commit private Agent authority"))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(&error, "commit private Agent authority")
+                })?;
             Ok(())
         }
         (
@@ -533,19 +607,21 @@ pub(super) fn persist_agent_authority_tx(
 }
 
 pub(super) fn persist_event_tx(
+    guard: &event_insert::Guard,
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
     event: RuntimeEventEnvelope,
 ) -> Result<PersistedEvent, ConversationStoreError> {
-    persist_event_tx_internal(transaction, conversation_id, event, true, None)
+    persist_event_tx_internal(guard, transaction, conversation_id, event, true, None)
 }
 
 pub(super) fn persist_event_tx_deferred(
+    guard: &event_insert::Guard,
     transaction: &Transaction<'_>,
     conversation_id: &ConversationId,
     event: RuntimeEventEnvelope,
 ) -> Result<PersistedEvent, ConversationStoreError> {
-    persist_event_tx_internal(transaction, conversation_id, event, false, None)
+    persist_event_tx_internal(guard, transaction, conversation_id, event, false, None)
 }
 
 // Fresh-start-only proof, borrowed from the exact transaction that has just
@@ -556,14 +632,18 @@ pub(super) struct ValidatedRequestStart<'a, 'connection> {
     pub(super) snapshot: &'a RequestSnapshot,
 }
 
-#[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
-pub(super) fn persist_event_tx_internal(
-    transaction: &Transaction<'_>,
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)] // One atomic event with fixed request/publication and preceding-member evidence.
+pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
+    guard: &event_insert::Guard,
+    requests: &mut native_request::Validation<'_, '_>,
     conversation_id: &ConversationId,
     mut event: RuntimeEventEnvelope,
     prepare_observation: bool,
-    validated_start: Option<ValidatedRequestStart<'_, '_>>,
+    validated_start: Option<&ValidatedRequestStart<'_, '_>>,
+    publication: Option<&event_insert::CanonicalPublication<'_>>,
+    previous_members: Option<&observation_members::Captured>,
 ) -> Result<PersistedEvent, ConversationStoreError> {
+    let transaction = requests.transaction();
     if event.schema_version != EVENT_SCHEMA_VERSION {
         return Err(ConversationStoreError::InvalidReference(format!(
             "event schema {} is not {}",
@@ -587,9 +667,12 @@ pub(super) fn persist_event_tx_internal(
         }
         validate_request_start_metadata(proof.snapshot, &event)?;
     } else {
-        validate_event_reference(transaction, &event)?;
+        validate_event_reference_with_requests(requests, &event)?;
     }
-    if let RuntimeEvent::ModelRequestStarted { request_id, .. } = &event.event
+    // Fresh Snapshot admission already owns the exact first-start proof.
+    // Other callers must still reject duplicate starts in either owner domain.
+    if validated_start.is_none()
+        && let RuntimeEvent::ModelRequestStarted { request_id, .. } = &event.event
         && find_request_start_event(transaction, request_id)?.is_some()
     {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -597,12 +680,11 @@ pub(super) fn persist_event_tx_internal(
         )));
     }
     let current: i64 = transaction
-        .query_row(
-            "SELECT next_event_sequence FROM rustx_store WHERE id=1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| sqlite_error(&error, format!("read event sequence: {error}")))?;
+        .prepare_cached("SELECT next_event_sequence FROM rustx_store WHERE id=1")
+        .and_then(|mut statement| statement.query_row([], |row| row.get(0)))
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("read event sequence: {error}"))
+        })?;
     let sequence = current
         .checked_add(1)
         .ok_or_else(|| storage("event sequence exhausted"))?;
@@ -610,55 +692,111 @@ pub(super) fn persist_event_tx_internal(
         event.event_id = EventId::new(format!("{conversation_id}-event-{sequence}"));
     }
     event.sequence = u64::try_from(sequence).map_err(|_| storage("event sequence exhausted"))?;
-    let lifecycles = lifecycle_keys(&event);
-    for (key, _) in &lifecycles {
+    let mut lifecycles = Vec::new();
+    for (key, terminal) in lifecycle_keys(&event) {
+        #[cfg(test)]
+        append_facts::lifecycle_probe();
         let existing: Option<Option<String>> = transaction
-            .query_row(
+            .query_row_cached(
                 "SELECT terminal_event_id FROM lifecycle_state WHERE lifecycle_key=?1",
-                [key],
+                [&key],
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| sqlite_error(&error, format!("lifecycle probe: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("lifecycle probe: {error}"))
+            })?;
         if existing.as_ref().is_some_and(Option::is_some) {
             return Err(ConversationStoreError::TerminalViolation(format!(
                 "lifecycle {key} is already terminal"
             )));
         }
+        lifecycles.push((key, terminal, existing.is_some()));
     }
-    for (key, terminal) in lifecycles {
+    // All terminal guards are checked before the first write. Until a write
+    // occurs, these same-transaction probes also prove row existence. Once a
+    // lifecycle write may have run a trigger, later keys are queried again.
+    let mut lifecycle_written = false;
+    for (key, terminal, known_exists) in lifecycles {
         if terminal {
             transaction
-                .execute(
+                .execute_cached(
                     "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,?2) ON CONFLICT(lifecycle_key) DO UPDATE SET terminal_event_id=excluded.terminal_event_id",
                     params![key, event.event_id.as_str()],
                 )
-                .map_err(|error| sqlite_error(&error, format!("record terminal lifecycle: {error}")))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("record terminal lifecycle: {error}")))?;
+            lifecycle_written = true;
         } else {
-            let exists: bool = transaction
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
-                    [&key],
-                    |row| row.get(0),
-                )
-                .map_err(|error| {
-                    sqlite_error(&error, format!("lifecycle existence probe: {error}"))
-                })?;
+            let exists = if lifecycle_written {
+                #[cfg(test)]
+                append_facts::lifecycle_probe();
+                transaction
+                    .query_row_cached(
+                        "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
+                        [&key],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(
+                            &error,
+                            format!("lifecycle existence probe: {error}"),
+                        )
+                    })?
+            } else {
+                known_exists
+            };
             if !exists {
                 transaction
-                    .execute(
+                    .execute_cached(
                         "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,NULL)",
                         [&key],
                     )
-                    .map_err(|error| sqlite_error(&error, format!("record lifecycle: {error}")))?;
+                    .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("record lifecycle: {error}")))?;
+                lifecycle_written = true;
             }
         }
     }
     let json = encode(&event, "runtime event")?;
+    if let Some(inserted) = event_insert::prepared(
+        guard,
+        transaction,
+        conversation_id,
+        &mut event,
+        &json,
+        prepare_observation,
+        validated_start.map(|proof| proof.snapshot),
+        publication,
+        previous_members,
+    )? {
+        return Ok(PersistedEvent {
+            event,
+            transcript_cursor: inserted.transcript_cursor,
+            facts: inserted.facts,
+        });
+    }
+    persist_event_isolated(
+        transaction,
+        conversation_id,
+        event,
+        &json,
+        prepare_observation,
+    )
+}
+
+/// Storage failure isolation uses the same current schema and domain builders.
+/// Lifecycle writes have already happened exactly once in the enclosing native transaction.
+#[allow(clippy::too_many_lines)]
+fn persist_event_isolated(
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
+    mut event: RuntimeEventEnvelope,
+    json: &str,
+    prepare_observation: bool,
+) -> Result<PersistedEvent, ConversationStoreError> {
+    let sequence = seq_to_i64(event.sequence)?;
     transaction
-        .execute(
-            "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp,observation_trace_required,observation_statistics_required,observation_kind,observation_members_required,observation_turn_required,observation_trace_fact_required,observation_execution_required,observation_unavailable) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,1)",
-            params![
+        .prepare_cached("INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp,observation_trace_required,observation_statistics_required,observation_kind,observation_members_required,observation_turn_required,observation_trace_fact_required,observation_execution_required,observation_unavailable) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,1)")
+        .and_then(|mut statement| statement.execute(params![
                 sequence,
                 event.event_id.as_str(),
                 i64::from(event.schema_version),
@@ -674,9 +812,8 @@ pub(super) fn persist_event_tx_internal(
                 observation_turn::required(&event),
                 observation_trace::required(&event),
                 observation_execution::required(&event),
-            ],
-        )
-        .map_err(|error| sqlite_error(&error, format!("insert runtime event: {error}")))?;
+            ]))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("insert runtime event: {error}")))?;
     auxiliary::index_event_tx(transaction, &event)?;
     // Missing auxiliary evidence is the fail-closed initial state. Independent
     // savepoints preserve own lifecycle facts if a different layout fails.
@@ -685,77 +822,104 @@ pub(super) fn persist_event_tx_internal(
     let _ = optional_display_layout(transaction, || {
         observation_readiness::insert(transaction, &event)
     })?;
-    let statistics_available = optional_display_layout(transaction, || {
-        observation_statistics::event(transaction, &event)?;
-        observation_members::member_event(transaction, &event)
-    })?
-    .is_some();
+    let statistics_required = observation_statistics::is_trace_anchor(&event.event)
+        || observation_statistics::requires_statistics(&event)
+        || observation_members::requires_members(&event);
+    let aggregate_facts = statistics_required
+        .then(|| {
+            optional_display_layout(transaction, || {
+                append_facts::aggregates(transaction, &event)
+            })
+        })
+        .transpose()?
+        .flatten();
+    let statistics_available = !statistics_required || aggregate_facts.is_some();
     if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
-        transaction.execute("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|sqlite_error(&error, error.to_string()))?;
+        transaction.execute_cached("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
 
     // Caller-supplied ephemeral evidence is never trusted. Native canonical
     // ownership is resolved inside this exact append transaction.
-    let assistant_available = optional_display_layout(transaction, || {
-        if let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event {
-            transaction.execute("UPDATE events SET observation_assistant_ledger=(SELECT position FROM message_ledger WHERE message_id=?2) WHERE sequence=?1",params![sequence,message_id.as_str()]).map_err(|error|sqlite_error(&error, error.to_string()))?;
-        }
-        Ok(())
-    })?.is_some();
+    let assistant_available = if let RuntimeEvent::AssistantMessageCommitted { message_id } =
+        &event.event
+    {
+        optional_display_layout(transaction, || {
+            transaction.execute_cached("UPDATE events SET observation_assistant_ledger=(SELECT position FROM message_ledger WHERE message_id=?2) WHERE sequence=?1",params![sequence,message_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            Ok(())
+        })?.is_some()
+    } else {
+        true
+    };
     event.tool_occurrence = observation::tool_occurrence_receipt(transaction, &event)?;
-    let tool_available = optional_display_layout(transaction, || {
-    if let Some(occurrence) = &event.tool_occurrence {
+    let tool_available = if let Some(occurrence) = &event.tool_occurrence {
+        optional_display_layout(transaction, || {
         let phase = match &event.event {
             RuntimeEvent::ToolExecutionStarted { .. } => Some(1),
             RuntimeEvent::ToolExecutionCompleted { .. }
             | RuntimeEvent::ToolExecutionFailed { .. } => Some(2),
             _ => None,
         };
-        transaction.execute("UPDATE events SET observation_tool_ledger=?1,observation_tool_block=?2,observation_tool_phase=?4 WHERE sequence=?3",params![occurrence.ledger_position,occurrence.block_index.get(),sequence,phase]).map_err(|error|sqlite_error(&error, error.to_string()))?;
-    }
+        transaction.execute("UPDATE events SET observation_tool_ledger=?1,observation_tool_block=?2,observation_tool_phase=?4 WHERE sequence=?3",params![occurrence.ledger_position,occurrence.block_index.get(),sequence,phase]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(())
-    })?.is_some();
-    let execution_available = optional_display_layout(transaction, || {
-        observation_execution::event(transaction, &event)
-    })?
-    .is_some();
-    let state_available = optional_display_layout(transaction, || {
-        observation_state::event(transaction, &event)
-    })?
-    .is_some();
-    let request_available = optional_display_layout(transaction, || {
-        observation_occupancy::event(transaction, &event)?;
-        observation_request::terminal(transaction, &event)
-    })?
-    .is_some();
-    let witness_available = observation_event::index_optional(transaction, &event)?;
-    let trace_available = optional_display_layout(transaction, || {
-        observation_trace::index_event(transaction, &event)
-    })?
-    .is_some();
-    let observation_json = crate::observation::bounded::bounded_bytes(
-        &event,
-        crate::durable::observation::HEADER_ENCODED_MAX,
+        })?.is_some()
+    } else {
+        true
+    };
+    let execution_required = observation_execution::required(&event);
+    let execution_facts = execution_required
+        .then(|| {
+            optional_display_layout(transaction, || {
+                observation_execution::event(transaction, &event)
+            })
+        })
+        .transpose()?
+        .flatten()
+        .flatten();
+    let execution_available = !execution_required || execution_facts.is_some();
+    let state_required = matches!(
+        event.event,
+        RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionFailed { .. }
+            | RuntimeEvent::CompactionCompleted { .. }
+            | RuntimeEvent::Goal {
+                fact: crate::goal::GoalFact::Written { .. }
+                    | crate::goal::GoalFact::RoundAdmitted { .. },
+            }
     );
-    let json_available = optional_display_layout(transaction, || {
-        #[cfg(test)]
-        let _probe =
-            super::start_probe::for_event(&event, super::AuxiliaryStartProbe::ObservationJson);
-        transaction
-            .execute(
-                "UPDATE events SET observation_json=?2 WHERE sequence=?1",
-                params![sequence, observation_json],
-            )
-            .map_err(|error| sqlite_error(&error, error.to_string()))?;
-        Ok(())
+    let state_available = !state_required
+        || optional_display_layout(transaction, || {
+            observation_state::event(transaction, &event)
+        })?
+        .is_some();
+    let request_required = matches!(
+        event.event,
+        RuntimeEvent::ModelRequestCompleted { .. }
+            | RuntimeEvent::ModelRequestFailed { .. }
+            | RuntimeEvent::CompactionCompleted { .. }
+    );
+    let request_available = !request_required
+        || optional_display_layout(transaction, || {
+            observation_occupancy::event(transaction, &event)?;
+            observation_request::terminal(transaction, &event)
+        })?
+        .is_some();
+    let witness_facts = observation_event::index_optional(
+        transaction,
+        &event,
+        json.as_bytes(),
+        execution_facts.as_ref(),
+    )?;
+    let witness_available = witness_facts.available;
+    let trace_available = optional_display_layout(transaction, || {
+        observation_trace::index_event(transaction, &event, execution_facts.as_ref())
     })?
     .is_some();
     transaction
-        .execute(
-            "UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1",
-            [sequence],
-        )
-        .map_err(|error| sqlite_error(&error, format!("update event sequence: {error}")))?;
+        .prepare_cached("UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1")
+        .and_then(|mut statement| statement.execute([sequence]))
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("update event sequence: {error}"))
+        })?;
     let transcript_cursor = if matches!(
         &event.event,
         RuntimeEvent::AttemptCancelled { .. }
@@ -777,7 +941,7 @@ pub(super) fn persist_event_tx_internal(
             "interaction_event",
             event.event_id.as_str(),
         )?)
-    } else if matches!(&event.event, RuntimeEvent::ConfigurationApplied { .. }) {
+    } else if matches!(event.event, RuntimeEvent::ConfigurationApplied { .. }) {
         Some(append_transcript_reference(
             transaction,
             "configuration_event",
@@ -787,9 +951,15 @@ pub(super) fn persist_event_tx_internal(
         None
     };
     let transcript_available = enrich_event_transcript(transaction, &event, transcript_cursor)?;
-    let turn_available =
-        optional_display_layout(transaction, || observation_turn::event(transaction, &event))?
-            .is_some();
+    // Unowned adoptions still capture the prompt; the required flag only
+    // describes the separate attempt-owned turn header.
+    let turn_required = observation_turn::required(&event)
+        || matches!(event.event, RuntimeEvent::InboundTurnAdopted { .. });
+    let turn_available = !turn_required
+        || optional_display_layout(transaction, || {
+            observation_turn::event(transaction, &event, aggregate_facts.as_ref())
+        })?
+        .is_some();
     // The **P** marker: a durable provider outcome is recorded against its
     // exact request, so the publication plane can reject U-without-P with one
     // keyed lookup instead of a Journal scan.
@@ -800,11 +970,11 @@ pub(super) fn persist_event_tx_internal(
     } = &event.event
     {
         let updated = transaction
-            .execute(
+            .execute_cached(
                 "UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL",
                 params![sequence, request_id.as_str()],
             )
-            .map_err(|error| sqlite_error(&error, format!("record provider outcome: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("record provider outcome: {error}")))?;
         if updated != 1 {
             return Err(ConversationStoreError::TerminalViolation(format!(
                 "request {request_id} already has a durable provider outcome"
@@ -819,7 +989,6 @@ pub(super) fn persist_event_tx_internal(
         && request_available
         && witness_available
         && trace_available
-        && json_available
         && transcript_available
         && turn_available
     {
@@ -827,21 +996,55 @@ pub(super) fn persist_event_tx_internal(
         // native J/C/T committed and this row explicitly unavailable.
         let _ = optional_display_layout(transaction, || {
             transaction
-                .execute(
-                    "UPDATE events SET observation_unavailable=0 WHERE sequence=?1",
-                    [sequence],
-                )
-                .map_err(|error| sqlite_error(&error, error.to_string()))?;
+                .prepare_cached("UPDATE events SET observation_unavailable=0 WHERE sequence=?1")
+                .and_then(|mut statement| statement.execute([sequence]))
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             Ok(())
         })?;
     }
     event.observation = prepare_observation
-        .then(|| observation_receipt::single(transaction, conversation_id, &event))
+        .then(|| {
+            observation_receipt::single_prepared(
+                transaction,
+                conversation_id,
+                &event,
+                witness_facts.witness.as_ref(),
+                execution_facts.as_ref(),
+            )
+        })
         .flatten();
     Ok(PersistedEvent {
         event,
         transcript_cursor,
+        facts: append_facts::Facts {
+            request_trace_prepared: false,
+            canonical_publication_prepared: false,
+            witness: witness_facts.witness,
+            execution: execution_facts,
+            members: None,
+        },
     })
+}
+
+#[allow(clippy::too_many_lines)] // One atomic event, lifecycle and private admission transaction.
+pub(super) fn persist_event_tx_internal(
+    guard: &event_insert::Guard,
+    transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
+    event: RuntimeEventEnvelope,
+    prepare_observation: bool,
+    validated_start: Option<&ValidatedRequestStart<'_, '_>>,
+) -> Result<PersistedEvent, ConversationStoreError> {
+    persist_event_tx_with_requests(
+        guard,
+        &mut native_request::Validation::new(transaction),
+        conversation_id,
+        event,
+        prepare_observation,
+        validated_start,
+        None,
+        None,
+    )
 }
 
 /// Contained derived-layout failures preserve the original transcript seat.
@@ -931,7 +1134,7 @@ pub(super) fn validate_attempt_start_uniqueness(
     };
     let key = format!("attempt:{attempt_id}");
     let exists: bool = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
             [&key],
             |row| row.get(0),
@@ -1008,7 +1211,7 @@ pub(super) fn find_event_at_sequence(
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
     let sequence = seq_to_i64(sequence)?;
     let Some(json) = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT event_json FROM events WHERE sequence=?1",
             [sequence],
             |row| row.get::<_, String>(0),
@@ -1320,7 +1523,9 @@ impl SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("event transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("event transaction: {error}"))
+            })?;
         // Recovery may retry after losing a commit acknowledgement. This
         // monotonic resource proof has one canonical event identity; return the
         // already committed receipt (including its original timestamp) rather
@@ -1365,10 +1570,15 @@ impl SqliteConversationStore {
         }
         persist_agent_authority_tx(&transaction, &event.event, authority)?;
         process_death::reach_event("before:event", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("event commit: {error}")))?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("event commit: {error}"))
+        })?;
         process_death::reach_event("after:event", &persisted.event.event);
         Ok(persisted.event)
     }

@@ -138,7 +138,7 @@ pub(super) fn assert_fragment_oracle(
     for (path, start, end, children, header) in &fields {
         let actual = observation_request::field_from(
             &connection,
-            "request_observation_fields",
+            "request_source_roots",
             &sequence.to_string(),
             path,
         )
@@ -558,7 +558,7 @@ pub(super) fn assert_reading_fragment_source(
         for field in page.fields {
             let (start, end, _, _) = observation_request::field_from(
                 &connection,
-                "request_observation_fields",
+                "request_source_roots",
                 &sequence.to_string(),
                 &field.path,
             )

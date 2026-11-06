@@ -307,10 +307,9 @@ impl AgentExecution<'_> {
                         ModelEvent::Started => {
                             stream_started = true;
                             // The provider stream physically began: the
-                            // publication stream opens durably before any of
-                            // its output can be staged, so a crash always
-                            // leaves either no stream at all or a stream
-                            // recovery can classify.
+                            // publication owner starts in memory. Its first
+                            // staged output or final settlement admits the
+                            // durable stream in that same transaction.
                             self.open_publication(assistant_message_id);
                             if let Some(terminal) = self.durable_failure_terminal_from_state() {
                                 return Err(terminal);

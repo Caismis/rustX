@@ -60,11 +60,16 @@ pub(in crate::durable::sqlite) fn load_publication_proposal_owners(
     stream_id: &PublicationStreamId,
 ) -> Result<Vec<PublicationProposalOwner>, ConversationStoreError> {
     let mut statement = transaction
-        .prepare(
+        .prepare_cached(
             "SELECT call_id,block_index,tool_id,tool_name,state
              FROM publication_proposals WHERE stream_id=?1 ORDER BY call_id",
         )
-        .map_err(|error| storage(format!("publication proposal owner query: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("publication proposal owner query: {error}"),
+            )
+        })?;
     let rows = statement
         .query_map([stream_id.as_str()], |row| {
             let block_index: i64 = row.get(1)?;
@@ -77,7 +82,12 @@ pub(in crate::durable::sqlite) fn load_publication_proposal_owners(
                 state,
             ))
         })
-        .map_err(|error| storage(format!("publication proposal owner rows: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("publication proposal owner rows: {error}"),
+            )
+        })?;
     rows.map(|row| {
         let (call_id, block_index, tool_id, name, state) =
             row.map_err(|error| storage(format!("publication proposal owner row: {error}")))?;
@@ -236,7 +246,12 @@ pub(in crate::durable::sqlite) fn validate_audit_proposal_ownership(
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
-            .map_err(|error| storage(format!("audit proposal owner probe: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("audit proposal owner probe: {error}"),
+                )
+            })?;
         let Some((stored_block_index, stored_tool_id, stored_name, stored_state)) = owner else {
             return Err(proposal_violation(
                 stream_id,
@@ -402,7 +417,9 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
              WHERE p.call_id=?1
              ORDER BY p.stream_id",
         )
-        .map_err(|error| storage(format!("tool proposal probe: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("tool proposal probe: {error}"))
+        })?;
     let rows = statement
         .query_map([call_id.as_str()], |row| {
             Ok((
@@ -415,7 +432,9 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
                 row.get::<_, String>(6)?,
             ))
         })
-        .map_err(|error| storage(format!("tool proposal rows: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("tool proposal rows: {error}"))
+        })?;
     let candidates = rows
         .map(|row| row.map_err(|error| storage(format!("tool proposal row: {error}"))))
         .collect::<Result<Vec<_>, _>>()?;
@@ -535,7 +554,12 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
             "UPDATE publication_proposals SET executed=1 WHERE stream_id=?1 AND call_id=?2",
             params![selected.0.as_str(), call_id.as_str()],
         )
-        .map_err(|error| storage(format!("record tool proposal dependency: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("record tool proposal dependency: {error}"),
+            )
+        })?;
     Ok(())
 }
 
@@ -595,7 +619,12 @@ pub(in crate::durable::sqlite) fn canonical_generation_owner(
                AND s.attempt_id=?3 AND s.turn_id=?4
              ORDER BY s.message_id",
         )
-        .map_err(|error| storage(format!("canonical generation owner probe: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("canonical generation owner probe: {error}"),
+            )
+        })?;
     let rows = statement
         .query_map(
             params![
@@ -606,7 +635,12 @@ pub(in crate::durable::sqlite) fn canonical_generation_owner(
             ],
             |row| row.get::<_, String>(0),
         )
-        .map_err(|error| storage(format!("canonical generation owner rows: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("canonical generation owner rows: {error}"),
+            )
+        })?;
     let owners = rows
         .map(|row| row.map_err(|error| storage(format!("canonical generation owner row: {error}"))))
         .collect::<Result<Vec<_>, _>>()?;

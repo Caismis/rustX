@@ -1,0 +1,107 @@
+Independent candidate D retention audit (read-only evidence analysis)
+
+Result: raw-data and identity audit passed. Retaining the joint candidate is defensible as a targeted improvement, provided the adverse results below stay in the report. This is not evidence of Pi parity or of general nonregression. No individual benefit can be assigned to either of the two jointly measured changes.
+
+Checks:
+- Re-hashed both retained executables; checked source src-tree identities, six identical benchmark-harness hashes, matching compiler identity, and rebuild artifact records (ordinary opt-level 3, debug assertions disabled, no profiling feature, fresh=false).
+- Checked all 72 product/controller records, reran their existing semantic validators, and independently reconstructed all 1,692 expected HTTP request bodies from prompts/scripted replies plus the fixed tool schema. Every one of the 846 paired requests is fully semantically equal after the declared exact workspace-path/text normalization.
+- Recomputed all eight raw metrics, all 288 paired ratios and 96 summaries, including medians/ranges and stored log-ratio intervals. All match direct-d-recomputed.json. Before/after result mtimes agree with the declared alternating order. The files cannot independently prove absence of unrelated external scheduling activity.
+
+Predeclared gate:
+experiment.txt required correctness, useful target gains, and no consistent material wider-cost regression, with no selective reruns. It did not predeclare a numeric materiality cutoff or a minimum count of regressing pairs. Therefore retention is a stated engineering judgment, not a mechanically proven pass. The full three-pair data set is retained; nothing is trimmed as noise.
+
+Observed target gains:
+- no-live short-small: wall ratio median 0.840596, per-turn self CPU 0.857143, complete-through-cleanup self CPU 0.904255; all three pairs improve each metric.
+- live short-large (64 history + 32 measured turns, not the single-turn large case): wall ratio 0.966770, complete self CPU 0.911215; all three pairs improve wall, per-turn CPU and complete CPU.
+
+Adverse and inconclusive observations:
+- live short-small: wall ratios 1.458342 / 1.042027 / 0.965548 (median about 1.042). Pair 0 also worsens per-turn CPU by about 42.4% and complete CPU by about 24.7%; it is not merely a wall-clock outlier. Retained without exclusion or a causal explanation.
+- no-live single-turn large: wall ratios 1.146284 / 1.147002 / 0.931130; two of three regress by about 14.6%. Complete CPU ratios 1.058824 / 1.055556 / 0.947368. Per-turn CPU is only 4–6 clock ticks in these runs and cannot resolve fine differences; this does not erase the observed wall regression.
+- no-live stream complete CPU median +6.45% (two pairs worse); no-live tool complete CPU median +5.56% (two pairs worse); live tool complete CPU median +4.76% (two pairs worse). Mixed pair signs and coarse short-run counters preclude broad conclusions.
+- live sampled anonymous PSS increases in all three short-small, short-large and stream pairs. Median increases are approximately 0.21%, 1.25% and 1.51%; the largest of these paired increases is 2.63%. Small but real recorded differences, not zero regression.
+- Process-attributed writes are almost unchanged. Median ratios range close to 1; no claim of a useful write-volume reduction is supported by these samples.
+- no-live short-large pair 2 has a very favorable wall ratio about 0.35765 while CPU is about 0.9469. This favorable outlier is retained too and must not be sold as a representative 64% speedup.
+
+All policy metrics below are paired AFTER/BEFORE ratios, listed as median [all three pairs]. Additional lifecycle wall, total PSS, and RSS results remain in d-retention-audit.json.
+
+direct-no-live / short-small
+  mean_turn_ms: 0.840596 [0.840596, 0.835942, 0.869670]
+  turn_cpu_ms_per_turn: 0.857143 [0.857143, 0.825000, 0.897959]
+  through_cleanup_self_cpu_ms: 0.904255 [0.904255, 0.882927, 0.917582]
+  through_cleanup_process_write_mib: 1.000789 [1.001627, 0.999052, 1.000789]
+  max_sampled_anon_pss_mib: 0.997602 [0.989138, 0.997602, 1.007883]
+direct-no-live / short-large
+  mean_turn_ms: 0.933245 [1.097034, 0.933245, 0.357651]
+  turn_cpu_ms_per_turn: 0.946903 [1.081818, 0.944444, 0.946903]
+  through_cleanup_self_cpu_ms: 0.955882 [0.989305, 0.955882, 0.935764]
+  through_cleanup_process_write_mib: 1.001115 [1.000162, 1.001115, 1.002899]
+  max_sampled_anon_pss_mib: 0.998477 [1.006588, 0.993842, 0.998477]
+direct-no-live / stream
+  mean_turn_ms: 0.997358 [0.997358, 0.989263, 1.015126]
+  turn_cpu_ms_per_turn: 1.000000 [0.950000, 1.000000, 1.266667]
+  through_cleanup_self_cpu_ms: 1.064516 [1.064516, 0.965517, 1.185185]
+  through_cleanup_process_write_mib: 1.000000 [1.000000, 1.000000, 1.000000]
+  max_sampled_anon_pss_mib: 0.992233 [0.998854, 0.985546, 0.992233]
+direct-no-live / large
+  mean_turn_ms: 1.146284 [1.146284, 1.147002, 0.931130]
+  turn_cpu_ms_per_turn: 1.000000 [1.000000, 1.500000, 1.000000]
+  through_cleanup_self_cpu_ms: 1.055556 [1.058824, 1.055556, 0.947368]
+  through_cleanup_process_write_mib: 1.000000 [1.000000, 1.000000, 1.000000]
+  max_sampled_anon_pss_mib: 1.002078 [1.002078, 1.002107, 0.998902]
+direct-no-live / tool
+  mean_turn_ms: 0.985631 [0.985631, 0.963141, 1.076564]
+  turn_cpu_ms_per_turn: 1.000000 [1.166667, 1.000000, 1.000000]
+  through_cleanup_self_cpu_ms: 1.055556 [1.055556, 0.950000, 1.166667]
+  through_cleanup_process_write_mib: 1.000000 [1.000000, 1.000000, 1.000000]
+  max_sampled_anon_pss_mib: 0.997616 [0.997616, 0.988094, 0.997730]
+direct-no-live / cancel
+  mean_turn_ms: 1.005197 [1.005197, 0.947415, 1.041540]
+  turn_cpu_ms_per_turn: 1.250000 [1.250000, 1.333333, 1.000000]
+  through_cleanup_self_cpu_ms: 0.937500 [0.937500, 0.882353, 1.117647]
+  through_cleanup_process_write_mib: 1.000000 [1.000000, 1.000000, 1.000000]
+  max_sampled_anon_pss_mib: 0.994197 [0.994197, 0.993588, 0.998666]
+direct-live / short-small
+  mean_turn_ms: 1.042027 [1.458342, 1.042027, 0.965548]
+  turn_cpu_ms_per_turn: 1.036649 [1.423841, 1.036649, 0.964646]
+  through_cleanup_self_cpu_ms: 0.983333 [1.247104, 0.960000, 0.983333]
+  through_cleanup_process_write_mib: 1.001893 [1.003523, 1.001893, 1.001839]
+  max_sampled_anon_pss_mib: 1.002075 [1.000590, 1.002075, 1.005876]
+direct-live / short-large
+  mean_turn_ms: 0.966770 [0.966770, 0.979136, 0.897700]
+  turn_cpu_ms_per_turn: 0.976190 [0.976190, 0.978166, 0.896907]
+  through_cleanup_self_cpu_ms: 0.911215 [0.965000, 0.911215, 0.888757]
+  through_cleanup_process_write_mib: 0.998405 [0.998405, 1.001823, 0.998205]
+  max_sampled_anon_pss_mib: 1.012478 [1.002958, 1.026345, 1.012478]
+direct-live / stream
+  mean_turn_ms: 1.011734 [1.017772, 1.011734, 0.967636]
+  turn_cpu_ms_per_turn: 1.111111 [1.176471, 1.111111, 0.761905]
+  through_cleanup_self_cpu_ms: 1.000000 [1.000000, 1.100000, 0.818182]
+  through_cleanup_process_write_mib: 1.000000 [1.000000, 1.000000, 1.000000]
+  max_sampled_anon_pss_mib: 1.015087 [1.015087, 1.021169, 1.005323]
+direct-live / large
+  mean_turn_ms: 1.020615 [1.155378, 0.920467, 1.020615]
+  turn_cpu_ms_per_turn: 1.000000 [1.500000, 1.000000, 0.857143]
+  through_cleanup_self_cpu_ms: 0.941176 [1.055556, 0.941176, 0.894737]
+  through_cleanup_process_write_mib: 1.000000 [1.000000, 1.000000, 1.000000]
+  max_sampled_anon_pss_mib: 0.997105 [0.996855, 1.003153, 0.997105]
+direct-live / tool
+  mean_turn_ms: 1.012513 [1.012513, 0.957788, 1.140921]
+  turn_cpu_ms_per_turn: 1.000000 [1.000000, 0.875000, 1.222222]
+  through_cleanup_self_cpu_ms: 1.047619 [1.047619, 0.954545, 1.090909]
+  through_cleanup_process_write_mib: 1.000000 [1.000000, 1.000000, 1.000000]
+  max_sampled_anon_pss_mib: 0.990459 [0.990459, 0.980655, 1.011422]
+direct-live / cancel
+  mean_turn_ms: 0.944886 [0.880571, 1.072420, 0.944886]
+  turn_cpu_ms_per_turn: 1.000000 [1.000000, 1.200000, 1.000000]
+  through_cleanup_self_cpu_ms: 1.000000 [1.000000, 0.894737, 1.000000]
+  through_cleanup_process_write_mib: 1.000000 [1.000000, 1.000000, 1.000000]
+  max_sampled_anon_pss_mib: 0.996740 [0.990416, 0.996740, 1.001991]
+
+Scope and limits:
+- CPU counts self user+system ticks at 100 Hz; complete CPU is the absolute through-cleanup value, including startup, harness work, and verification. It is not only measured-turn runtime.
+- I/O is /proc process-attributed write_bytes, not device writes. Memory is maximum sampled PSS/RSS across captured phases and turns, not true peak or allocation count.
+- Only three pairs: confidence intervals use a log-ratio Student-t model whose distribution and independence assumptions are not established. They do not turn this small experiment into parity/noninferiority evidence.
+- Builds/tests/measurements were not run by this audit. Correctness-suite completion is a separate prerequisite owned by root; retained product validation was independently rechecked here.
+- Fresh direct D/Pi comparisons are required for any current Pi claim; do not multiply historical ratios.
+
+Artifacts: d-retention-audit.json contains all raw metrics, ratios, identities, hashes, and comparison evidence. audit-d-retention.py is the standalone read-only recomputation source.

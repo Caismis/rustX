@@ -1,16 +1,12 @@
 //! In-flight Assistant blocks and foreground Tool slots, with their inline bounds.
+use super::SharedSnapshot;
+use super::shared_attempt;
 use super::{
-    ContentBlockIndex, ForegroundToolExecution, ForegroundToolState, InFlightAssistantMessage,
-    InFlightBlock, RuntimeClientAttemptFailure, RuntimeClientOutcome, RuntimeClientSnapshot,
-    ToolCallId, ToolExecutionResult,
+    ContentBlockIndex, ForegroundToolExecution, ForegroundToolState, InFlightBlock,
+    RuntimeClientAttemptFailure, RuntimeClientOutcome, ToolCallId,
 };
+use std::sync::Arc;
 
-pub(super) fn defer_result_content(result: &mut ToolExecutionResult) {
-    result.content.clear();
-    result.artifacts.clear();
-    result.deliveries.clear();
-    result.workflow = None;
-}
 pub(super) fn inline_label(value: &str) -> String {
     let mut end = value.len().min(256);
     while !value.is_char_boundary(end) {
@@ -142,7 +138,7 @@ pub(super) fn block_index_of(block: &InFlightBlock) -> ContentBlockIndex {
 }
 /// Appends one block in its native publication creation order.
 pub(super) fn push_in_flight_block(
-    in_flight: &mut Option<InFlightAssistantMessage>,
+    in_flight: &mut Option<shared_attempt::SharedInFlight>,
     block: InFlightBlock,
 ) {
     let Some(message) = in_flight.as_mut() else {
@@ -186,24 +182,46 @@ pub(super) fn foreground_slot_mut<'a>(
         .find(|slot| slot.call_id.as_ref() == Some(call_id))
 }
 pub(super) fn update_stored_tool_slots(
-    snapshot: &mut RuntimeClientSnapshot,
+    snapshot: &mut SharedSnapshot,
     occurrence: &crate::observation::tool::RuntimeClientToolOccurrence,
     mut update: impl FnMut(&mut crate::observation::tool::ForegroundToolExecution),
 ) {
-    for slot in snapshot
+    // Detach only rows containing this occurrence; historical heads keep all
+    // other immutable rows and persistent vector nodes.
+    let matching: Vec<_> = snapshot
         .message_descriptors
-        .iter_mut()
-        .flat_map(|descriptor| &mut descriptor.tool_calls)
-        .chain(
-            snapshot
-                .transcript
-                .entries
-                .iter_mut()
-                .flat_map(|entry| &mut entry.tool_calls),
-        )
-    {
-        if &slot.occurrence == occurrence {
-            update(slot);
+        .iter()
+        .enumerate()
+        .filter_map(|(index, descriptor)| {
+            descriptor
+                .tool_calls
+                .iter()
+                .any(|slot| &slot.occurrence == occurrence)
+                .then_some(index)
+        })
+        .collect();
+    for index in matching {
+        for slot in &mut Arc::make_mut(&mut snapshot.message_descriptors[index]).tool_calls {
+            if &slot.occurrence == occurrence {
+                update(slot);
+            }
+        }
+    }
+    if snapshot.transcript.entries.iter().any(|entry| {
+        entry
+            .tool_calls
+            .iter()
+            .any(|slot| &slot.occurrence == occurrence)
+    }) {
+        for slot in snapshot
+            .transcript
+            .entries
+            .iter_mut()
+            .flat_map(|entry| &mut Arc::make_mut(entry).tool_calls)
+        {
+            if &slot.occurrence == occurrence {
+                update(slot);
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ use super::{
 };
 use crate::durable::reading::TurnReadingProvenance;
 use crate::durable::response::CompletedResponseProvenance;
+use crate::durable::sqlite::statements::FixedStatements;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
@@ -71,7 +72,7 @@ pub(super) fn write_turn_header<T: serde::Serialize>(
     let native: Option<String> = connection.query_row(
         "SELECT CASE WHEN typeof(payload_digest)='text' AND length(CAST(payload_digest AS BLOB))=64 THEN payload_digest END FROM inherited_turn_provenance WHERE ordinal=?1",
         [ordinal], |row| row.get(0),
-    ).map_err(|error| storage(error.to_string()))?;
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let native = native.ok_or_else(|| storage("native turn digest unavailable"))?;
     let bytes = crate::observation::bounded::bounded_bytes(
         &CapturedTurnHeader {
@@ -93,7 +94,7 @@ pub(super) fn write_turn_header<T: serde::Serialize>(
     };
     connection
         .execute(sql, params![ordinal, bytes, witness.as_slice()])
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 
@@ -118,7 +119,7 @@ pub(super) fn read_turn_header<T: serde::de::DeserializeOwned>(
         .query_row(sql, [ordinal], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     #[cfg(test)]
     TURN_HEADER_READ_WORK.with(|work| {
         let (rows, materialized) = work.get();
@@ -157,7 +158,7 @@ pub(super) fn verify_turn_header_shape(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .ok_or_else(|| {
             ConversationStoreError::IncompatibleSchema("inherited turn header row absent".into())
         })?;
@@ -175,9 +176,9 @@ pub(super) fn verify_turn_header_shape(
     }
     let columns: Vec<String> = connection
         .prepare("PRAGMA table_info(inherited_turn_provenance)")
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .query_map([], |row| row.get(1))
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .collect::<Result<_, _>>()
         .map_err(|error| storage(error.to_string()))?;
     let payload = columns
@@ -217,7 +218,7 @@ pub(super) fn validate_turn_cursor(
                 [cursor.get()],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if !present {
             return Err(storage("inherited turn transcript location unavailable"));
         }
@@ -270,7 +271,7 @@ pub(super) fn counts_digest(history: &str, turns: i64, responses: i64) -> String
 }
 
 fn count(connection: &Connection, kind: &str) -> Result<i64, ConversationStoreError> {
-    let metadata:Option<(String,i64,i64,String)>=connection.query_row("SELECT history_digest,turn_count,response_count,provenance_digest FROM bootstrap_identity WHERE id=1",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let metadata:Option<(String,i64,i64,String)>=connection.query_row("SELECT history_digest,turn_count,response_count,provenance_digest FROM bootstrap_identity WHERE id=1",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let Some((history, turns, responses, hash)) = metadata else {
         return Ok(0);
     };
@@ -291,7 +292,7 @@ pub(super) fn turn_header_count(connection: &Connection) -> Result<i64, Conversa
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let last: Option<i64> = connection
         .query_row(
             "SELECT ordinal FROM inherited_turn_provenance ORDER BY ordinal DESC LIMIT 1",
@@ -299,7 +300,7 @@ pub(super) fn turn_header_count(connection: &Connection) -> Result<i64, Conversa
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if (total == 0 && (first.is_some() || last.is_some()))
         || (total > 0 && (first != Some(0) || last != Some(total - 1)))
     {
@@ -336,7 +337,7 @@ pub(super) fn persist(
             ended_at: turn.ended_at,
             execution: None,
         };
-        connection.execute("INSERT INTO inherited_turn_provenance(ordinal,payload,payload_digest) VALUES(?1,?2,?3)", params![ordinal,payload,payload_digest("turn",ordinal,&payload)]).map_err(|error| storage(error.to_string()))?;
+        connection.execute("INSERT INTO inherited_turn_provenance(ordinal,payload,payload_digest) VALUES(?1,?2,?3)", params![ordinal,payload,payload_digest("turn",ordinal,&payload)]).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let _ = super::optional_display_layout(connection, || {
             super::observation_identity::capture(
                 connection,
@@ -351,7 +352,7 @@ pub(super) fn persist(
                     "UPDATE inherited_turn_provenance SET display_provenance=?2 WHERE ordinal=?1",
                     params![ordinal, display_bytes(&display)?],
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             Ok(())
         })?;
         for id in &turn.process_message_ids {
@@ -367,13 +368,13 @@ pub(super) fn persist(
         let ordinal = seq_to_i64(ordinal as u64)?;
         let payload = encode(response, "inherited response")?;
         let closing_position: u64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [response.closing_message_id.as_str()],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
-        connection.execute("INSERT INTO inherited_response_provenance(ordinal,payload,payload_digest,closing_ledger_position) VALUES(?1,?2,?3,?4)",params![ordinal,payload,payload_digest("response",ordinal,&payload),closing_position]).map_err(|error|storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        connection.execute("INSERT INTO inherited_response_provenance(ordinal,payload,payload_digest,closing_ledger_position) VALUES(?1,?2,?3,?4)",params![ordinal,payload,payload_digest("response",ordinal,&payload),closing_position]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let _ = super::optional_display_layout(connection, || {
             super::observation_identity::capture(
                 connection,
@@ -383,7 +384,7 @@ pub(super) fn persist(
             )?;
             response_identity_fields(connection, ordinal, response)?;
             let display = response_header(connection, ordinal, response)?;
-            connection.execute("UPDATE inherited_response_provenance SET display_provenance=?2 WHERE ordinal=?1",params![ordinal,display_bytes(&display)?]).map_err(|error|storage(error.to_string()))?;
+            connection.execute("UPDATE inherited_response_provenance SET display_provenance=?2 WHERE ordinal=?1",params![ordinal,display_bytes(&display)?]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             Ok(())
         })?;
         for id in &response.process_message_ids {
@@ -397,14 +398,14 @@ pub(super) fn persist(
     }
     for (id, (turn, response)) in membership {
         let position: i64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [id.as_str()],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let original_digest = membership_digest(id.as_str(), turn, response);
-        connection.execute("INSERT INTO inherited_message_membership(assistant_message_id,assistant_ledger_position,turn_ordinal,response_ordinal,membership_digest) VALUES(?1,?2,?3,?4,?5)", params![id.as_str(),position,turn,response,original_digest]).map_err(|error| storage(error.to_string()))?;
+        connection.execute("INSERT INTO inherited_message_membership(assistant_message_id,assistant_ledger_position,turn_ordinal,response_ordinal,membership_digest) VALUES(?1,?2,?3,?4,?5)", params![id.as_str(),position,turn,response,original_digest]).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let _ = super::optional_display_layout(connection, || {
             super::observation_membership::member(
                 connection,
@@ -431,7 +432,7 @@ fn response_identity_fields(
         (2, Some(&response.origin.closing_message_id)),
     ] {
         if let Some(value) = value {
-            super::content::index_utf8_field(
+            crate::durable::sqlite::content::index_utf8_field(
                 connection,
                 "response_identity",
                 &key,
@@ -457,13 +458,18 @@ fn verify_members(
         });
     }
     let mut seen = BTreeSet::new();
-    let mut statement = connection.prepare_cached("SELECT m.turn_ordinal,m.response_ordinal,m.membership_digest FROM inherited_message_membership m JOIN message_ledger l ON l.message_id=m.assistant_message_id AND l.position=m.assistant_ledger_position WHERE m.assistant_message_id=?1 AND json_extract(l.message_json,'$.role')='assistant' AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)").map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection.prepare_cached("SELECT m.turn_ordinal,m.response_ordinal,m.membership_digest FROM inherited_message_membership m JOIN message_ledger l ON l.message_id=m.assistant_message_id AND l.position=m.assistant_ledger_position WHERE m.assistant_message_id=?1 AND json_extract(l.message_json,'$.role')='assistant' AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     for id in members {
         let (turn, response, hash): (Option<i64>, Option<i64>, String) = statement
             .query_row([id.as_str()], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
-            .map_err(|error| storage(format!("inherited membership: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inherited membership: {error}"),
+                )
+            })?;
         if !seen.insert(id)
             || hash != membership_digest(id.as_str(), turn, response)
             || (if kind == "turn" { turn } else { response }) != Some(ordinal)
@@ -477,9 +483,9 @@ fn verify_members(
         // member was omitted, including for a terminal-only Turn.
         let assigned = connection
             .prepare_cached(TURN_MEMBERS)
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .query_map([ordinal], |row| row.get::<_, String>(0))
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .collect::<Result<BTreeSet<_>, _>>()
             .map_err(|error| storage(error.to_string()))?;
         let declared = seen.iter().map(|id| id.as_str().to_owned()).collect();
@@ -502,7 +508,7 @@ fn validated_turn(
         (&turn.prompt_message_id, true),
     ] {
         if let Some(id) = id {
-            let role:Option<String>=connection.query_row("SELECT json_extract(message_json,'$.role') FROM message_ledger WHERE message_id=?1 AND position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)",[id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+            let role:Option<String>=connection.query_row("SELECT json_extract(message_json,'$.role') FROM message_ledger WHERE message_id=?1 AND position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)",[id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             if role.is_none() || (prompt && role.as_deref() != Some("user")) {
                 return Err(storage("invalid inherited Turn canonical anchor"));
             }
@@ -510,7 +516,7 @@ fn validated_turn(
     }
     if turn.process_message_ids.is_empty() {
         use crate::durable::reading::InheritedTurnOutcome;
-        let anchor:Option<i64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id=?1",[ordinal.to_string()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let anchor:Option<i64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id=?1",[ordinal.to_string()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if matches!(
             turn.outcome,
             InheritedTurnOutcome::Completed | InheritedTurnOutcome::IncompleteAtCut
@@ -542,7 +548,7 @@ fn selected(
         } else {
             RESPONSE_LOOKUP
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut records = BTreeMap::new();
     for id in messages.iter().collect::<BTreeSet<_>>() {
         let row = statement
@@ -558,7 +564,7 @@ fn selected(
                 ))
             })
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let Some((member, turn, response, hash, ordinal, payload, payload_hash)) = row else {
             continue;
         };
@@ -644,7 +650,7 @@ fn all(connection: &Connection, kind: &str) -> Result<Vec<(i64, String)>, Conver
     };
     let rows = connection
         .prepare(sql)
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -652,7 +658,7 @@ fn all(connection: &Connection, kind: &str) -> Result<Vec<(i64, String)>, Conver
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| storage(error.to_string()))?;
     if expected != seq_to_i64(rows.len() as u64)? {
@@ -716,7 +722,7 @@ pub(super) fn turn_at(
             [ordinal],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if hash != payload_digest("turn", ordinal, &json) {
         return Err(storage("corrupt inherited Turn payload"));
     }
@@ -730,7 +736,7 @@ pub(super) fn verify_seed_membership(
     let inconsistent: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM inherited_message_membership m LEFT JOIN message_ledger l ON l.position=m.assistant_ledger_position AND l.message_id=m.assistant_message_id WHERE l.position IS NULL)",
         [], |row| row.get(0),
-    ).map_err(|error| storage(error.to_string()))?;
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if inconsistent {
         return Err(storage("inherited membership canonical locator mismatch"));
     }
@@ -756,7 +762,7 @@ pub(super) fn verify_seed_membership(
                 .1 = Some(seq_to_i64(ordinal as u64)?);
         }
     }
-    let actual=connection.prepare("SELECT assistant_message_id,turn_ordinal,response_ordinal,membership_digest FROM inherited_message_membership").map_err(|error|storage(error.to_string()))?.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,Option<i64>>(1)?,row.get::<_,Option<i64>>(2)?,row.get::<_,String>(3)?))).map_err(|error|storage(error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
+    let actual=connection.prepare("SELECT assistant_message_id,turn_ordinal,response_ordinal,membership_digest FROM inherited_message_membership").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_map([],|row|Ok((row.get::<_,String>(0)?,row.get::<_,Option<i64>>(1)?,row.get::<_,Option<i64>>(2)?,row.get::<_,String>(3)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
     if actual.len() != expected.len() {
         return Err(storage("missing inherited membership"));
     }
@@ -784,7 +790,7 @@ fn response_header(
 ) -> Result<crate::durable::observation::InheritedResponseHeader, ConversationStoreError> {
     let mut models = Vec::new();
     for (index, model) in response.models.iter().enumerate() {
-        let encoded_bytes = super::content::index_structural_value(
+        let encoded_bytes = crate::durable::sqlite::content::index_structural_value(
             connection,
             "inherited_model",
             &ordinal.to_string(),
@@ -810,12 +816,12 @@ fn response_header(
             closing_message_id: (response.closing_message_id.as_str().len() <= 256)
                 .then(|| response.closing_message_id.clone()),
             closing_ledger_position: connection
-                .query_row(
+                .query_row_cached(
                     "SELECT position FROM message_ledger WHERE message_id=?1",
                     [response.closing_message_id.as_str()],
                     |row| row.get(0),
                 )
-                .map_err(|error| storage(error.to_string()))?,
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?,
             retry_message_id: response
                 .retry_message_id
                 .as_ref()
@@ -826,13 +832,15 @@ fn response_header(
                 .as_ref()
                 .map(|id| {
                     connection
-                        .query_row(
+                        .query_row_cached(
                             "SELECT position FROM message_ledger WHERE message_id=?1",
                             [id.as_str()],
                             |row| row.get(0),
                         )
                         .optional()
-                        .map_err(|error| storage(error.to_string()))
+                        .map_err(|error| {
+                            crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                        })
                 })
                 .transpose()?
                 .flatten(),
@@ -883,7 +891,7 @@ pub(super) fn observation_native_oracle(
     let mut turns: BTreeMap<i64, TurnReadingProvenance> = BTreeMap::new();
     let mut responses: BTreeMap<i64, crate::durable::observation::InheritedResponseHeader> =
         BTreeMap::new();
-    let mut statement=connection.prepare_cached("SELECT m.turn_ordinal,m.response_ordinal,m.membership_digest,t.display_provenance,r.display_provenance FROM message_ledger l JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=l.message_id LEFT JOIN inherited_message_membership m ON m.assistant_message_id=l.message_id AND m.assistant_ledger_position=l.position LEFT JOIN inherited_turn_provenance t ON t.ordinal=m.turn_ordinal LEFT JOIN inherited_response_provenance r ON r.ordinal=m.response_ordinal WHERE l.message_id=?1 AND json_extract(h.header_json,'$.role')='assistant' AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT m.turn_ordinal,m.response_ordinal,m.membership_digest,t.display_provenance,r.display_provenance FROM message_ledger l JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=l.message_id LEFT JOIN inherited_message_membership m ON m.assistant_message_id=l.message_id AND m.assistant_ledger_position=l.position LEFT JOIN inherited_turn_provenance t ON t.ordinal=m.turn_ordinal LEFT JOIN inherited_response_provenance r ON r.ordinal=m.response_ordinal WHERE l.message_id=?1 AND json_extract(h.header_json,'$.role')='assistant' AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     for id in messages.iter().collect::<BTreeSet<_>>() {
         let row: Option<DisplayMembershipRow> = statement
             .query_row([id.as_str()], |row| {
@@ -896,7 +904,7 @@ pub(super) fn observation_native_oracle(
                 ))
             })
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let Some((turn, response, hash, turn_bytes, response_bytes)) = row else {
             continue;
         };
@@ -949,7 +957,7 @@ fn observation_response(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .ok_or_else(|| storage("unknown inherited response"))?;
     serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))
 }
@@ -967,7 +975,7 @@ pub(super) fn observation_models(
     if offset > header.models_total {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let rows=connection.prepare_cached("SELECT block_index,readable_end FROM content_frontiers WHERE source_kind='inherited_model' AND source_id=?1 AND representation='canonical_json_v1' AND revision=1 AND block_index>=?2 AND block_index<?3 ORDER BY block_index LIMIT ?4").map_err(|error|storage(error.to_string()))?.query_map(params![ordinal.to_string(),offset,header.models_total,limit],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,u64>(1)?))).map_err(|error|storage(error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
+    let rows=connection.prepare_cached("SELECT block_index,readable_end FROM content_frontiers WHERE source_kind='inherited_model' AND source_id=?1 AND representation='j' AND revision=1 AND block_index>=?2 AND block_index<?3 ORDER BY block_index LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_map(params![ordinal.to_string(),offset,header.models_total,limit],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,u64>(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
     let mut names = Vec::with_capacity(rows.len());
     for (index, encoded_bytes) in rows {
         let value = if encoded_bytes <= 1024 {
@@ -1010,7 +1018,7 @@ pub(super) fn observation_model_read(
     if model >= header.models_total {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    super::content::structural_field_read(
+    crate::durable::sqlite::content::structural_field_read(
         connection,
         "inherited_model",
         &ordinal.to_string(),

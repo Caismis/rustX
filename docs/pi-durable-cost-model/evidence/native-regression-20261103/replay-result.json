@@ -1,0 +1,19 @@
+{
+  "accepted": true,
+  "archive_sha256": "80cbd7f89cf79bd7b3e0726cba03df6c869940cae201fa42402210a9633cd8f0",
+  "verified_members": 9050,
+  "native_products_reparsed": 20,
+  "ordinary_native_products": 12,
+  "native_closed_images": 2560,
+  "functional_products": 8,
+  "cpu_profiles": 4,
+  "pi_memory_products": 1,
+  "pi_native_images": 128,
+  "tests": {
+    "ok": 3251,
+    "ignored": 3
+  },
+  "tables_sha256": "fbdc2d5dd049107e907eeaa9cc2167f07874dc40a17bc8d5cd50b55f6a225174",
+  "tables_reproduced": true,
+  "scope": "Authenticates every selected member and independently rechecks raw native counters/full wire histories/closed images/cancellation absence, functional requests, CPU sample denominators, Pi memory/API/SQLite records, source maps, host observations and all tables. No product, compiler, git, symbolizer or network execution. Uses stored prearchive executable/library/Pi-runtime proofs for omitted artifacts; does not freshly verify their bytes."
+}

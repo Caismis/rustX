@@ -4,10 +4,15 @@
 //! publication transaction and derive finite display headers from the facts
 //! that transaction commits. They are read layouts only, never authority.
 
+#[cfg(test)]
+use super::PUBLICATION_CAPTURE_WORK;
+#[cfg(test)]
+thread_local! { static DESCRIPTOR_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0,0)) }; }
 use super::{audit_summary, block, cut, has_text_preview, identity, kind, message_locator};
 use crate::durable::observation::{
     HEADER_ENCODED_MAX, HEADER_PAGE_MAX, MessageBlockHeader, MessageHeader, TranscriptHeader,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::durable::sqlite::{
     Connection, ConversationStoreError, OptionalExtension, Transaction, params, seq_to_i64, storage,
 };
@@ -41,14 +46,15 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
             crate::observation::content::ContentRepresentation::CanonicalJsonV1,
         )? {
             metadata_deferred = !semantic_fits || reference.readable_end > 1024;
-            capture
-                .content
-                .push(crate::observation::cut::ContentBinding {
+            capture.content.push(
+                crate::observation::cut::ContentBinding {
                     source_path: None,
                     path: vec!["display".into()],
                     content_ref: reference,
                     deferred: metadata_deferred,
-                });
+                }
+                .into(),
+            );
         }
     }
     if let Some(position) = position {
@@ -71,14 +77,15 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
                     path.push("result".into());
                 }
                 path.extend(["content".into(), index.to_string(), "binary".into()]);
-                capture
-                    .content
-                    .push(crate::observation::cut::ContentBinding {
+                capture.content.push(
+                    crate::observation::cut::ContentBinding {
                         source_path: None,
                         path,
                         content_ref: reference,
                         deferred: true,
-                    });
+                    }
+                    .into(),
+                );
             }
             let source = crate::observation::content::ContentSource::CanonicalMessageBlock {
                 component: crate::observation::content::CanonicalContentComponent::BlockMetadata,
@@ -100,14 +107,15 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
                     path.push("result".into());
                 }
                 path.extend(["content".into(), index.to_string()]);
-                capture
-                    .content
-                    .push(crate::observation::cut::ContentBinding {
+                capture.content.push(
+                    crate::observation::cut::ContentBinding {
                         source_path: None,
                         path,
                         content_ref: reference,
                         deferred: true,
-                    });
+                    }
+                    .into(),
+                );
             }
         }
     }
@@ -148,11 +156,36 @@ pub(in crate::durable::sqlite) fn tool_call_count(message: &MessageBlock) -> u64
     }
 }
 
-pub(in crate::durable::sqlite) fn index_message(
+/// A single publication's finite pre-trim draft. It never outlives the
+/// canonical transaction and is admitted only without custom SQL triggers.
+/// Keep the pre-trim value: shorter final raw bindings can restore a display
+/// that the original canonical representation could not fit.
+#[derive(Debug)]
+pub(in crate::durable::sqlite) struct PublicationHeader {
+    pub(in crate::durable::sqlite) header: MessageHeader,
+    pub(in crate::durable::sqlite) captured_bindings: usize,
+}
+
+pub(in crate::durable::sqlite) fn index_publication_message(
+    connection: &Connection,
+    message: &MessageBlock,
+    position: u64,
+) -> Result<Option<PublicationHeader>, ConversationStoreError> {
+    index_message_capture(connection, message, Some(position), true)
+}
+
+#[allow(clippy::too_many_lines)] // One native descriptor with its original bounded admission.
+fn index_message_capture(
     connection: &Connection,
     message: &MessageBlock,
     position: Option<u64>,
-) -> Result<(), ConversationStoreError> {
+    retain_publication: bool,
+) -> Result<Option<PublicationHeader>, ConversationStoreError> {
+    #[cfg(test)]
+    PUBLICATION_CAPTURE_WORK.with(|work| {
+        let (messages, blocks, reused) = work.get();
+        work.set((messages + 1, blocks, reused));
+    });
     if position.is_some() {
         index_blocks(connection, message)?;
     }
@@ -187,6 +220,7 @@ pub(in crate::durable::sqlite) fn index_message(
         // Pending inbound is not canonical content; no locator may claim otherwise.
         capture.content.clear();
     }
+    let captured_bindings = capture.content.len();
     let metadata_deferred = append_message_metadata(
         connection,
         &conversation,
@@ -205,7 +239,7 @@ pub(in crate::durable::sqlite) fn index_message(
             (tool.result.status==crate::tools::types::ToolExecutionStatus::Success).then(||crate::durable::sqlite::observation_delivery::head(connection,position,0,8)).transpose()?
         }else{None},
         tool_calls: Vec::new(),
-        transcript_cursor: connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|storage(error.to_string()))?.map(crate::durable::TranscriptCursor::new),
+        transcript_cursor: connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.map(crate::durable::TranscriptCursor::new),
         identity: (message.id().as_str().len() <= 256).then(|| message.id().clone()),
         locator: position.map(|position| {
             crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
@@ -236,7 +270,7 @@ pub(in crate::durable::sqlite) fn index_message(
         display: (message.id().as_str().len() <= 256)
             .then_some(display)
             .flatten(),
-        content: capture.content,
+        content: capture.content.into_iter().map(crate::observation::metadata::MetadataFragment::into_owned).collect(),
         collections: capture.collections,
         deferred,
     };
@@ -245,10 +279,41 @@ pub(in crate::durable::sqlite) fn index_message(
             .collections
             .push(crate::observation::delivery::frontier(head));
     }
-    let bytes = message_header_bytes(&mut header)?;
-    connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|storage(error.to_string()))?;
+    let (bytes, prepared) = if retain_publication {
+        if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
+            // The common path encodes once and moves its exact admitted draft.
+            (
+                bytes,
+                Some(PublicationHeader {
+                    header,
+                    captured_bindings,
+                }),
+            )
+        } else {
+            // Only a head that needs trimming retains a bounded pre-trim copy.
+            // This private limit never narrows the public header admission.
+            let prepared = (crate::observation::preflight::bounded_fit(&header, 128 * 1024)
+                == Some(true))
+            .then(|| PublicationHeader {
+                header: header.clone(),
+                captured_bindings,
+            });
+            (message_header_bytes(&mut header)?, prepared)
+        }
+    } else {
+        (message_header_bytes(&mut header)?, None)
+    };
+    connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     index_tool_result(connection, message, position)?;
-    Ok(())
+    Ok(prepared)
+}
+
+pub(in crate::durable::sqlite) fn index_message(
+    connection: &Connection,
+    message: &MessageBlock,
+    position: Option<u64>,
+) -> Result<(), ConversationStoreError> {
+    index_message_capture(connection, message, position, false).map(|_| ())
 }
 
 pub(in crate::durable::sqlite) fn index_tool_result(
@@ -265,7 +330,7 @@ pub(in crate::durable::sqlite) fn index_tool_result(
                 "UPDATE observation_headers SET tool_result_json=?2 WHERE ledger_position=?1",
                 params![position, bytes],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
 }
@@ -360,12 +425,12 @@ pub(in crate::durable::sqlite) fn message_header_bytes(
     }
 }
 
-pub(in crate::durable::sqlite) fn index_entry(
+fn entry_header(
     connection: &Connection,
     kind: &str,
     id: &str,
     entry: &RuntimeClientTranscriptEntry,
-) -> Result<(), ConversationStoreError> {
+) -> Result<TranscriptHeader, ConversationStoreError> {
     let conversation = identity(connection)?;
     let mut capture = Capture::new(1);
     let display = capture.transcript_entry(entry, &conversation, &["display".into()]);
@@ -396,9 +461,8 @@ pub(in crate::durable::sqlite) fn index_entry(
                     &source,
                     crate::observation::content::ContentRepresentation::CanonicalJsonV1,
                 )? {
-                    capture
-                        .content
-                        .push(crate::observation::cut::ContentBinding {
+                    capture.content.push(
+                        crate::observation::cut::ContentBinding {
                             source_path: None,
                             path: vec![
                                 "display".into(),
@@ -409,7 +473,9 @@ pub(in crate::durable::sqlite) fn index_entry(
                             ],
                             content_ref: reference,
                             deferred: true,
-                        });
+                        }
+                        .into(),
+                    );
                 }
             }
         }
@@ -427,22 +493,23 @@ pub(in crate::durable::sqlite) fn index_entry(
         },
         message: None,
         display,
-        content: capture.content,
+        content: capture
+            .content
+            .into_iter()
+            .map(crate::observation::metadata::MetadataFragment::into_owned)
+            .collect(),
         collections: capture.collections,
         deferred,
     };
-    store_transcript_header(connection, kind, id, header)
+    Ok(header)
 }
 
-pub(in crate::durable::sqlite) fn store_transcript_header(
-    connection: &Connection,
-    kind: &str,
-    id: &str,
+fn transcript_header_bytes(
     mut header: TranscriptHeader,
-) -> Result<(), ConversationStoreError> {
-    let bytes = loop {
+) -> Result<Vec<u8>, ConversationStoreError> {
+    loop {
         if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
-            break bytes;
+            return Ok(bytes);
         }
         header.deferred = true;
         if header.display.take().is_some() {
@@ -457,7 +524,16 @@ pub(in crate::durable::sqlite) fn store_transcript_header(
         return Err(storage(
             "native transcript identity exceeds finite descriptor budget",
         ));
-    };
+    }
+}
+
+pub(in crate::durable::sqlite) fn store_transcript_header(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    header: TranscriptHeader,
+) -> Result<(), ConversationStoreError> {
+    let bytes = transcript_header_bytes(header)?;
     let journal: u64 = if matches!(
         kind,
         "attempt_terminal" | "interaction_event" | "configuration_event"
@@ -468,12 +544,102 @@ pub(in crate::durable::sqlite) fn store_transcript_header(
                 [id],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
     } else {
         0
     };
-    connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,journal_position,header_json,transcript_position) VALUES(?1,?2,NULL,?3,?4,(SELECT position FROM transcript_order WHERE reference_kind=?1 AND reference_id=?2)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET journal_position=excluded.journal_position,header_json=excluded.header_json",params![kind,id,journal,bytes]).map_err(|error|storage(error.to_string()))?;
+    store_transcript_bytes(connection, kind, id, journal, &bytes)
+}
+
+fn store_transcript_bytes(
+    connection: &Connection,
+    kind: &str,
+    id: &str,
+    journal: u64,
+    bytes: &[u8],
+) -> Result<(), ConversationStoreError> {
+    connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,journal_position,header_json,transcript_position) VALUES(?1,?2,NULL,?3,?4,(SELECT position FROM transcript_order WHERE reference_kind=?1 AND reference_id=?2)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET journal_position=excluded.journal_position,header_json=excluded.header_json",params![kind,id,journal,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
+}
+
+/// The trigger-free append builder already allocated the native T seat and
+/// prepared this exact event's member/execution domains in its savepoint.
+/// No historical read uses this entry point or substitutes pending evidence.
+pub(in crate::durable::sqlite) fn index_pending_native_event(
+    transaction: &Transaction<'_>,
+    kind: &str,
+    event: &crate::events::types::RuntimeEventEnvelope,
+    cursor: crate::durable::TranscriptCursor,
+    members: Option<
+        &crate::durable::sqlite::append_facts::Captured<
+            crate::durable::observation::AttemptMemberCounts,
+        >,
+    >,
+    execution: Option<&crate::durable::sqlite::observation_execution::Captured>,
+) -> Result<(), ConversationStoreError> {
+    let header = if kind == "attempt_terminal" {
+        // Keep the actual metadata/counter validation. process_view uses only
+        // this cut's T frontier, already advanced by native seat allocation.
+        let cut = cut(transaction, &event.conversation_id)?;
+        let counts = members.ok_or_else(|| storage("native member header unavailable"))?;
+        let process = crate::durable::sqlite::observation_members::pending_process_view(
+            &cut,
+            counts.value.clone(),
+            cursor,
+            event.sequence,
+            execution,
+        )?
+        .ok_or_else(|| storage("native terminal process unavailable"))?;
+        terminal_header(kind, event, cursor, process)
+    } else {
+        other_native_header(transaction, kind, event, cursor)?
+    };
+    let bytes = transcript_header_bytes(header)?;
+    store_transcript_bytes(
+        transaction,
+        kind,
+        event.event_id.as_str(),
+        event.sequence,
+        &bytes,
+    )
+}
+
+fn terminal_header(
+    kind: &str,
+    event: &crate::events::types::RuntimeEventEnvelope,
+    cursor: crate::durable::TranscriptCursor,
+    process: crate::observation::turn::TurnProcessView,
+) -> TranscriptHeader {
+    TranscriptHeader {
+        tool_calls: Vec::new(),
+        publication_settlement: None,
+        cursor,
+        reference_kind: kind.into(),
+        reference_id: if event.event_id.as_str().len() <= 256 {
+            event.event_id.to_string()
+        } else {
+            format!("transcript:{}", cursor.get())
+        },
+        message: None,
+        display: Some(
+            crate::observation::transcript::RuntimeClientTranscriptEntry {
+                cursor: crate::observation::transcript::RuntimeClientTranscriptCursor::new(
+                    cursor.get(),
+                ),
+                item:
+                    crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal {
+                        turn: process,
+                    },
+                tool_calls: Vec::new(),
+                turn_process: None,
+                completed_response: None,
+                response_pending: false,
+            },
+        ),
+        content: Vec::new(),
+        collections: Vec::new(),
+        deferred: false,
+    }
 }
 
 pub(in crate::durable::sqlite) fn index_native_event(
@@ -482,9 +648,8 @@ pub(in crate::durable::sqlite) fn index_native_event(
     event: &crate::events::types::RuntimeEventEnvelope,
     cursor: crate::durable::TranscriptCursor,
 ) -> Result<(), ConversationStoreError> {
-    if kind == "attempt_terminal" {
-        let conversation = event.conversation_id.clone();
-        let cut = cut(transaction, &conversation)?;
+    let header = if kind == "attempt_terminal" {
+        let cut = cut(transaction, &event.conversation_id)?;
         let process = crate::durable::sqlite::observation_members::process_view(
             transaction,
             &cut,
@@ -492,35 +657,37 @@ pub(in crate::durable::sqlite) fn index_native_event(
             Some(cursor),
         )?
         .ok_or_else(|| storage("native terminal process unavailable"))?;
-        return store_transcript_header(transaction,kind,event.event_id.as_str(),TranscriptHeader {
-            tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:if event.event_id.as_str().len()<=256 {event.event_id.to_string()} else {format!("transcript:{}",cursor.get())},message:None,
-            display:Some(crate::observation::transcript::RuntimeClientTranscriptEntry { cursor:crate::observation::transcript::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
-            content:Vec::new(),collections:Vec::new(),deferred:false,
-        });
-    }
+        terminal_header(kind, event, cursor, process)
+    } else {
+        other_native_header(transaction, kind, event, cursor)?
+    };
+    store_transcript_header(transaction, kind, event.event_id.as_str(), header)
+}
+
+fn other_native_header(
+    connection: &Connection,
+    kind: &str,
+    event: &crate::events::types::RuntimeEventEnvelope,
+    cursor: crate::durable::TranscriptCursor,
+) -> Result<TranscriptHeader, ConversationStoreError> {
     let Some(event_copy) = crate::observation::bounded::bounded_clone(event, HEADER_ENCODED_MAX)
     else {
-        return store_transcript_header(
-            transaction,
-            kind,
-            event.event_id.as_str(),
-            TranscriptHeader {
-                tool_calls: Vec::new(),
-                publication_settlement: None,
-                cursor,
-                reference_kind: kind.into(),
-                reference_id: if event.event_id.as_str().len() <= 256 {
-                    event.event_id.to_string()
-                } else {
-                    format!("transcript:{}", cursor.get())
-                },
-                message: None,
-                display: None,
-                content: Vec::new(),
-                collections: Vec::new(),
-                deferred: true,
+        return Ok(TranscriptHeader {
+            tool_calls: Vec::new(),
+            publication_settlement: None,
+            cursor,
+            reference_kind: kind.into(),
+            reference_id: if event.event_id.as_str().len() <= 256 {
+                event.event_id.to_string()
+            } else {
+                format!("transcript:{}", cursor.get())
             },
-        );
+            message: None,
+            display: None,
+            content: Vec::new(),
+            collections: Vec::new(),
+            deferred: true,
+        });
     };
     let item = match &event.event {
         crate::events::types::RuntimeEvent::InteractionRequested { .. } => {
@@ -534,41 +701,16 @@ pub(in crate::durable::sqlite) fn index_native_event(
         }
         _ => crate::durable::TranscriptItem::AttemptTerminal { event: event_copy },
     };
-    index_item(transaction, kind, event.event_id.as_str(), item, cursor)
+    item_header(connection, kind, event.event_id.as_str(), item, cursor)
 }
 
-pub(in crate::durable::sqlite) fn index_item(
-    transaction: &Transaction<'_>,
+fn item_header(
+    connection: &Connection,
     kind: &str,
     id: &str,
     item: crate::durable::TranscriptItem,
     cursor: crate::durable::TranscriptCursor,
-) -> Result<(), ConversationStoreError> {
-    if kind == "inherited_turn" {
-        let ordinal = id
-            .parse::<u64>()
-            .map_err(|_| storage("invalid original turn ordinal"))?;
-        let conversation: String = transaction
-            .query_row(
-                "SELECT conversation_id FROM rustx_store WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        let cut = cut(transaction, &ConversationId::new(conversation))?;
-        let process = crate::durable::sqlite::observation_members::inherited_process(
-            transaction,
-            &cut,
-            ordinal,
-            cursor,
-        )?
-        .ok_or_else(|| storage("inherited terminal process unavailable"))?;
-        return store_transcript_header(transaction,kind,id,TranscriptHeader {
-            tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:id.into(),message:None,
-            display:Some(crate::observation::transcript::RuntimeClientTranscriptEntry { cursor:crate::observation::transcript::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
-            content:Vec::new(),collections:Vec::new(),deferred:false,
-        });
-    }
+) -> Result<TranscriptHeader, ConversationStoreError> {
     let page = crate::durable::TranscriptPage {
         inherited_through: crate::durable::TranscriptCursor::new(0),
         entries: vec![crate::durable::TranscriptEntry {
@@ -584,7 +726,43 @@ pub(in crate::durable::sqlite) fn index_item(
         .into_iter()
         .next()
         .ok_or_else(|| storage("native transcript descriptor absent"))?;
-    index_entry(transaction, kind, id, &entry)
+    entry_header(connection, kind, id, &entry)
+}
+
+pub(in crate::durable::sqlite) fn index_item(
+    transaction: &Transaction<'_>,
+    kind: &str,
+    id: &str,
+    item: crate::durable::TranscriptItem,
+    cursor: crate::durable::TranscriptCursor,
+) -> Result<(), ConversationStoreError> {
+    if kind == "inherited_turn" {
+        let ordinal = id
+            .parse::<u64>()
+            .map_err(|_| storage("invalid original turn ordinal"))?;
+        let conversation: String = transaction
+            .query_row_cached(
+                "SELECT conversation_id FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        let cut = cut(transaction, &ConversationId::new(conversation))?;
+        let process = crate::durable::sqlite::observation_members::inherited_process(
+            transaction,
+            &cut,
+            ordinal,
+            cursor,
+        )?
+        .ok_or_else(|| storage("inherited terminal process unavailable"))?;
+        return store_transcript_header(transaction,kind,id,TranscriptHeader {
+            tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:id.into(),message:None,
+            display:Some(crate::observation::transcript::RuntimeClientTranscriptEntry { cursor:crate::observation::transcript::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
+            content:Vec::new(),collections:Vec::new(),deferred:false,
+        });
+    }
+    let header = item_header(transaction, kind, id, item, cursor)?;
+    store_transcript_header(transaction, kind, id, header)
 }
 
 pub(in crate::durable::sqlite) fn index_blocks(
@@ -639,11 +817,11 @@ pub(in crate::durable::sqlite) fn index_pending_header(
     id: &crate::runtime::identity::MessageId,
     transcript: Option<u64>,
 ) -> Result<(), ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("pending source header exceeds bound"));
     }
-    connection.execute("UPDATE pending_inbound SET observation_header=?1,observation_transcript=COALESCE(?2,observation_transcript) WHERE sequence=?3",params![bytes,transcript,sequence]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("UPDATE pending_inbound SET observation_header=?1,observation_transcript=COALESCE(?2,observation_transcript) WHERE sequence=?3",params![bytes,transcript,sequence]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 
@@ -696,7 +874,11 @@ pub(in crate::durable::sqlite) fn index_audit(
         },
         message: None,
         display,
-        content: capture.content,
+        content: capture
+            .content
+            .into_iter()
+            .map(crate::observation::metadata::MetadataFragment::into_owned)
+            .collect(),
         collections: capture.collections,
         deferred,
     };
@@ -739,9 +921,8 @@ pub(in crate::durable::sqlite) fn audit_metadata_bindings(
                 &source,
                 crate::observation::content::ContentRepresentation::CanonicalJsonV1,
             )? {
-                capture
-                    .content
-                    .push(crate::observation::cut::ContentBinding {
+                capture.content.push(
+                    crate::observation::cut::ContentBinding {
                         source_path: None,
                         path: vec![
                             "display".into(),
@@ -752,7 +933,9 @@ pub(in crate::durable::sqlite) fn audit_metadata_bindings(
                         ],
                         content_ref: reference,
                         deferred: true,
-                    });
+                    }
+                    .into(),
+                );
             }
         }
     }
@@ -838,9 +1021,27 @@ pub(in crate::durable::sqlite) fn index_audit_blocks(
                 "INSERT INTO audit_observation_blocks VALUES(?1,?2,?3)",
                 params![cursor.get(), ordinal as u64, bytes],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(in crate::durable::sqlite) fn take_publication_capture_work() -> (usize, usize, usize) {
+    PUBLICATION_CAPTURE_WORK.with(|work| work.replace((0, 0, 0)))
+}
+
+#[cfg(test)]
+pub(super) fn record_descriptor_work(hit: bool) {
+    DESCRIPTOR_WORK.with(|work| {
+        let (decodes, hits) = work.get();
+        work.set((decodes + usize::from(!hit), hits + usize::from(hit)));
+    });
+}
+
+#[cfg(test)]
+pub(in crate::durable::sqlite) fn descriptor_work() -> (usize, usize) {
+    DESCRIPTOR_WORK.with(|work| work.replace((0, 0)))
 }
 
 pub(in crate::durable::sqlite) fn canonical_bindings(
@@ -869,7 +1070,7 @@ pub(in crate::durable::sqlite) fn canonical_bindings(
             &binding.content_ref.source,
             binding.content_ref.representation,
         )?) {
-            binding.content_ref = reference;
+            *binding = binding.resolve(&reference);
         } else {
             return Err(storage("canonical descriptor missing native byte index"));
         }

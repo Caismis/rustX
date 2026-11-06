@@ -723,7 +723,7 @@ mod tests {
             id: ToolId::new("tool-bash"),
             name: "bash".to_owned(),
             description: "Run a shell command".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
         }
     }
 

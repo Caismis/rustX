@@ -1,0 +1,55 @@
+Python capability 两项 O3 libtest SourceUnavailable 诊断
+
+结论：复制测试可执行文件时遗漏了它按相对位置发现的两个 companion：
+bash-supervisor（运行 uv/python 检查和环境准备）以及 interactive-supervisor（运行 FastMCP）。
+只补 bash 不足以恢复测试。补齐两个同次 O3 构建 helper 后，同一 copied libtest 两项均通过；
+原 target/release/deps artifact 两项也通过。没有修改生产代码。
+
+身份与路径证据
+- candidate-e-build/identity.json：source HEAD a39f343b54a46c8e5527dad88842cb8a6d46691b，
+  conformance SHA256 19c52cb8b539abfc0a259d6493ad08b65df00a1e4cc782284cdf562ffa866cf7。
+- 原 libtest：/home/capi/.cache/rustx-pr485-target/release/deps/rustx-1b25cb32cbb96d49。
+- 复制件：/home/capi/.cache/rustx-pr485-next/candidate-e-build/lib-tests。
+- release/deps/rustx-1b25cb32cbb96d49.d:665-666：
+    # env-dep:CARGO_BIN_EXE_bash-supervisor
+    # env-dep:CARGO_BIN_EXE_interactive-supervisor
+  无值，故当前 libtest 中两个 option_env 都是 None。
+- src/runtime/process_runner.rs:1312-1329、1334-1350：优先编译期 CARGO_BIN_EXE，
+  否则 executable 同目录 sibling；仅 executable 父目录为 deps 时允许到上一级找 helper。
+- build-with-diagnostic.py:97-101 复制 libtest，没有同时复制 helper。
+- 初次只读检查 candidate-e-build/bash-supervisor 不存在，target/release/bash-supervisor 存在。
+  root 随后补齐 bash，check3 的两个 Python 测试仍失败；再补 interactive。
+  helper-identity.json 与 interactive-helper-identity.json 是 root 保存的同次构建身份。
+
+实际运行证据（均为功能诊断，不是性能样本）
+1. candidate-e-python-artifact-diagnosis/{command.json,stdout,stderr,process.strace}
+   2026-10-27 00:20:01.262754 至 00:20:34.168715 UTC。
+   原 artifact，threads=1，strace process/execve；2 passed，0 failed，exit 0。
+   execve trace 记录 release/bash-supervisor、真实 uv --version / uv lock --no-config、
+   release/interactive-supervisor outer -> inner -> venv/bin/python -m fastmcp.cli run ... --skip-env。
+2. candidate-e-python-copied-diagnosis/{command.json,stdout,stderr,process.strace}
+   00:20:52.220772 至 00:21:21.985725 UTC。
+   复制件已带两个 companion，threads=1，strace execve；2 passed，0 failed，exit 0。
+   trace:138-140、290-292 可见 candidate-e-build/interactive-supervisor outer/inner 和真实 FastMCP python 启动成功。
+3. candidate-e-python-copied-threads2/{command.json,stdout,stderr}
+   00:21:31.425162 至 00:21:47.439371 UTC。
+   同一两项，threads=2；exit 0。启动时序与 root 后续“无需重复”消息交错。
+   收到停止消息后按完整 argv 寻找这次进程，它已自然退出，因此没有终止任何进程。
+   此次与 root check4 的 sqlite 功能测试有短暂重叠；不进入性能统计。
+   之后停止全部产品运行，由 root 独占 check4 和正式测量。
+
+之前 O0 all-features 是否静默跳过
+- candidate-e-check2/tests-client.stdout 和 check2/tests-client.stdout 均记录同名两项 ok。
+- 对应两个 check-candidate.py:6 与本次 optimized driver 都设 RUSTX_REQUIRE_PROVIDER_EMULATOR=1、UV_OFFLINE=1。
+- tests/common/provider_emulator.rs:41-68 的 required_uv：只有 PATH 无 uv 且 REQUIRE变量不存在才返回 None 跳过；
+  REQUIRE变量存在但 uv 缺失会 panic，不能报告 ok。
+- tests/boundary/runtime_client/python_capability.rs:34-39 与 tests/support/runtime_client_conformance.rs:2251-2258
+  是这两项的 prerequisite 分支。因此先前成功不是 required_uv 的静默 skip。
+- artifact metadata 确实不同：先前 features=[issue-387-profile,mcp-fixture], opt_level=0；本次 features=[], opt_level=3。
+  这只是伴随差异。相同 O3 binary 在带完整 companion 的两个位置都通过，不能据 features 差异定为根因。
+
+环境限定
+- 历史 driver 没保存 UV_CACHE_DIR/PATH/代理/证书的实际值，不能把这些环境值声称为已对齐或已确认变化。
+- UV_OFFLINE 在所有这些 driver 都设为 1，并非此次新增；source runner 的 env_clear 与允许环境集合另由 audit agent 核查。
+- strace 未展开环境内容，只保留 argv 和环境变量数量；无真实 API 请求或 API key 配置。
+- 不将 strace 下 29-33 秒等墙钟作为 benchmark 结论。

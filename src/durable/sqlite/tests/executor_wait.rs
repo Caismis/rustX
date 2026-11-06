@@ -84,7 +84,10 @@ fn a_connection_wait_does_not_park_its_tokio_worker() {
     let owner = Arc::new(ConnectionOwner {
         manifest: manifest::Owner::uninstalled(),
         append_validation: append_validation::Owner::uninstalled(),
-        available: Mutex::new(Some(Connection::open_in_memory().unwrap())),
+        response: observation_response::Owner::uninstalled(),
+        event_guard: event_insert::Guard::uninstalled(),
+        transaction_writes: Arc::new(AtomicBool::new(false)),
+        available: Mutex::new(ConnectionSlot::new(Connection::open_in_memory().unwrap())),
         wake: Condvar::new(),
         poisoned: AtomicBool::new(false),
         lease_generation: AtomicU64::new(0),

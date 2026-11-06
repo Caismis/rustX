@@ -1,0 +1,130 @@
+Pi Durable 普通文本轮次成本图与 rustX D 可削减工作
+只读源码研究，2026-10-27
+
+身份、证据范围
+Pi checkout: /home/capi/Documents/codes/pi-rustx-benchmark
+Pi HEAD: 90d863f7c1183b965f099855715d6e88c7b8a52c（已只读 rev-parse 确认）
+rustX checkout: /home/capi/.codex/worktrees/pr485-pi-performance/rustX
+rustX HEAD: 694db002c96ed93c610280c14467cbac1f8a1a73（文档后继，保留 D production source）
+本文没有启动产品、构建、测试、数据库写入或网络。
+P: 表示相对 Pi checkout 的路径；R: 表示相对 rustX checkout 的路径。
+源码推导与历史诊断明确分开；没有新的计时、WAL 或 syscall 观测。
+
+主要结论
+Pi 的正常稳定短轮是五个不同语义的提交，不是“只 append 两条 JSON”。但它通常只新增 user/assistant 两个 entry、一个 task、一个 submission；重复改写同一个小 task JSON 与当前 pi.live 文档。稳定系统提示和工具 schema 不逐轮重新写入，模型消息使用不可变 entries + cutoff，当前上下文可复用已解析 range，仅扫描追加后缀。
+最重要的契约差异：Pi 在 request phase 固定 model/thinking/streamOptions/cutoff 以支持进行中任务恢复，但 final 会用 terminal outcome 覆盖该 checkpoint。它并未保留每个完成请求的完整不可变 request/config 目录。现有 benchmark 重开验证使用自己保存在 captures 数组中的 cutoff。不能据此删掉 rustX 的历史原始请求功能。
+
+一、五个事务究竟是什么
+前提：已初始化、闲置会话；普通 input；无队列/工具/compaction/retry/额外 hook 写入；系统/tool 配置稳定；响应在 partial timer 首次触发前结束。一般场景并不保证恰好五个事务。
+所有五笔都走 NodeSqliteDatabase.transaction 的 BEGIN IMMEDIATE → callback → COMMIT，失败 ROLLBACK（P packages/durable/src/storage/sqlite/node.ts:144–163）。每笔都有 durable_metadata 的 next_id/next_seq SELECT 与 UPDATE（P storage/sqlite/storage.ts:187–207）。表中 JSON 通过 JSON.stringify，数据库 CHECK(json_valid(...))；不是逐字段观察索引（同文件:72–75；P storage/sqlite/migrations.ts:32–88）。以下省略 packages/durable/src 前缀。
+
+T1 接收 input 并建立 run
+  入口 harness/submissions.ts:65–72、171–240，闲置普通路径236–239。
+  appendInput 写 entries：pi.user 的 model 消息、id/conversationId/byTaskId 等 entry JSON。
+  createSubmission 写 submissions：{type:'input',status:'placed',entry,...identity}。
+  startRun/createGeneration 写 tasks：pi.generation，input={}，state={status:'pending',checkpoint:{phase:'prepare',attempt:1}}。
+  修改 pi.live={run:{taskId,inputs:[submissionId]}}；此时 generation 不存在，checkpointWhen=true，存 base。
+  具体 startRun 见 harness/generation.ts:697–709；初始 checkpoint:121；task 初始记录 session/transaction.ts:383–425。
+  document_revisions 对 latest pi.live 执行 DELETE 旧 revisions、INSERT 新 base；documents 身份行不重写。参见 harness/live.ts:111–126 与 storage/sqlite/storage.ts:922–934。
+  record_ids 对 entry/submission/task 分别 INSERT OR IGNORE；新实际 id 三个。
+
+T2 调度 reserve pending → running
+  harness/scheduler.ts:1122–1182，尤其1168–1174。
+  tasks UPSERT 完整 record，state.status 改 running，prepare checkpoint 保留。
+  不写新 entry/live/submission。record_ids 对同一个 task 再 INSERT OR IGNORE；已有 id 不新增。
+  reserve 已 running 且无需 migration 时不写 task。一次 generation 的 prepare→request 不会因此额外增加一个 reserve 写事务。
+
+T3 固定本次请求的可恢复 checkpoint
+  harness/generation.ts:129–193：解析 agent/settings/model、读取 view、渲染 sections、比较 tools、判断 compaction。
+  commit 中读取最新 entry 为 cutoff；若系统/tool 发生变化，此笔还 append pi.system entry(s)（175–177）。稳定情况 entries=[]，不新增系统/schema JSON。
+  tasks UPSERT state={status:'running',checkpoint:{phase:'request',attempt,model,thinkingLevel,streamOptions,cutoff,...compacted?}}。
+  请求参数在发送之前持久固定；不是仅在内存保存。对应 runtime.commit → scheduler.#commitState:1453–1470、1631–1639。
+  record_ids 对既有 task 再 INSERT OR IGNORE。通常没有文档变化。
+
+T4 标记本轮 generation，并处理上次中断 partial
+  harness/generation.ts:196–204：commit 内 convertPartial，再设 pi.live.generation={attempt}，返回 undefined，故不改 task.state。
+  正常无旧 partial，只写 document_revisions 的 pi.live delta；因为 generation 存在，checkpointWhen=false。
+  旧 partial 如存在，会在同笔 append 为 aborted assistant，并计 usage（378–386）；这不是普通无中断路径。
+  T4 之后根据已存 cutoff 构造 context，执行 beforeRequest hook，然后调用 provider（205–219）。
+  ensureProviderSessionId 正常只读 pi.provider；只有缺少文档的旧会话才多一个补建 commit（harness/provider.ts:24–39）。
+
+T5 最终回答、任务结果、提交结算和 live 清理一次原子提交
+  classify 选择 answer（generation.ts:479–485），answer:542–566。
+  entries 新增 pi.assistant 完整 model message；同笔 recordUsage 更新 pi.usage。
+  endRun 将本 run inputs 的 submissions 改 done/answer，删除 live.run/generation/tools/nestedTools（harness/live.ts:134–145）。
+  tasks UPSERT terminal completed outcome {entryId}；没有 owned live work 的简单文本路径不经过 completing。
+  pi.live 无 generation，再写小 base 并删除此前 base/deltas。
+  usage 非零或 bucket 首次出现时，pi.usage 写 base（harness/usage.ts:15–38），仍是这一个事务，不额外 COMMIT；零 usage 且已有零 bucket 无 delta，因此不写 usage。
+  appendAssistant 与 usage 在 generation.ts:684–694；文档无操作时不落盘在 session/transaction.ts:1012–1032。
+  新实际 id 仅 assistant entry；entry/submission/task 三次 claimId 尝试中后二者复用已有 id。
+
+共同的计算/SQL成本
+  Session 并非跳过所有校验：callback → settleSuccess 组装/验证 → Storage.commit → adopt → publish（session/session.ts:690–741）。零 writes 直接 discard，无 SQL transaction（716–719）。
+  Table writes 做 copyJson，条目 ID/owner 检查；Storage 再检查全局 ID、document address/version（storage/sqlite/storage.ts:668–769）。
+  task/submission 更新重编码整个 record，并更新索引列（818–846）；entries 为不可变 JSON（807–816）。
+  SQL statement 以 SQL 文本缓存，事务与连接共享；没有逐笔 prepare（storage/sqlite/node.ts:77–118）。操作在一条 SerialOperationQueue 上串行（28–74）。
+
+二、历史诊断如何印证五笔，不能把它当本次 D 新观测
+旧证据：R docs/pi-durable-cost-model/evidence/remaining-gap-baseline/identity.json、summary.json、complete-pi/pi-sql-{before_measured_turns,after_turns}.json。
+Pi revision 正好为90d863f；Rust 是旧 binary 78e044be...，不是当前 D。因此不可把旧 Rust 670 commits/32 turns 作为当前 D 事务数。
+该 instrumented Pi cohort 32 warm turns：160 WAL write-commit markers；BEGIN160、COMMIT160；tasks UPSERT128、entries INSERT64、submissions UPSERT64、record_ids INSERT OR IGNORE256；document_revisions INSERT96、DELETE64；metadata UPDATE160；prepare0。普通每轮实际增量 rows: entries2、tasks1、submissions1、record_ids4。
+对稳定零 usage 的上述五笔，SQL run 次数可精确解释为：
+  T1=9（claim3+entry1+submission1+task1+live DELETE1+live INSERT1+metadata1）
+  T2=3（claim1+task1+metadata1）
+  T3=3（claim1+task1+metadata1）
+  T4=2（live delta INSERT1+metadata1）
+  T5=9（claim3+entry1+submission1+task1+live DELETE1+live INSERT1+metadata1）
+  合计26 run/turn ×32 = 832，与旧原始聚合一致。get49/turn、all5/turn为旧计数，不是所有生产请求的固定成本。
+旧 WAL page counts 常见重复17,7,7,4,17；与T1..T5的表/索引规模一致，但不能仅凭页数证明精确语义归属。旧页归属来自端点dbstat映射，不能排除中间页重用；WAL commit marker不包括无写事务，SQL elapsed含tracer停顿。
+
+三、request config、tools、history 保存与重建
+1. 原生历史是 entries 中 model 消息 + head/edits + 不可变 id。
+  harness/context.ts:24–40 两次有界读取捕获head/tail；readContextFrom:73–111在相同head下重用range，tail相同直接复用，追加只scan后缀。
+  extendRange:167–181只有新贡献/open尾部重新派生；遇edits/head则重建。旧entries冻结且不可变，消息数组仍复制（106–109），不是O(1)完整请求构造。
+  scheduler.ts:1743–1764按conversation缓存range；缓存不会改变持久事实。
+  head/compaction范围、最新edit胜出、排除aborted/error/deferred assistant、工具结果排序均在context.ts:129–333。
+
+2. 系统提示和tool声明是位置化的 pi.system 增量，不是每轮完整dump。
+  harness/prompt.ts:55–92：有head且尚未有新baseline时，写完整baseline并omit旧system entries；平时仅改值/null删除；顺序改变则remove-all/re-add-all；tool改动挂在最后一条system entry。
+  planTools:100–119对同名声明变化先remove再add；保留集合/新增顺序不满足目标顺序则全部重写。
+  packages/ai/src/utils/transcript.ts:58–65按顺序replay toolsRemoved/toolsAdded；123–141比较声明会JSON.parse(JSON.stringify(parameters))再JSON.stringify两边。因此稳定配置虽不写日志，仍有扫描、比较与序列化计算。
+  provider需要的完整tool/schema仍由model-facing请求发送；存储去重不是网络payload不含tools。
+
+3. model/thinking/streamOptions是运行期task checkpoint，不是完成请求的历史目录。
+  generation.ts:62–67与180–193明确固化模型参数供恢复重发；request读取这些字段而非新settings（196–219）。
+  final任务state完全替换为terminal outcome（scheduler.ts:1914–1917）；tasks只存当前record的UPSERT，无版本历史表（storage/sqlite/storage.ts:818–833；migrations.ts:41–54）。
+  assistant消息仍保留实际provider/model/usage，entries仍可用cutoff重建当时context；这不等于保留当时全部streamOptions、beforeRequest hook改写结果、wire body或原始字节范围。
+  benchmark R benchmarks/runtime/pi-http.mjs:57–60的beforeRequest hook自存captures={messages,cutoff}；156–162以该外部内存cutoff调用root.context({at})重开验证。它验证已有历史内容，不证明Pi有原生“列出每个历史请求及其全配置”的API。
+
+四、partial / final / close 的实际边界
+  partial: generation.ts:389–444，默认100ms trailing timer；同一时刻至多一笔partial commit。每笔copyJson provider的可变partial，赋入pi.live.generation.message，只在doc变化时写delta；没有每个token一条不可变entry。done/error/空content不会schedule新partial。
+  finally stopped=true、clearTimeout(timer)、await inFlight；未触发的pending partial可以丢弃，最终assistant由T5原子代替；在途partial必须先结束，因此不会落在final之后。
+  final: T5 commit成功后才adopt/publish；submission.wait从已提交记录/commit publication被唤醒（submissions.ts:86–103；session.ts:724–774）。provider completion本身不是settlement。live subscriber消费额外是benchmark契约。
+  durability: openNodeSqliteDatabase使用WAL+NORMAL、wal_autocheckpoint默认1000 pages（storage/sqlite/node.ts:185–201），不是每COMMIT强制fsync，也不是允许把最终写入推到SDK idle之后。
+  close: session.ts:483–516先封admission，再beforeClose、队列drain、storage.close；已经承诺的写入完成后关闭。Node adapter队列末清statement cache，执行wal_checkpoint(TRUNCATE)，finally database.close（node.ts:166–178）。错误向上传播。
+  close期间scheduler停止推进、清contextcache（scheduler.ts:1078–1091）；它并非悄悄将每个运行任务都变terminal，恢复依靠已经持久的task/live状态。
+
+五、对 rustX D 的差异与可实施的削减候选
+目前D每request都做 frozen_request_detail(messages=[])+SeekableObservationSource+完整scalar fragment capture（R src/durable/sqlite/observation_request/composed.rs:194–208）。
+Scalar含动态request/attempt/step/retry/assistant身份、options、effective_system_prompt、tools与contributions（R src/runtime_client/trace/frozen.rs:28–76、125–151）。不是全历史每次复制；历史native节点命中已有native id/digest即复用（composed/nodes.rs:173–185）。
+每scalar遍历字段生成Fact/header/base64/路径/ordinal；较密子树还额外原值校验；随后另行遍历字节建chunks（composed/fragments.rs:101–226）。页即使最终INSERT OR IGNORE已有，也已完成encode+SHA256（composed/index.rs:29–51）。这是真实的重复生成计算，不可拿最终存储去重反推已免除。
+
+候选A：复用已捕获的稳定request配置/工具Source片段，保留每请求不可变绑定。
+  目标是消除重复工具/schema与稳定配置的字段遍历、预览编码、Fact序列化、page hash/INSERT尝试；不是延迟字段索引，也不是删掉历史request。
+  先从有明确native immutable identity的工具/配置对象建立共享片段，复用现有composed Fragment/页hash/Root拼接方式；每请求仍保存request身份、历史selection、精确配置版本与根校验。
+  动态字段、工具顺序/同ID schema变化、系统提示变化、profile/options变化、retry/compaction分支均不可错误命中。按名字或可变指针缓存不够。
+  读取继续使用已有字段/byte索引，不像已拒E那样把Source重建和全树查找推给每次读取。保留raw byte范围、alias/keyspan、顺序、损坏页拒绝与旧cut读取。
+  可证伪验收：稳定32轮对比new scalar field visits/Fact bytes/hash bytes/SQL insert attempts降低；交替schema/顺序/options变化时每个历史request恢复精确；密集16KiB上下界 field/page/root/range读取不得复制E退化。当前尚无此候选的新时间收益。
+
+候选B：把重复original tool membership索引归到共享的不可变catalog，而非每request复制N条。
+  D的R src/durable/sqlite/observation_trace/inspection.rs:20–42，每request写catalog1行，并为每tool计算ToolId SHA256、写request_trace_definitions的ordinal/id/digest。注意这些行只有身份/顺序，不是重复整份schema；完整schema的重复处理属于候选A。
+  稳定七工具情况下旧诊断224 definitions/32 turns印证每请求7行；每行还有source_sequence相关身份/digest索引。可将同一精确有序catalog持久化一次，每request仅保存catalog版本引用与原provisional_message_id。
+  需保持inspection.rs:48–115的accepted assistant绑定、count完整性验证与first exact ToolId ordinal行为，以及:119之后的read-cut/digest证据；不能直接删除catalog或用当前registry替代历史工具。
+  这项比A更窄，但收益上限也更小：能消除稳定N个membership row+两索引重复维护/ToolId hash；不会自动解决完整scalar字段计算，更不能按224行推断wall主要成因。
+  验收需含重复ToolId首匹配、同名不同ID、乱序catalog、缺失条目/错digest、accepted owner不匹配、重开旧请求、工具调用历史读取。保留单轮原子request事实写入与WAL/NORMAL；不需以更弱持久性换收益。
+
+不建议的捷径
+  不要删掉请求capture来模仿Pi terminal checkpoint覆盖，因为rustX有额外明确的历史请求检查功能。
+  不要再做“只保原文、每次读重建全部Source”的E式移动成本；此前已测出密集字段读取显著退化。
+  不要以五事务为目标随意合并跨provider/调度恢复边界；先消除同一不可变事实的重复派生与重复索引，才有证据继续减少事务。
+  不要把旧baseline的Rust WAL表页数/670 commits当当前D来源，或把Pi变更日志节省字节自动解释成全部ms差距。

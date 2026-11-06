@@ -142,6 +142,12 @@ impl RuntimeClientHost {
             #[cfg(test)]
             snapshot_read_hook: Mutex::new(None),
             #[cfg(test)]
+            checkpoint_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_page_admitted_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_source_wait_hook: Mutex::new(None),
+            #[cfg(test)]
             cancellation_receipt_hook: Mutex::new(None),
             #[cfg(test)]
             manual_compaction_response_gate: Mutex::new(None),
@@ -239,6 +245,12 @@ impl RuntimeClientHost {
             audit_commit_hook: Mutex::new(None),
             #[cfg(test)]
             snapshot_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_page_admitted_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_source_wait_hook: Mutex::new(None),
             #[cfg(test)]
             cancellation_receipt_hook: Mutex::new(None),
             #[cfg(test)]

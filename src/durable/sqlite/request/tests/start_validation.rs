@@ -60,7 +60,16 @@ fn t14_t19_t20_fresh_request_start_reconstructs_original_input_once_and_replays_
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(stored, encode_snapshot(&snapshot).unwrap());
+    assert_eq!(
+        native_request::full(&store.lock().unwrap(), &stored, 64 * 1024 * 1024)
+            .unwrap()
+            .0,
+        {
+            let mut metadata = snapshot.clone();
+            metadata.input.clear();
+            metadata
+        }
+    );
     take_request_input_reconstructions();
     let retry = store
         .commit_model_turn_start(&[], &snapshot, Utc::now())
@@ -159,12 +168,19 @@ fn t14_t19_validated_fresh_start_cannot_cross_transaction_or_request_identity() 
         .started;
     let mut first = store.lock().unwrap();
     let transaction = first.transaction().unwrap();
-    reconstruct_request_start_reference(
-        &transaction,
-        &event,
-        Some(&encode_snapshot(&snapshot).unwrap()),
-    )
-    .unwrap();
+    let admitted: String = transaction
+        .query_row(
+            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            [snapshot.request_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    reconstruct_request_start_reference(&transaction, &event, Some(&admitted)).unwrap();
+    assert!(matches!(
+        reconstruct_request_start_reference(&transaction, &event, Some(&format!("{admitted} "))),
+        Err(ConversationStoreError::InvalidReference(message))
+            if message == "fresh request stored Snapshot differs from its exact admitted bytes"
+    ));
     let foreign_store = crate::durable::sqlite::test_support::store();
     foreign_store.initialize(&[]).unwrap();
     let mut second = foreign_store.lock().unwrap();
@@ -172,12 +188,12 @@ fn t14_t19_validated_fresh_start_cannot_cross_transaction_or_request_identity() 
     let mut foreign = event.clone();
     foreign.conversation_id = foreign_store.conversation_id().clone();
     assert!(matches!(
-        persist_event_tx_internal(
+        persist_event_tx_internal(&foreign_store.conn.event_guard,
             &foreign_transaction,
             foreign_store.conversation_id(),
             foreign,
             false,
-            Some(ValidatedRequestStart {
+            Some(&ValidatedRequestStart {
                 transaction: &transaction,
                 snapshot: &snapshot
             }),
@@ -195,11 +211,12 @@ fn t14_t19_validated_fresh_start_cannot_cross_transaction_or_request_identity() 
     };
     assert!(
         persist_event_tx_internal(
+            &store.conn.event_guard,
             &transaction,
             store.conversation_id(),
             different_request,
             false,
-            Some(ValidatedRequestStart {
+            Some(&ValidatedRequestStart {
                 transaction: &transaction,
                 snapshot: &snapshot
             }),

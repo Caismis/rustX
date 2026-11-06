@@ -1,5 +1,6 @@
 //! The `ProjectionStore` implementation over the projection, compaction, and lineage readers.
 
+use crate::durable::sqlite::native_request;
 #[cfg(test)]
 mod tests;
 
@@ -204,7 +205,22 @@ impl ProjectionStore for SqliteConversationStore {
     ) -> Result<crate::model::RequestSnapshot, ConversationStoreError> {
         limits.validate()?;
         self.read_transaction(|transaction| {
-            let bytes: Option<u64> = transaction.query_row("SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),seq_to_i64(cut.journal.0)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+            let sql = format!(
+                "SELECT {} FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",
+                native_request::MATERIALIZED_BYTES_SQL
+            );
+            let bytes: Option<u64> = transaction
+                .query_row(
+                    &sql,
+                    params![
+                        request.as_str(),
+                        seq_to_i64(cut.journal.0)?,
+                        native_request::NORMALIZATION_OVERHEAD
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| storage(e.to_string()))?;
             if cut.conversation_id != self.conversation_id {
                 return Err(ConversationStoreError::InvalidReference(
                     "foreign frozen request Resource Read Cut".into(),
@@ -288,15 +304,22 @@ impl ProjectionStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| storage(e.to_string()))?;
-        let result = projection::commit(&transaction, &self.conversation_id, input, |stage| {
-            #[cfg(test)]
-            if self.consume_compaction_fault(stage) || Self::consume(&self.fail_event_remaining) {
-                return Err(storage("fault injected: checkpoint transaction"));
-            }
-            #[cfg(not(test))]
-            let _ = stage;
-            Ok(())
-        })?;
+        let result = projection::commit(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            input,
+            |stage| {
+                #[cfg(test)]
+                if self.consume_compaction_fault(stage) || Self::consume(&self.fail_event_remaining)
+                {
+                    return Err(storage("fault injected: checkpoint transaction"));
+                }
+                #[cfg(not(test))]
+                let _ = stage;
+                Ok(())
+            },
+        )?;
         process_death::reach("before:commit_projection");
         transaction.commit().map_err(|e| storage(e.to_string()))?;
         process_death::reach("after:commit_projection");

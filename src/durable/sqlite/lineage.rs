@@ -69,7 +69,8 @@ pub(super) fn read_at(
             .is_none_or(|id| referenced.contains(id))
     });
     let completed_responses = responses(connection, conversation, read_cut.journal, &canonical)?;
-    let raw_tool_arguments = super::content::canonical_raw_arguments(connection, &canonical)?;
+    let raw_tool_arguments =
+        crate::durable::sqlite::content::canonical_raw_arguments(connection, &canonical)?;
     let projection_len = if let Some((id, include)) = boundary {
         canonical.iter().position(|m| m.id() == id).ok_or_else(|| {
             ConversationStoreError::InvalidReference(
@@ -209,10 +210,10 @@ fn responses(
             .collect();
     let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
     let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type') IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') AND (json_extract(event_json,'$.event.type') NOT IN ('model_request_started','model_request_completed','model_request_failed') OR json_extract(event_json,'$.event.owner.type')='agent') ORDER BY sequence")
-        .map_err(|error|storage(error.to_string()))?;
+        .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map([seq_to_i64(through)?], |row| row.get::<_, String>(0))
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     for json in rows {
         let event: RuntimeEventEnvelope = decode(
             &json.map_err(|error| storage(error.to_string()))?,

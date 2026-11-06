@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
 import { $getRoot, $isTextNode, getNearestEditorFromDOMNode } from 'lexical';
-import type { WorkflowFileDocument } from '../../protocol/app-server/v72';
+import type { WorkflowFileDocument } from '../../protocol/app-server/v73';
 import type { WorkflowEdit } from '../../protocol/app-server/workflow-documents.ts';
 import type { Predicate, Value, WorkflowDocument } from '../src/app/workflows/document/model';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';

@@ -1,6 +1,7 @@
 //! Disposable connection-local evidence for the existing canonical validator.
 //! Never an authority: reads, duplicate checks and head publication checks stay
 //! native. A batch owns provisional evidence; only successful COMMIT seats it.
+use super::statements::FixedStatements;
 use super::{
     Arc, AtomicU64, Connection, ConversationStoreError, MessageBlock, MessageId, Mutex, Ordering,
     SurfaceRevision, Transaction, TranscriptCursor, canonical::ledger::head_frontier,
@@ -18,8 +19,13 @@ impl Versions {
     fn read(connection: &Connection) -> Result<Self, ConversationStoreError> {
         let read = |sql| {
             connection
-                .query_row(sql, [], |row| row.get(0))
-                .map_err(|error| storage(format!("append validation version: {error}")))
+                .query_row_cached(sql, [], |row| row.get(0))
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("append validation version: {error}"),
+                    )
+                })
         };
         Ok(Self {
             data: read("PRAGMA main.data_version")?,
@@ -44,11 +50,11 @@ pub(super) struct Owner {
 }
 impl Owner {
     pub(super) fn new(connection: &Connection) -> Result<Arc<Self>, ConversationStoreError> {
-        let mut statement = connection.prepare("SELECT cid,name FROM pragma_table_info('message_ledger') WHERE name IN ('position','message_id') ORDER BY name")
-            .map_err(|error| storage(error.to_string()))?;
+        let mut statement = connection.prepare("SELECT cid,name FROM pragma_table_xinfo('message_ledger') WHERE name IN ('position','message_id') ORDER BY name")
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let columns = statement
             .query_map([], |row| row.get::<_, i32>(0))
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(error.to_string()))?;
         let identity_columns = columns
@@ -209,12 +215,30 @@ impl<'a> Batch<'a> {
         message: &MessageBlock,
         allowed_pending: Option<&MessageId>,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        self.append_with_capture(transaction, message, allowed_pending, None)
+    }
+    pub(super) fn append_publication(
+        &mut self,
+        transaction: &Transaction<'_>,
+        message: &MessageBlock,
+        header: &mut Option<super::observation::PublicationHeader>,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        self.append_with_capture(transaction, message, None, Some(header))
+    }
+    fn append_with_capture(
+        &mut self,
+        transaction: &Transaction<'_>,
+        message: &MessageBlock,
+        allowed_pending: Option<&MessageId>,
+        publication_header: Option<&mut Option<super::observation::PublicationHeader>>,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
         let head = self.head(transaction)?;
         let cursor = super::canonical::ledger::append_message_with_head(
             transaction,
             message,
             allowed_pending,
             head,
+            publication_header,
         )?;
         let epoch = self.owner.epoch.load(Ordering::Acquire);
         // The shared native writer inserts exactly one Ledger identity and

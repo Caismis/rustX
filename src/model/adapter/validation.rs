@@ -562,7 +562,7 @@ mod tests {
             id: ToolId::new(id),
             name: name.to_owned(),
             description: "d".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
         }
     }
 

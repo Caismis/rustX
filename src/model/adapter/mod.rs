@@ -24,6 +24,7 @@ pub(crate) mod proposal;
 pub(crate) mod retry;
 pub(crate) mod structured;
 pub mod traits;
+mod transport;
 pub mod validation;
 
 pub use traits::{

@@ -1,11 +1,13 @@
 //! Bounded capture of finite native display descriptors. Capture copies finite
 //! descriptors; source-owned bytes are materialized only by their native owner.
 use super::bounded::{
-    CHECKPOINT_ITEM_BYTES, CHECKPOINT_PAGE_ITEMS, bounded_bytes, bounded_clone, bounded_json_value,
+    CHECKPOINT_ITEM_BYTES, CHECKPOINT_PAGE_ITEMS, bounded_clone, bounded_json_value,
 };
 use super::bounded::{CHECKPOINT_TARGET_BYTES, bounded_item, bounded_item_bytes};
-use super::content::ContentRef;
+use super::bounded::{bounded_len, prepare_capture_item};
 use super::cut::{CollectionFrontier, ContentBinding};
+use super::metadata::MetadataFragment;
+use crate::observation::content::ContentRef;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -63,27 +65,170 @@ fn bounded_inbound_kind(
         }
     }
 }
+#[cfg(test)]
+thread_local! {
+ static CAPTURE_WORK: std::cell::Cell<[u64; 6]> = const { std::cell::Cell::new([0; 6]) };
+ static ITEM_WORK: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
+ static PREPARED_FIT_WORK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn record_item_work(index: usize) {
+    ITEM_WORK.with(|counts| {
+        let mut value = counts.get();
+        value[index] += 1;
+        counts.set(value);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn take_item_work() -> [u64; 3] {
+    ITEM_WORK.with(|counts| counts.replace([0; 3]))
+}
+
+#[cfg(test)]
+pub(crate) fn take_prepared_fit_work() -> u64 {
+    PREPARED_FIT_WORK.with(|work| work.replace(0))
+}
+
+#[cfg(test)]
+pub(crate) fn record_capture_work(index: usize) {
+    CAPTURE_WORK.with(|counts| {
+        let mut value = counts.get();
+        value[index] += 1;
+        counts.set(value);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn take_capture_work() -> [u64; 6] {
+    CAPTURE_WORK.with(|counts| counts.replace([0; 6]))
+}
+
+pub(crate) struct PreparedCapture<T> {
+    pub(crate) value: T,
+    pub(crate) capture: Capture,
+    pub(crate) fit: Option<usize>,
+}
+
 pub(crate) struct Capture {
     pub collections: Vec<CollectionFrontier>,
-    pub content: Vec<ContentBinding>,
+    pub content: Vec<MetadataFragment<ContentBinding>>,
     pub revision: u64,
     pub(crate) remaining: usize,
+    pub(crate) required: usize,
     pub(crate) evicted: bool,
 }
 impl Capture {
+    #[cfg(test)]
+    pub(crate) fn admission_state(&self) -> (usize, usize, bool) {
+        (self.remaining, self.required, self.evicted)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_remaining(revision: u64, remaining: usize) -> Self {
+        assert!(remaining <= CHECKPOINT_TARGET_BYTES / 8);
+        Self {
+            remaining,
+            ..Self::new(revision)
+        }
+    }
+
+    pub(crate) fn item_budget(&mut self) -> usize {
+        let limit = CHECKPOINT_ITEM_BYTES.min(self.remaining);
+        self.required = self
+            .required
+            .max(CHECKPOINT_TARGET_BYTES / 8 - self.remaining + limit);
+        limit
+    }
+
+    /// Replay one immutable capture only while its original admission decisions
+    /// have enough budget. Borderline heads execute their ordinary capture.
+    pub(crate) fn prepared<'a, T: Clone + Serialize + Send + Sync + 'static>(
+        &mut self,
+        owner: &'a std::sync::OnceLock<PreparedCapture<T>>,
+        build: impl Fn(&mut Self) -> T,
+    ) -> (std::borrow::Cow<'a, T>, Option<usize>) {
+        let prepared = owner.get_or_init(|| {
+            #[cfg(test)]
+            record_capture_work(0);
+            let mut capture = Self::new(0);
+            let value = build(&mut capture);
+            #[cfg(test)]
+            PREPARED_FIT_WORK.with(|work| work.set(work.get() + 1));
+            let fit = crate::observation::preflight::required_safe_integer_budget(
+                &value,
+                CHECKPOINT_TARGET_BYTES,
+            );
+            PreparedCapture {
+                value,
+                capture,
+                fit,
+            }
+        });
+        if !self.try_replay(&prepared.capture) {
+            #[cfg(test)]
+            record_capture_work(2);
+            let value = build(self);
+            #[cfg(test)]
+            PREPARED_FIT_WORK.with(|work| work.set(work.get() + 1));
+            let fit = crate::observation::preflight::required_safe_integer_budget(
+                &value,
+                CHECKPOINT_TARGET_BYTES,
+            );
+            return (std::borrow::Cow::Owned(value), fit);
+        }
+        #[cfg(test)]
+        record_capture_work(1);
+        (std::borrow::Cow::Borrowed(&prepared.value), prepared.fit)
+    }
+
     pub fn new(revision: u64) -> Self {
         Self {
             collections: Vec::new(),
             content: Vec::new(),
             revision,
             remaining: CHECKPOINT_TARGET_BYTES / 8,
+            required: 0,
             evicted: false,
         }
     }
+    /// Reuse admission and generated metadata only when the complete original
+    /// decision sequence fits. A rejected certificate leaves this capture intact.
+    pub(crate) fn try_replay(&mut self, prepared: &Self) -> bool {
+        if self.remaining < prepared.required {
+            return false;
+        }
+        // Zero means the original capture never requested item admission.
+        // Its metadata alone must not add a requirement at the current offset.
+        if prepared.required != 0 {
+            self.required = self
+                .required
+                .max(CHECKPOINT_TARGET_BYTES / 8 - self.remaining + prepared.required);
+        }
+        self.remaining -= CHECKPOINT_TARGET_BYTES / 8 - prepared.remaining;
+        self.evicted |= prepared.evicted;
+        self.content.extend(prepared.content.iter().cloned());
+        self.collections
+            .extend(prepared.collections.iter().cloned().map(|mut frontier| {
+                frontier.revision = self.revision;
+                frontier
+            }));
+        true
+    }
+
+    /// Live blocks are finite DTOs: arguments are strings, never lexical JSON
+    /// carriers. Their normalized form has the same admission charge, so one
+    /// capped encoding supplies both item admission and the shared-body debit.
+    /// A first-stage rejection still leaves shared eviction state untouched.
+    pub(crate) fn live_block<T: Serialize + DeserializeOwned>(&mut self, block: &T) -> Option<T> {
+        let (value, encoded, required) = prepare_capture_item(block)?;
+        self.admit_prepared(encoded, required).then_some(value)
+    }
+
     /// Admission for an already normalized immutable display row. The
     /// certificate belongs to that exact row, never a revision-only lookup.
     pub(crate) fn admit_prepared(&mut self, encoded: usize, required: usize) -> bool {
-        if required > CHECKPOINT_ITEM_BYTES.min(self.remaining) || encoded > required {
+        if required > self.item_budget() || encoded > required {
             self.evicted = true;
             return false;
         }
@@ -91,8 +236,7 @@ impl Capture {
         true
     }
     pub fn reserve(&mut self, item: &impl Serialize) -> bool {
-        let Some(bytes) = bounded_item_bytes(item, CHECKPOINT_ITEM_BYTES.min(self.remaining))
-        else {
+        let Some(bytes) = bounded_item_bytes(item, self.item_budget()) else {
             self.evicted = true;
             return false;
         };
@@ -102,7 +246,7 @@ impl Capture {
     /// Finite display DTOs only. Lexical JSON carriers use `bounded_clone`
     /// instead: their deserializer requires the original capped JSON bytes.
     pub fn item<T: Serialize + DeserializeOwned>(&mut self, domain: &str, item: &T) -> Option<T> {
-        let value = bounded_item(item, CHECKPOINT_ITEM_BYTES.min(self.remaining));
+        let value = bounded_item(item, self.item_budget());
         self.evicted |= value.is_none();
         let loaded = u64::from(value.is_some());
         self.frontier(domain, 1, loaded, if loaded == 1 { None } else { Some(0) });
@@ -110,14 +254,13 @@ impl Capture {
         self.remaining -= bytes.len();
         serde_json::from_value(value).ok()
     }
+
     /// Copies only the admitted DTO head; raw lexical JSON is not a DTO page.
     pub fn page<T: Serialize + DeserializeOwned>(&mut self, domain: &str, items: &[T]) -> Vec<T> {
         let mut result = Vec::new();
         let mut advanced = 0;
         for item in items.iter().take(CHECKPOINT_PAGE_ITEMS) {
-            let Some((bytes, value)) =
-                bounded_item(item, CHECKPOINT_ITEM_BYTES.min(self.remaining))
-            else {
+            let Some((bytes, value)) = bounded_item(item, self.item_budget()) else {
                 self.evicted = true;
                 break;
             };
@@ -155,12 +298,11 @@ impl Capture {
             let before = self.content.len();
             let projected =
                 self.message(message, conversation, &[domain.into(), index.to_string()]);
-            let Some(bytes) = bounded_bytes(&projected, CHECKPOINT_ITEM_BYTES.min(self.remaining))
-            else {
+            let Some(length) = bounded_len(&projected, self.item_budget()) else {
                 self.content.truncate(before);
                 break;
             };
-            self.remaining -= bytes.len();
+            self.remaining -= length;
             result.push(projected);
         }
         self.frontier(
@@ -209,8 +351,8 @@ impl Capture {
         conversation: &crate::runtime::identity::ConversationId,
         path: &[String],
     ) -> crate::message::types::MessageBlock {
-        use super::content::ContentRepresentation as Rep;
         use crate::message::types::{MessageBlock, UserContentBlock};
+        use crate::observation::content::ContentRepresentation as Rep;
         let id = &user.id;
 
         MessageBlock::User(crate::message::types::UserMessageBlock {
@@ -258,8 +400,8 @@ impl Capture {
         conversation: &crate::runtime::identity::ConversationId,
         path: &[String],
     ) -> crate::message::types::MessageBlock {
-        use super::content::ContentRepresentation as Rep;
         use crate::message::types::{AssistantContentBlock, MessageBlock};
+        use crate::observation::content::ContentRepresentation as Rep;
         let id = &assistant.id;
 
         MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
@@ -367,8 +509,8 @@ impl Capture {
         conversation: &crate::runtime::identity::ConversationId,
         path: &[String],
     ) -> crate::message::types::MessageBlock {
-        use super::content::ContentRepresentation as Rep;
         use crate::message::types::MessageBlock;
+        use crate::observation::content::ContentRepresentation as Rep;
         let id = &tool.id;
 
         MessageBlock::Tool(crate::message::types::ToolMessageBlock {
@@ -461,7 +603,7 @@ impl Capture {
         id: &crate::runtime::identity::MessageId,
         index: usize,
         path: Vec<String>,
-        representation: super::content::ContentRepresentation,
+        representation: crate::observation::content::ContentRepresentation,
     ) -> String {
         if text.len() <= 1024 {
             return text.to_owned();
@@ -482,33 +624,38 @@ impl Capture {
         id: &crate::runtime::identity::MessageId,
         index: usize,
         path: Vec<String>,
-        representation: super::content::ContentRepresentation,
+        representation: crate::observation::content::ContentRepresentation,
         readable_end: u64,
     ) {
-        self.content.push(ContentBinding {
-            source_path: None,
-            path,
-            deferred: true,
-            content_ref: ContentRef {
-                conversation_id: conversation.clone(),
-                source: super::content::ContentSource::CanonicalMessageBlock {
-                    component: crate::observation::content::CanonicalContentComponent::Payload,
-                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
-                        message_id: id.clone(),
+        self.content.push(
+            ContentBinding {
+                source_path: None,
+                path,
+                deferred: true,
+                content_ref: ContentRef {
+                    conversation_id: conversation.clone(),
+                    source: crate::observation::content::ContentSource::CanonicalMessageBlock {
+                        component: crate::observation::content::CanonicalContentComponent::Payload,
+                        locator:
+                            crate::observation::content::CanonicalContentLocator::ByMessageId {
+                                message_id: id.clone(),
+                            },
+                        block_index: crate::message::types::ContentBlockIndex::new(
+                            u32::try_from(index).expect("bounded block index"),
+                        ),
                     },
-                    block_index: crate::message::types::ContentBlockIndex::new(
-                        u32::try_from(index).expect("bounded block index"),
-                    ),
+                    representation,
+                    version: 1,
+                    content_revision: 1,
+                    readable_end,
                 },
-                representation,
-                version: 1,
-                content_revision: 1,
-                readable_end,
-            },
-        });
+            }
+            .into(),
+        );
     }
 }
 impl Capture {
+    #[cfg(test)]
     pub fn transcript_page(
         &mut self,
         entries: &[super::transcript::RuntimeClientTranscriptEntry],
@@ -516,21 +663,9 @@ impl Capture {
     ) -> Vec<super::transcript::RuntimeClientTranscriptEntry> {
         let mut result = Vec::new();
         for (index, entry) in entries.iter().take(CHECKPOINT_PAGE_ITEMS).enumerate() {
-            let before = self.content.len();
-            let Some(projected) = self.transcript_entry(
-                entry,
-                conversation,
-                &["transcript".into(), "entries".into(), index.to_string()],
-            ) else {
-                self.content.truncate(before);
+            let Some(projected) = self.transcript_row(entry, conversation, index) else {
                 break;
             };
-            let Some(bytes) = bounded_bytes(&projected, CHECKPOINT_ITEM_BYTES.min(self.remaining))
-            else {
-                self.content.truncate(before);
-                break;
-            };
-            self.remaining -= bytes.len();
             result.push(projected);
         }
         self.frontier(
@@ -541,6 +676,29 @@ impl Capture {
         );
         result
     }
+    #[cfg(test)]
+    fn transcript_row(
+        &mut self,
+        entry: &crate::observation::transcript::RuntimeClientTranscriptEntry,
+        conversation: &crate::runtime::identity::ConversationId,
+        index: usize,
+    ) -> Option<crate::observation::transcript::RuntimeClientTranscriptEntry> {
+        let before = self.content.len();
+        let result = self.transcript_entry(
+            entry,
+            conversation,
+            &["transcript".into(), "entries".into(), index.to_string()],
+        );
+        if let Some(projected) = result
+            && let Some(length) = bounded_len(&projected, self.item_budget())
+        {
+            self.remaining -= length;
+            return Some(projected);
+        }
+        self.content.truncate(before);
+        None
+    }
+
     fn audit_block(
         &mut self,
         audit: &crate::publication::PublicationAudit,
@@ -563,7 +721,7 @@ impl Capture {
             | Block::Refusal { block_index, text } => (
                 *block_index,
                 text,
-                super::content::ContentRepresentation::Utf8Text,
+                crate::observation::content::ContentRepresentation::Utf8Text,
             ),
             Block::ProposedToolCall {
                 block_index,
@@ -572,14 +730,14 @@ impl Capture {
             } => (
                 *block_index,
                 arguments,
-                super::content::ContentRepresentation::RawJsonUtf8,
+                crate::observation::content::ContentRepresentation::RawJsonUtf8,
             ),
         };
         let displayed = if text.len() <= 1024 {
             text.clone()
         } else {
             field.push(
-                if representation == super::content::ContentRepresentation::RawJsonUtf8 {
+                if representation == crate::observation::content::ContentRepresentation::RawJsonUtf8 {
                     "arguments"
                 } else {
                     "text"
@@ -592,7 +750,7 @@ impl Capture {
                 deferred: true,
                 content_ref: ContentRef {
                     conversation_id: conversation.clone(),
-                    source: super::content::ContentSource::DurableTranscriptAudit {
+                    source: crate::observation::content::ContentSource::DurableTranscriptAudit {
                         component:
                             crate::observation::content::PublicationContentComponent::Payload,
                         stream_id: audit.stream_id.clone(),
@@ -607,7 +765,7 @@ impl Capture {
                     content_revision: 1,
                     readable_end: text.len() as u64,
                 },
-            });
+            }.into());
             String::new()
         };
         match block {

@@ -1,0 +1,39 @@
+Append audit — raw evidence only; no benchmark, build, test, compression or source modification.
+Root: /home/capi/.cache/rustx-pr485-evidence
+
+48/48 append products have accepted=true, exit=0, oracle=passed, expected history/mode/32 operations/schema75→76. Independently recomputed all summary fields, pair ratios and medians from raw stat/io/smaps and append_ns: no mismatch. Warm/cold manifests bind the same baseline/candidate binaries.
+
+All figures below retain all three matched pairs. Ratio means candidate / baseline. Wall means only append_canonical; CPU warm covers the append phase; CPU cold sums 32 operation brackets and excludes reopen.
+
+mode history | wall ratio median [min,max] | CPU ratio median [min,max] | lifecycle ratio median [min,max]
+warm    0 | 0.866916 [0.806577,0.919949] | 1.000000 [0.500000,1.000000] | 0.825567 [0.807285,0.875200]
+warm   64 | 1.018144 [0.990727,1.045006] | 2.000000 [1.000000,3.000000] | 1.030477 [0.947128,1.058919]
+warm  512 | 0.990601 [0.956259,1.034247] | 0.800000 [0.666667,1.000000] | 1.025149 [0.994450,2.591113]
+warm 2048 | 0.973912 [0.970198,1.018102] | 1.250000 [1.000000,1.250000] | 0.988493 [0.370369,1.020403]
+cold    0 | 0.976507 [0.946241,1.028747] | 1.000000 [0.500000,1.000000] | 0.979442 [0.932900,1.012812]
+cold   64 | 1.012356 [0.980549,1.061986] | 2.000000 [0.571429,7.000000] | 1.021841 [1.012196,1.063495]
+cold  512 | 1.002908 [0.980470,1.004340] | 1.200000 [1.166667,1.666667] | 0.989606 [0.978969,0.992368]
+cold 2048 | 1.079834 [0.949925,3.072879] | 1.428571 [1.428571,1.750000] | 1.021056 [0.994004,3.497728]
+
+Cold history2048 pair2 retained:
+- Exact raw files: append-cold/2-2048-before.json, append-cold/2-2048-after.json and the corresponding .process.json files.
+- Process wall: 2587.514690 → 9036.779266 ms; internal lifecycle: 2582.001 → 9031.137 ms. Reporting/launch remainder is ~5 ms on both.
+- Seed/init: 2293.794 → 8202.452 ms wall; 2070 → 2500 ms self CPU. This accounts for 5908.658 ms (91.62%) of the 6449.136 ms extra lifecycle wall.
+- Append/reopen phase: 278.924 → 816.995 ms wall; 210 → 260 ms self CPU. Append calls alone total 93.251288 → 286.549955 ms; mean 2.914103 → 8.954686 ms (3.072879x).
+- Lifetime self CPU: 2280 → 2770 ms. About 5959 ms of excess wall is not matched by excess CPU. Identical writes at every phase and identical footprint rule out extra volume, but do not distinguish I/O wait, scheduling or host contention. Root cause is unresolved; this is not grounds to discard the observation.
+
+Other outliers are retained symmetrically:
+- append-warm/2-512-{before,after}.json: mean append 12.980284 → 12.412511 ms, lifecycle 1774.064 → 4596.800 ms; both append means are much slower than the other two pairs (~0.95–0.99 ms). Candidate seed/init 4123.153 ms vs baseline 1287.269 ms, CPU 570 vs 450 ms.
+- append-warm/2-2048-{before,after}.json: baseline lifecycle6283.312 ms vs candidate2327.147 ms, while append means1.446872 vs1.409126 ms. Baseline seed/init 6226.260 ms vs candidate 2271.162 ms. This favors candidate lifecycle through a baseline outlier and cannot be treated as a stable speedup.
+
+Interpretation:
+- Most median append wall ratios are close to1 (warm0/64/512/2048:0.867/1.018/0.991/0.974; cold:0.977/1.012/1.003/1.080). These data do not establish a general append speedup or consistent cold nonregression; full ranges must accompany the medians.
+- CPU counters are100Hz:10 ms/tick, hence0.3125 ms/append after dividing by32. Warm totals are often only1–5 ticks. Cold separately brackets32 short operations, so sampling quantization and overhead accumulate; zero brackets do not mean CPU-free work. Cold64 bracket ratios span0.571–7.0 whereas whole append/reopen phase CPU ratios span1.000–1.0625. Do not interpret the bracket median2x as a precise CPU regression.
+- All process-attributed writes and before/after close file footprints are equal within every pair. Memory counters are complete; values are sampled maxima, not peaks. Cold means store reopen, without OS page-cache eviction.
+
+Runtime recomputed.json consistency:
+-144 products =4 cohorts ×6 cases ×3 pairs ×2 engines,72 comparisons,1692 request comparisons. All144 stored arithmetic records and all paired log-t statistics are internally consistent; no missing/zero-ratio interval.
+- Raw hashes, CPU counters, settled times and sampled memory were spot-checked against revision-no-live/0-short-small-after.json; revision-live/2-short-small-before.json; pi-no-live/1-short-small-pi.json; pi-live/2-short-small-rust.json. This is not a rerun of all144 raw files.
+- Same-engine full semantic/schema equality is distinct from cross-engine core equality with Rust7/Pi4 native tool schemas; output preserves that distinction.
+
+Detailed values, raw references and phase counters: append-audit.json.

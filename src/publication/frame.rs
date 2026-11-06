@@ -102,17 +102,31 @@ pub enum PublicationPayload {
 
 impl PublicationPayload {
     /// The committed byte weight of this payload, used by the bounded
-    /// coalescing policy. Structural frames weigh their carried text only.
+    /// coalescing policy. Tool identities and completed arguments also count;
+    /// oversized argument encoding stops at the default pressure budget.
     #[must_use]
     pub fn byte_weight(&self) -> usize {
         match self {
             Self::TextSuffix { suffix, .. }
             | Self::ReasoningSuffix { suffix, .. }
-            | Self::RefusalSuffix { suffix, .. }
-            | Self::ProposedToolCallArgumentsSuffix { suffix, .. } => suffix.len(),
-            Self::ProposedToolCallStarted { .. }
-            | Self::ProposedToolCallCompleted { .. }
-            | Self::TerminalOnly => 0,
+            | Self::RefusalSuffix { suffix, .. } => suffix.len(),
+            Self::ProposedToolCallArgumentsSuffix {
+                suffix, call_id, ..
+            } => suffix.len().saturating_add(call_id.as_str().len()),
+            Self::ProposedToolCallStarted { call, .. } => call
+                .id
+                .as_str()
+                .len()
+                .saturating_add(call.tool_id.as_str().len())
+                .saturating_add(call.name.len()),
+            Self::ProposedToolCallCompleted { call, .. } => call
+                .id
+                .as_str()
+                .len()
+                .saturating_add(call.tool_id.as_str().len())
+                .saturating_add(call.name.len())
+                .saturating_add(argument_weight(&call.arguments)),
+            Self::TerminalOnly => 0,
         }
     }
 
@@ -186,6 +200,27 @@ impl PublicationPayload {
             (_, other) => Some(other),
         }
     }
+}
+
+// Count without constructing a second encoded argument buffer. An over-budget
+// value forces an immediate pressure flush; it is never truncated or discarded.
+fn argument_weight(value: &serde_json::Value) -> usize {
+    struct Length(usize);
+    impl std::io::Write for Length {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .filter(|size| *size <= super::coalescer::DEFAULT_PUBLICATION_MAX_BYTES)
+                .ok_or_else(|| std::io::Error::other("publication pressure budget reached"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut length = Length(0);
+    serde_json::to_writer(&mut length, value).map_or(usize::MAX, |()| length.0)
 }
 
 /// One durable publication frame: the unit rustX commits before release.

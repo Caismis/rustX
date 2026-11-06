@@ -1,0 +1,8 @@
+{
+  "accepted": true,
+  "archive_sha256": "cb986c55b76c1f1debeae4ad77a1399ca7603f304d73e319493e7852bc77dd24",
+  "verified_members": 994,
+  "counter_replay_equals_retained_strict_audit": true,
+  "scope": "All archived members verified and retained counters recomputed. No products, builds, current source or absent binaries executed/verified. Binary identities are retained build records.",
+  "audit_stdout": "{\"accepted\": true, \"errors\": [], \"products\": 96, \"inspection\": 32, \"tests\": 2363}\n"
+}

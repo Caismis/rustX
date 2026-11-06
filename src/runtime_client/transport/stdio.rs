@@ -90,7 +90,7 @@ use tokio::io::{AsyncBufReadExt as _, AsyncRead, AsyncWrite, AsyncWriteExt as _,
 
 use super::super::endpoint::RuntimeClientEndpoint;
 use super::super::host::EventDelivery;
-use super::super::types::{RuntimeClientCursor, RuntimeClientRequest};
+use crate::runtime_client::types::{RuntimeClientCursor, RuntimeClientRequest};
 
 /// The maximum size in bytes of one JSONL protocol record.
 ///

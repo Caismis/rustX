@@ -133,7 +133,8 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
             "type": "object",
             "properties": {"text": {"type": "string"}},
             "required": ["text"]
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::default(),
         approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -1319,6 +1320,7 @@ async fn shutdown_drains_after_settlement_control_plane_failure() {
             None,
         ),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -2223,7 +2225,8 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
             },
             "required": ["command"],
             "additionalProperties": false
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -2352,7 +2355,7 @@ async fn runtime_shutdown_closes_parallel_foreground_start_frontier() {
         id: crate::runtime::identity::ToolId::new(id),
         name: name.to_owned(),
         description: String::new(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Parallel,
         approval_policy: crate::tools::types::ToolApprovalPolicy::Never,

@@ -26,7 +26,9 @@ use crate::observation::status::AgentStatusView;
 
 use crate::observation::capability_source::CapabilityView;
 
-use super::snapshot::{RuntimeClientAgent, RuntimeClientContextView, RuntimeClientJob};
+use crate::runtime_client::snapshot::{
+    RuntimeClientAgent, RuntimeClientContextView, RuntimeClientJob,
+};
 
 use crate::observation::resource_source::RuntimeClientResourcesView;
 
@@ -83,8 +85,10 @@ pub enum RuntimeClientEvent {
     /// when durable facts change, never for publication text/argument suffixes.
     ReadDomainsUpdated {
         projection_head: Option<crate::observation::head::RuntimeClientProjectionHeadView>,
-        transcript: crate::observation::transcript::RuntimeClientTranscriptPage,
-        trace: crate::observation::trace::TracePage,
+        transcript: Box<crate::observation::transcript::RuntimeClientTranscriptPage>,
+        /// A supplied native Trace head replaces the loaded cache. None leaves
+        /// its issued cut/pins intact; native facts advertise independent Trace reads.
+        trace: Option<Box<crate::observation::trace::TracePage>>,
         occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
         todos: Option<crate::tools::todo::TodoSnapshot>,
     },
@@ -152,8 +156,8 @@ pub enum RuntimeClientEvent {
         head: Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
     },
     InteractionPending {
-        /// The complete routed interaction projection.
-        interaction: crate::observation::interaction::RuntimeClientInteractionHeader,
+        /// The complete routed interaction projection, kept off the scalar replay envelope.
+        interaction: Box<crate::observation::interaction::RuntimeClientInteractionHeader>,
     },
     /// A native interaction was removed from the live pending projection.
     InteractionSettled {
@@ -380,8 +384,9 @@ pub enum RuntimeClientEvent {
     /// read-only.
     MessageDescriptorCommitted {
         attempt_id: Option<AttemptId>,
-        descriptor: crate::observation::transcript::RuntimeClientMessageDescriptor,
-        head: Vec<crate::observation::transcript::RuntimeClientMessageDescriptor>,
+        descriptor: std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>,
+        #[schemars(with = "Vec<crate::observation::transcript::RuntimeClientMessageDescriptor>")]
+        head: super::snapshot::RuntimeClientMessageDescriptorHead,
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
         evicted_message_id: Option<MessageId>,
     },

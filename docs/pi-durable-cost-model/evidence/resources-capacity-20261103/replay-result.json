@@ -1,0 +1,14 @@
+{
+  "accepted": true,
+  "archive_sha256": "ce218fff8c32a9e1227b52b46abfbf86df32c16debe0f516fd4436b101b31f33",
+  "verified_members": 3233,
+  "ordinary_products_reparsed": 64,
+  "wire_comparisons_per_cohort": 1088,
+  "wal_products_reparsed": 8,
+  "native_products_reparsed": 9,
+  "cpu_profiles_reparsed": 2,
+  "heap_profiles_reparsed": 6,
+  "previous_memory_counter_products": 32,
+  "tables_reproduced": true,
+  "scope": "All regular members authenticated; raw counters/WAL/wire histories/closed SQLite images/profile denominators independently rechecked. Uses archived symbolization text and source/build identity records; does not freshly verify absent executable bytes or rerun symbolization, products, builds or network."
+}

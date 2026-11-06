@@ -1,0 +1,31 @@
+{
+  "accepted": true,
+  "errors": [],
+  "created_utc": "2026-10-30T01:01:48.452994+00:00",
+  "archive_sha256": "1bb966160f182424b59cfbd36c7f73540afe3d13653650e4166d0f8c8c723b9f",
+  "main_portable_verification_sha256": "88332f2cc6db1738d7653d06ebb128964f9533c837b883bab3844a18fa859b35",
+  "expected_strict_report_sha256": "ae44b8ccd7b4d4dbd5cd91b54f6159e788d9d8ff9f3b66017ae3e6d2d19fdd7f",
+  "recomputed_report_sha256": "ab2fa11ea5fccb41fc126fae75c0ce106e8f3b9842e98e48ff918a0d72ba69a0",
+  "auditor_sha256": "fc05014753d3c5dcb7365604a89dcd24795f947fee2301a48d683913a9d1956d",
+  "command": [
+    "python3",
+    "-B",
+    "/home/capi/.cache/rustx-pr485-inline-content-20261030-portable-verification/raw/order-probe-audit.py",
+    "--root",
+    "/home/capi/.cache/rustx-pr485-inline-content-20261030-portable-verification/raw",
+    "--raw-only",
+    "--output",
+    "/home/capi/.cache/rustx-pr485-inline-content-20261030-portable-verification/order-probe-recomputed.json"
+  ],
+  "equal_sections": [
+    "arms",
+    "binding",
+    "totals"
+  ],
+  "totals": {
+    "products": 24,
+    "comparisons": 12,
+    "checked_requests": 480
+  },
+  "scope": "Fresh extracted raw-only supplementary replay. No product or compiler executed. Original formal/diagnostic cohorts remain separate."
+}

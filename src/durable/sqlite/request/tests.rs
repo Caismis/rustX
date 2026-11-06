@@ -2255,7 +2255,11 @@ fn t19_t20_journal_readiness_is_exact_committed_and_recovered_on_reinstall() {
     drop(connection);
     drop(store);
     let reopened = Arc::new(SqliteConversationStore::open(id, &path).unwrap());
-    assert_eq!(reopened.observation_ready_frontier(0, 3).unwrap(), 2);
+    assert_eq!(
+        reopened.observation_ready_frontier(0, 3).unwrap(),
+        3,
+        "a new connection owns a committed-history baseline"
+    );
     let next = Arc::new(Observer {
         store: Arc::downgrade(&reopened),
         ready: Mutex::new(Vec::new()),

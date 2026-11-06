@@ -1,5 +1,7 @@
 //! The Request Snapshot domain and the atomic model-turn start transition.
 
+use super::native_request;
+use crate::durable::sqlite::statements::FixedStatements;
 #[cfg(test)]
 mod tests;
 
@@ -17,7 +19,7 @@ use self::contribution::{
     verify_contribution_start_tx, verify_frozen_contributions_tx,
 };
 use self::snapshot::{
-    encode_snapshot, load_request_snapshot, read_manifest_digest, read_stored_snapshot_root,
+    load_request_snapshot, read_manifest_digest, read_stored_snapshot_root,
     reconstruct_snapshot_input, stored_snapshot_digest, validate_accepted_continuation_source,
     validate_snapshot_identity,
 };
@@ -33,9 +35,9 @@ use super::journal::{
     persist_event_tx_internal,
 };
 use super::{
-    SqliteConversationStore, content, decode, journal_prefix, manifest, nonnegative,
-    observation_receipt, observation_request, observation_request_summary, observation_trace,
-    optional_display_layout, projection, reading, seq_to_i64, sequence_from_i64, storage,
+    SqliteConversationStore, content, journal_prefix, manifest, nonnegative, observation_receipt,
+    observation_request, observation_request_summary, observation_trace, optional_display_layout,
+    projection, reading, seq_to_i64, sequence_from_i64, storage,
 };
 use crate::durable::{
     ContributionEmissionRecord, ConversationStoreError, ModelTurnStartCommit,
@@ -62,9 +64,12 @@ impl RequestStore for SqliteConversationStore {
         request_id: &RequestId,
     ) -> Result<Option<ModelRequestOwner>, ConversationStoreError> {
         let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| storage(format!("request owner read transaction: {error}")))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("request owner read transaction: {error}"),
+            )
+        })?;
         auxiliary::load_request_owner_tx(&transaction, &self.conversation_id, request_id)
     }
 
@@ -98,16 +103,21 @@ impl RequestStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("request start transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("request start transaction: {error}"),
+                )
+            })?;
         let admission_epoch = self.conn.manifest.capture(&transaction)?;
         let existing: Option<(Option<String>, Option<i64>, String)> = transaction
-            .query_row(
-                "SELECT CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
+            .query_row_cached(
+                "SELECT CASE WHEN octet_length(snapshot_json)<=67108954 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
                 [snapshot.request_id.as_str()],
                 |row| Ok((row.get(0)?, row.get(1)?, read_manifest_digest(row, 2)?)),
             )
             .optional()
-            .map_err(|error| storage(format!("request snapshot probe: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("request snapshot probe: {error}")))?;
         if let Some((json, started_sequence, integrity)) = existing {
             let json = json.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(
@@ -131,9 +141,12 @@ impl RequestStore for SqliteConversationStore {
                 context,
                 snapshot,
             )?;
-            transaction
-                .commit()
-                .map_err(|error| storage(format!("request start retry commit: {error}")))?;
+            transaction.commit().map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("request start retry commit: {error}"),
+                )
+            })?;
             verified.verified_snapshot = Some(Box::new(snapshot.clone()));
             return Ok(verified);
         }
@@ -171,9 +184,9 @@ impl RequestStore for SqliteConversationStore {
             admission_epoch,
         )?;
         process_death::reach("before:commit_model_turn_start");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("request start commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("request start commit: {error}"))
+        })?;
         process_death::reach("after:commit_model_turn_start");
         selection.commit(&self.conn.manifest);
         persisted.verified_snapshot = Some(Box::new(snapshot.clone()));
@@ -195,12 +208,17 @@ impl RequestStore for SqliteConversationStore {
     ) -> Result<Option<PublicationStreamId>, ConversationStoreError> {
         let connection = self.lock()?;
         let value: Option<String> = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT pending_unresolved_output_stream_id FROM rustx_store WHERE id=1",
                 [],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(format!("pending carryover lookup: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("pending carryover lookup: {error}"),
+                )
+            })?;
         Ok(value.map(PublicationStreamId::new))
     }
     fn commit_attempt_terminal_with_carryover(
@@ -225,7 +243,12 @@ impl RequestStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("attempt terminal transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("attempt terminal transaction: {error}"),
+                )
+            })?;
         #[cfg(test)]
         {
             self.terminal_event_attempts.fetch_add(1, Ordering::SeqCst);
@@ -238,30 +261,48 @@ impl RequestStore for SqliteConversationStore {
         }
         validate_pending_carryover_source_tx(&transaction, &event, pending_source.as_ref())?;
         process_death::reach_event("before:attempt_terminal", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         let source = pending_source.as_ref().map(PublicationStreamId::as_str);
         transaction
             .execute(
                 "UPDATE rustx_store SET pending_unresolved_output_stream_id=?1 WHERE id=1",
                 [source],
             )
-            .map_err(|error| storage(format!("install pending carryover source: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("install pending carryover source: {error}"),
+                )
+            })?;
         process_death::reach("before:commit_attempt_terminal");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("attempt terminal commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("attempt terminal commit: {error}"),
+            )
+        })?;
         process_death::reach("after:commit_attempt_terminal");
         Ok(persisted.event)
     }
     fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError> {
         let connection = self.lock()?;
         let value: i64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT logical_step_sequence FROM rustx_store WHERE id=1",
                 [],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(format!("Todo progress lookup: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("Todo progress lookup: {error}"),
+                )
+            })?;
         nonnegative(value, "Todo progress sequence")
     }
     fn load_request_snapshot(
@@ -317,14 +358,24 @@ impl RequestStore for SqliteConversationStore {
                  WHERE started_sequence IS NOT NULL AND started_sequence > ?1
                  ORDER BY started_sequence, request_id LIMIT ?2",
             )
-            .map_err(|error| storage(format!("request snapshot page: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("request snapshot page: {error}"),
+                )
+            })?;
         let rows = statement
             .query_map(params![after, limit], |row| {
                 let request_id: String = row.get(0)?;
                 let sequence: i64 = row.get(1)?;
                 Ok((request_id, sequence))
             })
-            .map_err(|error| storage(format!("request snapshot page query: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("request snapshot page query: {error}"),
+                )
+            })?;
         let rows: Vec<(RequestId, u64)> = rows
             .map(|row| {
                 let (request_id, sequence) =
@@ -402,15 +453,17 @@ pub(super) fn validate_fresh_input_binding(
     connection: &Connection,
     snapshot: &RequestSnapshot,
     json: &str,
+    configuration: &native_request::FreshConfiguration,
     root: Option<manifest::NodeRef>,
 ) -> Result<(), ConversationStoreError> {
     let actual: String = connection
-        .query_row(
+        .query_row_cached(
             "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
             [snapshot.request_id.as_str()],
             |r| r.get(0),
         )
         .map_err(|e| storage(e.to_string()))?;
+    configuration.authenticate(connection)?;
     if actual != json || read_stored_snapshot_root(connection, &snapshot.request_id)? != root {
         return Err(ConversationStoreError::InvalidReference(
             "fresh request stored Snapshot/root differs from exact admitted values".into(),
@@ -424,11 +477,13 @@ pub(super) fn index_request_read_layouts(
     transaction: &Transaction<'_>,
     scope: &ConversationId,
     snapshot: &RequestSnapshot,
+    configuration: &native_request::FreshConfiguration,
     input: &crate::model::SelectedModelInput,
     selection: &manifest::Selection,
     retry_message_id: Option<&MessageId>,
     context: &[MessageBlock],
     event: &RuntimeEventEnvelope,
+    request_trace_prepared: bool,
 ) -> Result<(), ConversationStoreError> {
     let _ = optional_display_layout(transaction, || {
         if let Some(retry) = retry_message_id {
@@ -442,16 +497,18 @@ pub(super) fn index_request_read_layouts(
         }
         Ok(())
     })?;
-    let _ = optional_display_layout(transaction, || {
-        observation_trace::request_core(transaction, event, snapshot)
-    })?;
+    if !request_trace_prepared {
+        let _ = optional_display_layout(transaction, || {
+            observation_trace::request_core(transaction, event, snapshot)
+        })?;
+    }
     let _ = optional_display_layout(transaction, || {
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE request_snapshots SET observation_source_id=?2 WHERE request_id=?1",
                 params![snapshot.request_id.as_str(), event.sequence.to_string()],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         observation_request_summary::index(transaction, snapshot)?;
         observation_request::index_selection(
             transaction,
@@ -460,12 +517,12 @@ pub(super) fn index_request_read_layouts(
             input,
             snapshot,
             selection,
+            configuration,
         )
     })?;
     let _ = optional_display_layout(transaction, || {
         observation_trace::index_context(transaction, event.sequence, snapshot, context)
-    })?;
-    // Catalog identity evidence is independent of optional request-body layouts.
+    })?; // Catalog identity evidence is independent of optional request-body layouts.
     let _ = optional_display_layout(transaction, || {
         observation_trace::index_catalog(transaction, event.sequence, snapshot)
     })?;
@@ -490,7 +547,7 @@ pub(super) fn verify_committed_start_tx(
             snapshot.request_id
         )));
     };
-    let mut stored: RequestSnapshot = decode(json, "request snapshot")?;
+    let (mut stored, _) = native_request::full(transaction, json, 64 * 1024 * 1024)?;
     if !stored.input.is_empty() {
         return Err(ConversationStoreError::InvalidReference(
             "normalized frozen request metadata contains selected input".into(),
@@ -565,13 +622,18 @@ pub(super) fn reconstruct_request_start_reference(
         ));
     };
     let json: Option<String> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
             [request_id.as_str()],
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("request event reference: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("request event reference: {error}"),
+            )
+        })?;
     let Some(json) = json else {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request-start event references missing Request Snapshot {request_id}"
@@ -582,7 +644,7 @@ pub(super) fn reconstruct_request_start_reference(
             "fresh request stored Snapshot differs from its exact admitted bytes".into(),
         ));
     }
-    let snapshot: RequestSnapshot = decode(&json, "request-start snapshot")?;
+    let (snapshot, _) = native_request::full(transaction, &json, 64 * 1024 * 1024)?;
     validate_snapshot_identity(&snapshot)?;
     if snapshot.request_id != *request_id {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -597,7 +659,7 @@ pub(super) fn reconstruct_request_start_reference(
             [request_id.as_str()],
             |row| read_manifest_digest(row, 0),
         )
-        .map_err(|error| storage(format!("request reference integrity: {error}")))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("request reference integrity: {error}")))?;
     if stored_snapshot_digest(&json, root) != digest || !snapshot.input.is_empty() {
         return Err(ConversationStoreError::InvalidReference(
             "frozen request manifest integrity mismatch".into(),
@@ -683,11 +745,16 @@ impl SqliteConversationStore {
             .checked_add(1)
             .ok_or(ConversationStoreError::SequenceExhausted)?;
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE rustx_store SET logical_step_sequence=?1 WHERE id=1",
                 [seq_to_i64(next)?],
             )
-            .map_err(|error| storage(format!("update Todo progress sequence: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("update Todo progress sequence: {error}"),
+                )
+            })?;
         Ok(next)
     }
     /// Inserts the fresh model-turn start facts into `transaction`: the
@@ -738,31 +805,16 @@ impl SqliteConversationStore {
         )?;
         if !warm {
             projection::validate_request_selection(transaction, &self.conversation_id, snapshot)?;
-        }
-        // Retry belongs to the Attempt's original adoption, independent of the
+        } // Retry belongs to the Attempt's original adoption, independent of the
         // selected model context, media transformations or later steering.
         // next_event_sequence is the inclusive committed J frontier in this
         // same transaction, before the new RequestStarted row is appended.
         let through = journal_prefix(transaction)?;
         let retry_message_id =
             reading::attempt_prompt(transaction, &snapshot.identity.attempt_id, through)?;
-        let json = encode_snapshot(snapshot)?;
+        let (json, configuration) = native_request::persist(transaction, snapshot)?;
         let manifest_digest = stored_snapshot_digest(&json, selection.root);
-        transaction
-            .execute(
-                "INSERT INTO request_snapshots(request_id,canonical_frontier,snapshot_json,manifest_digest,started_sequence,retry_message_id,retry_ledger_position,previous_request_id,input_root,input_root_digest,input_count) VALUES(?1,?2,?3,?4,NULL,?5,(SELECT position FROM message_ledger WHERE message_id=?5),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1),?6,?7,?8)",
-                params![
-                    snapshot.request_id.as_str(),
-                    seq_to_i64(snapshot.canonical_frontier.0)?,
-                    json,
-                    manifest_digest,
-                    retry_message_id.as_ref().map(MessageId::as_str),
-                    selection.root.map(|r|r.id),
-                    selection.root.as_ref().map(|r|r.digest.as_slice()),
-                    selection.root.map_or(0,|r|r.count),
-                ],
-            )
-            .map_err(|error| storage(format!("insert request snapshot: {error}")))?;
+        transaction . execute_cached ( "INSERT INTO request_snapshots(request_id,canonical_frontier,snapshot_json,manifest_digest,started_sequence,retry_message_id,retry_ledger_position,previous_request_id,input_root,input_root_digest,input_count) VALUES(?1,?2,?3,?4,NULL,?5,(SELECT position FROM message_ledger WHERE message_id=?5),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1),?6,?7,?8)" , params ! [ snapshot . request_id . as_str ( ) , seq_to_i64 ( snapshot . canonical_frontier . 0 ) ? , json , manifest_digest , retry_message_id . as_ref ( ) . map ( MessageId :: as_str ) , selection . root . map ( | r | r . id ) , selection . root . as_ref ( ) . map ( | r | r . digest . as_slice ( ) ) , selection . root . map_or ( 0 , | r | r . count ) , ] , ) . map_err ( | error | crate::durable::sqlite::sqlite_error(&error, format ! ( "insert request snapshot: {error}" ) ) ) ? ;
         #[cfg(test)]
         if self.consume_request_start_fault(RequestStartFaultOperation::AfterSnapshotInsert) {
             return Err(storage(
@@ -792,10 +844,9 @@ impl SqliteConversationStore {
             return Err(storage(
                 "fault injected: request-start event journal commit",
             ));
-        }
-        // Validate the original stored R and its immutable C dependencies once,
+        } // Validate the original stored R and its immutable C dependencies once,
         // after insertion (including any native SQLite trigger effects).
-        validate_fresh_input_binding(transaction, snapshot, &json, selection.root)?;
+        validate_fresh_input_binding(transaction, snapshot, &json, &configuration, selection.root)?;
         let input = if warm && self.conn.manifest.epoch.load(Ordering::Acquire) == admission_epoch {
             None
         } else {
@@ -850,11 +901,12 @@ impl SqliteConversationStore {
             }
         }
         let persisted = persist_event_tx_internal(
+            &self.conn.event_guard,
             transaction,
             &self.conversation_id,
             event,
             false,
-            Some(ValidatedRequestStart {
+            Some(&ValidatedRequestStart {
                 transaction,
                 snapshot,
             }),
@@ -864,14 +916,19 @@ impl SqliteConversationStore {
             return Err(storage("fault injected: after request-start event insert"));
         }
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE request_snapshots SET started_sequence=?1 WHERE request_id=?2",
                 params![
                     seq_to_i64(persisted.event.sequence)?,
                     snapshot.request_id.as_str()
                 ],
             )
-            .map_err(|error| storage(format!("bind request start sequence: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("bind request start sequence: {error}"),
+                )
+            })?;
         let source_input = input.as_ref().map_or_else(
             || snapshot.input.messages(),
             |r| {
@@ -886,20 +943,20 @@ impl SqliteConversationStore {
             transaction,
             &self.conversation_id,
             snapshot,
+            &configuration,
             &source_input,
             selection,
             retry_message_id.as_ref(),
             context,
             &persisted.event,
-        )?;
-        // Todo progress is a conversation-owned semantic coordinate, not a
+            persisted.facts.request_trace_prepared,
+        )?; // Todo progress is a conversation-owned semantic coordinate, not a
         // Surface append count. Advance it only for the first request of a
         // logical primary step and do so after this start's request context
         // and ModelRequestStarted fact have staged. The enclosing transaction
         // makes the resulting value the exact origin of any Todo emission
         // committed below; a failed or cancelled start rolls it back.
-        Self::advance_logical_step_progress_tx(transaction, snapshot)?;
-        // contribution emissions are semantic observations of the logical
+        Self::advance_logical_step_progress_tx(transaction, snapshot)?; // contribution emissions are semantic observations of the logical
         // step, not one emission per transport attempt. A transient or
         // overflow retry may carry the same status metadata in its snapshot
         // when the canonical status message remains on the frozen Surface,
@@ -918,7 +975,7 @@ impl SqliteConversationStore {
             persisted.event,
             contribution_emissions,
         )?;
-        validate_fresh_input_binding(transaction, snapshot, &json, selection.root)?;
+        validate_fresh_input_binding(transaction, snapshot, &json, &configuration, selection.root)?;
         if self.conn.manifest.epoch.load(Ordering::Acquire) != validated_epoch {
             reconstruct_request_start_reference(transaction, &result.started, Some(&json))?;
         }
@@ -956,8 +1013,12 @@ impl SqliteConversationStore {
                         logical_step_origin,
                     },
                 };
-                let persisted =
-                    persist_event_tx_deferred(transaction, &self.conversation_id, emission_event)?;
+                let persisted = persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    transaction,
+                    &self.conversation_id,
+                    emission_event,
+                )?;
                 #[cfg(test)]
                 if self.consume_request_start_fault(
                     RequestStartFaultOperation::AfterContributionEventInsert,

@@ -1,6 +1,5 @@
 use super::{Connection, SeekableObservationSource, bytes, fact, geometry, scalar};
 use crate::runtime::read_layout::{INDEX_OPENS, take_file_work};
-use base64::Engine as _;
 
 #[derive(serde::Serialize, schemars::JsonSchema)]
 struct ScalarFixture {
@@ -77,6 +76,7 @@ fn t08_t15_t20_scalar_capture_scopes_span_io_without_changing_any_original_field
     INDEX_OPENS.with(|work| work.set(0));
     let connection = Connection::open_in_memory().unwrap();
     super::super::create_schema(&connection).unwrap();
+    super::super::install_workspace(&connection).unwrap();
     let (fragment, _, _) = scalar(&connection, &source).unwrap();
     assert_eq!(INDEX_OPENS.with(std::cell::Cell::get), 3);
     assert_eq!(take_file_work(), (0, 4));
@@ -88,11 +88,11 @@ fn t08_t15_t20_scalar_capture_scopes_span_io_without_changing_any_original_field
             (start, end, children)
         );
         assert_eq!(
-            base64::engine::general_purpose::STANDARD
-                .decode(actual.header)
-                .unwrap(),
+            super::super::read::fragment_field(&connection, &fragment, &path)
+                .unwrap()
+                .3,
             preview,
-            "original preview at {path:?}",
+            "original preview at {path:?}"
         );
     }
     let mut offset = 0;

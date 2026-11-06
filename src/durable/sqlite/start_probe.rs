@@ -87,7 +87,7 @@ impl super::SqliteConversationStore {
             "auxiliary_call_started"
         };
         self.lock().unwrap().execute_batch(&format!(
-            "CREATE TRIGGER optional_start_layout_fault BEFORE UPDATE OF observation_json ON events WHEN json_extract(NEW.event_json,'$.event.type')='{kind}' BEGIN SELECT RAISE(FAIL,'benign optional start layout failure'); END;"
+            "CREATE TRIGGER optional_start_layout_fault BEFORE UPDATE OF observation_source ON events WHEN json_extract(NEW.event_json,'$.event.type')='{kind}' BEGIN SELECT RAISE(FAIL,'benign optional start layout failure'); END;"
         )).unwrap();
     }
     /// Journal head and physical event/Call/Request/owner/audit row counts.

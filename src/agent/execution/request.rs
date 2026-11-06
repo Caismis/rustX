@@ -1078,7 +1078,7 @@ impl AgentExecution<'_> {
                 id: ToolId::new("runtime-workflow-output"),
                 name: crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME.to_owned(),
                 description: "Commit the structured terminal value of this Workflow AgentRun. It must be the sole tool-shaped call in the Assistant turn.".to_owned(),
-                input_schema: workflow_output.output_schema(),
+                input_schema: workflow_output.output_schema().into(),
             });
         }
         let mut effective_system_prompt = projection.effective_system_prompt.clone();

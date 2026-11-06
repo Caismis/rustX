@@ -1,0 +1,359 @@
+{
+  "scope": "Byte-identical readable derived summaries; raw ordered evidence remains in the original archive. No remeasurement.",
+  "readable_inputs": {
+    "runtime-summary.json": {
+      "bytes": 93356,
+      "sha256": "ed35fbc841faad379c934eb9928572ae04be2f95d7a866eb483e8fdf14abb1c3"
+    },
+    "append-warm-summary.json": {
+      "bytes": 45689,
+      "sha256": "af01beaed6e0c2001dd02ebcd640b0ea73fdbfb5052329676c59b3c09b8b900f"
+    },
+    "append-cold-summary.json": {
+      "bytes": 52470,
+      "sha256": "4059a1e29a97e318a78b7eb091ea08b1f1486afc61db25e8f26e70188db9fe07"
+    },
+    "runtime-uncertainty.json": {
+      "bytes": 3441,
+      "sha256": "b6ba5e41ce10758ab4df704545459bcffbb6d5137fb1beaaf371acddc68b8312"
+    }
+  },
+  "raw_samples": {
+    "pi-parity-qpsg/runtime/0-cancel-after.json": {
+      "bytes": 126083,
+      "sha256": "5abad0d04d2ff3d0d0116cb8d2b5d6714191a24c24acf27b4608315be12f0c4c"
+    },
+    "pi-parity-qpsg/runtime/0-cancel-before.json": {
+      "bytes": 126085,
+      "sha256": "4713c1f7d73f6ea3b5f899548d1565791883c556ae36e589d00044d302b66234"
+    },
+    "pi-parity-qpsg/runtime/0-large-after.json": {
+      "bytes": 159058,
+      "sha256": "b920b7f30021194887083cb9bef0f2db1674793587c20f4e5a758971a88d35db"
+    },
+    "pi-parity-qpsg/runtime/0-large-before.json": {
+      "bytes": 159058,
+      "sha256": "40b0c53cc6c70d34619d9276bb149a138bf2c05a356f1e785be16cd62bdc644a"
+    },
+    "pi-parity-qpsg/runtime/0-short-large-after.json": {
+      "bytes": 24770008,
+      "sha256": "a8a962b12fb225012d4901a6238aac4e7a7f79ee0eb55f5e7fe797d6a1d51f78"
+    },
+    "pi-parity-qpsg/runtime/0-short-large-before.json": {
+      "bytes": 24770010,
+      "sha256": "5a2c35d3a7210925962bf4c1b4841afd298b1d81ffa1e9015f4a5b0d4a8dd08e"
+    },
+    "pi-parity-qpsg/runtime/0-short-small-after.json": {
+      "bytes": 6681001,
+      "sha256": "c100b668a46cf032569a0ab29c43fa04dad3bc22f86016e6eb2eb5c345b1ecff"
+    },
+    "pi-parity-qpsg/runtime/0-short-small-before.json": {
+      "bytes": 6681008,
+      "sha256": "631f9e912f6166761388a8347c3c485b434d18341eaedb05b01aa22131a4c550"
+    },
+    "pi-parity-qpsg/runtime/0-stream-after.json": {
+      "bytes": 128615,
+      "sha256": "537a6a434723aa972c8ebfc01e0ae5b7f8e6fb6038cee6c5703b25ed981eb6a0"
+    },
+    "pi-parity-qpsg/runtime/0-stream-before.json": {
+      "bytes": 128607,
+      "sha256": "cf37fbce8f67bc69c6860b042ab6daef92f2ab17f19868ff4218ea1437de3a62"
+    },
+    "pi-parity-qpsg/runtime/0-tool-after.json": {
+      "bytes": 232795,
+      "sha256": "5fa5c0167e713cd3400e997da2c9c8faf38f3a0db4a5142312d14ef8fefdeda5"
+    },
+    "pi-parity-qpsg/runtime/0-tool-before.json": {
+      "bytes": 232787,
+      "sha256": "e805948e6ff48cb9cb905e5d2bb2fc216ad03a104791fe4640fc00cdd598106e"
+    },
+    "pi-parity-qpsg/runtime/1-cancel-after.json": {
+      "bytes": 126083,
+      "sha256": "a3d9d1e2173a52c784e7975fac9754033c91735b5a011dacae84501ec17e2f8c"
+    },
+    "pi-parity-qpsg/runtime/1-cancel-before.json": {
+      "bytes": 126083,
+      "sha256": "ebeaa580cc2a0a3d1c14dacb108003f2ffe56487c6f6ebff16cd8e690fb65a00"
+    },
+    "pi-parity-qpsg/runtime/1-large-after.json": {
+      "bytes": 159050,
+      "sha256": "5b291e6a1d4f69e936b2adab5fac7f91b3ea8dfdccde94e4df108105a782ef90"
+    },
+    "pi-parity-qpsg/runtime/1-large-before.json": {
+      "bytes": 159050,
+      "sha256": "12bc1b650306d97fbc5ee2c7d7824466bdc261f6e69c4003cbdc51cdea2db373"
+    },
+    "pi-parity-qpsg/runtime/1-short-large-after.json": {
+      "bytes": 24770015,
+      "sha256": "0ceacadf7d8c2ee5d9bd70d70a2b0da975550b227330ff66656e747f9d301e3a"
+    },
+    "pi-parity-qpsg/runtime/1-short-large-before.json": {
+      "bytes": 24770028,
+      "sha256": "0da0f02b6124d5fd09b7497dc75701fb578a26ed64fa73e28bf31b3b788612e5"
+    },
+    "pi-parity-qpsg/runtime/1-short-small-after.json": {
+      "bytes": 6681003,
+      "sha256": "12560186c7da69adf4ae95c7bade373e3870a528115a7866e9808ea2dbee4172"
+    },
+    "pi-parity-qpsg/runtime/1-short-small-before.json": {
+      "bytes": 6681006,
+      "sha256": "c3ea71c3e65eb29b89c9289976d5a046eeba6cbfd027fe03bb0425956fc6a5cf"
+    },
+    "pi-parity-qpsg/runtime/1-stream-after.json": {
+      "bytes": 128607,
+      "sha256": "c26404949c4f31ada332f7fcb9e6c154d35b643011d8c0da6cd713a0ab83b75e"
+    },
+    "pi-parity-qpsg/runtime/1-stream-before.json": {
+      "bytes": 128607,
+      "sha256": "75c6a46d68524b0b53ddba62ca767e6031e547794dfdd81d421c3909042a4cd5"
+    },
+    "pi-parity-qpsg/runtime/1-tool-after.json": {
+      "bytes": 232787,
+      "sha256": "02855c6b66c46b170f3a7ce1162f6ae7ffd78e500fe1fb3a8d694b03b2024166"
+    },
+    "pi-parity-qpsg/runtime/1-tool-before.json": {
+      "bytes": 232787,
+      "sha256": "44c6d1eee6344f11508f3e050659017f12134eb2c0f98b18146a3b9512229ae9"
+    },
+    "pi-parity-qpsg/runtime/2-cancel-after.json": {
+      "bytes": 126083,
+      "sha256": "513b02425d512c33454cdfde6617bdcac388df949f1cdcc05b62a6888c3a97a1"
+    },
+    "pi-parity-qpsg/runtime/2-cancel-before.json": {
+      "bytes": 126075,
+      "sha256": "543c02f71e8e220b0f08485767328d95cac463c6acb780ebe19a6e636071ca73"
+    },
+    "pi-parity-qpsg/runtime/2-large-after.json": {
+      "bytes": 159050,
+      "sha256": "1faa687448f00454e130c7f0298fd9cb6f62b2ca04b9c213703ac934ceff3854"
+    },
+    "pi-parity-qpsg/runtime/2-large-before.json": {
+      "bytes": 159050,
+      "sha256": "2ce9cd750bfdc47cdec6cc0f3e595c317cdb4c9d4314d289fe75bf2643923f38"
+    },
+    "pi-parity-qpsg/runtime/2-short-large-after.json": {
+      "bytes": 24769408,
+      "sha256": "41c3bb95d0ca974d48b78e1ee0b92d330656cd9c9e59ea6ac71954ec5362d514"
+    },
+    "pi-parity-qpsg/runtime/2-short-large-before.json": {
+      "bytes": 24770010,
+      "sha256": "2baeee65e2ff396269b2b0911567883db0271390abc2475608541a6e0729be68"
+    },
+    "pi-parity-qpsg/runtime/2-short-small-after.json": {
+      "bytes": 6681037,
+      "sha256": "dd05b3c892c88b7e4b27b9d08151a19cd407b43333fedf16243da82475b1bedd"
+    },
+    "pi-parity-qpsg/runtime/2-short-small-before.json": {
+      "bytes": 6681007,
+      "sha256": "3162f6e45382a7827143ff6e87c8c6085a7a6aef508d75ab25d49228b014e883"
+    },
+    "pi-parity-qpsg/runtime/2-stream-after.json": {
+      "bytes": 128607,
+      "sha256": "cb31f0c2a38e15ec669abd926fb6fa1d5b900f3347e819b9c9bf11fd78dc6e33"
+    },
+    "pi-parity-qpsg/runtime/2-stream-before.json": {
+      "bytes": 128616,
+      "sha256": "cdce3560d834860f34f2eaa1b2d904fda1929325419bd7f9f56736531eae0432"
+    },
+    "pi-parity-qpsg/runtime/2-tool-after.json": {
+      "bytes": 232796,
+      "sha256": "0812784bd17100ce39ce64fcdc123ceaae37b2b6c370614dbf9050f41e591455"
+    },
+    "pi-parity-qpsg/runtime/2-tool-before.json": {
+      "bytes": 232794,
+      "sha256": "3d14f5402ac2294600ece9b1e403dddadcc350b404e1df7a5dc39a75552d9687"
+    },
+    "pi-parity-qpsg/append-warm/0-0-after.json": {
+      "bytes": 9271,
+      "sha256": "2fdd0a9590cd636d6d05faf1e50790bebe27cb549908133523c9fe9edac91bba"
+    },
+    "pi-parity-qpsg/append-warm/0-0-before.json": {
+      "bytes": 9272,
+      "sha256": "f198c839a5fda953583be8a921207081e05e6d652cc8628f6dbef3137203713f"
+    },
+    "pi-parity-qpsg/append-warm/0-2048-after.json": {
+      "bytes": 9401,
+      "sha256": "706d3de9d83e538fe2b27455beefd7a36c9b9eff8ea607ee82a1c70e26de0583"
+    },
+    "pi-parity-qpsg/append-warm/0-2048-before.json": {
+      "bytes": 9401,
+      "sha256": "d70495c0caf74ef3624d6aec582d9d28f17f16ce8eab25c6691561e99da8c1e7"
+    },
+    "pi-parity-qpsg/append-warm/0-512-after.json": {
+      "bytes": 9328,
+      "sha256": "d1883293c0ab22b9caee775192c08d740a75f27ecb7a7c60cc49a68aac66f046"
+    },
+    "pi-parity-qpsg/append-warm/0-512-before.json": {
+      "bytes": 9332,
+      "sha256": "8b497e0045214e0739f177301ae6d876e0016a1e75196179e7033001669de356"
+    },
+    "pi-parity-qpsg/append-warm/0-64-after.json": {
+      "bytes": 9294,
+      "sha256": "26d40cbaa0015603c2527814ddae1efb1fe8fedd57911083e11b406886426e89"
+    },
+    "pi-parity-qpsg/append-warm/0-64-before.json": {
+      "bytes": 9293,
+      "sha256": "f33b39fd96393a8ca40fd5148bdb5cc4e76f60b61a444c6cfa0ff92f28329e9d"
+    },
+    "pi-parity-qpsg/append-warm/1-0-after.json": {
+      "bytes": 9274,
+      "sha256": "09e82a21992f9c32a40bbf00ee7eba40640ab527d39620218b022bc5c17e934b"
+    },
+    "pi-parity-qpsg/append-warm/1-0-before.json": {
+      "bytes": 9273,
+      "sha256": "721523350c9dd84af62e700f673a57b4324cfdcbaee701285147c4b15dd136db"
+    },
+    "pi-parity-qpsg/append-warm/1-2048-after.json": {
+      "bytes": 9401,
+      "sha256": "ef65f5585e3a1e5eb4c38e261c0c1b6d20b4952dde976a221627770ec044ef81"
+    },
+    "pi-parity-qpsg/append-warm/1-2048-before.json": {
+      "bytes": 9401,
+      "sha256": "b07ea737dfc4aa5b48345d50cf8118b1f9d2bef5fd651627a35acf4a1f2a8d75"
+    },
+    "pi-parity-qpsg/append-warm/1-512-after.json": {
+      "bytes": 9336,
+      "sha256": "177199ff1393177cf5bff36c124175f0fdccefb66d374dabf01db2eee0b8f207"
+    },
+    "pi-parity-qpsg/append-warm/1-512-before.json": {
+      "bytes": 9328,
+      "sha256": "2a5db0907b46598a5f1cab972fe7d940dd67a9de04f5dd7bd591d06de7746f04"
+    },
+    "pi-parity-qpsg/append-warm/1-64-after.json": {
+      "bytes": 9294,
+      "sha256": "3ca14a52ba1f9250228a67948df5c727d7520a3da7a67f8765750d97cc4696df"
+    },
+    "pi-parity-qpsg/append-warm/1-64-before.json": {
+      "bytes": 9294,
+      "sha256": "e01a5ffa9409006598d5ed8b2ea69cfe360a61573b01d4617e26ca1b32e19e80"
+    },
+    "pi-parity-qpsg/append-warm/2-0-after.json": {
+      "bytes": 9271,
+      "sha256": "a4800fd91603bf9b2c8b63037e3db17c9b83c29da44015545c441daace73a8d4"
+    },
+    "pi-parity-qpsg/append-warm/2-0-before.json": {
+      "bytes": 9271,
+      "sha256": "2440317682e3ea07f48a91beb125b3361e0afd7f8d4c9cba34fde4ee54509d57"
+    },
+    "pi-parity-qpsg/append-warm/2-2048-after.json": {
+      "bytes": 9400,
+      "sha256": "9cf981bc4fc014b70c7b1c4281b792def24bc4d33e31cd9d3d8a4a427881575d"
+    },
+    "pi-parity-qpsg/append-warm/2-2048-before.json": {
+      "bytes": 9400,
+      "sha256": "86cac3bcfc826e791b31fed149f3dd0c422260690bf1c1ddf4e2efb6c087a47e"
+    },
+    "pi-parity-qpsg/append-warm/2-512-after.json": {
+      "bytes": 9328,
+      "sha256": "ee0b04ecf039f147287c884bcd32b348fa977a8dbc86d8b9f392e4a25d05c5e7"
+    },
+    "pi-parity-qpsg/append-warm/2-512-before.json": {
+      "bytes": 9331,
+      "sha256": "39fa3138ebae0838d6e85ccdae8780c78a7b315adb416269697d8e373b9e96ee"
+    },
+    "pi-parity-qpsg/append-warm/2-64-after.json": {
+      "bytes": 9293,
+      "sha256": "39333cf20c6138c4f72ebbc11d195ae67dc705918375bf2eca6b282acacad42a"
+    },
+    "pi-parity-qpsg/append-warm/2-64-before.json": {
+      "bytes": 9293,
+      "sha256": "d3247eea31585f65acb604379cf7cde3705371f19b8a661d67b2721d01d984a0"
+    },
+    "pi-parity-qpsg/append-cold/0-0-after.json": {
+      "bytes": 90685,
+      "sha256": "691a1739bdeedf152d15e1aa3fa3b7c7496855ccfea2aefff59deb54bda5eb95"
+    },
+    "pi-parity-qpsg/append-cold/0-0-before.json": {
+      "bytes": 90685,
+      "sha256": "29a701467f1fb5d3d4b55d0d6056a1fd2f40bb728c5569243fc5d91655ee18ea"
+    },
+    "pi-parity-qpsg/append-cold/0-2048-after.json": {
+      "bytes": 91617,
+      "sha256": "7535b46c9a5350994aab4220904f73ba243af994fff5387959e686408052da54"
+    },
+    "pi-parity-qpsg/append-cold/0-2048-before.json": {
+      "bytes": 91617,
+      "sha256": "504a37c1d5aa90a1a653255a8458c71bb5fdda194fcb2d2e774b07aeb151f80c"
+    },
+    "pi-parity-qpsg/append-cold/0-512-after.json": {
+      "bytes": 91175,
+      "sha256": "0c5c952d363fc8376e3b8de285468dad771ccaa6f34ea6bf7c9e286249b7de16"
+    },
+    "pi-parity-qpsg/append-cold/0-512-before.json": {
+      "bytes": 91211,
+      "sha256": "c3953eeacde60a6496a6cfdb95eb544a8c2e1ccda132763c39247fa10f43860f"
+    },
+    "pi-parity-qpsg/append-cold/0-64-after.json": {
+      "bytes": 90871,
+      "sha256": "d3c5bc4699ebd3f88eeb8563f1df1874da3891371ed9b9f9fe73475007de41fb"
+    },
+    "pi-parity-qpsg/append-cold/0-64-before.json": {
+      "bytes": 90871,
+      "sha256": "4e00b4a8574556aa4c833eea6ae4c37c11ed11b8ac4738a7502436b5be7a8b1b"
+    },
+    "pi-parity-qpsg/append-cold/1-0-after.json": {
+      "bytes": 90680,
+      "sha256": "f3505f6e3fc007d6967dfb43b4ddb2cc413bb53e99352fb7024cc4e6c5176b3d"
+    },
+    "pi-parity-qpsg/append-cold/1-0-before.json": {
+      "bytes": 90686,
+      "sha256": "321d07ecac258efdadf6f04ed14df3f4157f124375883f307f2109e1f7d6f7c6"
+    },
+    "pi-parity-qpsg/append-cold/1-2048-after.json": {
+      "bytes": 91617,
+      "sha256": "6b71f4218f53cdf80b264e4ced930eeb78072b71817511bc92ce6e6e21c6f300"
+    },
+    "pi-parity-qpsg/append-cold/1-2048-before.json": {
+      "bytes": 91617,
+      "sha256": "79701bf58cf4bec88724fa22a1abc765ba7d65ebd4ad61c19f49ebf1069872e8"
+    },
+    "pi-parity-qpsg/append-cold/1-512-after.json": {
+      "bytes": 91218,
+      "sha256": "430f4a053162ff7730781b3364aa3895a9f51999c9ee7e5a0921241b57cd5cc5"
+    },
+    "pi-parity-qpsg/append-cold/1-512-before.json": {
+      "bytes": 91211,
+      "sha256": "7eb42678e8165b1c679aaa7566caba195757f5f7deda9f5f78a2b659f879a48b"
+    },
+    "pi-parity-qpsg/append-cold/1-64-after.json": {
+      "bytes": 90879,
+      "sha256": "fc1101f6e0787143501b2158b0251368d2d173e53c1d0b5a30cf93532a92ba77"
+    },
+    "pi-parity-qpsg/append-cold/1-64-before.json": {
+      "bytes": 90869,
+      "sha256": "e635bc4b153cd651f4afc7ab0b39e392bf480a2224c9300436785419725d932f"
+    },
+    "pi-parity-qpsg/append-cold/2-0-after.json": {
+      "bytes": 90673,
+      "sha256": "93c84ba44e40501486f5c75034f3782ec8bcc6a7a1707bbf88c3a81064508858"
+    },
+    "pi-parity-qpsg/append-cold/2-0-before.json": {
+      "bytes": 90685,
+      "sha256": "09636a31bfd5b5fa44d03a8dcaf640e9eac149d8b1ba76109639fa45080d3935"
+    },
+    "pi-parity-qpsg/append-cold/2-2048-after.json": {
+      "bytes": 91618,
+      "sha256": "2818159910a83f9f6dc6988d7eb1e7a6dc851058fe9b9d3d3b3cc884cee6b41a"
+    },
+    "pi-parity-qpsg/append-cold/2-2048-before.json": {
+      "bytes": 91618,
+      "sha256": "809bf3f6fc9609927ecc6994aee464926d443a758b0c2d531fa9f165a6a24751"
+    },
+    "pi-parity-qpsg/append-cold/2-512-after.json": {
+      "bytes": 91188,
+      "sha256": "9a22f849894845a01dde37372d1485dc4b76e1030385d89a7494008caabaf6dd"
+    },
+    "pi-parity-qpsg/append-cold/2-512-before.json": {
+      "bytes": 91152,
+      "sha256": "f189bb88927cbd20a8b4b2395aadf9ce57e0ba61fc3116bf4bcbd02b14ef6b2d"
+    },
+    "pi-parity-qpsg/append-cold/2-64-after.json": {
+      "bytes": 90871,
+      "sha256": "1da553af1c532816590ead20e79ee3a9e35d4e2a26956f6b90822c6e426f607b"
+    },
+    "pi-parity-qpsg/append-cold/2-64-before.json": {
+      "bytes": 90870,
+      "sha256": "5aa33d0bafbdd7d8538f7999d3d23cd7588c6508e335eb2fa350f14f2095cb3a"
+    }
+  }
+}

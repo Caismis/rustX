@@ -183,11 +183,12 @@ pub(crate) fn build_client(
     api_base: &str,
     http_client: Option<reqwest::Client>,
 ) -> Client<OpenAIConfig> {
-    let service = NoRetryService::new(http_client.unwrap_or_default());
+    let http_client = http_client.unwrap_or_else(super::super::transport::default_client);
+    let service = NoRetryService::new(http_client.clone());
     let openai_config = OpenAIConfig::new()
         .with_api_key(api_key.to_owned())
         .with_api_base(api_base.to_owned());
-    Client::with_config(openai_config).with_http_service(service)
+    Client::build(http_client, openai_config).with_http_service(service)
 }
 
 /// Recovers a captured [`HttpFailure`] from an SDK error.
@@ -203,6 +204,52 @@ mod tests {
     use super::{HttpFailure, parse_error_body, parse_retry_after};
     use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
     use reqwest::StatusCode;
+
+    #[tokio::test]
+    async fn default_transport_reuses_connection_without_sharing_binding_headers() {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut requests = Vec::new();
+                // Both bindings must use this one persistent connection.
+                for _ in 0..2 {
+                    let mut headers = Vec::new();
+                    loop {
+                        let mut line = String::new();
+                        assert!(reader.read_line(&mut line).await.unwrap() > 0);
+                        if line == "\r\n" { break; }
+                        headers.push(line);
+                    }
+                    let length = headers.iter().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    }).unwrap_or(0);
+                    reader.read_exact(&mut vec![0; length]).await.unwrap();
+                    requests.push(headers);
+                    reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+                }
+                requests
+            });
+            for (path, key) in [("left", "fixture-left"), ("right", "fixture-right")] {
+                let client = super::build_client(key, &format!("{base}/{path}"), None);
+                let _: serde_json::Value = client.chat().create_byot(serde_json::json!({})).await.unwrap();
+            }
+            let requests = server.await.unwrap();
+            for (headers, (path, key)) in requests.iter().zip([("left", "fixture-left"), ("right", "fixture-right")]) {
+                assert!(headers[0].starts_with(&format!("POST /{path}/chat/completions ")));
+                let authorization = headers.iter().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("authorization").then(|| value.trim())
+                });
+                assert_eq!(authorization, Some(format!("Bearer {key}").as_str()));
+            }
+        }).await.expect("two bindings must reuse the credential-free HTTP pool");
+    }
 
     /// `Retry-After` seconds convert to milliseconds.
     #[test]

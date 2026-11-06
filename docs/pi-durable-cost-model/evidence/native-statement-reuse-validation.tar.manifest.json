@@ -1,0 +1,70 @@
+{
+  "build.jsonl": {
+    "bytes": 458832,
+    "sha256": "f6ca37f37a59b5351e94b4b1389031e108ad249e9f0f10645d75642c58cf815b"
+  },
+  "build.stderr": {
+    "bytes": 119,
+    "sha256": "1529eb2b52b35f14ab46d338c1a7ffb2d3cddbd4125e1f67ebde216971716fff"
+  },
+  "candidate.patch": {
+    "bytes": 21138,
+    "sha256": "2d76e5545b5f846a92be404a5873b138ca46301abc6dbbe8a2ac7261ae324b25"
+  },
+  "clippy.log": {
+    "bytes": 119,
+    "sha256": "1f3d697e002c21c2e224bd6bbcdb562133cbe22030ad80f869c8212d2e4409f5"
+  },
+  "first-binary.json": {
+    "bytes": 973,
+    "sha256": "9e25eb2d9fdc66789c6e39bfa085633de9bd2998f8141f41656f1750eb16fdf2"
+  },
+  "fixed-binary.json": {
+    "bytes": 15323,
+    "sha256": "28fad8834921f6067e131a9408f7c2bd74265497a5e3dfad572a0e948c0a62ef"
+  },
+  "fixed-fixture-build.jsonl": {
+    "bytes": 458832,
+    "sha256": "8cf12f693d4ceaff347f524046c75cd6fb3e65b6b2697a56961b312d929c659b"
+  },
+  "fixed-fixture-build.stderr": {
+    "bytes": 119,
+    "sha256": "cc6b408fbc9d7c47cd7d89ae4e61f19bab909b4d4ac25ceed0ca59f73ff399dd"
+  },
+  "fixed-fixture-regression.log": {
+    "bytes": 247,
+    "sha256": "b39e85042fa245be2718bab516172abbac980db2097dd88a32e47f109f42f8cf"
+  },
+  "fixture-rebuild-clean.log": {
+    "bytes": 37,
+    "sha256": "8f008e437718ec9563ae06ef3aed26d5e2b390d2a2c85125cc3d4c102ac30a4c"
+  },
+  "negative-test-list.json": {
+    "bytes": 4240,
+    "sha256": "747b1c5c530a36d62c0ac73b64cc88a7bd92eb4b4cd52d0d5cdfea109f72aca3"
+  },
+  "post-preservation-clean.log": {
+    "bytes": 37,
+    "sha256": "8f008e437718ec9563ae06ef3aed26d5e2b390d2a2c85125cc3d4c102ac30a4c"
+  },
+  "preserved-obsolete-binary-archives.json": {
+    "bytes": 1338,
+    "sha256": "ffd8050ef7c11c93cd2632de334a3c2274816ace20beb65eebb2047f9c44aafc"
+  },
+  "preserved-original-relocations.json": {
+    "bytes": 62402,
+    "sha256": "23d7fff442452d9e8e93bf82d09991f01dca20233c014e30ed0b988e76d40413"
+  },
+  "regression.log": {
+    "bytes": 787,
+    "sha256": "6682a07ff0c2c2bfe0d83c4ff49e927b4ca9726108a0a323135503ccb66bfe7a"
+  },
+  "targeted-existing.log": {
+    "bytes": 11699,
+    "sha256": "10c23f34405124c7d3814287381c9a377714a81f47e25a475b0a8f8b951620c4"
+  },
+  "targeted-native-negatives.log": {
+    "bytes": 5293,
+    "sha256": "8cdc495b48a78f7582c515a2f7941f0742e973167959c54d8645e201b5162cc6"
+  }
+}

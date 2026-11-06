@@ -17,7 +17,7 @@ def start(argv,*args,**kwargs):
   assert 'attached' in line,line
  return product
 subprocess.Popen=start
-env={k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN','SECRET','CREDENTIAL','API_KEY'))};env.update(UV_CACHE_DIR='/workspace/.uv-cache',RUSTX_BENCH_CASE='short-small',RUSTX_BENCH_OUTPUT=str(root/'sample.json'))
+env={k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN','SECRET','CREDENTIAL','API_KEY'))};env.update(RUSTX_BENCH_CASE='short-small',RUSTX_BENCH_OUTPUT=str(root/'sample.json'))
 r=run([str(a.binary.resolve()),TEST,'--exact','--ignored','--nocapture'],root/'sample','short-small',env,Path('test-support/fake-provider').resolve())
 for tracer in tracers:
  stderr=tracer.communicate()[1];(root/'tracer.log').write_text(stderr);assert tracer.returncode==0

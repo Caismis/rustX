@@ -21,7 +21,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v72';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v73';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { responseRetryReady, type ResponseRetry } from './response-retry';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
@@ -106,10 +106,12 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const keepCompactions = mode === 'chat' && !scope?.selected && readingOwner.wanted && !!view && !view.retrying && !view.readingPreview;
   const checkpoints = useCompactionHistory(client, sessionId, keepCompactions && !readingPending, { owner: presentationOwner, keep: keepCompactions });
   const content = useMemo(() => [...view?.content ?? [], ...(view?.publicationHeads ?? []).flatMap(head => head.content)], [view?.content, view?.publicationHeads]);
+  const initialTrace = mode === 'trajectory' ? view?.trace : undefined;
   useEffect(() => {
     if (!view?.readable || view.retrying || view.readingPreview || scope?.selected) return;
     void (mode === 'chat' ? client.loadInitialHistory(view.id) : client.loadInitialTrace(view.id)).catch(() => {});
-  }, [client, mode, view?.id, view?.target?.attachment_id, view?.readable, view?.retrying, view?.readingPreview, scope?.selected]);
+  }, [client, mode, view?.id, view?.target?.attachment_id, view?.readable, view?.retrying, view?.readingPreview, scope?.selected,
+    initialTrace?.epoch, initialTrace?.page.next_cursor, initialTrace?.loading, initialTrace?.error]);
   if (sessionId && tracePreview) return <Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>;
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
   return mode === 'trajectory' && view.trace

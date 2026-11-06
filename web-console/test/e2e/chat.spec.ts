@@ -362,6 +362,8 @@ test('native history, rich settlement, real image previews, reconnect and native
       stage: page.isClosed() ? 'page-closed' : page.url() === 'about:blank' ? 'native-history-preparation' : 'browser',
       providerErrors: native.providerErrors.slice(-2048),
       appErrors: native.appErrors.slice(-4096),
+      traceView: page.isClosed() ? undefined : await page.getByRole('tabpanel', { name: 'Trajectory', exact: true }).innerText({ timeout: 1000 }).catch(() => undefined),
+      traceReads: wire.responses.filter(row => row.method === 'session/trace').slice(-6).map(row => ({ type: row.result?.type, records: row.result?.page?.records?.length, cursor: row.result?.page?.next_cursor, cut: row.result?.page?.read_cut })),
     };
     console.error('Chat failure diagnostics:', JSON.stringify(diagnostics));
     try {

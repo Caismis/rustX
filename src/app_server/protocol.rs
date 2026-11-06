@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v72 envelope and method vocabulary.
+//! Rust authority for the App Server v73 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 72;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 73;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -251,7 +251,7 @@ pub enum Method {
     Trace {
         target: AttachmentTarget,
         #[serde(default)]
-        #[schemars(length(max = 8))]
+        #[schemars(length(max = 128))]
         records: Vec<crate::observation::trace::TraceCursor>,
         before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
@@ -311,7 +311,6 @@ pub enum Method {
         request_id: crate::runtime::identity::ManualCompactionRequestId,
     },
     /// Durable exact-node controls. These do not acquire a runtime attachment.
-
     #[serde(rename = "workflow/scheduled/getRecovery")]
     WorkflowScheduledRecovery {
         session_id: SessionId,
@@ -781,13 +780,13 @@ pub enum Method {
     #[serde(rename = "inbound/edit")]
     InboundEdit {
         target: AttachmentTarget,
-        expected: crate::durable::inbox::PendingInboundRef,
+        expected: crate::durable::PendingInboundRef,
         text: String,
     },
     #[serde(rename = "inbound/remove")]
     InboundRemove {
         target: AttachmentTarget,
-        expected: crate::durable::inbox::PendingInboundRef,
+        expected: crate::durable::PendingInboundRef,
     },
     #[serde(rename = "turn/cancel")]
     TurnCancel { target: AttachmentTarget },
@@ -1320,7 +1319,7 @@ pub enum MethodResult {
         download: super::archive_download::ArchiveDownloadDescriptor,
     },
     InboundMutation {
-        outcome: crate::durable::inbox::PendingMutationOutcome,
+        outcome: crate::durable::PendingMutationOutcome,
     },
     ArtifactBytes {
         data: String,
@@ -1345,6 +1344,9 @@ pub enum MethodResult {
     },
     Trace {
         page: crate::observation::trace::TracePage,
+        /// Complete input prefix examined; resubmit any remaining interests.
+        #[schemars(range(max = 128))]
+        refreshed: usize,
     },
     TraceToolLocation {
         location: Option<crate::runtime_client::trace::TraceToolLocation>,

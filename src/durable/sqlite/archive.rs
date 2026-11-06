@@ -40,7 +40,7 @@ impl SqliteConversationStore {
         let mode: String = store
             .lock()?
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-            .map_err(|error| super::storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if mode != "wal" {
             return Err(super::storage(
                 "archive capture requires writer-established WAL storage",

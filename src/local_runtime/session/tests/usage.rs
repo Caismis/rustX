@@ -3,7 +3,7 @@
 use super::super::SESSION_LIST_PAGE_LIMIT;
 use super::*;
 use crate::durable::CanonicalStore;
-use crate::durable::inbox::ConversationInboundCapability;
+use crate::durable::ConversationInboundCapability;
 
 /// The one Session lifecycle classification every product path shares:
 /// startup reuse, `/new`, and `/resume` visibility. An unused Session is

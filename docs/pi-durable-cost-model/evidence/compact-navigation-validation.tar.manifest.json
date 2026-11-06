@@ -1,0 +1,74 @@
+{
+  "pi-parity-small-nav/boundary_suites-durable-content.log": {
+    "bytes": 3398,
+    "sha256": "20066bdcdb924a2d04676bbf141e77aefb2f2c04a4c757a71f57752787596544"
+  },
+  "pi-parity-small-nav/cache-clean.log": {
+    "bytes": 38,
+    "sha256": "58bd8bf761f15b2d20312c422793b276828b24abe6e47e926d73ec3e237864a3"
+  },
+  "pi-parity-small-nav/candidate/byte_carrier.rs": {
+    "bytes": 5689,
+    "sha256": "9aa66592cd9cf35d74700056f8bcec6b27fe19ed5c82566d35d4842946a6e880"
+  },
+  "pi-parity-small-nav/candidate/read_layout.rs": {
+    "bytes": 81756,
+    "sha256": "47262cd0823d5a31623b78751b81006cbbb7b342e9270713ac40f27abab0c0af"
+  },
+  "pi-parity-small-nav/candidate/small.rs": {
+    "bytes": 9349,
+    "sha256": "a92cb898d92dad09087a15f33968e36a207aed9a60dfed3cbdf15793c7f42340"
+  },
+  "pi-parity-small-nav/candidate.patch": {
+    "bytes": 14534,
+    "sha256": "03f48d9560170a89abd127724c79dc292cf34d2a5bf74b6442c4632a22893f22"
+  },
+  "pi-parity-small-nav/design.md": {
+    "bytes": 1676,
+    "sha256": "36a1de8840e89133722b22a4097cdff7326accef42f70f8088295e62837faace"
+  },
+  "pi-parity-small-nav/durable-sqlite-observation_request-composed.log": {
+    "bytes": 3911,
+    "sha256": "c71a68bb25208404e3d7efe83054acbdfed309a3c6b22c82e285f773f69e815e"
+  },
+  "pi-parity-small-nav/durable-sqlite-observation_request-state_preview_tests.log": {
+    "bytes": 968,
+    "sha256": "b9049e88f99ed48013153c903a921ec8dbee03a56fd506fb3fd8b3b38ef35f64"
+  },
+  "pi-parity-small-nav/prepare.py": {
+    "bytes": 8757,
+    "sha256": "cbee8b16ce81382ea5c412b96f83109b87e6feb6836df24d24111527250cc6e0"
+  },
+  "pi-parity-small-nav/read-layout-tests.log": {
+    "bytes": 3216,
+    "sha256": "4d7db6ed62b2146cd716fe92776f1876e994ba22a1565a8d48b8dfaa1f1486c4"
+  },
+  "pi-parity-small-nav/related-test-list.txt": {
+    "bytes": 45144,
+    "sha256": "120acd359610f5d799566d795a20dc81f1707df157c5bc618425fe2ca71552ed"
+  },
+  "pi-parity-small-nav/runtime-read_layout.log": {
+    "bytes": 3216,
+    "sha256": "95f3ae744fa2e83b9d4f9621a386df9fb66c276db64d8f0f56923bf16a67ad70"
+  },
+  "pi-parity-small-nav/test-build-final.jsonl": {
+    "bytes": 458832,
+    "sha256": "27c7403d16a8594be11a8f7b9c6843ef1826367a3a1fa67b3193b6455d84290e"
+  },
+  "pi-parity-small-nav/test-build-final.log": {
+    "bytes": 119,
+    "sha256": "8e797d222b7add26ea27ee9e21adcec40d045a22a73da82adfd2dacd5954bb89"
+  },
+  "pi-parity-small-nav/test-build.jsonl": {
+    "bytes": 458832,
+    "sha256": "9754767c68b78d33d20c47d0ace508c237198678d60007fb963c6761a7377847"
+  },
+  "pi-parity-small-nav/test-build.log": {
+    "bytes": 119,
+    "sha256": "65cd7268e24b2e31c488f5f0a457b2389939b241442ace7220dc89c9169d4387"
+  },
+  "pi-parity-small-nav/validation.json": {
+    "bytes": 690,
+    "sha256": "00a1d158af8ce4f354915066954de69681e5f865cd3099d26dec081029e792a3"
+  }
+}

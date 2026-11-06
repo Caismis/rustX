@@ -216,6 +216,9 @@ pub(crate) async fn dispatch(
         super::upload_transfer::serve(Replay(std::io::Cursor::new(line).chain(socket)), host, None)
             .await
     } else {
+        // RPC acknowledgements and terminal notifications must not wait for a
+        // previous small frame's TCP acknowledgement before leaving the socket.
+        socket.set_nodelay(true)?;
         // Preserve the established WebSocket endpoint's cooperative shutdown.
         super::transport::websocket::connection(
             Replay(std::io::Cursor::new(line).chain(socket)),

@@ -14,11 +14,11 @@
 //! reached by an explicit arm below.
 
 use super::bounds::{TRACE_DETAIL_BLOCKS, TraceJson, TraceText, identity_fits};
-use super::types::{TraceArtifact, TraceContentBlock, TraceToolOutcome};
 use crate::message::content::{FileReference, ImageReference};
 use crate::message::types::{
     AssistantContentBlock, ToolMessageBlock, UserContentBlock, UserSource,
 };
+use crate::observation::trace::{TraceArtifact, TraceContentBlock, TraceToolOutcome};
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
 /// The provenance namespace of one canonical User message.

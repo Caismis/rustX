@@ -1,4 +1,5 @@
 //! Native selected-input topology. Optional Source metadata never enters these digests.
+use super::statements::FixedStatements;
 use super::{
     Arc, AtomicU64, Connection, ConversationStoreError, Digest, Mutex, OptionalExtension, Ordering,
     Sha256, decode, nonnegative, params, seq_to_i64, storage,
@@ -55,12 +56,15 @@ const NODE_SCHEMA: &str = "CREATE TABLE native_input_nodes (
         CHECK((typeof(item_json)='text' AND item_digest IS NOT NULL AND count=1 AND height=1 AND left_id IS NULL AND right_id IS NULL AND left_digest IS NULL AND right_digest IS NULL) OR (item_json IS NULL AND item_digest IS NULL AND typeof(left_id)='integer' AND left_id>0 AND typeof(right_id)='integer' AND right_id>0 AND typeof(left_digest)='blob' AND length(left_digest)=32 AND typeof(right_digest)='blob' AND length(right_digest)=32))
     )";
 pub(super) fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    connection
-        .execute_batch(NODE_SCHEMA)
-        .map_err(|error| storage(format!("native selected input schema: {error}")))
+    connection.execute_batch(NODE_SCHEMA).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("native selected input schema: {error}"),
+        )
+    })
 }
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name='native_input_nodes'",[],|r|r.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name='native_input_nodes'",[],|r|r.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if sql.flatten().as_deref() != Some(NODE_SCHEMA) {
         return Err(ConversationStoreError::IncompatibleSchema(
             "native selected input schema differs".into(),
@@ -92,6 +96,18 @@ fn digest_branch(left: NodeRef, right: NodeRef) -> [u8; 32] {
     }
     sha.finalize().into()
 }
+type HeaderRow = (Vec<u8>, u64, u8);
+fn decoded_header(id: u64, row: HeaderRow) -> Result<NodeRef, ConversationStoreError> {
+    if row.1 == 0 || row.1 > MAX_ITEMS || row.2 == 0 || row.2 > MAX_HEIGHT {
+        return Err(invalid("native selected input header bounds"));
+    }
+    Ok(NodeRef {
+        id,
+        digest: bytes32(row.0)?,
+        count: row.1,
+        height: row.2,
+    })
+}
 fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStoreError> {
     #[cfg(test)]
     NODE_READ_WORK.with(|work| {
@@ -104,22 +120,13 @@ fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStore
             },
         );
     });
-    let row: (Vec<u8>, u64, u8) = connection
-        .query_row(
-            "SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height FROM native_input_nodes WHERE id=?1",
-            [seq_to_i64(id)?],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
+    let mut statement = connection
+        .prepare_cached("SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height FROM native_input_nodes WHERE id=?1")
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let row: HeaderRow = statement
+        .query_row([seq_to_i64(id)?], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .map_err(|e| storage(e.to_string()))?;
-    if row.1 == 0 || row.1 > MAX_ITEMS || row.2 == 0 || row.2 > MAX_HEIGHT {
-        return Err(invalid("native selected input header bounds"));
-    }
-    Ok(NodeRef {
-        id,
-        digest: bytes32(row.0)?,
-        count: row.1,
-        height: row.2,
-    })
+    decoded_header(id, row)
 }
 type NodeRow = (
     Option<Vec<u8>>,
@@ -132,10 +139,6 @@ pub(super) fn node(
     connection: &Connection,
     expected: &NodeRef,
 ) -> Result<Node, ConversationStoreError> {
-    let actual = header(connection, expected.id)?;
-    if actual != *expected {
-        return Err(invalid("native selected input node identity"));
-    }
     #[cfg(test)]
     NODE_READ_WORK.with(|work| {
         let (headers, shapes) = work.get();
@@ -147,7 +150,25 @@ pub(super) fn node(
             },
         );
     });
-    let (item,left,right,left_digest,right_digest): NodeRow=connection.query_row("SELECT CASE WHEN typeof(item_digest)='blob' AND length(item_digest)=32 THEN item_digest END,left_id,right_id,CASE WHEN typeof(left_digest)='blob' AND length(left_digest)=32 THEN left_digest END,CASE WHEN typeof(right_digest)='blob' AND length(right_digest)=32 THEN right_digest END FROM native_input_nodes WHERE id=?1",[seq_to_i64(expected.id)?],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|storage(e.to_string()))?;
+    let id = seq_to_i64(expected.id)?;
+    // Read this node's identity and shape together. Child headers still come
+    // from their actual rows; no construction or historical proof is reused.
+    let (head, shape): (HeaderRow, NodeRow) = connection
+        .prepare_cached("SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height,CASE WHEN typeof(item_digest)='blob' AND length(item_digest)=32 THEN item_digest END,left_id,right_id,CASE WHEN typeof(left_digest)='blob' AND length(left_digest)=32 THEN left_digest END,CASE WHEN typeof(right_digest)='blob' AND length(right_digest)=32 THEN right_digest END FROM native_input_nodes WHERE id=?1")
+        .and_then(|mut statement| {
+            statement.query_row([id], |row| {
+                Ok((
+                    (row.get(0)?, row.get(1)?, row.get(2)?),
+                    (row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?),
+                ))
+            })
+        })
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let actual = decoded_header(expected.id, head)?;
+    if actual != *expected {
+        return Err(invalid("native selected input node identity"));
+    }
+    let (item, left, right, left_digest, right_digest) = shape;
     let kind = match (item, left, right, left_digest, right_digest) {
         (Some(item), None, None, None, None) if actual.count == 1 && actual.height == 1 => {
             if digest_leaf(&bytes32(item)?) != actual.digest {
@@ -250,7 +271,7 @@ fn persist_node(
             (digest_branch(a, b), None, None, Some(a), Some(b))
         }
     };
-    connection.execute("INSERT INTO native_input_nodes(digest,count,height,item_digest,item_json,left_id,right_id,left_digest,right_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![digest.as_slice(),input.count as u64,input.height,item_digest.as_ref().map(<[u8;32]>::as_slice),item_json,left.map(|r|r.id),right.map(|r|r.id),left.as_ref().map(|r|r.digest.as_slice()),right.as_ref().map(|r|r.digest.as_slice())]).map_err(|e|storage(e.to_string()))?;
+    connection.execute_cached("INSERT INTO native_input_nodes(digest,count,height,item_digest,item_json,left_id,right_id,left_digest,right_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![digest.as_slice(),input.count as u64,input.height,item_digest.as_ref().map(<[u8;32]>::as_slice),item_json,left.map(|r|r.id),right.map(|r|r.id),left.as_ref().map(|r|r.digest.as_slice()),right.as_ref().map(|r|r.digest.as_slice())]).map_err(|e|storage(e.to_string()))?;
     let reference = NodeRef {
         id: nonnegative(connection.last_insert_rowid(), "native input node id")?,
         digest,
@@ -323,10 +344,12 @@ struct MutationColumns {
 }
 impl MutationColumns {
     fn read(connection: &Connection) -> Self {
-        // Resolve indexes from the validated schema rather than assuming column order.
+        // Preupdate accessors accept logical schema ordinals, including virtual
+        // generated columns. table_info omits and renumbers those columns;
+        // table_xinfo preserves the ordinals SQLite converts to stored fields.
         let columns = |table: &str| {
             connection
-                .prepare(&format!("PRAGMA table_info({table})"))
+                .prepare(&format!("PRAGMA table_xinfo({table})"))
                 .expect("native dependency schema")
                 .query_map([], |row| {
                     Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
@@ -453,6 +476,9 @@ impl Owner {
     pub fn install(
         connection: &Connection,
         append: Arc<super::append_validation::Owner>,
+        response: Arc<super::observation_response::Owner>,
+        statistics: Arc<super::observation_statistics::FoldCache>,
+        transaction_writes: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<Arc<Self>, ConversationStoreError> {
         let owner = Self::new();
         let watched = owner.clone();
@@ -466,8 +492,11 @@ impl Owner {
                     if db != "main" {
                         return;
                     }
+                    transaction_writes.store(true, Ordering::Release);
                     // One SQLite hook dispatches to independent proof owners.
                     append.observe(table, change);
+                    response.observe(table, change);
+                    statistics.observe(table, change);
                     let invalidates = columns.invalidates(&watched, table, change);
                     if invalidates {
                         watched.invalidate();
@@ -488,16 +517,16 @@ impl Owner {
         // data_version follows the pinned read snapshot; a concurrent commit is
         // observed after that transaction ends, at the next snapshot capture.
         connection
-            .query_row("SELECT rootpage FROM sqlite_schema LIMIT 1", [], |row| {
+            .query_row_cached("SELECT rootpage FROM sqlite_schema LIMIT 1", [], |row| {
                 row.get::<_, i64>(0)
             })
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let actual = (
             connection
-                .query_row("PRAGMA main.data_version", [], |r| r.get::<_, u64>(0))
+                .query_row_cached("PRAGMA main.data_version", [], |r| r.get::<_, u64>(0))
                 .map_err(|e| storage(e.to_string()))?,
             connection
-                .query_row("PRAGMA main.schema_version", [], |r| r.get::<_, u64>(0))
+                .query_row_cached("PRAGMA main.schema_version", [], |r| r.get::<_, u64>(0))
                 .map_err(|e| storage(e.to_string()))?,
         );
         let mut versions = self

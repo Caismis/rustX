@@ -10,13 +10,13 @@ use super::ForegroundToolExecution;
 use super::ForegroundToolState;
 #[cfg(test)]
 use super::in_flight::inline_label;
+use super::prepared_capture;
 use super::{
     ApprovalMode, Arc, CapabilityView, ContentMetadata, ConversationId, DomainSources,
     ForegroundResultContent, HashMap, InboundDiagnostics, MessageBlock, NativePublicationState,
     ObservationSourceState, PreparedDurableToolReading, RuntimeClientAttempt,
     RuntimeClientContextView, RuntimeClientCursor, RuntimeClientProjection, RuntimeClientSnapshot,
-    SessionModelView, VecDeque, agent_view, background_view, inbound_item_view, stamp_trace_cut,
-    upsert_background,
+    SessionModelView, VecDeque, agent_view, background_view, inbound_item_view, upsert_background,
 };
 use crate::observation::head::RuntimeClientCompactionView;
 
@@ -27,8 +27,7 @@ pub(super) fn initial_client_snapshot(
     initial_model: Option<SessionModelView>,
 ) -> RuntimeClientSnapshot {
     RuntimeClientSnapshot {
-        settings_evidence: super::super::settings::SettingsEvidence::LiveSession,
-        // Absent until the host installs the attached runtime's own
+        settings_evidence: super::super::settings::SettingsEvidence::LiveSession, // Absent until the host installs the attached runtime's own
         // frozen composition. A projection with no runtime behind it
         // — durable historical inspection — keeps it absent rather
         // than reconstructing one.
@@ -54,7 +53,7 @@ pub(super) fn initial_client_snapshot(
         agents: Vec::new(),
         statuses: Vec::new(),
         context: RuntimeClientContextView::default(),
-        capabilities: initial_capabilities,
+        capabilities: Arc::new(initial_capabilities),
         resources: crate::observation::resource_source::RuntimeClientResourcesView::default(),
         model: initial_model,
         model_status: None,
@@ -88,7 +87,9 @@ impl RuntimeClientProjection {
             publication_state: NativePublicationState::default(),
             read_through: 0,
             source_cut: None,
-            head_bindings: std::collections::BTreeMap::new(),
+            head_bindings: imbl::OrdMap::new(),
+            transcript_bindings: prepared_capture::PreparedBindingHead::default(),
+            transcript_head: crate::observation::transcript::PreparedTranscriptHead::default(),
             foreground_content: Vec::new(),
             prepared_messages: std::collections::BTreeMap::new(),
             bootstrap_transcript_through: 0,
@@ -116,16 +117,17 @@ impl RuntimeClientProjection {
             source_state: ObservationSourceState::default(),
             prepared_outcomes: std::collections::BTreeMap::new(),
             prepared_journal: std::collections::BTreeMap::new(),
-            live_frontiers: std::collections::BTreeMap::new(),
+            live_frontiers: imbl::OrdMap::new(),
             read_domains_dirty: false,
+            read_domains_requested: false,
             read_failure: None,
             read_revision: 0,
-            domain_revisions: std::collections::BTreeMap::new(),
+            domain_revisions: crate::observation::metadata::MetadataFragment::default(),
             auxiliary_audit_total: None,
             domain_sources: DomainSources::new(),
             domain_source_bytes: 0,
-            source_frontiers: std::collections::BTreeMap::default(),
-            collection_cuts: std::collections::BTreeMap::new(),
+            source_frontiers: imbl::OrdMap::default(),
+            collection_cuts: crate::observation::metadata::MetadataFragment::default(),
             pending_heads: std::collections::BTreeMap::new(),
             collection_ordinal: None,
             tool_occurrence: None,
@@ -141,7 +143,8 @@ impl RuntimeClientProjection {
                 initial_messages,
                 initial_capabilities,
                 initial_model,
-            ),
+            )
+            .into(),
             replay: VecDeque::new(),
             replay_cut_cursors: HashMap::new(),
             initial_read_cut: None,
@@ -209,7 +212,7 @@ impl RuntimeClientProjection {
         &mut self,
         extensions: super::super::settings::EffectivePlugins,
     ) {
-        self.snapshot.effective_plugins = Some(extensions);
+        self.snapshot.effective_plugins = (Some(extensions)).into();
     }
 
     pub(super) fn bootstrap_agents(
@@ -244,8 +247,14 @@ impl RuntimeClientProjection {
         self.native_journal_highwater = seed.journal_through;
         self.read_through = seed.journal_through;
         self.snapshot.transcript =
-            crate::observation::transcript::transcript_page_view(seed.transcript.clone())
-                .expect("runtime bootstrap transcript is valid");
+            (crate::observation::transcript::transcript_page_view(seed.transcript.clone())
+                .expect("runtime bootstrap transcript is valid"))
+            .into();
+        self.transcript_bindings = self.snapshot.transcript.content.clone().into();
+        self.transcript_head = crate::observation::transcript::PreparedTranscriptHead::from_entries(
+            &self.snapshot.conversation_id,
+            &self.snapshot.transcript.entries,
+        );
         self.bootstrap_transcript_through =
             seed.transcript.entries.last().map_or(0, |e| e.cursor.get());
         #[cfg(test)]
@@ -297,8 +306,8 @@ impl RuntimeClientProjection {
         // enters this projection: `None` here means the attached runtime
         // composes no Todo extension, and the live fold below deliberately
         // cannot turn that back into a list.
-        self.snapshot.todos.clone_from(&seed.todos);
-        self.snapshot.goal.clone_from(&seed.goal);
+        self.snapshot.todos.replace_from(&seed.todos);
+        self.snapshot.goal.replace_from(&seed.goal);
         self.snapshot.model_status = Some(seed.model.status());
         // This inactive allocation has no live attempt, Agent Status, or
         // compaction owner. The host separately seeds committed compaction
@@ -318,8 +327,8 @@ impl RuntimeClientProjection {
         context: super::super::snapshot::RuntimeClientContextView,
         tools: Vec<PreparedDurableToolReading>,
     ) {
-        self.snapshot.attempt = attempt;
-        self.snapshot.context = context;
+        self.snapshot.attempt = (attempt).into();
+        self.snapshot.context = (context).into();
         for tool in tools {
             let PreparedDurableToolReading {
                 occurrence,
@@ -439,7 +448,7 @@ impl RuntimeClientProjection {
         let mut head: Vec<_> = self.pending_heads.values().flatten().cloned().collect();
         head.sort_by_key(|header| header.source_offset);
         head.truncate(32);
-        self.snapshot.pending_interactions = head;
+        self.snapshot.pending_interactions = (head).into();
     }
 
     pub(crate) fn bind_activation(
@@ -457,7 +466,7 @@ impl RuntimeClientProjection {
     pub(crate) fn initialize_publication_view(&mut self) {
         self.retire_initial_read_cut();
         let cut = self.working_read_cut();
-        stamp_trace_cut(&mut self.snapshot.trace, &cut);
+        self.snapshot.trace.stamp_cut(&cut);
         let seed = Arc::new(self.capture_working_seed());
         if self.cursor.get() == 0 && self.replay.is_empty() {
             self.initial_read_cut = Some(seed.read_cut.clone());

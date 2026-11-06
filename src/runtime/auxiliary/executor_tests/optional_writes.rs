@@ -111,7 +111,7 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
         );
         vec![Some(1), Some(2)]
     } else {
-        assert!(call.is_none());
+        assert!(call.is_none(), "{probe:?}: {call:?}");
         assert_eq!(
             fixture.store.auxiliary_integrity_counts_for_test(),
             (0, [0; 5])

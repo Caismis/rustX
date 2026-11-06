@@ -51,10 +51,13 @@ def summarize(directories, append=False):
     seen = set()
     identities = set()
     append_modes = set()
+    observer_modes = set()
     for directory in directories:
         manifest = directory / 'manifest.json'
+        manifest_mode = None
         if manifest.exists():
             value = json.loads(manifest.read_text())
+            manifest_mode = value.get('observer_mode')
             if 'executables' in value:
                 identities.add(tuple(value['executables'][side]['sha256'] for side in ('before','after')))
         before_paths = {path.stem.removesuffix('-before'):path for path in directory.glob('*-before.json')}
@@ -73,6 +76,18 @@ def summarize(directories, append=False):
                 status = json.loads(path.with_name(path.stem+'.process.json').read_text())
                 assert status['accepted'], f'failed sample retained: {path}'
                 raw = json.loads(path.read_text())
+                if not append:
+                    mode=status.get('observer_mode','native-workflow')
+                    if mode not in ('native-workflow','no-live-subscriber','live-subscriber'):
+                        raise ValueError('unknown observer mode')
+                    if mode!='native-workflow' or 'observer_mode' in raw:
+                        assert raw.get('observer_mode')==mode, 'observer mode missing or mismatched'
+                        assert all(turn.get('observer_mode')==mode for turn in raw['samples'])
+                    if manifest_mode is not None and manifest_mode != mode:
+                        raise ValueError('manifest observer mode differs from sample')
+                    observer_modes.add(mode)
+                    if len(observer_modes)>1:
+                        raise ValueError('mixed observer modes cannot be pooled')
                 workload.append((raw['history'], raw['measured'], raw.get('cold',False) if append else False))
                 if append:
                     cold = raw.get('cold',False)
@@ -105,7 +120,7 @@ def summarize(directories, append=False):
                 if all(value is None or isinstance(value,(int,float)) for value in values):
                     medians[case][side][key] = statistics.median(values) if all(value is not None for value in values) else None
     append_mode = ('cold' if True in append_modes else 'warm') if append else None
-    return {'append_mode':append_mode,
+    return {**({'observer_mode':next(iter(observer_modes))} if observer_modes and observer_modes!={'native-workflow'} else {}), 'append_mode':append_mode,
             'append_counter_scope':('per-operation brackets, including counter-sampling overhead; reopen excluded; whole phase with reopens retained separately' if append_mode=='cold' else 'whole append phase after seed, including driver overhead' if append else None),
             'memory_scope':'all observed lifecycle and operation counters; sampled maxima, not peaks',
             'scope':'See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction',

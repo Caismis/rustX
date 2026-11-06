@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../../protocol/app-server/v72';
+import type { AttachmentTarget } from '../../../protocol/app-server/v73';
 import type { wireProbe } from './wire-probe';
 export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('button', { name: 'View options', exact: true }).click();
@@ -92,10 +92,22 @@ export async function confirmSettingsAction(page: Page, label: string) {
 }
 export async function connectRemote(page: Page, endpoint: string, token: string, deliveryToken?: string) {
   await openConnectionSettings(page);
-  await page.getByLabel('Connection mode').selectOption('remote');
-  await page.getByLabel('WebSocket endpoint').fill(endpoint);
-  await page.getByLabel('Transport token').fill(token);
-  if (deliveryToken) await page.getByLabel('Delivery Access token (optional, enables side questions)').fill(deliveryToken);
+  // Re-entering an unchanged value still dispatches a DOM change event. The
+  // connection owner may then start restoration before the explicit Connect
+  // gesture, whose replacement would retire that just-dispatched Attach.
+  const mode = page.getByLabel('Connection mode');
+  if (await mode.inputValue() !== 'remote') await mode.selectOption('remote');
+  const address = page.getByLabel('WebSocket endpoint');
+  const currentAddress = await address.inputValue();
+  let sameAddress = currentAddress === endpoint;
+  try { sameAddress ||= new URL(currentAddress).href === new URL(endpoint).href; } catch { /* An unconfigured field needs the authored endpoint. */ }
+  if (!sameAddress) await address.fill(endpoint);
+  const secret = page.getByLabel('Transport token');
+  if (await secret.inputValue() !== token) await secret.fill(token);
+  if (deliveryToken) {
+    const access = page.getByLabel('Delivery Access token (optional, enables side questions)');
+    if (await access.inputValue() !== deliveryToken) await access.fill(deliveryToken);
+  }
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('.connection-status')).toHaveText('Connected');
   await closeSettings(page);

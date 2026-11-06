@@ -1661,8 +1661,8 @@ async fn frozen_child_message_continuation_survives_live_admission_and_binds_reg
         source_cut: Some(source.clone()),
         canonical_foreground: None,
         live_publication: None,
-        domain_revisions: std::collections::BTreeMap::new(),
-        collection_cuts: std::collections::BTreeMap::new(),
+        domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+        collection_cuts: crate::observation::metadata::MetadataFragment::default(),
     };
     let domain = "messages.message:frozen-instruction.blocks";
     let before = host

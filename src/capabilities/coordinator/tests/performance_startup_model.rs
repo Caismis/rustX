@@ -232,6 +232,7 @@ async fn measure(servers: usize, profile: Profile, order: ConversationOrder) -> 
             },
             estimator: Arc::new(crate::context::DefaultTokenEstimator),
             status_engine: None,
+            status_clock: Arc::new(crate::context::status::SystemClock),
         },
         tool_runtime,
         capability: owner,
