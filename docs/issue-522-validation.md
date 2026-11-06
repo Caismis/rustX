@@ -1,7 +1,7 @@
 # Automatic sequential compaction validation
 
 The implementation is based on `origin/main` at
-`c9ad6e345473b407b08870aebe6498c986c6b145`. It replaces authored compaction
+`a81d053f`. It replaces authored compaction
 tuning with a model-derived policy and one sequential Summary pipeline. The
 background operation lifecycle and final Web/TUI presentation are separate
 changes.
@@ -56,28 +56,28 @@ usage components explicitly unknown.
 
 ## Recorded verification
 
-Verification for implementation commit
-`6ae62f65902e92037285356e140d8f4bc4d14208` includes:
+Verification uses Rust 1.98.1, the locked provider emulator and the repository's
+FULL profile. The [current PR checks](https://github.com/Caismis/rustX/pull/531/checks)
+are the final-head merge authority, including Linux and macOS native suites,
+generated protocol, complete clients and real-browser acceptance.
 
-- Rust 1.98.1 formatting and strict all-target/all-feature Clippy.
-- An uninterrupted complete native library and boundary run: 5286 passed,
-  zero failed and 10 intentionally ignored.
-- External contracts 31, Provider 188, durable 147, real-process 67,
-  subagent 45, tools 135, configuration catalog 27 and managed-output 2 tests.
-- Real HTTP provider-emulator conformance for more than twelve accepted
-  chunks, Native-to-Prompt downgrade, cross-Provider/Profile selection,
-  repeated compaction and cancellation; all 58 emulator Python tests.
-- Authoritative Rust schema/TypeScript regeneration and protocol, Web and
-  TUI typechecks; Web production build, i18n, 336 source-provenance records,
-  notices for 349 dependencies, and 42 launcher tests.
-- Real App Server browser checks with the pinned Playwright image, including
-  compaction in English/light and Chinese/dark and the updated Settings view.
+The [current implementation run](https://github.com/Caismis/rustX/actions/runs/42136608086)
+passed format/strict Clippy, Linux deterministic contracts and boundary suites,
+generated v73 protocol, complete TUI and Web/Host/launcher suites, production
+browser inputs and macOS Desktop adapter/Host. The full macOS and browser jobs
+remain required gates; an interrupted local build is not a passing test run.
 
-The [FULL CI run](https://github.com/Caismis/rustX/actions/runs/42115386352)
-also passed Linux deterministic contracts and boundary suites, format/lint,
-generated-protocol drift, complete TUI and Web/Host/launcher suites, both
-browser acceptance shards and coverage, and the macOS Desktop adapter/Host
-job. The macOS full platform-boundary job remains a required merge gate.
+Real HTTP conformance covers more than twelve accepted chunks, one authorized
+Native-to-Prompt downgrade, cross-Provider/Profile selection, repeated compaction
+and cancellation. The provider emulator has 58 passing Python tests. Source and
+fixture hashes use canonical tracked bytes, independently of Windows checkout
+line endings; actual request and provenance bytes retain their native authority.
+
+The response-loss browser test waits for the actual MCP page before inspecting a
+retained editor. The unchanged original flow reproduced its navigation race;
+the corrected helper passed eight repeated gated runs and a final run using the
+repository fixture configuration. The strict shell screenshot comparator also
+passed four repetitions without changing its baseline or tolerance.
 
 The semantic corpus is maintained separately in
 [`tests/fixtures/compaction-quality`](../tests/fixtures/compaction-quality/README.md).
