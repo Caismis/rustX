@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ScheduleHeader, ScheduledWorkflowRecovery } from '../../../../protocol/app-server/v69';
+import type { ScheduleHeader, ScheduledWorkflowRecovery } from '../../../../protocol/app-server/v72';
 import { Button } from '../../presentation/primitives/Button';
 import { IconClockOutline16 } from '../../presentation/primitives/icons';
 import { useLocale } from '../../locale/react';

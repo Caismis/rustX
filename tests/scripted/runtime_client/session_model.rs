@@ -1288,17 +1288,7 @@ async fn a_rejected_model_update_changes_nothing() {
     )
     .await;
     let (attachment, subscription) = attach(&host);
-    receive_until(&host, &subscription, |event| {
-        event.event.facts().iter().any(|fact| {
-            matches!(
-                fact,
-                RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
-                    eligibility: rustx::runtime::adoption::AdoptionEligibility::Eligible
-                }
-            )
-        })
-    })
-    .await;
+    host.projection_settled().await;
     let (_, before) = host
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))

@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v69 envelope and method vocabulary.
+//! Rust authority for the App Server v72 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 69;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 72;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -853,6 +853,50 @@ pub enum Method {
         #[schemars(range(min = 1, max = 65_536))]
         max_bytes: u32,
     },
+    /// Connection-owned expanded-document scratch, never a source publication.
+    #[serde(rename = "workflow/documentBegin")]
+    WorkflowDocumentBegin {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        byte_length: u32,
+        sha256: String,
+    },
+    #[serde(rename = "workflow/documentWrite")]
+    WorkflowDocumentWrite {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowDocumentRef,
+        offset: u32,
+        data: String,
+    },
+    #[serde(rename = "workflow/documentFinish")]
+    WorkflowDocumentFinish {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowDocumentRef,
+    },
+    #[serde(rename = "workflow/documentRead")]
+    WorkflowDocumentRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowDocumentRef,
+        offset: u32,
+        max_bytes: u32,
+    },
+    #[serde(rename = "workflow/documentRelease")]
+    WorkflowDocumentRelease {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowDocumentRef,
+    },
+    #[serde(rename = "workflow/checkReportRead")]
+    WorkflowCheckReportRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowCheckReportRef,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        max_bytes: u32,
+    },
+    #[serde(rename = "workflow/checkReportRelease")]
+    WorkflowCheckReportRelease {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        reference: super::workflow_documents::WorkflowCheckReportRef,
+    },
     /// The Workflow files physically owned by exactly one source scope
     /// (Issue #491); never the merged effective catalog.
     #[serde(rename = "workflow/list")]
@@ -891,7 +935,7 @@ pub enum Method {
     WorkflowAnalyze {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         id: crate::runtime::workflow::WorkflowId,
-        document: Box<crate::workflow_file::WorkflowFileDocument>,
+        document: Box<super::workflow_documents::WorkflowDocumentRef>,
         generation: String,
         #[serde(default)]
         query: Option<crate::runtime::workflow::authoring::WorkflowAnalysisQuery>,
@@ -900,7 +944,7 @@ pub enum Method {
     WorkflowCheck {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         id: crate::runtime::workflow::WorkflowId,
-        document: Box<crate::workflow_file::WorkflowFileDocument>,
+        document: Box<super::workflow_documents::WorkflowDocumentRef>,
         /// A User (Global) file's explicit Workspace dependency context. A
         /// Workspace file is always checked in its own Workspace.
         #[serde(default)]
@@ -912,7 +956,9 @@ pub enum Method {
     SourcesWrite {
         target: crate::local_runtime::configuration::settings::SourceTarget,
         expected_revision: String,
-        mutation: crate::local_runtime::configuration::settings::SourceMutation,
+        mutation: crate::local_runtime::configuration::settings::SourceMutation<
+            Box<super::workflow_documents::WorkflowDocumentRef>,
+        >,
     },
     #[serde(rename = "session/settings")]
     SettingsRead { session_id: SessionId },
@@ -940,12 +986,6 @@ pub enum Method {
     },
     #[serde(rename = "session/configuration")]
     SessionConfiguration { session_id: SessionId },
-    #[serde(rename = "session/adoptConfiguration")]
-    AdoptConfiguration {
-        session_id: SessionId,
-        candidate: crate::local_runtime::configuration::application::ApplicationIdentity,
-        expected_binding: u64,
-    },
 }
 
 impl Method {
@@ -1028,6 +1068,13 @@ impl Method {
             | Self::SourcesValueRead { .. }
             | Self::WorkflowList { .. }
             | Self::WorkflowRead { .. }
+            | Self::WorkflowDocumentBegin { .. }
+            | Self::WorkflowDocumentWrite { .. }
+            | Self::WorkflowDocumentFinish { .. }
+            | Self::WorkflowDocumentRead { .. }
+            | Self::WorkflowDocumentRelease { .. }
+            | Self::WorkflowCheckReportRead { .. }
+            | Self::WorkflowCheckReportRelease { .. }
             | Self::WorkflowModelChoices { .. }
             | Self::WorkflowToolCatalog { .. }
             | Self::WorkflowCheck { .. }
@@ -1079,8 +1126,7 @@ impl Method {
             | Self::InteractionRespond { .. }
             | Self::InteractionCancel { .. }
             | Self::SourcesWrite { .. }
-            | Self::ConfigurationReconcile { .. }
-            | Self::AdoptConfiguration { .. } => true,
+            | Self::ConfigurationReconcile { .. } => true,
         }
     }
 }
@@ -1094,9 +1140,8 @@ pub enum ErrorData {
     SessionFileRead {
         reason: crate::tools::session_files::SessionFileReadFailure,
     },
-    ConfigurationAdoption {
-        rejection: crate::runtime::adoption::AdoptionError,
-    },
+    /// A newer Session binding superseded the model selection's fence.
+    ModelSelectionConflict,
     /// The Session's published Model Catalog does not admit its configured
     /// selection, so no work is accepted until `session/setModel` commits a
     /// selection it does admit. Nothing falls back to a default.
@@ -1470,11 +1515,14 @@ pub enum MethodResult {
     SourceSettings {
         projection: Box<crate::local_runtime::configuration::observation::BoundedSourceSettings>,
     },
+    WorkflowDocument { reference: super::workflow_documents::WorkflowDocumentRef },
+    WorkflowDocumentChunk { chunk: super::workflow_documents::WorkflowDocumentChunk },
+    WorkflowDocumentAccepted {},
     WorkflowLibrary {
         library: crate::local_runtime::workflow_authoring::WorkflowLibrary,
     },
     WorkflowSource {
-        source: Box<crate::local_runtime::workflow_authoring::WorkflowSource>,
+        source: Box<crate::local_runtime::workflow_authoring::WorkflowSource<Box<super::workflow_documents::WorkflowDocumentRef>>>,
     },
     WorkflowModelChoices {
         choices: crate::local_runtime::workflow_authoring::WorkflowModelChoices,
@@ -1482,9 +1530,9 @@ pub enum MethodResult {
     WorkflowToolCatalog {
         catalog: crate::local_runtime::workflow_tools::WorkflowToolCatalog,
     },
-    WorkflowCheck {
-        report: Box<crate::local_runtime::workflow_authoring::WorkflowCheckReport>,
-    },
+    WorkflowCheck { report: super::workflow_documents::WorkflowCheckReportRef },
+    WorkflowCheckReportChunk { chunk: super::workflow_documents::WorkflowCheckReportChunk },
+    WorkflowCheckReportReleased {},
     WorkflowAnalysis {
         report: Box<crate::local_runtime::workflow_authoring::WorkflowAnalysisReport>,
     },

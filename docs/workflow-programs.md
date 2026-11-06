@@ -638,7 +638,7 @@ completed. Native analysis exposes possible ancestors for these selectors.
 The compiler still requires matching types and proves at least one source on
 every activation, preserving rustX's definite-reference contract; ordinary
 nodes do not gain access to optional branch producers. The old flat named
-group output format is removed; App Server v69 requires the grouping flag.
+group output format is removed; App Server v72 requires the grouping flag.
 
 ### Code Execution and Variable Assigner
 
@@ -884,7 +884,7 @@ root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 
 | Bound | Limit | Admission/commit owner |
 | --- | --- | --- |
-| Complete YAML file / expanded file document / executable definition | 1 MiB / 768 KiB / 512 KiB | Native file owner and finite reader; compiler budgets executable bytes only |
+| Complete YAML file / expanded file document / executable definition | 16 MiB each, inclusive | Independent native byte dimensions; 64 KiB document chunks preserve the 1 MiB control-record bound |
 | Static nodes, including every nested graph | 256 | One compiler counter shared by all blocks |
 | Nested body depth | 8, root depth zero | Recursive compiler admission |
 | Loop `loop_count` | 1–100 rounds (Dify's `LOOP_NODE_MAX_COUNT`) | Trusted compiler ceiling |

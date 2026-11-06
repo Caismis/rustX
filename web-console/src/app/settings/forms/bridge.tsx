@@ -2,7 +2,7 @@ import { useTranslation } from '../../../locale/react';
 import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
-import type { SourceMutation } from '../../../../../protocol/app-server/v69';
+import type { SourceMutation } from '../../../../../protocol/app-server/v72';
 import { Button } from '../../../presentation/primitives/Button';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
@@ -381,7 +381,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         {presentation !== 'dialog' && removal}
         {(unit.intent || presentation === 'dialog') && <Button type="button" disabled={!unit.intent} onClick={unit.discard}>{presentation === 'dialog' ? tx('settings:models.reset-form') : tx('settings:bridge.discard-draft')}</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
-        {onCancel && <Button type="button" onClick={onCancel}>{tx('settings:aria.cancel')}</Button>}
+        {onCancel && <Button type="button" onClick={() => { unit.discard(); onCancel(); }}>{tx('settings:aria.cancel')}</Button>}
       </div>
     </fieldset>
   </form></UnitReset.Provider>;

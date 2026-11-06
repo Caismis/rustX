@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { WorkflowCheckReport } from '../../protocol/app-server/v69';
+import type { WorkflowCheckReport } from '../../protocol/app-server/v72';
 import { changeNode, nodeTemplate } from '../src/app/workflows/document/commands';
 import { checklist } from '../src/app/workflows/document/checklist';
 import { toggleAggregateGroups } from '../src/app/workflows/document/aggregate';

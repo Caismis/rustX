@@ -167,6 +167,7 @@ export class RustxTuiApp {
     connection: this.#connectionLabel(),
     session: this.#connecting ? undefined : this.#sessionInfo,
     conversation: this.#connecting ? undefined : this.#conversationContext(),
+    application: this.#connecting ? undefined : this.#session?.application,
   }));
   readonly #editor: ComposerEditor;
   readonly #promptHistory: string[] = [];

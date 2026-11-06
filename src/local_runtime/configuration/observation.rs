@@ -793,7 +793,6 @@ mod application_tests {
                     diagnostic: "é\\\"failure".repeat(40_000),
                 },
             )]),
-            candidate: None,
         };
         let bounded = session_application(&source).unwrap();
         assert!(bounded.inline.is_none());

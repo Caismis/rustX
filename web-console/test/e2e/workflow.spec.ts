@@ -1,24 +1,34 @@
 import { connectRemote } from './shell-actions';
 import { openEmptySession, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
+import { wireProbe } from './wire-probe';
 
 test('native Workflow Agent child composes with Chat, Trace, reload and resource inventory', async ({ page }) => {
   const fixture = await startDogfood('web_workflow_observation'); let passed = false;
+  const wire = await wireProbe(page);
+  let session: string | undefined;
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const workflowPath = join(fixture.workspaceA, '.agents/workflows/review_pr.yaml');
   const agentPath = join(fixture.workspaceA, '.agents/agents/reviewer.toml');
-  const workflow = readFileSync(workflowPath, 'utf8'), agent = readFileSync(agentPath, 'utf8');
+  const original = readFileSync(workflowPath, 'utf8');
+  const prefix = `${original}\n#`;
+  const workflow = prefix + 'x'.repeat(16_777_216 - Buffer.byteLength(prefix));
+  writeFileSync(workflowPath, workflow);
+  const agent = readFileSync(agentPath, 'utf8');
   const connect = async () => {
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    // Transport initialization precedes restoration of the selected Session.
+    // Large authored inputs must finish native attachment before replay checks.
+    if (session) await wire.attachedTarget(session);
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
-    await openEmptySession(page, fixture, 'Workspace A');
+    session = await openEmptySession(page, fixture, 'Workspace A');
     await page.getByLabel('Message', { exact: true }).fill('workflow conformance request');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('workflow-child-admitted');
@@ -27,11 +37,9 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     const child = page.locator('[data-workflow-activation-id]');
     const run = page.locator('[data-workflow-run-id]');
     // Chat restores request notices independently of the Workflow header.
-    // Wait for this fixture's initial prompt before choosing pointer coordinates;
-    // its late insertion otherwise moves the node during the click itself.
-    const waitInitialPrompt = () => expect(page.locator('[data-system-change="prompt"]:visible')).toHaveCount(1);
+    // Chat hides the initial system prompt (Harness hidden rows), so no late
+    // row insertion can move the node under the pointer.
     const openChild = async () => {
-      await waitInitialPrompt();
       await run.getByRole('button', { name: 'View review', exact: true }).click();
     };
     await expect(child).toHaveCount(1); await expect(run).toHaveCount(1);
@@ -97,7 +105,6 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
     await expect(run).toContainText('completed');
     await expect(catalog).toHaveText('1 subagents');
-    await waitInitialPrompt();
     await run.getByRole('button').first().click();
     await openChild();
     await expect(childView).toContainText('One-shot subagent record');
@@ -107,7 +114,6 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childView).toContainText('One-shot subagent record');
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await page.reload(); await connect();
-    await waitInitialPrompt();
     await run.getByRole('button').first().click();
     await openChild();
     await expect(childView).toContainText('One-shot subagent record');

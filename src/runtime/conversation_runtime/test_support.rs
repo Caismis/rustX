@@ -1071,36 +1071,6 @@ pub(super) fn commit_background(
     execution_id
 }
 
-/// Drains `pending` until the runtime's latest published configuration-
-/// adoption eligibility is `expected`. Consecutive publications must
-/// differ: the runtime never republishes an unchanged value. The queue's
-/// wake permit makes the drain/wait pair lossless, so nothing polls.
-pub(super) async fn published_eligibility_until(
-    pending: &PendingObservations,
-    latest: &mut Option<crate::runtime::adoption::AdoptionEligibility>,
-    expected: crate::runtime::adoption::AdoptionEligibility,
-) {
-    within_liveness_guard("published adoption eligibility", async {
-        loop {
-            for observation in pending.drain_fixture_facts() {
-                if let ConversationObservation::AdoptionEligibility(eligibility) = observation {
-                    assert_ne!(
-                        latest.as_ref(),
-                        Some(&eligibility),
-                        "eligibility republished unchanged"
-                    );
-                    *latest = Some(eligibility);
-                }
-            }
-            if latest.as_ref() == Some(&expected) {
-                return;
-            }
-            pending.wait().await;
-        }
-    })
-    .await;
-}
-
 // Shared native child invariant for ordinary Subagents and Workflow Agents.
 // Parent admission is held solely to keep the fixture occurrence pending.
 pub(super) fn assert_pending_mutation_preserves_child(

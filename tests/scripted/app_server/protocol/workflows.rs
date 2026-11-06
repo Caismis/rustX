@@ -9,7 +9,7 @@ use crate::local_runtime::workflow_authoring::{
 };
 use crate::runtime::workflow::WorkflowId;
 
-fn workflow(id: &str, edit: WorkflowEdit) -> SourceMutation {
+fn workflow<D>(id: &str, edit: WorkflowEdit<D>) -> SourceMutation<D> {
     SourceMutation::Workflow {
         id: WorkflowId::parse(id).unwrap(),
         edit,
@@ -90,6 +90,7 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
         else {
             panic!("check")
         };
+        let report = read_report(&connection, &target, &report).await;
         assert!(matches!(report.structure, WorkflowStructure::Valid { .. }));
         assert!(matches!(
             report.dependencies,
@@ -99,7 +100,8 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
 
         // As a Dify draft, an unfinished save commits; reading it back
         // keeps the document and names its first problem by path.
-        let mut broken = document.clone();
+        let mut broken: Box<crate::workflow_file::WorkflowFileDocument> =
+            Box::new(read_document(&connection, &target, &document).await);
         let start = broken
             .block
             .nodes
@@ -133,7 +135,7 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
                 mutation: workflow(
                     "review",
                     WorkflowEdit::Replace {
-                        document: Box::new(*broken),
+                        document: Box::new(stage_document(&connection, &target, &broken).await),
                     },
                 ),
             },
@@ -295,18 +297,138 @@ async fn issue491_saved_workflow_files_change_only_future_adoption() {
             )
             .await
             .unwrap();
-        // File commit and publication are separate facts from adoption: the
-        // Session keeps its admitted program until it adopts the candidate.
+        // File commit is a separate fact from the Session commit, which native
+        // performs automatically at the idle Session's boundary.
         assert!(receipt.configuration_revision.is_some());
-        let application = super::super::configuration::settled(&f, 0).await;
-        assert_eq!(description().as_deref(), Some("First description"));
-        let candidate = application.candidate.expect("a newer prepared candidate");
-        f.manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        super::super::configuration::applied(&f, 0).await;
         assert_eq!(description().as_deref(), Some("Second description"));
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     })
     .await;
+}
+
+async fn stage_document(
+    connection: &AppServerConnection,
+    target: &SourceTarget,
+    document: &crate::workflow_file::WorkflowFileDocument,
+) -> crate::app_server::workflow_documents::WorkflowDocumentRef {
+    use base64::Engine;
+    use sha2::Digest;
+    let bytes = crate::app_server::wire::workflow_document_to_bytes(document).unwrap();
+    let MethodResult::WorkflowDocument { reference } = call(
+        connection,
+        1000,
+        Method::WorkflowDocumentBegin {
+            target: target.clone(),
+            byte_length: u32::try_from(bytes.len()).unwrap(),
+            sha256: format!("{:x}", sha2::Sha256::digest(&bytes)),
+        },
+    )
+    .await
+    else {
+        panic!("document begin")
+    };
+    for (index, chunk) in bytes.chunks(65_536).enumerate() {
+        call(
+            connection,
+            1001,
+            Method::WorkflowDocumentWrite {
+                target: target.clone(),
+                reference: reference.clone(),
+                offset: u32::try_from(index * 65_536).unwrap(),
+                data: base64::engine::general_purpose::STANDARD.encode(chunk),
+            },
+        )
+        .await;
+    }
+    call(
+        connection,
+        1002,
+        Method::WorkflowDocumentFinish {
+            target: target.clone(),
+            reference: reference.clone(),
+        },
+    )
+    .await;
+    reference
+}
+
+async fn read_document(
+    connection: &AppServerConnection,
+    target: &SourceTarget,
+    reference: &crate::app_server::workflow_documents::WorkflowDocumentRef,
+) -> crate::workflow_file::WorkflowFileDocument {
+    use base64::Engine;
+    let mut bytes = Vec::new();
+    loop {
+        let MethodResult::WorkflowDocumentChunk { chunk } = call(
+            connection,
+            1003,
+            Method::WorkflowDocumentRead {
+                target: target.clone(),
+                reference: reference.clone(),
+                offset: u32::try_from(bytes.len()).unwrap(),
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("document read")
+        };
+        bytes.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.data)
+                .unwrap(),
+        );
+        if chunk.next_offset.is_none() {
+            break;
+        }
+    }
+    crate::app_server::wire::workflow_document_from_json(&String::from_utf8(bytes).unwrap())
+        .unwrap()
+}
+
+async fn read_report(
+    connection: &AppServerConnection,
+    target: &SourceTarget,
+    reference: &crate::app_server::workflow_documents::WorkflowCheckReportRef,
+) -> crate::local_runtime::workflow_authoring::WorkflowCheckReport {
+    use base64::Engine as _;
+    let mut bytes = Vec::new();
+    loop {
+        let MethodResult::WorkflowCheckReportChunk { chunk } = call(
+            connection,
+            1004,
+            Method::WorkflowCheckReportRead {
+                target: target.clone(),
+                reference: reference.clone(),
+                offset: bytes.len() as u64,
+                max_bytes: 65_536,
+            },
+        )
+        .await
+        else {
+            panic!("report chunk")
+        };
+        bytes.extend(
+            base64::engine::general_purpose::STANDARD
+                .decode(chunk.data)
+                .unwrap(),
+        );
+        if chunk.next_offset.is_none() {
+            break;
+        }
+    }
+    call(
+        connection,
+        1005,
+        Method::WorkflowCheckReportRelease {
+            target: target.clone(),
+            reference: reference.clone(),
+        },
+    )
+    .await;
+    crate::app_server::wire::workflow_check_report_from_json(&String::from_utf8(bytes).unwrap())
+        .unwrap()
 }

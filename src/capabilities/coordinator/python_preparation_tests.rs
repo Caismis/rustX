@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use futures_util::FutureExt;
 use tokio::sync::{Semaphore, mpsc};
 
 use super::{CapabilityCoordinator, CapabilityCoordinatorConfig};
@@ -159,7 +158,11 @@ impl PreparationFixture {
 
     fn with_interpreter(names: &[&str], interpreter_script: Option<String>) -> Self {
         let directory = tempfile::tempdir().expect("fixture directory");
-        let workspace_root = directory.path().join("workspace");
+        let workspace_root = directory
+            .path()
+            .canonicalize()
+            .expect("canonical root")
+            .join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
         let mut packages = BTreeMap::new();
         for name in names {
@@ -169,7 +172,11 @@ impl PreparationFixture {
             std::fs::write(root.join("requirements.txt"), b"").expect("requirements");
             packages.insert(
                 ToolSourceId::ManagedPython((*name).to_owned()),
-                crate::tools::python::discover_package(&root, name),
+                crate::tools::python::discover_package(
+                    &root,
+                    name,
+                    &crate::runtime::CancellationSignal::new(),
+                ),
             );
         }
         let demand = ToolSourceDemand::new(
@@ -330,14 +337,19 @@ async fn overlapping_python_preparations_coalesce_identical_fingerprints() {
         None,
         |_, binding| std::future::ready(binding),
     ));
-    assert!(first.as_mut().now_or_never().is_none());
-    assert!(second.as_mut().now_or_never().is_none());
-    assert!(
-        joins
-            .try_recv()
-            .expect("second caller joined the build")
-            .starts_with("sha256:")
-    );
+    // Source verification runs on blocking owners; drive both preparations
+    // until the explicit coalescing observation, rather than assuming that
+    // one poll completes physical filesystem work.
+    let joined = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            joined = joins.recv() => joined.expect("second caller joined the build"),
+            _ = &mut first => panic!("first build cannot settle before its release"),
+            _ = &mut second => panic!("second build cannot settle before its release"),
+        }
+    })
+    .await
+    .expect("both preparations reach the physical build gate");
+    assert!(joined.starts_with("sha256:"));
     assert_eq!(
         fixture.runner.probe_calls.load(Ordering::SeqCst),
         4,

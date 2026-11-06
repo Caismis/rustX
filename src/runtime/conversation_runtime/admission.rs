@@ -99,15 +99,6 @@ pub(crate) enum IdleBusyReason {
     AdmissionChanged,
 }
 
-/// Which owners one evaluation of the native idle rule consults.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum IdleProbe {
-    /// Every owner, including the durable pending-inbox and Goal probes.
-    Durable,
-    /// Only in-memory owners; never reads the durable store.
-    InMemory,
-}
-
 /// The accepted identity of one submitted inbound message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundAdmission {
@@ -196,30 +187,17 @@ impl SemanticInboundClass {
 }
 
 impl RuntimeInner {
-    /// Begins or joins the one semantic runtime drain.
+    /// The one native residency idle rule.
     ///
     /// The coordinator lock serializes the lifecycle transition with inbound
     /// acceptance, model updates, and attempt admission. The shared
     /// lifecycle admission guards serialize it with background ownership and
     /// capability commits that have their own native synchronization owner.
+    /// Configuration commit uses its own narrower safety rule, so pending
+    /// work never makes a ready configuration ineligible.
     pub(super) fn idle_epoch_locked(
         &self,
         state: &CoordinatorState,
-    ) -> Result<u64, IdleBusyReason> {
-        self.idle_epoch_probed(state, IdleProbe::Durable)
-    }
-
-    /// The one native idle rule. `IdleProbe::Durable` is exact and is what
-    /// residency and the adoption gate use. `IdleProbe::InMemory` omits the two
-    /// durable-store probes — pending inbox and Goal continuation authority —
-    /// for the advisory eligibility publisher, which must never become a
-    /// second consumer of durable reads: whenever either holds while the
-    /// runtime is otherwise idle, the admission pass that follows admits an
-    /// attempt, and that admission is itself an announced busy owner.
-    pub(super) fn idle_epoch_probed(
-        &self,
-        state: &CoordinatorState,
-        probe: IdleProbe,
     ) -> Result<u64, IdleBusyReason> {
         use IdleBusyReason as Busy;
         let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
@@ -254,17 +232,13 @@ impl RuntimeInner {
         // Active Goal whose budget is exhausted all own nothing — an
         // exhausted Goal therefore cannot spin to pin residency forever.
         if admissible
-            && probe == IdleProbe::Durable
             && self
                 .goal_owns_future_work(state)
                 .map_err(|_| Busy::Durability)?
         {
             return Err(Busy::AutonomousExtension);
         }
-        if admissible
-            && probe == IdleProbe::Durable
-            && self.mailbox.has_pending().map_err(|_| Busy::Durability)?
-        {
+        if admissible && self.mailbox.has_pending().map_err(|_| Busy::Durability)? {
             return Err(Busy::Inbound);
         }
         if self.interaction.pending_count() != 0 {
@@ -417,14 +391,14 @@ impl RuntimeInner {
         // missing runtime nor silently leave a conversation that never
         // admits anything.
         //
-        // The worker is also the publisher of configuration-adoption
-        // eligibility after activation. Every eligibility input either crosses a counted
-        // lifecycle admission (attempts, compaction, inbound, interactions,
-        // background and subagent ownership, Goal writes), moves the lifecycle
-        // itself, or changes inside an admission pass this worker runs or is
-        // woken for. The lifecycle announcement is enabled before each
-        // derivation, so a change that lands after it re-derives: the
-        // publication is level-triggered, not inferred from event traffic.
+        // The worker is also the owner of the staged configuration commit
+        // between Attempts. Every commit blocker either crosses a counted
+        // lifecycle admission (attempts, compaction, background and subagent
+        // ownership), moves the lifecycle itself, or changes inside an
+        // admission pass this worker runs or is woken for. The lifecycle
+        // announcement is enabled before each pass, so a blocker that settles
+        // after it reruns the commit: progress is level-triggered, with no
+        // client, polling or retry timer.
         self.executor.spawn(async move {
             let mut admit = false;
             loop {
@@ -433,7 +407,7 @@ impl RuntimeInner {
                 lifecycle_changed.as_mut().enable();
                 // Retain the native owner across a concrete manual-tail join,
                 // then release it before the ordinary idle wait below.
-                let catalog_commit_blocked;
+                let commit_blocked;
                 {
                     let Some(inner) = weak.upgrade() else {
                         break;
@@ -442,12 +416,19 @@ impl RuntimeInner {
                     {
                         let mut state = inner.lock_state();
                         inner.publish_runtime_catalogs_locked(&mut state);
+                        inner.commit_staged_configuration_locked(&mut state);
+                        if !state.configuration_commit_waiting
+                            && std::mem::take(&mut state.configuration_admission_deferred)
+                        {
+                            admit = true;
+                        }
                     }
                     if admit && !inner.admit_next_scheduled() {
                         inner.admit_next_attempt();
                     }
-                    inner.publish_adoption_eligibility();
-                    catalog_commit_blocked = inner.lock_state().catalog_commit_blocked;
+                    let state = inner.lock_state();
+                    commit_blocked =
+                        state.catalog_commit_blocked || state.configuration_commit_waiting;
                 }
                 admit = tokio::select! {
                     biased;
@@ -455,7 +436,7 @@ impl RuntimeInner {
                     () = mailbox_wake.notified() => true,
                     () = wake.eligibility.notified() => false,
                     () = &mut lifecycle_changed => false,
-                    () = lifecycle.commit_available(), if catalog_commit_blocked => false,
+                    () = lifecycle.commit_available(), if commit_blocked => false,
                     result = catalog_changes.changed() => {
                         if result.is_err() { break; }
                         false
@@ -465,10 +446,12 @@ impl RuntimeInner {
                     break;
                 }
             }
-            // The lifecycle has left `Running`; publish that before the exit
-            // boundary drain waits on, so no publication follows quiescence.
+            // The lifecycle has left `Running`: a candidate still staged can
+            // never commit, so it is superseded before the exit boundary drain
+            // waits on, and no publication follows quiescence.
             if let Some(inner) = weak.upgrade() {
-                inner.publish_adoption_eligibility();
+                let mut state = inner.lock_state();
+                inner.commit_staged_configuration_locked(&mut state);
             }
             wake.mark_exited();
             #[cfg(test)]
@@ -540,6 +523,17 @@ impl RuntimeInner {
             return;
         }
         self.publish_runtime_catalogs_locked(&mut state);
+        // A ready configuration commits before this independent Attempt is
+        // admitted; a candidate a real owner still blocks stays staged and the
+        // Attempt runs with the last committed configuration.
+        self.commit_staged_configuration_locked(&mut state);
+        if state.configuration_commit_waiting {
+            // A ready candidate is only waiting for the capability commit
+            // boundary: this Attempt must capture it, so the pass is resumed
+            // by the worker once that boundary is released.
+            state.configuration_admission_deferred = true;
+            return;
+        }
         if self.runtime_catalog_preparer.get().is_some()
             && (state.catalog_commit_blocked
                 || state.pending_runtime_catalog.is_some()

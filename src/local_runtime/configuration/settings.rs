@@ -217,7 +217,7 @@ pub struct EffectiveConfiguration {
     pub available_tools: Vec<crate::tools::types::ToolDefinition>,
     pub session_model: Option<crate::model::session::SessionModelConfig>,
     pub effective_model: crate::model::session::SessionModelView,
-    pub admitted_attempt: Option<crate::runtime::adoption::AdmittedConfiguration>,
+    pub admitted_attempt: Option<crate::runtime::configuration_commit::AdmittedConfiguration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -319,8 +319,9 @@ pub enum ConfigMutation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Finite wire command; parsed and consumed once per CAS operation.
-pub enum SourceMutation {
-    /// Explicit repair of an unparseable configuration document. Never used
+#[schemars(rename = "SourceMutation")]
+pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
+    /// Explicit repair of a configuration document violating its source contract. Never used
     /// for ordinary semantic-unit editing and never accepts an invalid source.
     RepairConfig {
         document: String,
@@ -340,7 +341,7 @@ pub enum SourceMutation {
     /// (Issue #491). The expected revision is that file's.
     Workflow {
         id: crate::runtime::workflow::WorkflowId,
-        edit: super::super::workflow_authoring::WorkflowEdit,
+        edit: super::super::workflow_authoring::WorkflowEdit<D>,
     },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -411,7 +412,12 @@ fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<Sour
             // A document violating its source contract is not editable either:
             // ordinary writes refuse it and manual repair accepts it.
             Ok(document) => {
-                match super::capture::source_restrictions(&path, &document, workspace) {
+                match super::capture::source_restrictions(&path, &document, workspace).and_then(
+                    |()| {
+                        super::semantics::source_semantics(&document)
+                            .map_err(|failure| failure.launch(Some(path.clone())))
+                    },
+                ) {
                     Ok(()) => (Some(redact(document)), None),
                     Err(failure) => (
                         None,
@@ -737,6 +743,10 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
         base_url: String,
         api_key: String,
     }
+    // Every managed configuration candidate, including manual source repair,
+    // satisfies the same source-intrinsic constraints used for source health.
+    // References and defaults supplied by another scope are not required here.
+    super::semantics::source_semantics(&document).map_err(|_| SettingsError::Invalid)?;
     // Encoding stays inside native authority, so the authored environment keeps
     // its literal values here; only the wire projection redacts them.
     let document = document.project(
@@ -848,7 +858,11 @@ impl UserConfigManager {
                     &error,
                 )),
         }
-        match super::super::managed_python_resources::discover(workspace, &user) {
+        match super::super::managed_python_resources::discover_controlled(
+            workspace,
+            &user,
+            &self.resource_io,
+        ) {
             Ok(catalog) => {
                 inventory
                     .definitions
@@ -887,10 +901,15 @@ impl UserConfigManager {
                             ),
                         },
                     )
+                    .with_cancellation(self.resource_io.clone())
                     .discover()
                 })
         } else {
-            Some(crate::skills::SkillDiscovery::user_root(user.join("skills")).discover())
+            Some(
+                crate::skills::SkillDiscovery::user_root(user.join("skills"))
+                    .with_cancellation(self.resource_io.clone())
+                    .discover(),
+            )
         };
         if let Some(skills) = skills {
             inventory.definitions.extend(
@@ -967,6 +986,58 @@ impl UserConfigManager {
         &self,
         target: &SourceTarget,
     ) -> Result<(SourceSettings, String), SettingsError> {
+        self.with_source_documents(target, |user, workspace| {
+            self.capture_round(target, user, workspace)
+        })
+    }
+
+    /// Registered Model choices depend only on authored configuration documents.
+    /// Keep their source fence without scanning unrelated package assets.
+    pub(in crate::local_runtime) fn capture_authored_settings(
+        &self,
+        target: &SourceTarget,
+    ) -> Result<(Option<RuntimeLayer>, String), SettingsError> {
+        self.with_source_documents(target, |user, workspace| {
+            let user_bytes = user.read().map_err(|_| SettingsError::Io)?;
+            let workspace_bytes = workspace
+                .map(AdmittedSource::read)
+                .transpose()
+                .map_err(|_| SettingsError::Io)?
+                .flatten();
+            let resolved = compose_authored_layers(
+                user.path(),
+                workspace.map(AdmittedSource::path),
+                user_bytes.as_deref(),
+                workspace_bytes.as_deref(),
+                &mut BTreeMap::new(),
+            );
+            let mut manifest =
+                BTreeMap::from([(user.path().to_path_buf(), revision(user_bytes.as_deref()))]);
+            if let Some(document) = workspace {
+                manifest.insert(
+                    document.path().to_path_buf(),
+                    revision(workspace_bytes.as_deref()),
+                );
+            }
+            verify_authored_documents(
+                target,
+                user,
+                workspace,
+                user_bytes.as_deref(),
+                workspace_bytes.as_deref(),
+            )?;
+            Ok((
+                resolved.ok(),
+                super::capture::source_manifest_revision(&manifest),
+            ))
+        })
+    }
+
+    fn with_source_documents<T>(
+        &self,
+        target: &SourceTarget,
+        capture: impl Fn(&AdmittedSource, Option<&AdmittedSource>) -> Result<T, SettingsError>,
+    ) -> Result<T, SettingsError> {
         target.validate()?;
         let user = self.config_path(&SourceTarget::User);
         let workspace = target
@@ -998,19 +1069,15 @@ impl UserConfigManager {
                     None => unlocked.push(document),
                 }
             }
-            let captured = self
-                .capture_round(target, &user, workspace.as_ref())
-                .map_err(|error| {
-                    // Whatever failed, a round whose pathname no longer names
-                    // an admitted directory is refused as redirected.
-                    if user.redirected()
-                        || workspace.as_ref().is_some_and(AdmittedSource::redirected)
-                    {
-                        SettingsError::Invalid
-                    } else {
-                        error
-                    }
-                });
+            let captured = capture(&user, workspace.as_ref()).map_err(|error| {
+                // Whatever failed, a round whose pathname no longer names
+                // an admitted directory is refused as redirected.
+                if user.redirected() || workspace.as_ref().is_some_and(AdmittedSource::redirected) {
+                    SettingsError::Invalid
+                } else {
+                    error
+                }
+            });
             let mut appeared = false;
             for document in unlocked {
                 match document.lock_exists().map_err(|_| refused(target)) {
@@ -1050,8 +1117,12 @@ impl UserConfigManager {
                 .collect();
         let resource_revisions: BTreeMap<_, _> = roots
             .iter()
-            .map(|(_, root)| {
-                let revision = super::super::resource_directory::revision(root);
+            .map(|(scope, root)| {
+                let revision = super::super::resource_directory::revision_with_cancellation(
+                    root,
+                    *scope,
+                    &self.resource_io,
+                );
                 (root.clone(), revision)
             })
             .collect();
@@ -1065,39 +1136,13 @@ impl UserConfigManager {
         }
         let input_revision = super::capture::source_manifest_revision(&manifest);
         let mut provenance = BTreeMap::new();
-        let resolved = (|| {
-            // Composition reads each document under its own source contract,
-            // exactly as its source view and Session resolution do.
-            let mut merged = RuntimeLayer::default();
-            let user_layer =
-                super::capture::parse_layer(&user, user_bytes.as_deref().unwrap_or(b""), false)
-                    .map_err(|_| SettingsError::Invalid)?;
-            merged.overlay(
-                user_layer,
-                &super::Origin::User {
-                    document: user.clone(),
-                    base: user.parent().ok_or(SettingsError::Invalid)?.into(),
-                },
-                &mut provenance,
-            );
-            if let Some(path) = &workspace {
-                let layer = super::capture::parse_layer(
-                    path,
-                    workspace_bytes.as_deref().unwrap_or(b""),
-                    true,
-                )
-                .map_err(|_| SettingsError::Invalid)?;
-                merged.overlay(
-                    layer,
-                    &super::Origin::Workspace {
-                        document: path.clone(),
-                        base: path.parent().ok_or(SettingsError::Invalid)?.into(),
-                    },
-                    &mut provenance,
-                );
-            }
-            Ok::<_, SettingsError>(merged)
-        })();
+        let resolved = compose_authored_layers(
+            &user,
+            workspace.as_deref(),
+            user_bytes.as_deref(),
+            workspace_bytes.as_deref(),
+            &mut provenance,
+        );
         let prospective_approval_mode = resolved
             .as_ref()
             .ok()
@@ -1165,26 +1210,21 @@ impl UserConfigManager {
         };
         #[cfg(test)]
         self.test_hooks.reach("before_capture_verification");
-        for (scope, document, captured) in
-            std::iter::once((SourceScope::User, user_document, user_bytes)).chain(
-                workspace_document
-                    .map(|document| (SourceScope::Workspace, document, workspace_bytes)),
-            )
-        {
-            let expected = revision(captured.as_deref());
-            let actual = revision(reread(document, target)?.as_deref());
-            if actual != expected {
-                return Err(SettingsError::Conflict {
-                    scope,
-                    expected,
-                    actual,
-                });
-            }
-        }
+        verify_authored_documents(
+            target,
+            user_document,
+            workspace_document,
+            user_bytes.as_deref(),
+            workspace_bytes.as_deref(),
+        )?;
         for (scope, root) in roots {
             let expected = &result.resource_revisions[&root];
-            let actual = super::super::resource_directory::revision(&root);
-            if actual != *expected {
+            let actual = super::super::resource_directory::revision_with_cancellation(
+                &root,
+                scope,
+                &self.resource_io,
+            );
+            if !super::super::resource_directory::same_capture(expected, &actual) {
                 return Err(SettingsError::Conflict {
                     scope,
                     expected: expected.clone(),
@@ -1250,6 +1290,11 @@ impl UserConfigManager {
         if capacity.is_some() {
             self.test_hooks.reach("workflow_capacity_locked");
         }
+        let source = if matches!(&mutation, SourceMutation::Workflow { .. }) {
+            source.with_byte_limit(crate::workflow_file::MAX_WORKFLOW_FILE_BYTES as u64)
+        } else {
+            source
+        };
         let committed_revision;
         {
             let _lock = source.lock(name).map_err(|error| {
@@ -1278,7 +1323,7 @@ impl UserConfigManager {
                         original.as_deref().unwrap_or(b""),
                         scope == SourceScope::Workspace,
                     )
-                    .is_ok()
+                    .is_ok_and(|layer| super::semantics::source_semantics(&layer).is_ok())
                     {
                         return Err(SettingsError::Invalid);
                     }
@@ -1307,6 +1352,8 @@ impl UserConfigManager {
                         scope == SourceScope::Workspace,
                     )
                     .map_err(|_| SettingsError::Invalid)?;
+                    super::semantics::source_semantics(&document)
+                        .map_err(|_| SettingsError::Invalid)?;
                     apply(&mut document, mutation)?;
                     Some(encode(document)?)
                 }
@@ -1431,7 +1478,7 @@ impl UserConfigManager {
             }
         };
         if let Some(bytes) = candidate {
-            if !crate::bounded_file::within_bound(bytes) {
+            if bytes.len() as u64 > source.byte_limit() {
                 return Err(SettingsError::Invalid);
             }
             #[cfg(test)]
@@ -1495,6 +1542,62 @@ impl UserConfigManager {
             _ => SettingsError::Committed,
         }
     }
+}
+
+fn compose_authored_layers(
+    user: &Path,
+    workspace: Option<&Path>,
+    user_bytes: Option<&[u8]>,
+    workspace_bytes: Option<&[u8]>,
+    provenance: &mut BTreeMap<String, super::Origin>,
+) -> Result<RuntimeLayer, SettingsError> {
+    let mut merged = RuntimeLayer::default();
+    let layer = super::capture::parse_layer(user, user_bytes.unwrap_or(b""), false)
+        .map_err(|_| SettingsError::Invalid)?;
+    merged.overlay(
+        layer,
+        &super::Origin::User {
+            document: user.to_path_buf(),
+            base: user.parent().ok_or(SettingsError::Invalid)?.to_path_buf(),
+        },
+        provenance,
+    );
+    if let Some(path) = workspace {
+        let layer = super::capture::parse_layer(path, workspace_bytes.unwrap_or(b""), true)
+            .map_err(|_| SettingsError::Invalid)?;
+        merged.overlay(
+            layer,
+            &super::Origin::Workspace {
+                document: path.to_path_buf(),
+                base: path.parent().ok_or(SettingsError::Invalid)?.to_path_buf(),
+            },
+            provenance,
+        );
+    }
+    Ok(merged)
+}
+
+fn verify_authored_documents(
+    target: &SourceTarget,
+    user: &AdmittedSource,
+    workspace: Option<&AdmittedSource>,
+    user_bytes: Option<&[u8]>,
+    workspace_bytes: Option<&[u8]>,
+) -> Result<(), SettingsError> {
+    for (scope, document, captured) in std::iter::once((SourceScope::User, user, user_bytes))
+        .chain(workspace.map(|document| (SourceScope::Workspace, document, workspace_bytes)))
+    {
+        let expected = revision(captured);
+        let actual = revision(reread(document, target)?.as_deref());
+        if actual != expected {
+            return Err(SettingsError::Conflict {
+                scope,
+                expected,
+                actual,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

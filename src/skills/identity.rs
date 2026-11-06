@@ -1,16 +1,16 @@
 //! Deterministic content-derived Skill package version identity (M6).
 //!
-//! [`package_version_id`] computes the `SkillVersionId` of an accepted
+//! [`inspect_package`] computes the `SkillVersionId` of an accepted
 //! Skill package as SHA-256 over the complete package content in the stable
 //! textual form `sha256:<64 lowercase hex characters>`.
 //!
 //! The digest covers every regular package file recursively:
 //!
 //! ```text
-//! rustx-skill-v1
-//! path=<workspace/package-relative path>
-//! len=<file length>
-//! <raw file bytes>
+//! rustx-skill-v2
+//! <u64 big-endian path byte length><raw package-relative OS path bytes>
+//! <u64 big-endian file byte length>
+//! <SHA-256 of complete file bytes, verified by a second content read>
 //! ```
 //!
 //! Files are processed in deterministic sorted workspace-relative path
@@ -24,7 +24,6 @@
 //! version without changing environment identities when the dependency
 //! inputs are unchanged.
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -32,71 +31,97 @@ use sha2::{Digest, Sha256};
 use crate::runtime::identity::SkillVersionId;
 
 /// The format/version domain separator of the Skill package digest.
-const SKILL_VERSION_DOMAIN: &[u8] = b"rustx-skill-v1\n";
+const SKILL_VERSION_DOMAIN: &[u8] = b"rustx-skill-v2\n";
 
-/// Computes the deterministic content-derived version identity of one
-/// accepted Skill package.
-///
-/// `markdown_bytes` must be the exact bytes of `SKILL.md` read during
-/// discovery, so the digest covers the exact accepted package state without
-/// a second read of the primary instructions file.
-///
+/// Computes identity over complete accepted bytes with fixed-buffer I/O.
+/// No package or individual-file byte admission limit applies.
 /// # Errors
-///
-/// Returns a human-readable failure when a package file cannot be read.
+/// Rejects unsafe paths, non-regular files, concurrent edits and I/O failures.
+#[cfg(test)]
 pub fn package_version_id(
     package_root: &Path,
     files: &[PathBuf],
-    markdown_bytes: &[u8],
 ) -> Result<SkillVersionId, String> {
+    inspect_package(
+        package_root,
+        files,
+        &crate::runtime::CancellationSignal::new(),
+    )
+    .map(|(identity, _)| identity)
+}
+
+/// Capture only the frontmatter while hashing the very same SKILL.md read.
+/// Body bytes are validated as UTF-8 and hashed, never retained.
+pub(crate) fn inspect_package(
+    root: &Path,
+    files: &[PathBuf],
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<(SkillVersionId, Vec<u8>), String> {
+    use crate::package_io::{PackageDirectory, stream};
+    let directory = PackageDirectory::open(root).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
-    let mut remaining = 16 * 1024 * 1024_u64;
     hasher.update(SKILL_VERSION_DOMAIN);
+    let mut header = Vec::new();
     for relative in files {
-        let path = package_root.join(relative);
-        let len = std::fs::metadata(&path)
-            .map_err(|error| format!("cannot stat {}: {error}", path.display()))?
-            .len();
-        remaining = remaining
-            .checked_sub(len)
-            .ok_or("Skill package exceeds 16 MiB")?;
-        hasher.update(format!("path={}\n", relative.display()));
-        hasher.update(format!("len={len}\n"));
-        if relative == Path::new(crate::skills::package::SKILL_MARKDOWN_FILE) {
-            // The primary instructions file was already read during
-            // discovery; hash those exact bytes so the digest covers the
-            // exact accepted state.
-            debug_assert_eq!(len, markdown_bytes.len() as u64);
-            hasher.update(markdown_bytes);
-            continue;
-        }
-        let mut file = std::fs::File::open(&path)
-            .map_err(|error| format!("cannot open {}: {error}", path.display()))?
-            .take(len + 1);
-        let mut consumed = 0_u64;
-        let mut buffer = vec![0u8; 64 * 1024];
-        loop {
-            let read = file
-                .read(&mut buffer)
-                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-            if read == 0 {
-                break;
+        let markdown = relative == Path::new(crate::skills::package::SKILL_MARKDOWN_FILE);
+        let mut delimiters = 0;
+        let mut line_start = 0;
+        let mut header_finished = false;
+        let mut utf8 = Vec::new();
+        let evidence = stream(&directory, relative, cancellation, |bytes| {
+            if markdown {
+                utf8.extend_from_slice(bytes);
+                match std::str::from_utf8(&utf8) {
+                    Ok(_) => utf8.clear(),
+                    Err(error) if error.error_len().is_none() => {
+                        utf8.drain(..error.valid_up_to());
+                    }
+                    Err(_) => return Err(std::io::Error::other("SKILL.md is not valid UTF-8")),
+                }
+                for &byte in bytes {
+                    if header_finished {
+                        break;
+                    }
+                    header.push(byte);
+                    // The first line can only be one of these delimiters.
+                    // Reject an impossible prefix before retaining an arbitrarily
+                    // long malformed first line from an unselected candidate.
+                    if line_start == 0
+                        && !b"---\n".starts_with(&header)
+                        && !b"---\r\n".starts_with(&header)
+                    {
+                        return Err(std::io::Error::other(
+                            "SKILL.md must start with a frontmatter delimiter",
+                        ));
+                    }
+                    if byte == b'\n' {
+                        let line = &header[line_start..];
+                        if line == b"---\n" || line == b"---\r\n" {
+                            delimiters += 1;
+                        }
+                        if line_start == 0 && delimiters == 0 || delimiters == 2 {
+                            header_finished = true;
+                        }
+                        line_start = header.len();
+                    }
+                }
             }
-            consumed += read as u64;
-            if consumed > len {
-                return Err("Skill resource grew during bounded inspection".into());
-            }
-            hasher.update(&buffer[..read]);
+            Ok(())
+        })
+        .map_err(|error| format!("cannot inspect {}: {error}", root.join(relative).display()))?;
+        let path_bytes = relative.as_os_str().as_encoded_bytes();
+        hasher.update((path_bytes.len() as u64).to_be_bytes());
+        hasher.update(path_bytes);
+        hasher.update(evidence.metadata.len().to_be_bytes());
+        hasher.update(evidence.digest);
+        if !utf8.is_empty() {
+            return Err("SKILL.md is not valid UTF-8".into());
         }
     }
-    let digest = hasher.finalize();
-    let mut hex = String::with_capacity(71);
-    hex.push_str("sha256:");
-    for byte in digest {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{byte:02x}");
-    }
-    Ok(SkillVersionId::new(hex))
+    Ok((
+        SkillVersionId::new(format!("sha256:{:x}", hasher.finalize())),
+        header,
+    ))
 }
 
 #[cfg(test)]
@@ -106,7 +131,12 @@ mod tests {
 
     fn package_dir() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().expect("temp dir");
-        let package = dir.path().join("skills").join("pdf");
+        let package = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("skills")
+            .join("pdf");
         std::fs::create_dir_all(&package).expect("package dir");
         std::fs::write(
             package.join("SKILL.md"),
@@ -138,9 +168,8 @@ mod tests {
     #[test]
     fn same_bytes_same_version_id() {
         let (_dir, package) = package_dir();
-        let markdown = std::fs::read(package.join("SKILL.md")).expect("read");
-        let first = package_version_id(&package, &files_of(&package), &markdown).expect("id");
-        let second = package_version_id(&package, &files_of(&package), &markdown).expect("id");
+        let first = package_version_id(&package, &files_of(&package)).expect("id");
+        let second = package_version_id(&package, &files_of(&package)).expect("id");
         assert_eq!(first, second);
         assert!(first.as_str().starts_with("sha256:"));
         assert_eq!(first.as_str().len(), 7 + 64);
@@ -150,15 +179,109 @@ mod tests {
     #[test]
     fn body_change_changes_version_id() {
         let (_dir, package) = package_dir();
-        let markdown = std::fs::read(package.join("SKILL.md")).expect("read");
-        let before = package_version_id(&package, &files_of(&package), &markdown).expect("id");
+        let before = package_version_id(&package, &files_of(&package)).expect("id");
         std::fs::write(
             package.join("SKILL.md"),
             "---\nname: pdf\ndescription: A pdf skill\n---\nchanged body\n",
         )
         .expect("write");
-        let markdown = std::fs::read(package.join("SKILL.md")).expect("read");
-        let after = package_version_id(&package, &files_of(&package), &markdown).expect("id");
+        let after = package_version_id(&package, &files_of(&package)).expect("id");
         assert_ne!(before, after);
+    }
+}
+
+#[cfg(test)]
+mod large_tests {
+    use super::*;
+    use crate::runtime::CancellationSignal;
+    use std::io::Write;
+
+    #[test]
+    fn issue527_invalid_newline_free_skill_stops_at_the_first_chunk() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let package = root.join("invalid");
+        std::fs::create_dir(&package).unwrap();
+        let mut file = std::fs::File::create(package.join("SKILL.md")).unwrap();
+        file.write_all(b"x").unwrap();
+        file.set_len(256 * 1024 * 1024).unwrap();
+        crate::package_io::STREAMED_FILE_BYTES.with(|count| count.set(0));
+        let outcome = crate::skills::SkillDiscovery::user_root(root).discover();
+        assert!(outcome.packages.is_empty());
+        assert_eq!(outcome.diagnostics.len(), 1);
+        crate::package_io::STREAMED_FILE_BYTES.with(|count| {
+            assert_eq!(count.get(), crate::package_io::CHUNK_BYTES as u64);
+        });
+    }
+
+    #[test]
+    fn issue527_large_assets_and_markdown_stream_through_discovery_and_materialization() {
+        for size_mib in [17_u64, 64, 256] {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let package = root.join("large");
+            std::fs::create_dir(&package).unwrap();
+            let mut markdown = std::fs::File::create(package.join("SKILL.md")).unwrap();
+            markdown
+                .write_all(b"---\nname: large\ndescription: Large local resources\n---\n")
+                .unwrap();
+            if size_mib == 17 {
+                let mut body = vec![b'x'; 64 * 1024];
+                *body.last_mut().unwrap() = b'\n';
+                for _ in 0..17 * 16 {
+                    markdown.write_all(&body).unwrap();
+                }
+            }
+            drop(markdown);
+            std::fs::File::create(package.join("asset.bin"))
+                .unwrap()
+                .set_len(size_mib * 1024 * 1024)
+                .unwrap();
+            let start = std::time::Instant::now();
+            let outcome = crate::skills::SkillDiscovery::user_root(root.clone()).discover();
+            assert!(outcome.diagnostics.is_empty(), "{:?}", outcome.diagnostics);
+            let accepted = &outcome.packages[0];
+            let (identity, header) =
+                inspect_package(&package, accepted.files(), &CancellationSignal::new()).unwrap();
+            assert_eq!(&identity, accepted.version_id());
+            assert!(header.len() < 128, "discovery retains frontmatter only");
+            let destination = root.join("child/large");
+            let binding = crate::protocol::manifest::SkillBinding {
+                skill_id: accepted.id().clone(),
+                version_id: identity.clone(),
+            };
+            crate::skills::materialization::materialize_skill(
+                &binding,
+                &package,
+                accepted.files(),
+                &destination,
+                &CancellationSignal::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::metadata(destination.join("asset.bin"))
+                    .unwrap()
+                    .len(),
+                size_mib * 1024 * 1024
+            );
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(package.join("asset.bin"))
+                .unwrap()
+                .write_all(b"changed")
+                .unwrap();
+            assert_ne!(
+                inspect_package(&package, accepted.files(), &CancellationSignal::new())
+                    .unwrap()
+                    .0,
+                identity
+            );
+            eprintln!(
+                "issue527 Skill {size_mib} MiB: {:?}; retained header={} bytes; I/O buffer={} bytes",
+                start.elapsed(),
+                header.len(),
+                crate::package_io::CHUNK_BYTES
+            );
+        }
     }
 }

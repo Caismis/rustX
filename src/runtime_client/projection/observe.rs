@@ -32,6 +32,8 @@ pub(super) fn invalidates_read_domains(observation: &ConversationObservation) ->
         ConversationObservation::Committed { .. } => true,
         ConversationObservation::InteractionPending { audit, .. }
         | ConversationObservation::InteractionSettled { audit, .. } => audit.is_some(),
+        // A transcript row of its own.
+        ConversationObservation::ConfigurationApplied { .. } => true,
         #[cfg(test)]
         ConversationObservation::Event { event, .. } => invalidates_event(event),
         #[cfg(test)]
@@ -62,8 +64,7 @@ pub(super) fn invalidates_read_domains(observation: &ConversationObservation) ->
         | ConversationObservation::SessionModelChanged { .. }
         | ConversationObservation::Shutdown
         | ConversationObservation::DurableFailure { .. }
-        | ConversationObservation::DurabilityFailed { .. }
-        | ConversationObservation::AdoptionEligibility(_) => false,
+        | ConversationObservation::DurabilityFailed { .. } => false,
     }
 }
 #[cfg(test)]

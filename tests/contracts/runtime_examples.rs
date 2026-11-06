@@ -195,16 +195,16 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
         [&rustx::capabilities::ToolSourceId::ManagedPython("echo".into())]
         .as_ref()
         .expect("committed echo package must be valid");
-    assert_eq!(package.name, "echo");
+    assert_eq!(package.name(), "echo");
     let file_names: Vec<&str> = package
-        .files
+        .files()
         .iter()
-        .map(|(path, _)| path.to_str().expect("UTF-8 package path"))
+        .map(|path| path.to_str().expect("UTF-8 package path"))
         .collect();
     assert!(file_names.contains(&"server.py"));
     assert!(file_names.contains(&"requirements.txt"));
     // The example declares no dependencies; rustX pins FastMCP itself.
-    assert!(package.requirements.is_empty());
+    assert!(package.requirements().is_empty());
 }
 
 #[test]
@@ -345,10 +345,19 @@ fn current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
         // CLI unit tests deliberately exercise rejected historical spellings.
         let product = text.split("#[cfg(test)]").next().unwrap();
         for spelling in obsolete {
-            assert!(
-                !product.contains(spelling),
-                "{path} contains obsolete {spelling}"
-            );
+            // Match obsolete identifiers, allowing the distinct Model-owned
+            // reasoning_profile_order / reasoningProfileOrder metadata.
+            let present = if matches!(
+                spelling,
+                "reasoning_profile" | "reasoningProfile" | "ReasoningProfile"
+            ) {
+                product
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .any(|token| token == spelling)
+            } else {
+                product.contains(spelling)
+            };
+            assert!(!present, "{path} contains obsolete {spelling}");
         }
     }
 }

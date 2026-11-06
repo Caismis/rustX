@@ -104,16 +104,7 @@ async fn scheduler85_review_metadata_preserves_v1_after_v2_composition_and_on_co
                 )
                 .await
                 .unwrap();
-            let application = super::super::configuration::settled(&f, 0).await;
-            if let Some(candidate) = application.candidate {
-                f.manager
-                    .adopt_configuration(
-                        &session.id,
-                        &candidate.identity,
-                        candidate.expected_binding,
-                    )
-                    .unwrap();
-            }
+            super::super::configuration::applied(&f, 0).await;
             let second = receipt(
                 f.manager
                     .schedule_command(
@@ -698,6 +689,85 @@ async fn scheduler85_review_reconcile_preserves_live_completed_return_and_digest
                 .as_str()
             )
         );
+        f.close().await;
+    })
+    .await;
+}
+
+/// A runtime the Scheduler alone starts cold takes over its Session's
+/// configuration application like a client load does: a healthy replacement
+/// recovers the commit its predecessor left uncertain and notifies observers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_scheduler_cold_start_recovers_the_configuration_application() {
+    bounded(async {
+        use crate::local_runtime::configuration::application::UnitApplication;
+        use crate::local_runtime::configuration::settings::{
+            ConfigMutation, SourceMutation, SourceTarget,
+        };
+        let mut f = Fixture::with_session_count(None, 1).await;
+        f.install_scheduled_workflow("Cold configuration owner");
+        let clock = Clock::new();
+        f.manager.schedule_clock = clock.clone();
+        let id = f.sessions[0].id.clone();
+        let resident = f.load(0).await.unwrap().unwrap();
+        scheduled(&f).await;
+        let runtime = f.manager.configuration_runtime(&id).unwrap();
+        runtime.fail_next_configuration_record();
+        let source = f
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap();
+        let mut changed = f.manager.configuration_changes();
+        f.manager
+            .write_source_settings(
+                &SourceTarget::User,
+                source.user.revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::Instructions {
+                        authored: Some("published, not recorded".into()),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let uncertain = |f: &Fixture| {
+            f.manager
+                .configuration_application(&id)
+                .is_some_and(|view| {
+                    view.units
+                        .values()
+                        .any(|unit| matches!(unit, UnitApplication::Uncertain { .. }))
+                })
+        };
+        while !uncertain(&f) {
+            changed.changed().await.unwrap();
+        }
+        while !f.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
+        drop((resident, runtime));
+        let conversation = f.id(0).await;
+        let _ = f.manager.unload(&conversation).await;
+        assert!(uncertain(&f), "the unloaded allocation stays uncertain");
+        changed.mark_unchanged();
+        clock.add(60);
+        let driver = {
+            let manager = f.manager.clone();
+            tokio::spawn(async move { manager.run_schedule_driver().await })
+        };
+        // Only the Scheduler starts the replacement; no client loads it.
+        changed.changed().await.unwrap();
+        let replacement = f.manager.configuration_runtime(&id).unwrap();
+        assert!(replacement.durability_failure().is_none());
+        assert!(
+            !uncertain(&f),
+            "{:?}",
+            f.manager.configuration_application(&id)
+        );
+        let view = f.manager.configuration_application(&id).unwrap();
+        assert!(*changed.borrow_and_update() >= view.version, "{view:?}");
+        driver.abort();
         f.close().await;
     })
     .await;

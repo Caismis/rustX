@@ -2301,23 +2301,23 @@ async fn image_tool_round_trip_and_text_model_switch() {
     // Manual compaction invokes the production summary request builder and
     // adapter over the image-bearing canonical span, not a helper-only mock.
     // Attempt settlement is logical; the coordinator may still own its tail.
-    // This fixture submits no further work before maintenance, so wait for the
-    // native idle-owner observation rather than racing that ownership return.
+    // A Busy refusal admits nothing, so retry until the native owner returns.
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            let (snapshot, _) = driver.snapshot().unwrap();
-            if matches!(
-                snapshot.configuration_adoption_eligibility,
-                rustx::runtime::adoption::AdoptionEligibility::Eligible
-            ) {
-                break;
+            match driver.compact_context().await {
+                Err(error)
+                    if error
+                        .message
+                        .contains("requires an idle conversation runtime") =>
+                {
+                    tokio::task::yield_now().await;
+                }
+                result => break result.unwrap(),
             }
-            tokio::task::yield_now().await;
         }
     })
     .await
     .expect("native idle owners must return after the delegated Attempt settles");
-    driver.compact_context().await.unwrap();
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 8);
     let summary = body_text(&requests[7]);

@@ -1,4 +1,4 @@
-import type { AttachmentTarget, CompletedResponseView, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v69';
+import type { AttachmentTarget, CompletedResponseView, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v72';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';

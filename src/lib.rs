@@ -18,6 +18,7 @@ pub mod local_runtime;
 pub mod message;
 pub mod model;
 pub mod observation;
+mod package_io;
 pub mod protocol;
 pub mod publication;
 pub mod runtime;

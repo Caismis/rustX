@@ -64,6 +64,7 @@ chrono-tz = { version = "0.10", features = ["serde"] }
 croner = "=4.0.2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "process", "signal", "fs"] }
 tokio-util = { version = "0.7", features = ["rt", "codec"] }
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 futures-util = "0.3"
 tracing = "0.1"
 async-openai = { version = "0.41", default-features = true, features = ["chat-completion", "responses", "middleware", "byot"] }

@@ -1032,6 +1032,62 @@ export type Request1 =
       };
     }
   | {
+      method: 'workflow/documentBegin';
+      params: {
+        target: SourceTarget;
+        byte_length: number;
+        sha256: string;
+      };
+    }
+  | {
+      method: 'workflow/documentWrite';
+      params: {
+        target: SourceTarget;
+        reference: WorkflowDocumentRef;
+        offset: number;
+        data: string;
+      };
+    }
+  | {
+      method: 'workflow/documentFinish';
+      params: {
+        target: SourceTarget;
+        reference: WorkflowDocumentRef;
+      };
+    }
+  | {
+      method: 'workflow/documentRead';
+      params: {
+        target: SourceTarget;
+        reference: WorkflowDocumentRef;
+        offset: number;
+        max_bytes: number;
+      };
+    }
+  | {
+      method: 'workflow/documentRelease';
+      params: {
+        target: SourceTarget;
+        reference: WorkflowDocumentRef;
+      };
+    }
+  | {
+      method: 'workflow/checkReportRead';
+      params: {
+        target: SourceTarget;
+        reference: WorkflowCheckReportRef;
+        offset: number;
+        max_bytes: number;
+      };
+    }
+  | {
+      method: 'workflow/checkReportRelease';
+      params: {
+        target: SourceTarget;
+        reference: WorkflowCheckReportRef;
+      };
+    }
+  | {
       method: 'workflow/list';
       params: {
         target: SourceTarget;
@@ -1065,7 +1121,7 @@ export type Request1 =
       params: {
         target: SourceTarget;
         id: WorkflowId;
-        document: WorkflowFileDocument;
+        document: WorkflowDocumentRef;
         generation: string;
         query?: WorkflowAnalysisQuery | null;
       };
@@ -1075,7 +1131,7 @@ export type Request1 =
       params: {
         target: SourceTarget;
         id: WorkflowId;
-        document: WorkflowFileDocument;
+        document: WorkflowDocumentRef;
         /**
          * A User (Global) file's explicit Workspace dependency context. A
          * Workspace file is always checked in its own Workspace.
@@ -1126,14 +1182,6 @@ export type Request1 =
       method: 'session/configuration';
       params: {
         session_id: SessionId;
-      };
-    }
-  | {
-      method: 'session/adoptConfiguration';
-      params: {
-        session_id: SessionId;
-        candidate: ApplicationIdentity;
-        expected_binding: string;
       };
     };
 /**
@@ -1623,6 +1671,14 @@ export type ContentSource =
       publication_request_id: RequestId;
       block_index: ContentBlockIndex;
       type: 'live_publication_prefix';
+    }
+  | {
+      journal_sequence: number;
+      type: 'configuration_instructions';
+    }
+  | {
+      journal_sequence: number;
+      type: 'configuration_catalog';
     };
 /**
  * Exact deterministic component of one immutable canonical message.
@@ -1875,570 +1931,6 @@ export type WorkflowModelChoicesQuery =
  * via the `definition` "ModelRef".
  */
 export type ModelRef = string;
-/**
- * One Workflow node in the authoring/domain layer.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowNodeDefinition".
- */
-export type WorkflowNodeDefinition =
-  | {
-      type: 'start';
-    }
-  | {
-      variables: {
-        [k: string]: WorkflowValue;
-      };
-      template: string;
-      type: 'template';
-    }
-  | {
-      input: WorkflowValue;
-      filter?: WorkflowListFilter | null;
-      sort?: WorkflowListSort | null;
-      limit?: number | null;
-      extract?: WorkflowValue | null;
-      type: 'list';
-    }
-  | {
-      model?: WorkflowModelPolicy;
-      input: WorkflowValue;
-      instruction?: WorkflowValue[];
-      classes: WorkflowClassifierClass[];
-      type: 'classifier';
-    }
-  | {
-      code_language: WorkflowCodeLanguage;
-      variables: {
-        [k: string]: WorkflowValue;
-      };
-      code: string;
-      outputs: {
-        [k: string]: WorkflowVarType;
-      };
-      retry?: WorkflowRetry | null;
-      on_error?: WorkflowValueErrorStrategy;
-      type: 'code';
-    }
-  | {
-      grouped: boolean;
-      groups: WorkflowAggregateGroup[];
-      type: 'aggregate';
-    }
-  | {
-      model?: WorkflowModelPolicy;
-      /**
-       * The prompt: a system message, then user and assistant turns.
-       */
-      messages: WorkflowModelMessage[];
-      output: WorkflowModelOutput;
-      /**
-       * Retry a failed call before its failure is handled.
-       */
-      retry?: WorkflowRetry | null;
-      /**
-       * What a call that still failed does.
-       */
-      on_error?:
-        | {
-            type: 'stop';
-          }
-        | {
-            text: string;
-            structured_output?: unknown;
-            type: 'default_value';
-          }
-        | {
-            type: 'fail_branch';
-          };
-      type: 'model';
-    }
-  | {
-      /**
-       * Variables the body reads and an Assigner node writes, under the
-       * Loop's own ID.
-       */
-      loop_variables?: WorkflowLoopVariable[];
-      /**
-       * Checked before the first round and after every round.
-       */
-      break_condition?: WorkflowPredicate | null;
-      loop_count: number;
-      body: WorkflowBlock1;
-      type: 'loop';
-    }
-  | {
-      /**
-       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
-       */
-      iterator:
-        | {
-            path: string[];
-            type: 'reference';
-          }
-        | {
-            value: unknown;
-            type: 'literal';
-          }
-        | {
-            fields: {
-              [k: string]: WorkflowValue;
-            };
-            type: 'object';
-          }
-        | {
-            items: WorkflowValue[];
-            type: 'array';
-          }
-        | {
-            parts: WorkflowValue[];
-            type: 'template';
-          };
-      /**
-       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
-       */
-      output:
-        | {
-            path: string[];
-            type: 'reference';
-          }
-        | {
-            value: unknown;
-            type: 'literal';
-          }
-        | {
-            fields: {
-              [k: string]: WorkflowValue;
-            };
-            type: 'object';
-          }
-        | {
-            items: WorkflowValue[];
-            type: 'array';
-          }
-        | {
-            parts: WorkflowValue[];
-            type: 'template';
-          };
-      is_parallel?: boolean;
-      /**
-       * Rounds run at once in parallel mode.
-       */
-      parallel_nums?: number;
-      error_handle_mode?: WorkflowIterationErrorMode;
-      /**
-       * Join the rounds' arrays into one array.
-       */
-      flatten_output?: boolean;
-      body: WorkflowBlock1;
-      type: 'iteration';
-    }
-  | {
-      type: 'loop_end';
-    }
-  | {
-      items: WorkflowAssignment[];
-      type: 'assigner';
-    }
-  | {
-      /**
-       * The Markdown shown to the person: fixed text and references, as
-       * an Agent's task.
-       */
-      content: WorkflowValue[];
-      actions: WorkflowReviewAction[];
-      timeout_ms: string;
-      type: 'review';
-    }
-  | {
-      selector: WorkflowToolSelector;
-      arguments: WorkflowValue;
-      result: WorkflowToolResult;
-      /**
-       * Call a failed Tool again before its failure is handled, as Dify's
-       * tool node does; each call is its own invocation.
-       */
-      retry?: WorkflowRetry | null;
-      /**
-       * As Dify's error handling on its Agent and tool nodes, for a call that
-       * failed or timed out once it is proven settled. Cancellation, an unknown
-       * outcome, unproven settlement and a refused start still stop the run.
-       */
-      on_error?:
-        | {
-            type: 'stop';
-          }
-        | {
-            value: unknown;
-            type: 'default_value';
-          }
-        | {
-            type: 'fail_branch';
-          };
-      type: 'tool';
-    }
-  | {
-      /**
-       * The native named profile to resolve at `AgentRun` admission.
-       */
-      profile: string;
-      /**
-       * The task instruction for this `AgentRun`: fixed text and explicit
-       * references, as a Model message's content.
-       */
-      task: WorkflowValue[];
-      /**
-       * What the `AgentRun` returns: its final reply text, or a
-       * structured value committed through `workflow_output`.
-       */
-      output:
-        | {
-            type: 'text';
-          }
-        | {
-            schema: unknown;
-            type: 'json_schema';
-          };
-      /**
-       * As Dify's Agent output routes: the child picks one of these
-       * exits through its required `switch` value.
-       */
-      routes?: WorkflowAgentRoute[];
-      /**
-       * As Dify's error handling on its Agent and tool nodes, for a call that
-       * failed or timed out once it is proven settled. Cancellation, an unknown
-       * outcome, unproven settlement and a refused start still stop the run.
-       */
-      on_error?:
-        | {
-            type: 'stop';
-          }
-        | {
-            value: unknown;
-            type: 'default_value';
-          }
-        | {
-            type: 'fail_branch';
-          };
-      type: 'agent';
-    }
-  | {
-      cases: WorkflowBranchCase[];
-      type: 'branch';
-    }
-  | {
-      outputs: WorkflowReturnOutput[];
-      type: 'return';
-    };
-/**
- * Closed, explicitly tagged value syntax; no evaluation of expression strings.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowValue".
- */
-export type WorkflowValue =
-  | {
-      path: string[];
-      type: 'reference';
-    }
-  | {
-      value: unknown;
-      type: 'literal';
-    }
-  | {
-      fields: {
-        [k: string]: WorkflowValue;
-      };
-      type: 'object';
-    }
-  | {
-      items: WorkflowValue[];
-      type: 'array';
-    }
-  | {
-      parts: WorkflowValue[];
-      type: 'template';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowListOperator".
- */
-export type WorkflowListOperator =
-  | 'equal'
-  | 'not_equal'
-  | 'contains'
-  | 'not_contains'
-  | 'starts_with'
-  | 'ends_with'
-  | 'greater'
-  | 'greater_equal'
-  | 'less'
-  | 'less_equal'
-  | 'empty'
-  | 'not_empty'
-  | 'in'
-  | 'not_in';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowSortOrder".
- */
-export type WorkflowSortOrder = 'asc' | 'desc';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelPolicy".
- */
-export type WorkflowModelPolicy =
-  | {
-      mode: 'session';
-    }
-  | {
-      model: string;
-      profile?: string | null;
-      request_params?: {
-        [k: string]: unknown;
-      };
-      max_output_tokens?: number | null;
-      mode: 'explicit';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowCodeLanguage".
- */
-export type WorkflowCodeLanguage = 'python3' | 'javascript';
-/**
- * The value types of a Loop variable, as Dify offers them.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowVarType".
- */
-export type WorkflowVarType =
-  | 'string'
-  | 'number'
-  | 'boolean'
-  | 'object'
-  | 'array[string]'
-  | 'array[number]'
-  | 'array[boolean]'
-  | 'array[object]';
-/**
- * As Dify's error handling on its Agent and tool nodes, for a call that
- * failed or timed out once it is proven settled. Cancellation, an unknown
- * outcome, unproven settlement and a refused start still stop the run.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowValueErrorStrategy".
- */
-export type WorkflowValueErrorStrategy =
-  | {
-      type: 'stop';
-    }
-  | {
-      value: unknown;
-      type: 'default_value';
-    }
-  | {
-      type: 'fail_branch';
-    };
-/**
- * Who speaks a Model prompt message.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelRole".
- */
-export type WorkflowModelRole = 'system' | 'user' | 'assistant';
-/**
- * The single authored output contract of a Workflow Model node.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelOutput".
- */
-export type WorkflowModelOutput =
-  | {
-      type: 'text';
-    }
-  | {
-      schema: unknown;
-      type: 'json_schema';
-    };
-/**
- * Typed predicates. Equality requires matching scalar types; no coercion.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowPredicate".
- */
-export type WorkflowPredicate =
-  | {
-      value: WorkflowValue;
-      type: 'boolean';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'equal';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'not_equal';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'greater';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'greater_equal';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'less';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'less_equal';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'contains';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'not_contains';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'starts_with';
-    }
-  | {
-      left: WorkflowValue;
-      right: WorkflowValue;
-      type: 'ends_with';
-    }
-  | {
-      value: WorkflowValue;
-      type: 'empty';
-    }
-  | {
-      value: WorkflowValue;
-      type: 'not_empty';
-    }
-  | {
-      predicate: WorkflowPredicate;
-      type: 'not';
-    }
-  | {
-      predicates: WorkflowPredicate[];
-      type: 'and';
-    }
-  | {
-      predicates: WorkflowPredicate[];
-      type: 'or';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowPort".
- */
-export type WorkflowPort = boolean | string;
-/**
- * How an Iteration treats a round that failed.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowIterationErrorMode".
- */
-export type WorkflowIterationErrorMode =
-  'terminated' | 'continue_on_error' | 'remove_abnormal_output';
-/**
- * Dify's write modes. `overwrite` writes a variable's value and `set` a
- * constant; both assign.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowWriteMode".
- */
-export type WorkflowWriteMode =
-  | 'overwrite'
-  | 'clear'
-  | 'set'
-  | 'append'
-  | 'extend'
-  | 'remove_first'
-  | 'remove_last'
-  | 'increment'
-  | 'decrement'
-  | 'multiply'
-  | 'divide';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowToolSelector".
- */
-export type WorkflowToolSelector =
-  | {
-      name: string;
-      origin: 'builtin';
-    }
-  | {
-      source_id: string;
-      name: string;
-      origin: 'source';
-    };
-/**
- * What a Tool node commits, fixed by the Tool: its declared structured
- * result, or its text. Never provider text heuristics or a part index.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowToolResult".
- */
-export type WorkflowToolResult =
-  | {
-      schema: unknown;
-      type: 'json';
-    }
-  | {
-      type: 'text';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowNoteTheme".
- */
-export type WorkflowNoteTheme = 'blue' | 'cyan' | 'green' | 'yellow' | 'pink' | 'violet';
-/**
- * Presentation order targets a specific authored list. Schema `path` contains
- * property names (not JSON pointers); missing/new fields append in key order.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowOrderTarget".
- */
-export type WorkflowOrderTarget =
-  | {
-      block: WorkflowBlockStep[];
-      path: WorkflowSchemaStep[];
-      kind: 'block_input';
-    }
-  | {
-      address: WorkflowNodeAddress;
-      path: WorkflowSchemaStep[];
-      kind: 'node_output';
-    };
-/**
- * An exact position in a schema, independent of value-reference semantics.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowSchemaStep".
- */
-export type WorkflowSchemaStep =
-  | {
-      name: string;
-      kind: 'property';
-    }
-  | {
-      kind: 'items';
-    };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowConsumerField".
@@ -2914,7 +2406,7 @@ export type WorkflowEdit =
       operation: 'create';
     }
   | {
-      document: WorkflowFileDocument;
+      document: WorkflowDocumentRef;
       operation: 'replace';
     }
   | {
@@ -3307,6 +2799,17 @@ export type MethodResult =
       type: 'source_settings';
     }
   | {
+      reference: WorkflowDocumentRef;
+      type: 'workflow_document';
+    }
+  | {
+      chunk: WorkflowDocumentChunk;
+      type: 'workflow_document_chunk';
+    }
+  | {
+      type: 'workflow_document_accepted';
+    }
+  | {
       library: WorkflowLibrary;
       type: 'workflow_library';
     }
@@ -3323,8 +2826,15 @@ export type MethodResult =
       type: 'workflow_tool_catalog';
     }
   | {
-      report: WorkflowCheckReport;
+      report: WorkflowCheckReportRef;
       type: 'workflow_check';
+    }
+  | {
+      chunk: WorkflowCheckReportChunk;
+      type: 'workflow_check_report_chunk';
+    }
+  | {
+      type: 'workflow_check_report_released';
     }
   | {
       report: WorkflowAnalysisReport;
@@ -3939,7 +3449,8 @@ export type TraceKind =
       | 'interaction'
     )
   | 'user'
-  | 'context';
+  | 'context'
+  | 'configuration';
 /**
  * How one actual request's frozen System Prompt relates to its predecessor.
  *
@@ -4040,6 +3551,21 @@ export type AgentActivationOrigin =
       node_id: WorkflowNodeInstance;
       kind: 'workflow';
     };
+/**
+ * Why the Session's configuration changed.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConfigurationChangeReason".
+ */
+export type ConfigurationChangeReason = 'source' | 'model_selection' | 'reallocation';
+/**
+ * One configuration domain a commit changed.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConfigurationDomain".
+ */
+export type ConfigurationDomain =
+  'instructions' | 'context_policy' | 'tools' | 'skills' | 'model' | 'execution_policy';
 /**
  * The cursor domain of durable transcript paging.
  *
@@ -5623,10 +5149,6 @@ export type RuntimeClientEvent =
       type: 'trace_changed';
     }
   | {
-      eligibility: AdoptionEligibility;
-      type: 'configuration_adoption_eligibility_changed';
-    }
-  | {
       view: RuntimeClientGoalView;
       type: 'goal_changed';
     }
@@ -5977,6 +5499,14 @@ export type RuntimeClientEvent =
        */
       transcript_cursor: string;
       type: 'interaction_audit_settled';
+    }
+  | {
+      item: RuntimeClientTranscriptConfigurationApplied;
+      /**
+       * The cursor domain of durable transcript paging.
+       */
+      transcript_cursor: string;
+      type: 'configuration_applied';
     }
   | {
       context: RuntimeClientContextView1;
@@ -6341,26 +5871,6 @@ export type RuntimeClientEvent =
       type: 'runtime_durability_failed';
     };
 /**
- * Whether a live runtime could adopt a prepared configuration now.
- *
- * Runtime-domain advisory state, published by the runtime through its Runtime
- * Client projection; it is never part of a `ConfigurationApplication`.
- * Adoption always revalidates the native admission gate.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AdoptionEligibility".
- */
-export type AdoptionEligibility =
-  | {
-      status: 'eligible';
-    }
-  | {
-      status: 'busy';
-    }
-  | {
-      status: 'unavailable';
-    };
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionNodeOriginObservation".
  */
@@ -6459,7 +5969,6 @@ export type UnitApplication =
       status: 'preparing';
     }
   | {
-      impact: CacheImpact;
       status: 'ready';
     }
   | {
@@ -6467,13 +5976,12 @@ export type UnitApplication =
       status: 'failed';
     }
   | {
+      diagnostic: string;
+      status: 'uncertain';
+    }
+  | {
       status: 'process_restart';
     };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "CacheImpact".
- */
-export type CacheImpact = 'preserved' | 'prefix_changed' | 'cache_namespace_changed' | 'unproven';
 /**
  * The redacted client-facing description of a credential source.
  *
@@ -6646,67 +6154,6 @@ export type WorkflowToolSourceState =
     )
   | 'pending';
 /**
- * Whether the native compiler admits the candidate's structure.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowStructure".
- */
-export type WorkflowStructure =
-  | {
-      outputs: {
-        [k: string]: unknown;
-      };
-      status: 'valid';
-    }
-  | {
-      diagnostic: WorkflowDiagnostic;
-      status: 'invalid';
-    };
-/**
- * Dependency admission of a structurally valid candidate in one explicit
- * Workspace composition.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowDependencies".
- */
-export type WorkflowDependencies =
-  | {
-      status: 'not_checked';
-    }
-  | {
-      context: string;
-      status: 'admitted';
-    }
-  | {
-      context: string;
-      model_nodes: string[];
-      status: 'requires_attempt';
-    }
-  | {
-      context: string;
-      diagnostics: WorkflowAdmissionDiagnostic[];
-      status: 'blocked';
-    }
-  | {
-      context: string;
-      reason: string;
-      status: 'unavailable';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ModelPolicyInspection".
- */
-export type ModelPolicyInspection =
-  | {
-      mode: 'session';
-    }
-  | {
-      model: ModelRef;
-      profile?: ModelProfileId | null;
-      max_output_tokens?: number | null;
-      mode: 'explicit';
-    };
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowReferenceAvailability".
  */
@@ -6730,8 +6177,7 @@ export type ErrorData =
       kind: 'session_file_read';
     }
   | {
-      rejection: AdoptionError;
-      kind: 'configuration_adoption';
+      kind: 'model_selection_conflict';
     }
   | {
       diagnostic: string;
@@ -6921,24 +6367,6 @@ export type SessionFileReadFailure =
   | 'read_failed';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AdoptionError".
- */
-export type AdoptionError =
-  | {
-      status: 'busy';
-    }
-  | {
-      status: 'not_ready';
-    }
-  | {
-      status: 'conflict';
-    }
-  | {
-      diagnostic: string;
-      status: 'failed';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionArchivePrepareError".
  */
 export type SessionArchivePrepareError =
@@ -7072,6 +6500,606 @@ export type AuxiliarySegment =
  * via the `definition` "ResyncReason".
  */
 export type ResyncReason = 'replay_unavailable' | 'record_too_large';
+/**
+ * One Workflow node in the authoring/domain layer.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeDefinition".
+ */
+export type WorkflowNodeDefinition =
+  | {
+      type: 'start';
+    }
+  | {
+      variables: {
+        [k: string]: WorkflowValue;
+      };
+      template: string;
+      type: 'template';
+    }
+  | {
+      input: WorkflowValue;
+      filter?: WorkflowListFilter | null;
+      sort?: WorkflowListSort | null;
+      limit?: number | null;
+      extract?: WorkflowValue | null;
+      type: 'list';
+    }
+  | {
+      model?: WorkflowModelPolicy;
+      input: WorkflowValue;
+      instruction?: WorkflowValue[];
+      classes: WorkflowClassifierClass[];
+      type: 'classifier';
+    }
+  | {
+      code_language: WorkflowCodeLanguage;
+      variables: {
+        [k: string]: WorkflowValue;
+      };
+      code: string;
+      outputs: {
+        [k: string]: WorkflowVarType;
+      };
+      retry?: WorkflowRetry | null;
+      on_error?: WorkflowValueErrorStrategy;
+      type: 'code';
+    }
+  | {
+      grouped: boolean;
+      groups: WorkflowAggregateGroup[];
+      type: 'aggregate';
+    }
+  | {
+      model?: WorkflowModelPolicy;
+      /**
+       * The prompt: a system message, then user and assistant turns.
+       */
+      messages: WorkflowModelMessage[];
+      output: WorkflowModelOutput;
+      /**
+       * Retry a failed call before its failure is handled.
+       */
+      retry?: WorkflowRetry | null;
+      /**
+       * What a call that still failed does.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            text: string;
+            structured_output?: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
+      type: 'model';
+    }
+  | {
+      /**
+       * Variables the body reads and an Assigner node writes, under the
+       * Loop's own ID.
+       */
+      loop_variables?: WorkflowLoopVariable[];
+      /**
+       * Checked before the first round and after every round.
+       */
+      break_condition?: WorkflowPredicate | null;
+      loop_count: number;
+      body: WorkflowBlock1;
+      type: 'loop';
+    }
+  | {
+      /**
+       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+       */
+      iterator:
+        | {
+            path: string[];
+            type: 'reference';
+          }
+        | {
+            value: unknown;
+            type: 'literal';
+          }
+        | {
+            fields: {
+              [k: string]: WorkflowValue;
+            };
+            type: 'object';
+          }
+        | {
+            items: WorkflowValue[];
+            type: 'array';
+          }
+        | {
+            parts: WorkflowValue[];
+            type: 'template';
+          };
+      /**
+       * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+       */
+      output:
+        | {
+            path: string[];
+            type: 'reference';
+          }
+        | {
+            value: unknown;
+            type: 'literal';
+          }
+        | {
+            fields: {
+              [k: string]: WorkflowValue;
+            };
+            type: 'object';
+          }
+        | {
+            items: WorkflowValue[];
+            type: 'array';
+          }
+        | {
+            parts: WorkflowValue[];
+            type: 'template';
+          };
+      is_parallel?: boolean;
+      /**
+       * Rounds run at once in parallel mode.
+       */
+      parallel_nums?: number;
+      error_handle_mode?: WorkflowIterationErrorMode;
+      /**
+       * Join the rounds' arrays into one array.
+       */
+      flatten_output?: boolean;
+      body: WorkflowBlock1;
+      type: 'iteration';
+    }
+  | {
+      type: 'loop_end';
+    }
+  | {
+      items: WorkflowAssignment[];
+      type: 'assigner';
+    }
+  | {
+      /**
+       * The Markdown shown to the person: fixed text and references, as
+       * an Agent's task.
+       */
+      content: WorkflowValue[];
+      actions: WorkflowReviewAction[];
+      timeout_ms: string;
+      type: 'review';
+    }
+  | {
+      selector: WorkflowToolSelector;
+      arguments: WorkflowValue;
+      result: WorkflowToolResult;
+      /**
+       * Call a failed Tool again before its failure is handled, as Dify's
+       * tool node does; each call is its own invocation.
+       */
+      retry?: WorkflowRetry | null;
+      /**
+       * As Dify's error handling on its Agent and tool nodes, for a call that
+       * failed or timed out once it is proven settled. Cancellation, an unknown
+       * outcome, unproven settlement and a refused start still stop the run.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            value: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
+      type: 'tool';
+    }
+  | {
+      /**
+       * The native named profile to resolve at `AgentRun` admission.
+       */
+      profile: string;
+      /**
+       * The task instruction for this `AgentRun`: fixed text and explicit
+       * references, as a Model message's content.
+       */
+      task: WorkflowValue[];
+      /**
+       * What the `AgentRun` returns: its final reply text, or a
+       * structured value committed through `workflow_output`.
+       */
+      output:
+        | {
+            type: 'text';
+          }
+        | {
+            schema: unknown;
+            type: 'json_schema';
+          };
+      /**
+       * As Dify's Agent output routes: the child picks one of these
+       * exits through its required `switch` value.
+       */
+      routes?: WorkflowAgentRoute[];
+      /**
+       * As Dify's error handling on its Agent and tool nodes, for a call that
+       * failed or timed out once it is proven settled. Cancellation, an unknown
+       * outcome, unproven settlement and a refused start still stop the run.
+       */
+      on_error?:
+        | {
+            type: 'stop';
+          }
+        | {
+            value: unknown;
+            type: 'default_value';
+          }
+        | {
+            type: 'fail_branch';
+          };
+      type: 'agent';
+    }
+  | {
+      cases: WorkflowBranchCase[];
+      type: 'branch';
+    }
+  | {
+      outputs: WorkflowReturnOutput[];
+      type: 'return';
+    };
+/**
+ * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowValue".
+ */
+export type WorkflowValue =
+  | {
+      path: string[];
+      type: 'reference';
+    }
+  | {
+      value: unknown;
+      type: 'literal';
+    }
+  | {
+      fields: {
+        [k: string]: WorkflowValue;
+      };
+      type: 'object';
+    }
+  | {
+      items: WorkflowValue[];
+      type: 'array';
+    }
+  | {
+      parts: WorkflowValue[];
+      type: 'template';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowListOperator".
+ */
+export type WorkflowListOperator =
+  | 'equal'
+  | 'not_equal'
+  | 'contains'
+  | 'not_contains'
+  | 'starts_with'
+  | 'ends_with'
+  | 'greater'
+  | 'greater_equal'
+  | 'less'
+  | 'less_equal'
+  | 'empty'
+  | 'not_empty'
+  | 'in'
+  | 'not_in';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowSortOrder".
+ */
+export type WorkflowSortOrder = 'asc' | 'desc';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelPolicy".
+ */
+export type WorkflowModelPolicy =
+  | {
+      mode: 'session';
+    }
+  | {
+      model: string;
+      profile?: string | null;
+      request_params?: {
+        [k: string]: unknown;
+      };
+      max_output_tokens?: number | null;
+      mode: 'explicit';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCodeLanguage".
+ */
+export type WorkflowCodeLanguage = 'python3' | 'javascript';
+/**
+ * The value types of a Loop variable, as Dify offers them.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowVarType".
+ */
+export type WorkflowVarType =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'object'
+  | 'array[string]'
+  | 'array[number]'
+  | 'array[boolean]'
+  | 'array[object]';
+/**
+ * As Dify's error handling on its Agent and tool nodes, for a call that
+ * failed or timed out once it is proven settled. Cancellation, an unknown
+ * outcome, unproven settlement and a refused start still stop the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowValueErrorStrategy".
+ */
+export type WorkflowValueErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      value: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
+/**
+ * Who speaks a Model prompt message.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelRole".
+ */
+export type WorkflowModelRole = 'system' | 'user' | 'assistant';
+/**
+ * The single authored output contract of a Workflow Model node.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelOutput".
+ */
+export type WorkflowModelOutput =
+  | {
+      type: 'text';
+    }
+  | {
+      schema: unknown;
+      type: 'json_schema';
+    };
+/**
+ * Typed predicates. Equality requires matching scalar types; no coercion.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPredicate".
+ */
+export type WorkflowPredicate =
+  | {
+      value: WorkflowValue;
+      type: 'boolean';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'not_equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'greater';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'greater_equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'less';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'less_equal';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'contains';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'not_contains';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'starts_with';
+    }
+  | {
+      left: WorkflowValue;
+      right: WorkflowValue;
+      type: 'ends_with';
+    }
+  | {
+      value: WorkflowValue;
+      type: 'empty';
+    }
+  | {
+      value: WorkflowValue;
+      type: 'not_empty';
+    }
+  | {
+      predicate: WorkflowPredicate;
+      type: 'not';
+    }
+  | {
+      predicates: WorkflowPredicate[];
+      type: 'and';
+    }
+  | {
+      predicates: WorkflowPredicate[];
+      type: 'or';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPort".
+ */
+export type WorkflowPort = boolean | string;
+/**
+ * How an Iteration treats a round that failed.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowIterationErrorMode".
+ */
+export type WorkflowIterationErrorMode =
+  'terminated' | 'continue_on_error' | 'remove_abnormal_output';
+/**
+ * Dify's write modes. `overwrite` writes a variable's value and `set` a
+ * constant; both assign.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowWriteMode".
+ */
+export type WorkflowWriteMode =
+  | 'overwrite'
+  | 'clear'
+  | 'set'
+  | 'append'
+  | 'extend'
+  | 'remove_first'
+  | 'remove_last'
+  | 'increment'
+  | 'decrement'
+  | 'multiply'
+  | 'divide';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolSelector".
+ */
+export type WorkflowToolSelector =
+  | {
+      name: string;
+      origin: 'builtin';
+    }
+  | {
+      source_id: string;
+      name: string;
+      origin: 'source';
+    };
+/**
+ * What a Tool node commits, fixed by the Tool: its declared structured
+ * result, or its text. Never provider text heuristics or a part index.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowToolResult".
+ */
+export type WorkflowToolResult =
+  | {
+      schema: unknown;
+      type: 'json';
+    }
+  | {
+      type: 'text';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNoteTheme".
+ */
+export type WorkflowNoteTheme = 'blue' | 'cyan' | 'green' | 'yellow' | 'pink' | 'violet';
+/**
+ * Presentation order targets a specific authored list. Schema `path` contains
+ * property names (not JSON pointers); missing/new fields append in key order.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowOrderTarget".
+ */
+export type WorkflowOrderTarget =
+  | {
+      block: WorkflowBlockStep[];
+      path: WorkflowSchemaStep[];
+      kind: 'block_input';
+    }
+  | {
+      address: WorkflowNodeAddress;
+      path: WorkflowSchemaStep[];
+      kind: 'node_output';
+    };
+/**
+ * An exact position in a schema, independent of value-reference semantics.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowSchemaStep".
+ */
+export type WorkflowSchemaStep =
+  | {
+      name: string;
+      kind: 'property';
+    }
+  | {
+      kind: 'items';
+    };
+/**
+ * As Dify's error handling, for a call that failed or timed out after its
+ * retries. Cancellation, an unknown outcome and authority errors still stop
+ * the run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelErrorStrategy".
+ */
+export type WorkflowModelErrorStrategy =
+  | {
+      type: 'stop';
+    }
+  | {
+      text: string;
+      structured_output?: unknown;
+      type: 'default_value';
+    }
+  | {
+      type: 'fail_branch';
+    };
+/**
+ * The authored output contract of a Workflow Agent node, as Dify's Agent:
+ * the final reply is the `text` variable, or a declared schema adds the
+ * reserved `workflow_output` terminal and its fields are the variables.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentOutput".
+ */
+export type WorkflowAgentOutput =
+  | {
+      type: 'text';
+    }
+  | {
+      schema: unknown;
+      type: 'json_schema';
+    };
 /**
  * The rustX-owned logical identity of a context contributor.
  *
@@ -7483,42 +7511,6 @@ export type QuestionnaireResponse =
     }
   | {
       type: 'declined';
-    };
-/**
- * As Dify's error handling, for a call that failed or timed out after its
- * retries. Cancellation, an unknown outcome and authority errors still stop
- * the run.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelErrorStrategy".
- */
-export type WorkflowModelErrorStrategy =
-  | {
-      type: 'stop';
-    }
-  | {
-      text: string;
-      structured_output?: unknown;
-      type: 'default_value';
-    }
-  | {
-      type: 'fail_branch';
-    };
-/**
- * The authored output contract of a Workflow Agent node, as Dify's Agent:
- * the final reply is the `text` variable, or a declared schema adds the
- * reserved `workflow_output` terminal and its fields are the variables.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowAgentOutput".
- */
-export type WorkflowAgentOutput =
-  | {
-      type: 'text';
-    }
-  | {
-      schema: unknown;
-      type: 'json_schema';
     };
 /**
  * The configurable execution-ownership policy of one tool.
@@ -7940,6 +7932,18 @@ export type RuntimeClientTranscriptItem =
             type: 'cancelled';
           };
       type: 'interaction_settled';
+    }
+  | {
+      /**
+       * Identifies one durable runtime event.
+       */
+      event_id: string;
+      /**
+       * Event timestamp.
+       */
+      timestamp: string;
+      change: ConfigurationChange1;
+      type: 'configuration_applied';
     };
 /**
  * Typed kind of inbound information.
@@ -8899,6 +8903,67 @@ export type InteractionOutcome =
         | 'subagent_execution_deadline_exceeded';
       type: 'cancelled';
     };
+/**
+ * Whether the native compiler admits the candidate's structure.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowStructure".
+ */
+export type WorkflowStructure =
+  | {
+      outputs: {
+        [k: string]: unknown;
+      };
+      status: 'valid';
+    }
+  | {
+      diagnostic: WorkflowDiagnostic;
+      status: 'invalid';
+    };
+/**
+ * Dependency admission of a structurally valid candidate in one explicit
+ * Workspace composition.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDependencies".
+ */
+export type WorkflowDependencies =
+  | {
+      status: 'not_checked';
+    }
+  | {
+      context: string;
+      status: 'admitted';
+    }
+  | {
+      context: string;
+      model_nodes: string[];
+      status: 'requires_attempt';
+    }
+  | {
+      context: string;
+      diagnostics: WorkflowAdmissionDiagnostic[];
+      status: 'blocked';
+    }
+  | {
+      context: string;
+      reason: string;
+      status: 'unavailable';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelPolicyInspection".
+ */
+export type ModelPolicyInspection =
+  | {
+      mode: 'session';
+    }
+  | {
+      model: ModelRef;
+      profile?: ModelProfileId | null;
+      max_output_tokens?: number | null;
+      mode: 'explicit';
+    };
 
 export interface ProtocolTypes {
   message: ProtocolMessage;
@@ -9623,6 +9688,26 @@ export interface SourceFieldRef {
   byte_length: number;
 }
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDocumentRef".
+ */
+export interface WorkflowDocumentRef {
+  id: string;
+  byte_length: number;
+  sha256: string;
+}
+/**
+ * Read-only derived report; it is never a candidate/source capability.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCheckReportRef".
+ */
+export interface WorkflowCheckReportRef {
+  report_id: string;
+  byte_length: number;
+  sha256: string;
+}
+/**
  * A continuation is accepted only against the same complete catalog.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9631,349 +9716,6 @@ export interface SourceFieldRef {
 export interface WorkflowToolCatalogCursor {
   offset: number;
   digest: string;
-}
-/**
- * Complete authored source, with the executable fields at their native YAML
- * locations. Files without `editor` have deterministic derived presentation.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowFileDocument".
- */
-export interface WorkflowFileDocument {
-  /**
-   * The model-facing description of the workflow Tool.
-   */
-  description: string;
-  /**
-   * Trusted finite total foreground lifetime, including descendant waits.
-   */
-  timeout_ms?: string;
-  block: WorkflowBlock;
-  editor?: WorkflowEditorMetadata | null;
-}
-/**
- * The root lexical execution scope.
- */
-export interface WorkflowBlock {
-  /**
-   * The workflow input JSON Schema.
-   */
-  input?: {
-    [k: string]: unknown;
-  };
-  /**
-   * Stable node definitions keyed by explicit node id.
-   */
-  nodes: {
-    [k: string]: WorkflowNodeDefinition;
-  };
-  /**
-   * Ordinary sequential control-flow edges.
-   */
-  edges?: WorkflowEdgeDefinition[];
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowListFilter".
- */
-export interface WorkflowListFilter {
-  /**
-   * Empty selects a primitive item; otherwise literal object field names.
-   */
-  path: string[];
-  operator: WorkflowListOperator;
-  value: WorkflowValue;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowListSort".
- */
-export interface WorkflowListSort {
-  path: string[];
-  order: WorkflowSortOrder;
-}
-/**
- * A classifier's stable exit, display label and variable-aware topic.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowClassifierClass".
- */
-export interface WorkflowClassifierClass {
-  id: string;
-  label: string;
-  description: WorkflowValue[];
-}
-/**
- * As Dify's retry on failure: a failed or timed-out Model or Tool call is
- * made again, up to `max_retries` more times, `interval_ms` after the
- * previous one ended.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowRetry".
- */
-export interface WorkflowRetry {
-  max_retries: number;
-  interval_ms: number;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowAggregateGroup".
- */
-export interface WorkflowAggregateGroup {
-  name: string;
-  output_type?: WorkflowVarType | null;
-  variables: string[][];
-}
-/**
- * One prompt message of a Model node. The first message is the system
- * prompt and every later one a user or assistant turn. Its content is fixed
- * text (string literals) and explicit references, rendered in order: a
- * string value as itself, any other value as its JSON text.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowModelMessage".
- */
-export interface WorkflowModelMessage {
-  role: WorkflowModelRole;
-  content?: WorkflowValue[];
-}
-/**
- * A Loop variable: Dify's `label`, `var_type` and constant or variable value.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowLoopVariable".
- */
-export interface WorkflowLoopVariable {
-  label: string;
-  var_type: WorkflowVarType;
-  /**
-   * Closed, explicitly tagged value syntax; no evaluation of expression strings.
-   */
-  value:
-    | {
-        path: string[];
-        type: 'reference';
-      }
-    | {
-        value: unknown;
-        type: 'literal';
-      }
-    | {
-        fields: {
-          [k: string]: WorkflowValue;
-        };
-        type: 'object';
-      }
-    | {
-        items: WorkflowValue[];
-        type: 'array';
-      }
-    | {
-        parts: WorkflowValue[];
-        type: 'template';
-      };
-}
-/**
- * A fixed graph: the root, or a Loop or Iteration body. A body declares no
- * input or output: as in Dify, it reads the variables of the nodes around
- * it, its container's variables and its own nodes.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBlock".
- */
-export interface WorkflowBlock1 {
-  /**
-   * The workflow input JSON Schema.
-   */
-  input?: {
-    [k: string]: unknown;
-  };
-  /**
-   * Stable node definitions keyed by explicit node id.
-   */
-  nodes: {
-    [k: string]: WorkflowNodeDefinition;
-  };
-  /**
-   * Ordinary sequential control-flow edges.
-   */
-  edges?: WorkflowEdgeDefinition[];
-}
-/**
- * One explicit edge in the workflow graph.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowEdgeDefinition".
- */
-export interface WorkflowEdgeDefinition {
-  /**
-   * Source node id.
-   */
-  from: string;
-  /**
-   * Destination node id.
-   */
-  to: string;
-  /**
-   * The Branch case, Agent route or fail port. Ordinary nodes omit it.
-   */
-  port?: WorkflowPort | null;
-}
-/**
- * One write of a Variable Assigner.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowAssignment".
- */
-export interface WorkflowAssignment {
-  /**
-   * The written Loop variable: `[loop, label]`.
-   */
-  variable: string[];
-  operation: WorkflowWriteMode;
-  /**
-   * The operand; `clear`, `remove_first` and `remove_last` take none.
-   */
-  value?: WorkflowValue | null;
-}
-/**
- * One button the person may press, and the exit it takes.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowReviewAction".
- */
-export interface WorkflowReviewAction {
-  id: string;
-  title: string;
-}
-/**
- * One exit an Agent may choose, as Dify's Agent output route. The child
- * sees every route's ID and description when it picks one.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowAgentRoute".
- */
-export interface WorkflowAgentRoute {
-  id: string;
-  description: string;
-}
-/**
- * A stable exit identity and its condition. The first matching case wins.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBranchCase".
- */
-export interface WorkflowBranchCase {
-  id: string;
-  condition: WorkflowPredicate;
-}
-/**
- * As Dify's End output variable: a result field and the variable it reads.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowReturnOutput".
- */
-export interface WorkflowReturnOutput {
-  variable: string;
-  value_selector: string[];
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowEditorMetadata".
- */
-export interface WorkflowEditorMetadata {
-  display?: WorkflowDisplay | null;
-  nodes?: WorkflowNodePresentation[];
-  notes?: WorkflowNote[];
-  orders?: WorkflowFieldOrder[];
-}
-/**
- * How people see the Workflow in the library and editor. Never part of the
- * program: models only read the definition's own `description`.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowDisplay".
- */
-export interface WorkflowDisplay {
-  /**
-   * The human name; the file id remains the native identity.
-   */
-  title: string;
-  description?: string | null;
-  /**
-   * An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).
-   */
-  icon?: string | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowNodePresentation".
- */
-export interface WorkflowNodePresentation {
-  address: WorkflowNodeAddress;
-  title?: string | null;
-  description?: string | null;
-  position?: WorkflowPosition | null;
-  /**
-   * Authored Loop container geometry, never measured DOM state.
-   */
-  dimensions?: WorkflowDimensions | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowNodeAddress".
- */
-export interface WorkflowNodeAddress {
-  block: WorkflowBlockStep[];
-  node: string;
-}
-/**
- * Structured lexical address of a Loop or Iteration body.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBlockStep".
- */
-export interface WorkflowBlockStep {
-  node: string;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowPosition".
- */
-export interface WorkflowPosition {
-  x: number;
-  y: number;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowDimensions".
- */
-export interface WorkflowDimensions {
-  width: number;
-  height: number;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowNote".
- */
-export interface WorkflowNote {
-  id: string;
-  block: WorkflowBlockStep[];
-  /**
-   * As Dify, the note's Lexical editor state serialized as JSON.
-   */
-  text: string;
-  theme: WorkflowNoteTheme;
-  position: WorkflowPosition;
-  dimensions: WorkflowDimensions;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowFieldOrder".
- */
-export interface WorkflowFieldOrder {
-  target: WorkflowOrderTarget;
-  fields: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9997,6 +9739,23 @@ export interface WorkflowConsumerAddress {
   address: WorkflowNodeAddress;
   field: WorkflowConsumerField;
   path?: WorkflowExpressionStep[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeAddress".
+ */
+export interface WorkflowNodeAddress {
+  block: WorkflowBlockStep[];
+  node: string;
+}
+/**
+ * Structured lexical address of a Loop or Iteration body.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBlockStep".
+ */
+export interface WorkflowBlockStep {
+  node: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -10064,6 +9823,10 @@ export interface Model {
    */
   request_params?: RequestParams | null;
   default_profile?: ModelProfileId | null;
+  /**
+   * Optional complete Profile order, from lower to higher declared reasoning strength.
+   */
+  reasoning_profile_order?: ModelProfileId[] | null;
   profiles?: {
     [k: string]: Profile;
   } | null;
@@ -10449,6 +10212,24 @@ export interface GoalExtensionDocument1 {
   enabled?: boolean;
 }
 /**
+ * How people see the Workflow in the library and editor. Never part of the
+ * program: models only read the definition's own `description`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDisplay".
+ */
+export interface WorkflowDisplay {
+  /**
+   * The human name; the file id remains the native identity.
+   */
+  title: string;
+  description?: string | null;
+  /**
+   * An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).
+   */
+  icon?: string | null;
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionSettingsRef".
  */
@@ -10464,19 +10245,6 @@ export interface SessionApplicationRef {
   version: string;
   revision: string;
   byte_length: number;
-}
-/**
- * Source attempt identity is independent of both content and execution version.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApplicationIdentity".
- */
-export interface ApplicationIdentity {
-  /**
-   * None means immutable input capture failed; no source revision is fabricated.
-   */
-  input_revision?: string | null;
-  attempt: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -11476,6 +11244,21 @@ export interface TraceRecord {
   message_id?: MessageId | null;
   attachments: TraceArtifact[];
   /**
+   * The committed change of a `configuration` record, as recorded.
+   */
+  configuration?: ConfigurationChange | null;
+  /**
+   * The exact effective instructions that `configuration` record's commit
+   * installed, read through `content_read` whether or not a request used
+   * them.
+   */
+  configuration_instructions?: ContentRef | null;
+  /**
+   * The JSON catalog of the Tools and Skills that commit affected, before
+   * and after.
+   */
+  configuration_catalog?: ContentRef | null;
+  /**
    * Whether this record has heavy detail available for inspection.
    */
   has_detail: boolean;
@@ -11651,6 +11434,75 @@ export interface TraceToolCall {
   name?: string | null;
   occurrence: RuntimeClientToolOccurrence;
   fields: TraceFieldSource[];
+}
+/**
+ * The typed semantic summary of one actual configuration commit.
+ *
+ * Recorded once per commit that changed something; never for preparation,
+ * a file notification or a commit with no effective semantic change. It
+ * names what changed, not the bodies: the exact prompt and Tool schemas a
+ * request used remain in that request's own immutable snapshot.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConfigurationChange".
+ */
+export interface ConfigurationChange {
+  reason: ConfigurationChangeReason;
+  /**
+   * The Session binding revision this commit replaced.
+   */
+  previous_binding_revision: string;
+  /**
+   * The Session binding revision this commit installed.
+   */
+  binding_revision: string;
+  /**
+   * The changed domains, in their stable order.
+   */
+  domains: ConfigurationDomain[];
+  tools: NamedChanges;
+  skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added, changed or removed, with their before and after
+   * states.
+   */
+  catalog_bytes: string;
+}
+/**
+ * Named-item differences of one catalog. A same-name item whose definition
+ * changed is `changed`, never a removal plus an addition.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "NamedChanges".
+ */
+export interface NamedChanges {
+  added: BoundedNames;
+  removed: BoundedNames;
+  changed: BoundedNames;
+}
+/**
+ * A bounded, ordered list of names with its exact total.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BoundedNames".
+ */
+export interface BoundedNames {
+  /**
+   * Sorted names: at most [`CONFIGURATION_CHANGE_NAME_LIMIT`] of them,
+   * within [`CONFIGURATION_CHANGE_NAME_BYTES`] encoded bytes.
+   */
+  names: string[];
+  /**
+   * The exact number of names in this category.
+   */
+  total: number;
 }
 /**
  * A contiguous native history window ending at the selected execution.
@@ -11999,6 +11851,18 @@ export interface RuntimeClientTranscriptEntry {
               type: 'cancelled';
             };
         type: 'interaction_settled';
+      }
+    | {
+        /**
+         * Identifies one durable runtime event.
+         */
+        event_id: string;
+        /**
+         * Event timestamp.
+         */
+        timestamp: string;
+        change: ConfigurationChange1;
+        type: 'configuration_applied';
       };
 }
 /**
@@ -13115,6 +12979,43 @@ export interface QuestionnaireSubmission2 {
   answers: QuestionnaireAnswerEntry[];
 }
 /**
+ * The typed semantic summary of one actual configuration commit.
+ *
+ * Recorded once per commit that changed something; never for preparation,
+ * a file notification or a commit with no effective semantic change. It
+ * names what changed, not the bodies: the exact prompt and Tool schemas a
+ * request used remain in that request's own immutable snapshot.
+ */
+export interface ConfigurationChange1 {
+  reason: ConfigurationChangeReason;
+  /**
+   * The Session binding revision this commit replaced.
+   */
+  previous_binding_revision: string;
+  /**
+   * The Session binding revision this commit installed.
+   */
+  binding_revision: string;
+  /**
+   * The changed domains, in their stable order.
+   */
+  domains: ConfigurationDomain[];
+  tools: NamedChanges;
+  skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added, changed or removed, with their before and after
+   * states.
+   */
+  catalog_bytes: string;
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ObservedTurnIdentity".
  */
@@ -13260,25 +13161,6 @@ export interface RuntimeClientSnapshot {
    * or tool authority.
    */
   effective_approval_mode: 'policy' | 'full_access';
-  /**
-   * Whether this live runtime could adopt a prepared Session configuration
-   * now. Runtime-domain advisory state published by the runtime with its
-   * adoption gate's idle rule over in-memory owners, and changed only by the
-   * `configuration_adoption_eligibility_changed` event; it describes no
-   * candidate and is never configuration application state. `unavailable` until the runtime runs, after it stops, and for a
-   * durable inspection projection. `session/adoptConfiguration` revalidates
-   * the real gate at its commit boundary.
-   */
-  configuration_adoption_eligibility:
-    | {
-        status: 'eligible';
-      }
-    | {
-        status: 'busy';
-      }
-    | {
-        status: 'unavailable';
-      };
   /**
    * The runtime's durable-authority failure, when it has entered the
    * explicit degraded state. While set, no new durable admission/execution
@@ -15832,10 +15714,6 @@ export interface RuntimeClientProtocolEvent {
         type: 'trace_changed';
       }
     | {
-        eligibility: AdoptionEligibility;
-        type: 'configuration_adoption_eligibility_changed';
-      }
-    | {
         view: RuntimeClientGoalView;
         type: 'goal_changed';
       }
@@ -16186,6 +16064,14 @@ export interface RuntimeClientProtocolEvent {
          */
         transcript_cursor: string;
         type: 'interaction_audit_settled';
+      }
+    | {
+        item: RuntimeClientTranscriptConfigurationApplied;
+        /**
+         * The cursor domain of durable transcript paging.
+         */
+        transcript_cursor: string;
+        type: 'configuration_applied';
       }
     | {
         context: RuntimeClientContextView1;
@@ -16796,6 +16682,94 @@ export interface RuntimeClientTranscriptInteractionSettled {
           | 'subagent_execution_deadline_exceeded';
         type: 'cancelled';
       };
+}
+/**
+ * The bounded configuration change item.
+ */
+export interface RuntimeClientTranscriptConfigurationApplied {
+  /**
+   * Identifies one durable runtime event.
+   */
+  event_id: string;
+  /**
+   * Event timestamp.
+   */
+  timestamp: string;
+  change: ConfigurationChange2;
+  instructions: ContentRef1;
+  catalog: ContentRef2;
+}
+/**
+ * The typed semantic summary of one actual configuration commit.
+ *
+ * Recorded once per commit that changed something; never for preparation,
+ * a file notification or a commit with no effective semantic change. It
+ * names what changed, not the bodies: the exact prompt and Tool schemas a
+ * request used remain in that request's own immutable snapshot.
+ */
+export interface ConfigurationChange2 {
+  reason: ConfigurationChangeReason;
+  /**
+   * The Session binding revision this commit replaced.
+   */
+  previous_binding_revision: string;
+  /**
+   * The Session binding revision this commit installed.
+   */
+  binding_revision: string;
+  /**
+   * The changed domains, in their stable order.
+   */
+  domains: ConfigurationDomain[];
+  tools: NamedChanges;
+  skills: NamedChanges;
+  /**
+   * The byte length of the effective system instructions this commit
+   * installed. The fact retains them exactly, readable in bounded ranges
+   * even when no request ever used them.
+   */
+  instructions_bytes: string;
+  /**
+   * The byte length of the retained JSON catalog of every Tool and Skill
+   * this commit added, changed or removed, with their before and after
+   * states.
+   */
+  catalog_bytes: string;
+}
+/**
+ * The exact effective instructions the commit installed, read in
+ * bounded ranges through `content_read`.
+ */
+export interface ContentRef1 {
+  conversation_id: ConversationId;
+  source: ContentSource;
+  representation: ContentRepresentation;
+  version: number;
+  /**
+   * Immutable sources use revision 1. For `LivePublicationPrefix` this is
+   * the committed frame sequence plus one, with exact H verified against
+   * the retained staging frontier index and projection release cut.
+   */
+  content_revision: number;
+  readable_end: number;
+}
+/**
+ * The JSON catalog of the Tools and Skills the commit affected (before
+ * and after),
+ * read in bounded ranges through `content_read`.
+ */
+export interface ContentRef2 {
+  conversation_id: ConversationId;
+  source: ContentSource;
+  representation: ContentRepresentation;
+  version: number;
+  /**
+   * Immutable sources use revision 1. For `LivePublicationPrefix` this is
+   * the committed frame sequence plus one, with exact H verified against
+   * the retained staging frontier index and projection release cut.
+   */
+  content_revision: number;
+  readable_end: number;
 }
 /**
  * Authoritative context state at this lifecycle boundary.
@@ -17947,16 +17921,19 @@ export interface ConfigurationApplication {
     provider?: UnitApplication;
     shared_capacity?: UnitApplication;
   };
-  candidate?: AvailableConfiguration | null;
 }
 /**
+ * Source attempt identity is independent of both content and execution version.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AvailableConfiguration".
+ * via the `definition` "ApplicationIdentity".
  */
-export interface AvailableConfiguration {
-  identity: ApplicationIdentity;
-  expected_binding: string;
-  impact: CacheImpact;
+export interface ApplicationIdentity {
+  /**
+   * None means immutable input capture failed; no source revision is fabricated.
+   */
+  input_revision?: string | null;
+  attempt: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -18419,6 +18396,10 @@ export interface CatalogModelView {
    */
   defaultProfile?: ModelProfileId | null;
   /**
+   * Optional complete Profile order, lowest declared reasoning strength first.
+   */
+  reasoningProfileOrder?: ModelProfileId[] | null;
+  /**
    * The redacted client-facing description of a credential source.
    *
    * This is safe to place in Runtime Client results: it carries the source
@@ -18613,6 +18594,15 @@ export interface SourceCollection {
   kind: string;
 }
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDocumentChunk".
+ */
+export interface WorkflowDocumentChunk {
+  offset: number;
+  data: string;
+  next_offset?: number | null;
+}
+/**
  * The Workflow files physically owned by one source scope.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -18741,7 +18731,7 @@ export interface WorkflowSource {
    * The parsed native definition. Absent for a missing, unparseable or
    * browser-unrepresentable file, whose bytes stay untouched on disk.
    */
-  document?: WorkflowFileDocument | null;
+  document?: WorkflowDocumentRef | null;
   /**
    * The first structural (parse or compile) or representability failure.
    */
@@ -18772,8 +18762,7 @@ export interface WorkflowToolChoice {
   description: string;
   input_schema: unknown;
   /**
-   * What a Tool node commits, fixed by the Tool: its declared structured
-   * result, or its text. Never provider text heuristics or a part index.
+   * The fixed result a node of this Tool commits.
    */
   result:
     | {
@@ -18809,94 +18798,13 @@ export interface WorkflowToolSource {
   tools: WorkflowToolChoice[];
 }
 /**
- * One offline check of one exact candidate document.
- *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowCheckReport".
+ * via the `definition` "WorkflowCheckReportChunk".
  */
-export interface WorkflowCheckReport {
-  /**
-   * The file revision a `replace` with this candidate commits: the native
-   * identity of its canonical serialization, so a client recognizes its
-   * own normalized commit on reread. Absent when the file cannot hold it.
-   */
-  revision?: string | null;
-  structure: WorkflowStructure;
-  dependencies: WorkflowDependencies;
-  /**
-   * The redacted static explanation, when requested of a valid candidate.
-   */
-  explanation?: WorkflowInspection2 | null;
-  /**
-   * Retained orphaned presentation references; executable validity is separate.
-   */
-  presentation?: WorkflowPresentationDiagnostic[];
-}
-/**
- * Static program facts. Literals and task text are deliberately not exported.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowInspection2".
- */
-export interface WorkflowInspection2 {
-  identity: WorkflowToolIdentity;
-  stage: string;
-  input_schema: unknown;
-  output_schema: unknown;
-  configured_timeout_ms: string;
-  conservative_steps: number;
-  conservative_agent_runs: number;
-  conservative_model_calls: number;
-  conservative_retained_bytes: number;
-  caps: {
-    [k: string]: number;
-  };
-  blocks: {
-    [k: string]: BlockInspection;
-  };
-  tools: ExactToolSelector[];
-  profiles: SubagentName[];
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "BlockInspection".
- */
-export interface BlockInspection {
-  entry: string;
-  input_schema: unknown;
-  output_schema: unknown;
-  nodes: {
-    [k: string]: NodeInspection;
-  };
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NodeInspection".
- */
-export interface NodeInspection {
-  kind: string;
-  edges: [unknown, unknown][];
-  bindings: {
-    [k: string]: unknown;
-  };
-  profile?: SubagentName | null;
-  /**
-   * Selector identities only; provider parameters may contain secrets.
-   */
-  model?: ModelPolicyInspection | null;
-  selector?: ExactToolSelector | null;
-  output_schema?: unknown;
-  result_kind?: string | null;
-  loop_count?: number | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowPresentationDiagnostic".
- */
-export interface WorkflowPresentationDiagnostic {
-  path: string;
-  category: string;
-  reason: string;
+export interface WorkflowCheckReportChunk {
+  offset: number;
+  data: string;
+  next_offset?: number | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -18965,6 +18873,15 @@ export interface WorkflowReferenceChoice {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPresentationDiagnostic".
+ */
+export interface WorkflowPresentationDiagnostic {
+  path: string;
+  category: string;
+  reason: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "BoundedSessionApplication".
  */
 export interface BoundedSessionApplication {
@@ -19025,6 +18942,314 @@ export interface RpcError {
   code: number;
   message: string;
   data?: ErrorData | null;
+}
+/**
+ * Complete authored source, with the executable fields at their native YAML
+ * locations. Files without `editor` have deterministic derived presentation.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowFileDocument".
+ */
+export interface WorkflowFileDocument {
+  /**
+   * The model-facing description of the workflow Tool.
+   */
+  description: string;
+  /**
+   * Trusted finite total foreground lifetime, including descendant waits.
+   */
+  timeout_ms?: string;
+  block: WorkflowBlock;
+  editor?: WorkflowEditorMetadata | null;
+}
+/**
+ * The root lexical execution scope.
+ */
+export interface WorkflowBlock {
+  /**
+   * The workflow input JSON Schema.
+   */
+  input?: {
+    [k: string]: unknown;
+  };
+  /**
+   * Stable node definitions keyed by explicit node id.
+   */
+  nodes: {
+    [k: string]: WorkflowNodeDefinition;
+  };
+  /**
+   * Ordinary sequential control-flow edges.
+   */
+  edges?: WorkflowEdgeDefinition[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowListFilter".
+ */
+export interface WorkflowListFilter {
+  /**
+   * Empty selects a primitive item; otherwise literal object field names.
+   */
+  path: string[];
+  operator: WorkflowListOperator;
+  value: WorkflowValue;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowListSort".
+ */
+export interface WorkflowListSort {
+  path: string[];
+  order: WorkflowSortOrder;
+}
+/**
+ * A classifier's stable exit, display label and variable-aware topic.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowClassifierClass".
+ */
+export interface WorkflowClassifierClass {
+  id: string;
+  label: string;
+  description: WorkflowValue[];
+}
+/**
+ * As Dify's retry on failure: a failed or timed-out Model or Tool call is
+ * made again, up to `max_retries` more times, `interval_ms` after the
+ * previous one ended.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowRetry".
+ */
+export interface WorkflowRetry {
+  max_retries: number;
+  interval_ms: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAggregateGroup".
+ */
+export interface WorkflowAggregateGroup {
+  name: string;
+  output_type?: WorkflowVarType | null;
+  variables: string[][];
+}
+/**
+ * One prompt message of a Model node. The first message is the system
+ * prompt and every later one a user or assistant turn. Its content is fixed
+ * text (string literals) and explicit references, rendered in order: a
+ * string value as itself, any other value as its JSON text.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowModelMessage".
+ */
+export interface WorkflowModelMessage {
+  role: WorkflowModelRole;
+  content?: WorkflowValue[];
+}
+/**
+ * A Loop variable: Dify's `label`, `var_type` and constant or variable value.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowLoopVariable".
+ */
+export interface WorkflowLoopVariable {
+  label: string;
+  var_type: WorkflowVarType;
+  /**
+   * Closed, explicitly tagged value syntax; no evaluation of expression strings.
+   */
+  value:
+    | {
+        path: string[];
+        type: 'reference';
+      }
+    | {
+        value: unknown;
+        type: 'literal';
+      }
+    | {
+        fields: {
+          [k: string]: WorkflowValue;
+        };
+        type: 'object';
+      }
+    | {
+        items: WorkflowValue[];
+        type: 'array';
+      }
+    | {
+        parts: WorkflowValue[];
+        type: 'template';
+      };
+}
+/**
+ * A fixed graph: the root, or a Loop or Iteration body. A body declares no
+ * input or output: as in Dify, it reads the variables of the nodes around
+ * it, its container's variables and its own nodes.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBlock".
+ */
+export interface WorkflowBlock1 {
+  /**
+   * The workflow input JSON Schema.
+   */
+  input?: {
+    [k: string]: unknown;
+  };
+  /**
+   * Stable node definitions keyed by explicit node id.
+   */
+  nodes: {
+    [k: string]: WorkflowNodeDefinition;
+  };
+  /**
+   * Ordinary sequential control-flow edges.
+   */
+  edges?: WorkflowEdgeDefinition[];
+}
+/**
+ * One explicit edge in the workflow graph.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowEdgeDefinition".
+ */
+export interface WorkflowEdgeDefinition {
+  /**
+   * Source node id.
+   */
+  from: string;
+  /**
+   * Destination node id.
+   */
+  to: string;
+  /**
+   * The Branch case, Agent route or fail port. Ordinary nodes omit it.
+   */
+  port?: WorkflowPort | null;
+}
+/**
+ * One write of a Variable Assigner.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAssignment".
+ */
+export interface WorkflowAssignment {
+  /**
+   * The written Loop variable: `[loop, label]`.
+   */
+  variable: string[];
+  operation: WorkflowWriteMode;
+  /**
+   * The operand; `clear`, `remove_first` and `remove_last` take none.
+   */
+  value?: WorkflowValue | null;
+}
+/**
+ * One button the person may press, and the exit it takes.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReviewAction".
+ */
+export interface WorkflowReviewAction {
+  id: string;
+  title: string;
+}
+/**
+ * One exit an Agent may choose, as Dify's Agent output route. The child
+ * sees every route's ID and description when it picks one.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowAgentRoute".
+ */
+export interface WorkflowAgentRoute {
+  id: string;
+  description: string;
+}
+/**
+ * A stable exit identity and its condition. The first matching case wins.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBranchCase".
+ */
+export interface WorkflowBranchCase {
+  id: string;
+  condition: WorkflowPredicate;
+}
+/**
+ * As Dify's End output variable: a result field and the variable it reads.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowReturnOutput".
+ */
+export interface WorkflowReturnOutput {
+  variable: string;
+  value_selector: string[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowEditorMetadata".
+ */
+export interface WorkflowEditorMetadata {
+  display?: WorkflowDisplay | null;
+  nodes?: WorkflowNodePresentation[];
+  notes?: WorkflowNote[];
+  orders?: WorkflowFieldOrder[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodePresentation".
+ */
+export interface WorkflowNodePresentation {
+  address: WorkflowNodeAddress;
+  title?: string | null;
+  description?: string | null;
+  position?: WorkflowPosition | null;
+  /**
+   * Authored Loop container geometry, never measured DOM state.
+   */
+  dimensions?: WorkflowDimensions | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowPosition".
+ */
+export interface WorkflowPosition {
+  x: number;
+  y: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDimensions".
+ */
+export interface WorkflowDimensions {
+  width: number;
+  height: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNote".
+ */
+export interface WorkflowNote {
+  id: string;
+  block: WorkflowBlockStep[];
+  /**
+   * As Dify, the note's Lexical editor state serialized as JSON.
+   */
+  text: string;
+  theme: WorkflowNoteTheme;
+  position: WorkflowPosition;
+  dimensions: WorkflowDimensions;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowFieldOrder".
+ */
+export interface WorkflowFieldOrder {
+  target: WorkflowOrderTarget;
+  fields: string[];
 }
 /**
  * Heavy inspection detail for one exact record identity.
@@ -20248,6 +20473,25 @@ export interface RuntimeClientTranscriptInteractionSettled1 {
       };
 }
 /**
+ * One live-published Session configuration change projection.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientTranscriptConfigurationApplied".
+ */
+export interface RuntimeClientTranscriptConfigurationApplied1 {
+  /**
+   * Identifies one durable runtime event.
+   */
+  event_id: string;
+  /**
+   * Event timestamp.
+   */
+  timestamp: string;
+  change: ConfigurationChange2;
+  instructions: ContentRef1;
+  catalog: ContentRef2;
+}
+/**
  * Finite proposal metadata; exact provider identifiers and arguments can be deferred.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -20259,4 +20503,85 @@ export interface RuntimeClientToolCall2 {
   name: string;
   arguments?: unknown;
   metadata_ref?: ContentRef | null;
+}
+/**
+ * One offline check of one exact candidate document.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowCheckReport".
+ */
+export interface WorkflowCheckReport {
+  /**
+   * The file revision a `replace` with this candidate commits: the native
+   * identity of its canonical serialization, so a client recognizes its
+   * own normalized commit on reread. Absent when the file cannot hold it.
+   */
+  revision?: string | null;
+  structure: WorkflowStructure;
+  dependencies: WorkflowDependencies;
+  /**
+   * The redacted static explanation, when requested of a valid candidate.
+   */
+  explanation?: WorkflowInspection2 | null;
+  /**
+   * Retained orphaned presentation references; executable validity is separate.
+   */
+  presentation?: WorkflowPresentationDiagnostic[];
+}
+/**
+ * Static program facts. Literals and task text are deliberately not exported.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowInspection2".
+ */
+export interface WorkflowInspection2 {
+  identity: WorkflowToolIdentity;
+  stage: string;
+  input_schema: unknown;
+  output_schema: unknown;
+  configured_timeout_ms: string;
+  conservative_steps: number;
+  conservative_agent_runs: number;
+  conservative_model_calls: number;
+  conservative_retained_bytes: number;
+  caps: {
+    [k: string]: number;
+  };
+  blocks: {
+    [k: string]: BlockInspection;
+  };
+  tools: ExactToolSelector[];
+  profiles: SubagentName[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BlockInspection".
+ */
+export interface BlockInspection {
+  entry: string;
+  input_schema: unknown;
+  output_schema: unknown;
+  nodes: {
+    [k: string]: NodeInspection;
+  };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "NodeInspection".
+ */
+export interface NodeInspection {
+  kind: string;
+  edges: [unknown, unknown][];
+  bindings: {
+    [k: string]: unknown;
+  };
+  profile?: SubagentName | null;
+  /**
+   * Selector identities only; provider parameters may contain secrets.
+   */
+  model?: ModelPolicyInspection | null;
+  selector?: ExactToolSelector | null;
+  output_schema?: unknown;
+  result_kind?: string | null;
+  loop_count?: number | null;
 }

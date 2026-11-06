@@ -32,7 +32,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       await expect(page.getByLabel('Transport token')).toHaveCount(0);
       await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     };
-    const openModel = async () => {
+    const openModel = async (mode: 'open' | 'restore') => {
       const menu = settingsSectionMenu(page);
       if (await menu.isVisible()) {
         await menu.click();
@@ -41,7 +41,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       // Returning to Models restores its retained editor. The background
       // tabpanel remains rendered but is aria-hidden while the modal is open.
       await expect(page.getByRole('tabpanel', { name: 'Models', exact: true, includeHidden: true })).toBeVisible();
-      if (await model.isVisible()) {
+      if (mode === 'restore') {
         await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
         return;
       }
@@ -58,7 +58,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       if (await back.isVisible()) await back.click();
       await openSettingsPage(page, 'MCP servers');
     };
-    await openModel();
+    await openModel('open');
     await model.getByLabel('Context window').fill('250000');
     appendFileSync(fixture.settings, '\n# external revision before save\n');
     await model.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
@@ -73,7 +73,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     expect(readFileSync(fixture.settings, 'utf8')).toContain('250000');
     await reconnect();
     // Reopen the independent Model dialog after the authoritative native reread.
-    await openModel();
+    await openModel('restore');
     await expect(model.getByLabel('Context window')).toHaveValue('250000');
     expect(writes()).toHaveLength(2);
     await openMcp();

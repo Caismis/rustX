@@ -3,7 +3,7 @@ import { useState, type ReactNode } from 'react';
 import type {
   AppServerPolicy, ContextLayer, RuntimeLayer, SourceScope, SourceSettings, SubagentsLayer,
   TimeoutLayer, ToolDeadlineLayer,
-} from '../../../../../protocol/app-server/v69';
+} from '../../../../../protocol/app-server/v72';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitForm } from '../forms/bridge';
 import { TextField } from '../forms/controls';
@@ -70,8 +70,7 @@ export function AdvancedPage({ source, config, closed, scope, processPolicyImpac
     <ul>{observedUnits.map(unit => {
       const result = observedResult(unitApplication(source.application, unit));
       return <li key={unit}>{observedUnitLabel(tx, unit)}: <strong>{observedResultLabel(tx, result)}</strong>
-        {result.state === 'failed' && <> — {result.diagnostic}</>}
-        {result.state === 'ready' && <> {tx('settings:advanced-page.cache-impact')}{' '}{result.impact}</>}
+        {(result.state === 'failed' || result.state === 'uncertain') && <> — {result.diagnostic}</>}
       </li>;
     })}</ul>
     <p>{tx('settings:advanced-page.applied-preparing-failed-and-restart-pending-are-native-observat')}</p>

@@ -65,10 +65,23 @@ impl ProspectiveSessionConfig {
                 &source.workflows,
                 source.managed_python.clone(),
             );
+            // A source only an admitted Named Agent selects stays lazy, but
+            // its binding is still what that Agent runs on.
+            let lazy = source
+                .admitted_agent_dependencies()
+                .iter()
+                .filter_map(|name| source.subagents.get(name))
+                .flat_map(|profile| {
+                    profile
+                        .tools()
+                        .iter()
+                        .filter_map(|selector| selector.source().cloned())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<std::collections::BTreeSet<_>>();
             config.mcp_servers.retain(|id, _| {
-                demand
-                    .sources
-                    .contains(&crate::capabilities::ToolSourceId::Mcp(id.clone()))
+                let id = crate::capabilities::ToolSourceId::Mcp(id.clone());
+                demand.sources.contains(&id) || lazy.contains(&id)
             });
             (config, demand.sources)
         };
@@ -116,15 +129,38 @@ impl ProspectiveSessionConfig {
     }
 
     /// Whether every invocation an Attempt of this Session would freeze is
-    /// effectively unchanged: the primary and explicit Summary selection, and
-    /// those of every admitted named Agent. Compared as resolved invocations
+    /// effectively unchanged: the primary and explicit Summary selection,
+    /// those of every admitted named Agent and of every direct Model node of
+    /// an enabled Workflow. Compared as resolved invocations
     /// ([`ModelCatalog::same_invocation`]), so authored spelling and
     /// unselected catalog entries never force a preparation, while any
     /// provider binding, wire model, limit, Profile, reasoning or parameter
     /// change does. Catalog edits reach future selections separately, through
     /// catalog publication ([`Self::same_catalog`]).
     pub(crate) fn same_provider(&self, other: &Self) -> bool {
-        self.same_session_model(other) && self.same_agent_models(other)
+        self.same_session_model(other)
+            && self.same_agent_models(other)
+            && self.same_workflow_models(other)
+    }
+
+    /// Whether two complete closures enable the same direct Workflow Model
+    /// nodes with effectively the same explicit invocations.
+    fn same_workflow_models(&self, other: &Self) -> bool {
+        let (left, right) = (
+            self.workflow_model_selections(),
+            other.workflow_model_selections(),
+        );
+        left.len() == right.len()
+            && left.iter().all(|(node, selection)| {
+                right.get(node).is_some_and(|other_selection| {
+                    self.models.same_invocation(
+                        selection,
+                        &other.models,
+                        other_selection,
+                        crate::model::invocation::RequestParamsLayer::SessionOverrides,
+                    )
+                })
+            })
     }
 
     /// Whether the Session's own primary and explicit Summary selections
@@ -154,21 +190,58 @@ impl ProspectiveSessionConfig {
     }
 
     /// Whether publishing this capture's catalog leaves every named Agent
-    /// invocation of the `adopted` closure unchanged. Which Agents are admitted
+    /// and Workflow Model invocation of the `adopted` closure unchanged. Which Agents are admitted
     /// and how they are defined stays the adopted closure's until Capability
     /// adoption, so an Agent this source newly admits, drops or redefines is
     /// that unit's change, never one to an adopted invocation. An adopted Agent
     /// naming no model inherits the invoking Attempt's frozen model; one naming
     /// a selection resolves it against the catalog the Session publishes, so
     /// that selection must resolve to the same invocation here.
-    pub(crate) fn preserves_adopted_agent_models(&self, adopted: &Self) -> bool {
+    ///
+    /// The same holds for each explicit model a direct Model node of an
+    /// enabled Workflow names, at any depth.
+    pub(crate) fn preserves_adopted_models(&self, adopted: &Self) -> bool {
         adopted.admitted_agent_dependencies().iter().all(|name| {
             adopted
                 .subagents
                 .get(name)
                 .and_then(|definition| definition.profile().model.clone())
                 .is_none_or(|model| adopted.same_model(&model, self, &model))
-        })
+        }) && adopted
+            .workflow_model_selections()
+            .values()
+            .all(|selection| {
+                adopted.models.same_invocation(
+                    selection,
+                    &self.models,
+                    selection,
+                    crate::model::invocation::RequestParamsLayer::SessionOverrides,
+                )
+            })
+    }
+
+    /// The explicit selection of every direct Model node in the Workflows
+    /// this capture enables, by Workflow and authored path.
+    fn workflow_model_selections(
+        &self,
+    ) -> std::collections::BTreeMap<
+        (crate::runtime::workflow::WorkflowId, String),
+        crate::model::ModelSelection,
+    > {
+        self.config
+            .agent
+            .workflows
+            .iter()
+            .filter_map(|id| Some((id, self.workflows.entries().get(id)?)))
+            .flat_map(|(id, entry)| {
+                entry
+                    .source
+                    .model_policy_nodes()
+                    .into_iter()
+                    .filter_map(|node| Some(((id.clone(), node.path), node.policy.selection()?)))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     fn same_model(
@@ -177,43 +250,7 @@ impl ProspectiveSessionConfig {
         other: &Self,
         right: &crate::model::session::SessionModelConfig,
     ) -> bool {
-        use crate::model::invocation::RequestParamsLayer;
-        self.models.same_invocation(
-            &left.selection(),
-            &other.models,
-            &right.selection(),
-            RequestParamsLayer::SessionOverrides,
-        ) && [
-            (
-                left.summary_selection(),
-                right.summary_selection(),
-                RequestParamsLayer::SummaryOverrides,
-            ),
-            (
-                left.title_selection(),
-                right.title_selection(),
-                RequestParamsLayer::TitleOverrides,
-            ),
-            (
-                left.classification_selection(),
-                right.classification_selection(),
-                RequestParamsLayer::ClassificationOverrides,
-            ),
-            (
-                left.btw_selection(),
-                right.btw_selection(),
-                RequestParamsLayer::BtwOverrides,
-            ),
-        ]
-        .into_iter()
-        .all(|(left, right, layer)| match (left, right) {
-            (None, None) => true,
-            (Some(left), Some(right)) => {
-                self.models
-                    .same_invocation(&left, &other.models, &right, layer)
-            }
-            _ => false,
-        })
+        crate::model::session::same_session_invocation(&self.models, left, &other.models, right)
     }
 
     /// Why this capture's catalog does not admit the Session's own selection,

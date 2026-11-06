@@ -120,6 +120,9 @@ pub enum TraceKind {
     Subagent,
     Workflow,
     Interaction,
+    /// A Session configuration commit between Attempts. It owns no Attempt;
+    /// the first request that used it shows that in its own request state.
+    Configuration,
 }
 
 /// The closed lifecycle vocabulary.
@@ -451,6 +454,15 @@ pub struct TraceRecord {
     /// Canonical accepted message; publication without acceptance is absent.
     pub message_id: Option<MessageId>,
     pub attachments: Vec<TraceArtifact>,
+    /// The committed change of a `configuration` record, as recorded.
+    pub configuration: Option<crate::runtime::configuration_commit::ConfigurationChange>,
+    /// The exact effective instructions that `configuration` record's commit
+    /// installed, read through `content_read` whether or not a request used
+    /// them.
+    pub configuration_instructions: Option<crate::observation::content::ContentRef>,
+    /// The JSON catalog of the Tools and Skills that commit affected, before
+    /// and after.
+    pub configuration_catalog: Option<crate::observation::content::ContentRef>,
     /// Whether this record has heavy detail available for inspection.
     pub has_detail: bool,
     pub truncated: bool,

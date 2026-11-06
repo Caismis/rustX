@@ -1,4 +1,4 @@
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v69';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v72';
 import { sameAnalysisQuery } from '../../../../../protocol/app-server/workflow-analysis';
 import { blockAt, nodeAt, sameDocument, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';
@@ -76,7 +76,7 @@ export class WorkflowAnalysisSession {
         && input.generation === now.generation && input.document === now.document && sameDocument(input.query, now.query);
     };
     let report: WorkflowAnalysisReport;
-    try { report = await input.port.analyze(input.target.id, input.document, String(input.generation), input.query); }
+    try { report = await input.port.analyze(input.target.id, input.document, String(input.generation), input.query, owns); }
     catch (error) { if (owns()) throw error; return undefined; }
     if (!owns() || report.id !== input.target.id || report.generation !== String(input.generation) || !sameAnalysisQuery(report.query, input.query)
       || report.target.kind !== input.port.scope.kind || !/^sha256:[a-f0-9]{64}$/.test(report.candidate_revision)) return undefined;

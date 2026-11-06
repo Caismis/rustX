@@ -317,9 +317,8 @@ use crate::model::session::{
 };
 use crate::model::{ModelRequest, RequestIdentity, invocation::ModelInvocationError};
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
-use crate::runtime::adoption::{
-    AdmittedConfiguration, AdoptionEligibility, AdoptionError, ConfigurationCut,
-    PreparedConfiguration, configuration_cache_impact,
+use crate::runtime::configuration_commit::{
+    AdmittedConfiguration, ConfigurationCut, PreparedConfiguration, StagedConfiguration,
 };
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::{
@@ -365,9 +364,10 @@ mod scheduled;
 mod test_support;
 mod title;
 
-use admission::{IdleProbe, SemanticInboundClass, WakeGate};
+use admission::{SemanticInboundClass, WakeGate};
 pub(crate) use compaction::ManualCompactionHandle;
 use compaction::{CurrentManualCompaction, ManualTail};
+pub(crate) use configuration::ConfigurationHealth;
 use drain::{DrainCompletion, DrainTrigger};
 use durability::{
     AdmissionDurabilityCycle, AdmissionRetryBudget, BackgroundFailureSink, SubagentFailureSink,
@@ -766,6 +766,15 @@ struct CoordinatorState {
     pending_runtime_catalog: Option<PendingRuntimeCatalog>,
     catalog_commit_blocked: bool,
     catalog_admission_deferred: bool,
+    /// The one fully prepared configuration candidate waiting for this
+    /// runtime's safe boundary. Committed before the next independent
+    /// Attempt is admitted; a newer candidate supersedes it.
+    staged_configuration: Option<StagedConfiguration>,
+    /// The staged commit found a capability lifecycle admission in flight.
+    configuration_commit_waiting: bool,
+    /// An admission pass that reached a waiting staged commit; the worker
+    /// resumes exactly that pass once the commit boundary is released.
+    configuration_admission_deferred: bool,
     runtime_refresh_sequence: u64,
     runtime_catalog_failure: Option<RuntimeCatalogFailure>,
     explicit_model: bool,
@@ -871,10 +880,14 @@ struct CoordinatorState {
 /// The shared state of one conversation runtime.
 pub(crate) struct RuntimeInner {
     configuration_owner: Arc<()>,
+    /// The first configuration commit this allocation published but could
+    /// not record. The durability gate keeps only its first failure, so this
+    /// fact is kept apart from it.
+    unrecorded_configuration: Arc<std::sync::OnceLock<String>>,
     initialization_cancellation:
         std::sync::OnceLock<crate::runtime::cancellation::CancellationSignal>,
     runtime_catalog_preparer:
-        std::sync::OnceLock<Arc<crate::runtime::adoption::RuntimeCatalogPreparer>>,
+        std::sync::OnceLock<Arc<crate::runtime::configuration_commit::RuntimeCatalogPreparer>>,
     runtime_catalog_publication: tokio::sync::watch::Sender<u64>,
     #[cfg(test)]
     runtime_catalog_processed: tokio::sync::watch::Sender<u64>,
@@ -955,10 +968,6 @@ pub(crate) struct RuntimeInner {
     wake: Arc<WakeGate>,
     /// Whether the admission worker task was spawned.
     worker_started: AtomicBool,
-    /// The configuration-adoption eligibility this runtime last published. Its
-    /// lock orders every derivation with its publication (taken before the
-    /// coordinator lock, never after it).
-    published_eligibility: Mutex<Option<AdoptionEligibility>>,
     /// The one shared semantic drain completion.
     drain: std::sync::OnceLock<Arc<DrainCompletion>>,
     /// Guards creation of the one drain task.

@@ -1,15 +1,17 @@
-//! Configuration adoption: off-side candidate preparation, the adoption
-//! commit under the coordinator lock, independently published units, and
-//! adoption eligibility. Authored-configuration composition is the
-//! application owner's concern (`local_runtime::configuration`).
+//! Configuration commit: off-side candidate preparation, the staged commit
+//! at the runtime's own safe boundary, and independently published units.
+//! Authored-configuration composition is the application owner's concern
+//! (`local_runtime::configuration`).
 
 use super::{
-    AdoptionEligibility, AdoptionError, Arc, CapabilityCoordinator, ConfigurationCut,
-    ContextBinding, ConversationLifecycleState, ConversationObservation, ConversationRuntime,
-    CoordinatorState, IdleProbe, PendingRuntimeCatalog, PreparedConfiguration,
-    PreparedRuntimeResources, RuntimeCatalogFailure, RuntimeConfiguration, RuntimeInner,
-    RuntimeResourceSnapshot, SessionModelConfig, SessionModelState, configuration_cache_impact,
-    validate_model_context,
+    Arc, CapabilityCoordinator, ConfigurationCut, ContextBinding, ConversationLifecycleState,
+    ConversationObservation, ConversationRuntime, CoordinatorState, DurableOperation,
+    PendingRuntimeCatalog, PreparedConfiguration, PreparedRuntimeResources, RuntimeCatalogFailure,
+    RuntimeConfiguration, RuntimeInner, RuntimeResourceSnapshot, SessionModelConfig,
+    SessionModelState, validate_model_context,
+};
+use crate::runtime::configuration_commit::{
+    ConfigurationChange, ConfigurationContent, StagedConfiguration, StagedOutcome,
 };
 
 impl RuntimeInner {
@@ -221,8 +223,6 @@ impl RuntimeInner {
             resources,
             snapshot,
         );
-        let impact =
-            configuration_cache_impact(&state.resources, &state.model, &resources, &state.model);
         let resources = if !may_clear_failure && let Some(reason) = failure_reason {
             resources.with_runtime_catalog_failure(reason)
         } else {
@@ -233,49 +233,9 @@ impl RuntimeInner {
             .binding_revision
             .checked_add(1)
             .expect("Session binding revision exhausted");
-        tracing::debug!(?impact, "published adopted runtime catalog");
         self.observe_resources(state, availability);
         self.runtime_catalog_publication
             .send_replace(state.binding_revision);
-    }
-
-    /// Whether this live runtime could adopt a prepared configuration now.
-    ///
-    /// Runtime-domain advisory state derived by the adoption gate's own idle
-    /// rule over its in-memory owners (see [`IdleProbe::InMemory`]); it says
-    /// nothing about any candidate, and the gate still evaluates the exact rule
-    /// at its commit boundary.
-    pub(super) fn adoption_eligibility(&self) -> AdoptionEligibility {
-        let state = self.lock_state();
-        if !self.lifecycle.is_running() {
-            AdoptionEligibility::Unavailable
-        } else if self.idle_epoch_probed(&state, IdleProbe::InMemory).is_err()
-            || self.tool_runtime.background().configuration_busy()
-            || self
-                .subagents
-                .as_ref()
-                .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
-        {
-            AdoptionEligibility::Busy
-        } else {
-            AdoptionEligibility::Eligible
-        }
-    }
-
-    /// Publishes the current adoption eligibility when it differs from the
-    /// last publication. Derivation and publication happen under one lock, so
-    /// publications are totally ordered, the latest always reflects the latest
-    /// derivation, and an unchanged value is never republished.
-    pub(super) fn publish_adoption_eligibility(&self) {
-        let mut published = self
-            .published_eligibility
-            .lock()
-            .expect("published eligibility lock poisoned");
-        let eligibility = self.adoption_eligibility();
-        if published.as_ref() != Some(&eligibility) {
-            *published = Some(eligibility.clone());
-            self.observe(ConversationObservation::AdoptionEligibility(eligibility));
-        }
     }
 
     /// Publishes the adopted generation, Session model and approval mode of
@@ -305,12 +265,268 @@ impl RuntimeInner {
             snapshot: Arc::clone(resources),
         });
     }
+    /// Whether a real execution owner currently blocks replacing the
+    /// committed configuration.
+    ///
+    /// This is configuration commit safety, deliberately narrower than the
+    /// residency idle rule: queued human input, a recovered continuation and
+    /// a Goal's authorization for future rounds own no committed resource, so
+    /// they never starve a ready candidate. The next Attempt they produce is
+    /// admitted after the commit and captures it.
+    fn configuration_commit_blocked(&self, state: &CoordinatorState) -> bool {
+        state.current_attempt.is_some()
+            || state.scheduled.is_some()
+            || state.manual_compaction.is_some()
+            || self
+                .manual_tail
+                .lock()
+                .expect("manual tail owner")
+                .is_some()
+            || self.durability_gate.is_failed()
+            || self.tool_runtime.background().configuration_busy()
+            || self
+                .subagents
+                .as_ref()
+                .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
+    }
+
+    /// Report one staged candidate's outcome outside the coordinator lock. A
+    /// candidate that did not commit retires its uncommitted physical owners.
+    pub(super) fn settle_staged_configuration(
+        &self,
+        staged: StagedConfiguration,
+        outcome: StagedOutcome,
+    ) {
+        self.report_staged_outcome(staged.prepared.capability, staged.settled, outcome);
+    }
+
+    fn report_staged_outcome(
+        &self,
+        uncommitted: Option<crate::capabilities::PreparedCapabilityCandidate>,
+        settled: Box<
+            dyn FnOnce(StagedOutcome) -> futures_util::future::BoxFuture<'static, ()> + Send,
+        >,
+        outcome: StagedOutcome,
+    ) {
+        let report = settled(outcome);
+        self.executor.spawn(async move {
+            if let Some(capability) = uncommitted {
+                capability.retire_uncommitted().await;
+            }
+            report.await;
+        });
+    }
+
+    /// Commit the staged candidate when it is still current and no real owner
+    /// blocks it. Called under the coordinator lock at every boundary pass and
+    /// before Attempt admission, so commit and admission have one order.
+    #[allow(clippy::too_many_lines)] // One validation, publication and evidence boundary.
+    pub(super) fn commit_staged_configuration_locked(&self, state: &mut CoordinatorState) {
+        state.configuration_commit_waiting = false;
+        let Some(staged) = state.staged_configuration.take() else {
+            return;
+        };
+        if !self.lifecycle.is_running()
+            || !staged.desired.is_current()
+            || state.binding_revision != staged.prepared.baseline
+            || !Arc::ptr_eq(&staged.prepared.owner, &self.configuration_owner)
+        {
+            self.settle_staged_configuration(staged, StagedOutcome::Superseded);
+            return;
+        }
+        if self.configuration_commit_blocked(state) {
+            state.staged_configuration = Some(staged);
+            return;
+        }
+        let StagedConfiguration {
+            mut prepared,
+            desired,
+            reason,
+            retain,
+            settled,
+        } = staged;
+        let failure_reason = state
+            .resources
+            .inspection()
+            .resource_diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.field == "runtime.catalog")
+            .map(|diagnostic| diagnostic.reason.clone());
+        let revision = state.resources.revision().next();
+        let context_only = prepared.capability.is_none();
+        let (resources, availability) = if prepared.capability.is_some() {
+            let committed = match self
+                .capability
+                .try_commit_runtime(&self.capability_publication, &mut prepared.capability)
+            {
+                Ok(committed) => committed,
+                Err(crate::capabilities::CapabilityCommitError::Busy) => {
+                    // A lifecycle admission is crossing the capability plane;
+                    // the worker waits for that exact owner to release it.
+                    state.configuration_commit_waiting = true;
+                    state.staged_configuration = Some(StagedConfiguration {
+                        prepared,
+                        desired,
+                        reason,
+                        retain,
+                        settled,
+                    });
+                    return;
+                }
+                Err(error) => {
+                    self.report_staged_outcome(
+                        prepared.capability,
+                        settled,
+                        StagedOutcome::Failed {
+                            diagnostic: error.to_string(),
+                        },
+                    );
+                    return;
+                }
+            };
+            (
+                Arc::new(RuntimeResourceSnapshot::from_prepared(
+                    revision,
+                    prepared
+                        .resources
+                        .take()
+                        .expect("capability resource closure"),
+                    committed.snapshot,
+                )),
+                committed.availability,
+            )
+        } else {
+            (
+                Arc::new(prepared.preview.as_ref().clone().with_revision(revision)),
+                prepared.preview.capability_availability().clone(),
+            )
+        };
+        let preserves_failure = context_only
+            || state
+                .runtime_catalog_failure
+                .as_ref()
+                .is_some_and(|failure| {
+                    self.capability
+                        .runtime_refresh_is_current(&failure.authority)
+                });
+        let resources = if preserves_failure && let Some(reason) = failure_reason {
+            Arc::new(resources.with_runtime_catalog_failure(reason))
+        } else {
+            resources
+        };
+        let previous_binding = state.binding_revision;
+        let binding_revision = previous_binding
+            .checked_add(1)
+            .expect("Session binding revision exhausted");
+        let change = ConfigurationChange::between(
+            reason,
+            (previous_binding, binding_revision),
+            (&state.resources, &state.model),
+            (&resources, &prepared.model),
+        );
+        retain(binding_revision);
+        if !preserves_failure {
+            state.runtime_catalog_failure = None;
+        }
+        let reopens = state.model.unavailable().is_some() && prepared.model.unavailable().is_none();
+        state.model = prepared.model;
+        state.effective_approval_mode = resources
+            .configuration()
+            .map_or(state.effective_approval_mode, |generation| {
+                generation.config.approval_mode
+            });
+        state.resources = resources;
+        state.binding_revision = binding_revision;
+        // The change record and the generation it describes share this
+        // critical section: no Attempt can be admitted between them. A record
+        // that cannot be made durable fences admission instead of letting new
+        // work run on an unrecorded generation.
+        let outcome = self.record_effective_change(state, change);
+        self.observe_resources(state, availability);
+        if reopens {
+            // Work accepted before the selection became unavailable was held,
+            // not dropped; this commit is what admits it.
+            self.mailbox.wake().notify_one();
+        }
+        self.report_staged_outcome(None, settled, outcome);
+    }
+
+    /// Record the change fact of a generation just installed under the
+    /// coordinator lock. No effective change records nothing; a record that
+    /// cannot be made durable fences admission and leaves the commit
+    /// uncertain, since the generation is already published.
+    fn record_effective_change(
+        &self,
+        state: &mut CoordinatorState,
+        change: Option<(ConfigurationChange, ConfigurationContent)>,
+    ) -> StagedOutcome {
+        let Some((change, content)) = change else {
+            return StagedOutcome::Committed;
+        };
+        match self.record_configuration_change(change, &content) {
+            Ok(()) => StagedOutcome::Committed,
+            Err(diagnostic) => {
+                let _ = self.unrecorded_configuration.set(diagnostic.clone());
+                self.record_durability_failure(
+                    state,
+                    DurableOperation::RecordConfigurationChange,
+                    diagnostic.clone(),
+                );
+                StagedOutcome::Uncertain { diagnostic }
+            }
+        }
+    }
+
+    /// Append the Session-level change fact with its transcript position and
+    /// release it to observers in Journal order. It belongs to no Attempt.
+    fn record_configuration_change(
+        &self,
+        change: ConfigurationChange,
+        content: &ConfigurationContent,
+    ) -> Result<(), String> {
+        #[cfg(test)]
+        if self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_mut()
+            .is_some_and(|probe| std::mem::take(&mut probe.fail_configuration_record))
+        {
+            return Err("fault injected: configuration change record".into());
+        }
+        let event = crate::events::types::RuntimeEventEnvelope {
+            tool_occurrence: None,
+            observation: None,
+            schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+            event_id: crate::runtime::identity::EventId::new(""),
+            sequence: 0,
+            conversation_id: self.conversation_id.clone(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: self.clock.now(),
+            event: crate::events::types::RuntimeEvent::ConfigurationApplied { change },
+        };
+        let (event, cursor) = self
+            .store
+            .append_configuration_change(event, &content.instructions, &content.catalog)
+            .map_err(|error| error.to_string())?;
+        // The wrapper releases the fact's transcript position and Journal
+        // sequence in order; the inner fact becomes the clients' live row.
+        self.observe(ConversationObservation::Published {
+            journal_sequence: event.sequence,
+            observation: Box::new(ConversationObservation::ConfigurationApplied {
+                event: Box::new(event),
+                cursor,
+            }),
+        });
+        Ok(())
+    }
 }
 
 impl ConversationRuntime {
     pub(crate) fn install_runtime_catalog_preparer(
         &self,
-        prepare: Arc<crate::runtime::adoption::RuntimeCatalogPreparer>,
+        prepare: Arc<crate::runtime::configuration_commit::RuntimeCatalogPreparer>,
     ) {
         assert!(self.inner.runtime_catalog_preparer.set(prepare).is_ok());
     }
@@ -484,13 +700,9 @@ impl ConversationRuntime {
         >,
         selection: SessionModelConfig,
     ) -> Result<PreparedConfiguration, String> {
-        let (baseline, old, old_model) = {
+        let (baseline, old) = {
             let state = self.inner.lock_state();
-            (
-                state.binding_revision,
-                state.resources.clone(),
-                state.model.clone(),
-            )
+            (state.binding_revision, state.resources.clone())
         };
         let prepared = prepare(&self.inner.capability)
             .await
@@ -509,7 +721,6 @@ impl ConversationRuntime {
             resources.clone(),
             capability.configuration_snapshot(old.capability()),
         ));
-        let impact = configuration_cache_impact(&old, &old_model, &preview, &model);
         Ok(PreparedConfiguration {
             owner: self.inner.configuration_owner.clone(),
             baseline,
@@ -517,7 +728,6 @@ impl ConversationRuntime {
             model,
             capability: Some(capability),
             resources: Some(resources),
-            impact,
         })
     }
 
@@ -547,13 +757,6 @@ impl ConversationRuntime {
         }
         candidate.preview = Arc::new(candidate.preview.with_context_binding(binding)?);
         candidate.model = model;
-        let state = self.inner.lock_state();
-        candidate.impact = configuration_cache_impact(
-            &state.resources,
-            &state.model,
-            &candidate.preview,
-            &candidate.model,
-        );
         Ok(())
     }
 
@@ -583,7 +786,6 @@ impl ConversationRuntime {
         validate_model_context(&binding.configuration.config.context_policy(), &model)
             .map_err(|error| error.message)?;
         let preview = Arc::new(old.with_context_binding(&binding)?);
-        let impact = configuration_cache_impact(&old, &old_model, &preview, &model);
         Ok(PreparedConfiguration {
             owner: self.inner.configuration_owner.clone(),
             baseline,
@@ -591,144 +793,51 @@ impl ConversationRuntime {
             model,
             capability: None,
             resources: None,
-            impact,
         })
     }
 
-    pub(crate) fn configuration_allocation_matches(
-        &self,
-        candidate: &PreparedConfiguration,
-    ) -> bool {
-        Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
-    }
-
-    /// Publish readiness while holding the same binding fence as model changes
-    /// and Attempt admission. The caller holds the source/application fence.
-    pub(crate) fn with_configuration_baseline(
-        &self,
-        candidate: &PreparedConfiguration,
-        publish: impl FnOnce(),
-    ) -> bool {
-        let state = self.inner.lock_state();
-        if !self.inner.lifecycle.is_running()
-            || state.binding_revision != candidate.baseline
-            || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
-        {
-            return false;
-        }
-        publish();
-        true
-    }
-
-    /// The live runtime's current configuration-adoption eligibility,
-    /// derived from its native owners. Advisory only: adoption revalidates
-    /// the real gate at its commit boundary.
-    #[cfg(test)]
-    pub(crate) fn configuration_adoption_eligibility(&self) -> AdoptionEligibility {
-        self.inner.adoption_eligibility()
-    }
-
-    /// Final commit primitive used by the native configuration owner. It holds
-    /// the source fence around this call; this gate is also Attempt admission's
-    /// gate. A refusal leaves the ready candidate available to inspect/retry.
-    pub(crate) fn adopt_configuration(
-        &self,
-        prepared: &mut Option<PreparedConfiguration>,
-        expected_binding: u64,
-        explicit: bool,
-        retain: impl FnOnce() -> Result<(), AdoptionError>,
-    ) -> Result<u64, AdoptionError> {
+    /// Stage one fully prepared candidate for this runtime's safe boundary.
+    ///
+    /// The candidate replaces any earlier staged one, which is superseded.
+    /// When no real execution owner blocks replacement the commit happens
+    /// here, inside this call; otherwise the runtime commits it before it
+    /// admits its next independent Attempt, or when the last blocker settles.
+    /// The caller holds its source fence, so no newer desire can be captured
+    /// between its currency check and this staging.
+    pub(crate) fn stage_configuration(&self, staged: StagedConfiguration) {
         let mut state = self.inner.lock_state();
-        if explicit
-            && (self.inner.idle_epoch_locked(&state).is_err()
-                || self.inner.tool_runtime.background().configuration_busy()
-                || self
-                    .inner
-                    .subagents
-                    .as_ref()
-                    .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy))
-        {
-            return Err(AdoptionError::Busy);
+        if let Some(previous) = state.staged_configuration.replace(staged) {
+            self.inner
+                .settle_staged_configuration(previous, StagedOutcome::Superseded);
         }
-        let candidate = prepared.as_ref().ok_or(AdoptionError::NotReady)?;
-        if !self.inner.lifecycle.is_running()
-            || state.binding_revision != expected_binding
-            || candidate.baseline != expected_binding
-            || !Arc::ptr_eq(&candidate.owner, &self.inner.configuration_owner)
-            || (!explicit && !candidate.adopts_implicitly())
-        {
-            return Err(AdoptionError::Conflict);
-        }
-        let candidate = prepared.take().expect("checked candidate");
-        let failure_reason = state
-            .resources
-            .inspection()
-            .resource_diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.field == "runtime.catalog")
-            .map(|diagnostic| diagnostic.reason.clone());
-        let revision = state.resources.revision().next();
-        let context_only = candidate.capability.is_none();
-        let (resources, availability) = if let Some(capability) = candidate.capability {
-            let committed = self
-                .inner
-                .capability
-                .commit_runtime(&self.inner.capability_publication, capability)
-                .map_err(|error| AdoptionError::Failed {
-                    diagnostic: error.to_string(),
-                })?;
-            (
-                Arc::new(RuntimeResourceSnapshot::from_prepared(
-                    revision,
-                    candidate.resources.expect("capability resource closure"),
-                    committed.snapshot,
-                )),
-                committed.availability,
-            )
-        } else {
-            (
-                Arc::new(candidate.preview.as_ref().clone().with_revision(revision)),
-                candidate.preview.capability_availability().clone(),
-            )
-        };
-        let preserves_failure = context_only
-            || state
-                .runtime_catalog_failure
-                .as_ref()
-                .is_some_and(|failure| {
-                    self.inner
-                        .capability
-                        .runtime_refresh_is_current(&failure.authority)
-                });
-        let resources = if preserves_failure && let Some(reason) = failure_reason {
-            Arc::new(resources.with_runtime_catalog_failure(reason))
-        } else {
-            resources
-        };
-        retain()?;
-        if !preserves_failure {
-            state.runtime_catalog_failure = None;
-        }
-        let reopens =
-            state.model.unavailable().is_some() && candidate.model.unavailable().is_none();
-        state.model = candidate.model;
-        state.effective_approval_mode = resources
-            .configuration()
-            .map_or(state.effective_approval_mode, |generation| {
-                generation.config.approval_mode
-            });
-        state.resources = resources;
-        state.binding_revision = state
-            .binding_revision
-            .checked_add(1)
-            .expect("Session binding revision exhausted");
-        self.inner.observe_resources(&state, availability);
-        if reopens {
-            // Work accepted before the selection became unavailable was held,
-            // not dropped; this commit is what admits it.
-            self.inner.mailbox.wake().notify_one();
-        }
-        Ok(state.binding_revision)
+        self.inner.commit_staged_configuration_locked(&mut state);
+        drop(state);
+        // A blocked candidate is retried at the worker's next boundary pass.
+        self.inner.wake.eligibility.notify_one();
+    }
+
+    /// The identity of this runtime allocation, shared with every candidate
+    /// it prepares.
+    pub(crate) fn configuration_owner(&self) -> &Arc<()> {
+        &self.inner.configuration_owner
+    }
+
+    /// This allocation's native authority over unrecorded configuration
+    /// commits.
+    pub(crate) fn configuration_health(&self) -> ConfigurationHealth {
+        ConfigurationHealth(self.inner.unrecorded_configuration.clone())
+    }
+
+    /// The Session model state configuration changes are compared against.
+    #[cfg(test)]
+    pub(crate) fn model_state_for_test(&self) -> crate::model::session::SessionModelState {
+        self.inner.lock_state().model.clone()
+    }
+
+    /// Whether a candidate is staged and waiting for the safe boundary.
+    #[cfg(test)]
+    pub(crate) fn has_staged_configuration(&self) -> bool {
+        self.inner.lock_state().staged_configuration.is_some()
     }
 
     /// Publish the shared child capacity unit. `capacity` is the desired
@@ -839,13 +948,13 @@ impl ConversationRuntime {
     pub(crate) fn apply_execution_policy(
         &self,
         compose: impl FnOnce(&RuntimeConfiguration) -> Option<RuntimeConfiguration>,
-    ) -> Result<bool, String> {
+    ) -> Result<StagedOutcome, String> {
         let mut state = self.inner.lock_state();
         if !self.inner.lifecycle.is_running() {
             return Err("runtime is not running".into());
         }
         let Some(configuration) = state.resources.configuration().and_then(|c| compose(c)) else {
-            return Ok(false);
+            return Ok(StagedOutcome::Committed);
         };
         let approval_mode = configuration.config.approval_mode;
         let resources = Arc::new(
@@ -854,11 +963,20 @@ impl ConversationRuntime {
                 .with_configuration(configuration)
                 .with_revision(state.resources.revision().next()),
         );
+        // The unit keeps its own commit identity: it changes the generation
+        // future Attempts freeze, never the Session binding.
+        let change = ConfigurationChange::between(
+            crate::runtime::configuration_commit::ConfigurationChangeReason::Source,
+            (state.binding_revision, state.binding_revision),
+            (&state.resources, &state.model),
+            (&resources, &state.model),
+        );
         state.effective_approval_mode = approval_mode;
         let availability = resources.capability_availability().clone();
         state.resources = resources;
+        let outcome = self.inner.record_effective_change(&mut state, change);
         self.inner.observe_resources(&state, availability);
-        Ok(true)
+        Ok(outcome)
     }
 
     /// Reads the adopted generation, Session intent and admitted work in one
@@ -882,3 +1000,29 @@ impl ConversationRuntime {
 
 #[cfg(test)]
 mod tests;
+
+/// One runtime allocation's answer to whether it published a configuration
+/// commit whose change fact it could not record. The failure is absorbing, so
+/// only a replacement allocation recovers from it.
+#[derive(Clone)]
+pub(crate) struct ConfigurationHealth(Arc<std::sync::OnceLock<String>>);
+
+impl ConfigurationHealth {
+    /// The diagnostic of the first unrecorded commit, if any.
+    pub(crate) fn unrecorded(&self) -> Option<String> {
+        self.0.get().cloned()
+    }
+
+    pub(crate) fn same_allocation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for ConfigurationHealth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("ConfigurationHealth")
+            .field(&self.unrecorded())
+            .finish()
+    }
+}

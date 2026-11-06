@@ -10,7 +10,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/errors';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v69';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v72';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -347,7 +347,7 @@ it.each(['before', 'after'] as const)('S1-09 an uncertain save stays uncertain w
 // Blocking finding 2 — owner navigation uses the native source owners, not the
 // application scope key. Every case below uses a real Session application scope.
 function failedSession(sources: readonly SourceTarget[]): ConfigurationApplication {
-  return { ...cfg3Application(), scope: cfg3Session, sources: [...sources], candidate: null, units: { capabilities: { status: 'failed', diagnostic: 'resource failed' } } };
+  return { ...cfg3Application(), scope: cfg3Session, sources: [...sources], units: { capabilities: { status: 'failed', diagnostic: 'resource failed' } } };
 }
 
 it('S1-10 a Session configuration failure offers one action per native source owner', async () => {
@@ -355,8 +355,7 @@ it('S1-10 a Session configuration failure offers one action per native source ow
   const s = cfg3Client();
   s.source.application = failedSession([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
   render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]} openOwningSettings={open} />);
-  await screen.findByText(/Some configuration preparation failed/);
-  expect(screen.queryByRole('button', { name: 'Adopt configuration' })).toBeNull();
+  await screen.findByText(/could not be applied/);
   // The scope is the Session identity; it is never offered as a source owner.
   expect(s.source.application.scope).toBe(cfg3Session);
   expect(screen.queryByRole('button', { name: /source:/ })).toBeNull();
@@ -371,7 +370,7 @@ it('S1-10 a User-owned Session application offers only User authoring', async ()
   const s = cfg3Client();
   s.source.application = failedSession([{ kind: 'user' }]);
   render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]} openOwningSettings={open} />);
-  await screen.findByText(/Some configuration preparation failed/);
+  await screen.findByText(/could not be applied/);
   expect(screen.queryByRole('button', { name: /Open Workspace Settings/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Open User Settings' }));
   expect(open).toHaveBeenCalledWith({ kind: 'user' });
@@ -380,10 +379,9 @@ it('S1-10 a User-owned Session application offers only User authoring', async ()
 it('S1-10 preparing and adopted states fabricate no candidate and no owner action', async () => {
   const open = vi.fn();
   const s = cfg3Client();
-  s.source.application = { ...cfg3Application(), scope: cfg3Session, candidate: null, units: { capabilities: { status: 'preparing' } } };
+  s.source.application = { ...cfg3Application(), scope: cfg3Session, units: { capabilities: { status: 'preparing' } } };
   render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]} openOwningSettings={open} />);
   await screen.findByText(/Preparing configuration/);
-  expect(screen.queryByRole('button', { name: 'Adopt configuration' })).toBeNull();
   expect(screen.queryByRole('button', { name: /^Open / })).toBeNull();
   expect(open).not.toHaveBeenCalled();
 });
@@ -393,15 +391,15 @@ it('S1-12 invalid configuration stays repairable and is not presented as empty o
   s.source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: null, diagnostic: 'invalid rustx.toml' };
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   await screen.findByText(/invalid rustx\.toml/);
-  expect(screen.getByRole('form', { name: 'Repair malformed source' })).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Repair invalid source' })).toBeTruthy();
   fireEvent.click(screen.getByRole('tab', { name: 'Agent' }));
   // No structured editor presents the unparsed document as empty, inherited or
   // defaulted: it names the malformed document and offers only its repair.
-  expect(screen.getByText(/Structured editing is unavailable because \/workspace\/rustx\.toml does not parse/)).toBeTruthy();
+  expect(screen.getByText(/Structured editing is unavailable because \/workspace\/rustx\.toml violates the source contract/)).toBeTruthy();
   expect(screen.queryByText(/Inherited — no Workspace override/)).toBeNull();
   expect(screen.queryByText(/Native default — no authored value/)).toBeNull();
   // Repair submits an exact revision-fenced repair mutation.
-  const repair = screen.getByRole('form', { name: 'Repair malformed source' });
+  const repair = screen.getByRole('form', { name: 'Repair invalid source' });
   fireEvent.change(repair.querySelector('textarea')!, { target: { value: '[agent]\n' } });
   fireEvent.click(repair.querySelector('button[type="submit"]')!);
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { expected_revision: 'workspace-1', mutation: { kind: 'repair_config', document: '[agent]\n' } } }));

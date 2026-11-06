@@ -98,3 +98,7 @@ pub mod app_server_policy;
 
 #[cfg(test)]
 mod mcp_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "../../tests/support/case_insensitive_volume.rs"]
+pub(crate) mod case_insensitive_volume;

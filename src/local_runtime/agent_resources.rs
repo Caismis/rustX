@@ -145,7 +145,11 @@ pub(crate) fn load_authorized(
         let error = |message: String| RuntimeResourceLoadError::new(message).at(path, &field);
         let mut revision = "unreadable".to_owned();
         let result = (|| -> Result<NamedAgentDefinition, RuntimeResourceLoadError> {
-            let bytes = super::resource_directory::read_resource(boundary, path)?;
+            let bytes = super::resource_directory::read_resource(
+                boundary,
+                path,
+                crate::bounded_file::MAX_RESOURCE_BYTES,
+            )?;
             revision = super::settings::revision(Some(&bytes));
             let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;
             let agent = parse(text).map_err(|e| {

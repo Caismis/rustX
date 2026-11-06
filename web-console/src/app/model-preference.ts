@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { SessionModelConfig } from '../../../protocol/app-server/v69';
+import type { SessionModelConfig } from '../../../protocol/app-server/v72';
 import type { AppServerClient } from '../client/app-server';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 

@@ -78,8 +78,8 @@ it('C10 Workspace revocation disables mutation and preserves local draft', async
 });
 
 it.each(['target', 'connection'] as const)('C10 late response after %s replacement cannot overwrite new authority', async invalidation => {
- let release!: (result: import('../../protocol/app-server/v69').MethodResult) => void;
- const pending = new Promise<import('../../protocol/app-server/v69').MethodResult>(resolve => { release = resolve; });
+ let release!: (result: import('../../protocol/app-server/v72').MethodResult) => void;
+ const pending = new Promise<import('../../protocol/app-server/v72').MethodResult>(resolve => { release = resolve; });
  let reads = 0;
  const s = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++reads === 1) return pending; });
  const host = cfg3Host(s); const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
@@ -191,7 +191,6 @@ it('saves a whole Workspace Provider with explicit credentials without copying U
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await screen.findByText(/Provider transport saved/);
   expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
-  expect(subject.request.mock.calls.filter(([operation]) => operation.method === 'session/adoptConfiguration')).toHaveLength(0);
   expect(screen.queryByRole('button', { name: /Adopt/ })).toBeNull();
 });
 
@@ -306,7 +305,7 @@ it.each(['empty', 'omit'] as const)('preserves native %s Tool selection as a dis
   await waitFor(() => expect(subject.request.mock.calls.find(([op]) => op.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { mutation: { mutation: { unit: 'native_tools', authored: mode === 'empty' ? [] : null } } } }));
 });
 
-it('process state comes from native classification, outside Session adoption', async () => {
+it('process state comes from native classification, outside the Session commit', async () => {
  const subject = cfg3Client(); subject.source.application = cfg3Application(); subject.source.application.units.process_bindings = { status: 'process_restart' };
  await open(subject, 'Advanced', 'User');
  expect(screen.getByText(/Restart required/)).toBeTruthy();
@@ -353,7 +352,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v69').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v72').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
@@ -428,7 +427,7 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
 });
 
 it('retains a Model draft when native validation rejects its semantic unit', async () => {
- const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32000, message: 'Native validation failed', data: { kind: 'configuration_adoption', rejection: { status: 'failed', diagnostic: 'Invalid provider reference' } } }); });
+ const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32602, message: 'Invalid provider reference', data: { kind: 'invalid_params' } }); });
  await open(subject, 'Models');
  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
  fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
@@ -440,7 +439,6 @@ it('retains a Model draft when native validation rejects its semantic unit', asy
  fireEvent.click(screen.getByRole('button', { name: 'Save Model draft-model' }));
  expect((await screen.findByRole('alert')).textContent).toContain('Invalid provider reference');
  expect((screen.getByLabelText('Provider identity') as HTMLInputElement).value).toBe('missing');
- expect(subject.request.mock.calls.filter(([op]) => op.method === 'session/adoptConfiguration')).toHaveLength(0);
 });
 
 it('preserves the original revision when removing an otherwise clean unit conflicts', async () => {
@@ -496,7 +494,7 @@ it.each([
   ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v69').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v72').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
@@ -573,8 +571,8 @@ it('T17 a post-commit read that observes the exact pre-save revision asks for re
 });
 
 it('retires a confirmed Provider save, including its literal credential, after the editor unmounts', async () => {
-  let release!: (result: import('../../protocol/app-server/v69').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v69').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v72').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v72').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
@@ -609,8 +607,8 @@ it('retires a confirmed Provider save, including its literal credential, after t
 });
 
 it('a late acknowledgement advances the CAS base without erasing a newer draft submitted after it', async () => {
-  let release!: (result: import('../../protocol/app-server/v69').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v69').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v72').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v72').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);

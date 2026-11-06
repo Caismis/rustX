@@ -52,54 +52,54 @@ impl TraceFactKind {
             Self::WorkflowCancelled => "workflow_cancelled",
             Self::InteractionRequested => "interaction_requested",
             Self::InteractionSettled => "interaction_settled",
+            Self::ConfigurationApplied => "configuration_applied",
         }
     }
+    /// Every native Trace fact kind.
+    pub(crate) const ALL: [Self; 32] = [
+        Self::AttemptStarted,
+        Self::AttemptCompleted,
+        Self::AttemptFailed,
+        Self::AttemptCancelled,
+        Self::AttemptTimedOut,
+        Self::AttemptLimitExceeded,
+        Self::TurnStarted,
+        Self::TurnCompleted,
+        Self::InboundTurnAdopted,
+        Self::ModelRequestStarted,
+        Self::ModelRequestCompleted,
+        Self::ModelRequestFailed,
+        Self::AssistantMessageCommitted,
+        Self::ToolExecutionStarted,
+        Self::ToolExecutionCompleted,
+        Self::ToolExecutionFailed,
+        Self::ToolMessageCommitted,
+        Self::CompactionStarted,
+        Self::CompactionCompleted,
+        Self::CompactionFailed,
+        Self::BackgroundExecutionCommitted,
+        Self::BackgroundTerminalPublished,
+        Self::SubagentOwnershipCommitted,
+        Self::SubagentTerminalPublished,
+        Self::SubagentTerminalSettled,
+        Self::WorkflowStarted,
+        Self::WorkflowCompleted,
+        Self::WorkflowFailed,
+        Self::WorkflowCancelled,
+        Self::InteractionRequested,
+        Self::InteractionSettled,
+        Self::ConfigurationApplied,
+    ];
     pub(crate) fn parse(value: &str) -> Option<Self> {
-        use TraceFactKind::{
-            AssistantMessageCommitted, AttemptCancelled, AttemptCompleted, AttemptFailed,
-            AttemptLimitExceeded, AttemptStarted, AttemptTimedOut, BackgroundExecutionCommitted,
-            BackgroundTerminalPublished, CompactionCompleted, CompactionFailed, CompactionStarted,
-            InboundTurnAdopted, InteractionRequested, InteractionSettled, ModelRequestCompleted,
-            ModelRequestFailed, ModelRequestStarted, SubagentOwnershipCommitted,
-            SubagentTerminalPublished, SubagentTerminalSettled, ToolExecutionCompleted,
-            ToolExecutionFailed, ToolExecutionStarted, ToolMessageCommitted, TurnCompleted,
-            TurnStarted, WorkflowCancelled, WorkflowCompleted, WorkflowFailed, WorkflowStarted,
-        };
-        [
-            AttemptStarted,
-            AttemptCompleted,
-            AttemptFailed,
-            AttemptCancelled,
-            AttemptTimedOut,
-            AttemptLimitExceeded,
-            TurnStarted,
-            TurnCompleted,
-            InboundTurnAdopted,
-            ModelRequestStarted,
-            ModelRequestCompleted,
-            ModelRequestFailed,
-            AssistantMessageCommitted,
-            ToolExecutionStarted,
-            ToolExecutionCompleted,
-            ToolExecutionFailed,
-            ToolMessageCommitted,
-            CompactionStarted,
-            CompactionCompleted,
-            CompactionFailed,
-            BackgroundExecutionCommitted,
-            BackgroundTerminalPublished,
-            SubagentOwnershipCommitted,
-            SubagentTerminalPublished,
-            SubagentTerminalSettled,
-            WorkflowStarted,
-            WorkflowCompleted,
-            WorkflowFailed,
-            WorkflowCancelled,
-            InteractionRequested,
-            InteractionSettled,
-        ]
-        .into_iter()
-        .find(|kind| kind.as_str() == value)
+        Self::ALL.into_iter().find(|kind| kind.as_str() == value)
+    }
+    /// The kinds that open a Trace record: the one classification every
+    /// Trace query and count uses.
+    pub(crate) fn anchors() -> Vec<Self> {
+        Self::ALL
+            .into_iter()
+            .filter(|kind| kind.is_anchor())
+            .collect()
     }
     pub(crate) const fn is_anchor(self) -> bool {
         matches!(
@@ -115,6 +115,7 @@ impl TraceFactKind {
                 | Self::SubagentOwnershipCommitted
                 | Self::WorkflowStarted
                 | Self::InteractionRequested
+                | Self::ConfigurationApplied
         )
     }
 }

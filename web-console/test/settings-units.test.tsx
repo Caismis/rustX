@@ -8,7 +8,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v69';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v72';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
@@ -43,8 +43,79 @@ const modelDetail = (source: SourceSettings, scope: SourceScope, revision: strin
 const toolsPage = (source: SourceSettings, document: RuntimeLayer, scope: SourceScope, revision: string) =>
   <ToolsPage source={source} document={document} scope={scope} revision={revision} />;
 
+it('configures a complete reasoning draft, preserves invalid JSON, and clears only the order', async () => {
+  const original = cfg3Effective().document.models!.main;
+  const { request_params: _, ...rest } = original;
+  const main = { ...rest, default_profile: 'z-low', profiles: {
+    'z-low': { max_output_tokens: 512, request_params: { effort: 'none' } },
+    'a-high': { request_params: { effort: 'high' } },
+  } };
+  const source = catalogSource('user', { models: { main } });
+  const { writes } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
+  expect(screen.getByText('Not configured')).toBeTruthy();
+  expect(writes).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Configure reasoning order' }));
+  const list = () => screen.getByRole('list', { name: 'Reasoning order (low to high)' });
+  const ids = () => [...list().children].map(row => row.getAttribute('data-profile-order'));
+  expect(ids()).toEqual(['a-high', 'z-low']);
+  const json = screen.getByLabelText('Profile parameters (JSON)');
+  changeJson(json, '{"request_params":');
+  const up = screen.getByRole('button', { name: 'Move z-low up' });
+  fireEvent.click(up);
+  expect(ids()).toEqual(['z-low', 'a-high']);
+  expect(document.activeElement).toBe(up);
+  expect(readJson(json)).toBe('{"request_params":');
+  fireEvent.click(screen.getByRole('button', { name: 'Profile a-high' }));
+  expect(readJson(screen.getByLabelText('Profile parameters (JSON)'))).toBe('{"request_params":');
+  expect(jsonValidity(json).checkValidity()).toBe(false);
+  changeJson(json, JSON.stringify(main.profiles['z-low']));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(writes).toHaveBeenCalledTimes(1));
+  expect(writes.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
+    ...main, reasoning_profile_order: ['z-low', 'a-high'],
+  } } });
+  fireEvent.click(screen.getByRole('button', { name: 'Clear reasoning order' }));
+  expect(screen.getByText('Not configured')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(writes).toHaveBeenCalledTimes(2));
+  expect(writes.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
+    ...main, reasoning_profile_order: undefined,
+  } } });
+});
+
+it('keeps reasoning membership coherent on add, delete, final delete and reset', async () => {
+  const { request_params: _, ...rest } = cfg3Effective().document.models!.main;
+  const main = { ...rest, default_profile: 'b', profiles: { a: { request_params: {} }, b: { request_params: {} } }, reasoning_profile_order: ['b', 'a'] };
+  const source = catalogSource('user', { models: { main } });
+  const { writes } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
+  const long = 'custom-profile-with-a-long-identity-'.repeat(5);
+  fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
+  fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: long } });
+  fireEvent.keyDown(screen.getByLabelText('New profile identity'), { key: 'Enter' });
+  expect(screen.getByRole('status').textContent).toContain(`Profile ${long} was placed last`);
+  const ids = () => [...screen.getByRole('list', { name: 'Reasoning order (low to high)' }).children].map(row => row.getAttribute('data-profile-order'));
+  expect(ids()).toEqual(['b', 'a', long]);
+  fireEvent.click(screen.getByRole('button', { name: 'Delete profile b' }));
+  expect(ids()).toEqual(['a', long]);
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(writes).toHaveBeenCalledTimes(1));
+  expect(writes.mock.calls[0][0]).toMatchObject({ mutation: { authored: { default_profile: 'a', reasoning_profile_order: ['a', long] } } });
+  fireEvent.click(screen.getByRole('button', { name: 'Reset form' }));
+  expect(ids()).toEqual(['b', 'a']);
+  expect(screen.queryByRole('button', { name: `Profile ${long}` })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Delete profile a' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Delete profile b' }));
+  expect(screen.queryByRole('list', { name: 'Reasoning order (low to high)' })).toBeNull();
+  expect(screen.getByText('Add Profiles before configuring reasoning order.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
+  await waitFor(() => expect(writes).toHaveBeenCalledTimes(2));
+  expect(writes.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
+    ...rest, profiles: undefined, default_profile: undefined, reasoning_profile_order: undefined,
+  } } });
+});
+
 it('preserves source-authored protocol overrides when editing unrelated Model fields', async () => {
-  const model = { ...cfg3Effective().document.models!.main, protocol: 'openai_chat_completions' as const, capabilities: { ...cfg3Effective().document.models!.main.capabilities }, default_profile: 'deep', profiles: { deep: { max_output_tokens: 2048, request_params: { reasoning: { effort: 'high' }, stop: [null] } }, quick: { request_params: {} } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const } };
+  const model = { ...cfg3Effective().document.models!.main, protocol: 'openai_chat_completions' as const, capabilities: { ...cfg3Effective().document.models!.main.capabilities }, default_profile: 'deep', reasoning_profile_order: ['quick', 'deep'], profiles: { deep: { max_output_tokens: 2048, request_params: { reasoning: { effort: 'high' }, stop: [null] } }, quick: { request_params: {} } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const } };
   const source = catalogSource('workspace', { models: { main: model } });
   const { writes: write } = await renderEditor(modelDetail(source, 'workspace', 'exact', 'main'), { source, context: source });
   // One unrelated field changes; everything else must survive the complete

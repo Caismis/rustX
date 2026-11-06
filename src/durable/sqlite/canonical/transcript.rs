@@ -286,7 +286,7 @@ pub(in crate::durable::sqlite) fn load_transcript_item(
             }
             Ok(TranscriptItem::PublicationAudit { audit })
         }
-        "interaction_event" | "attempt_terminal" => {
+        "interaction_event" | "configuration_event" | "attempt_terminal" => {
             load_transcript_event(connection, reference_kind, reference_id)
         }
         other => Err(ConversationStoreError::InvalidReference(format!(
@@ -332,6 +332,9 @@ pub(in crate::durable::sqlite) fn load_transcript_event(
         }
         ("interaction_event", RuntimeEvent::InteractionSettled { .. }) => {
             Ok(TranscriptItem::InteractionSettled { event })
+        }
+        ("configuration_event", RuntimeEvent::ConfigurationApplied { .. }) => {
+            Ok(TranscriptItem::ConfigurationApplied { event })
         }
         _ => Err(ConversationStoreError::InvalidReference(format!(
             "transcript event reference {reference_id} is not a matching transcript event"

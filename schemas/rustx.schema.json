@@ -620,6 +620,15 @@
         "provider": {
           "type": "string"
         },
+        "reasoning_profile_order": {
+          "description": "Optional complete Profile order, from lower to higher declared reasoning strength.",
+          "items": {
+            "$ref": "#/$defs/ModelProfileId"
+          },
+          "type": [
+            "array"
+          ]
+        },
         "request_params": {
           "anyOf": [
             {

@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
+import { RpcFailure } from '../../src/client/errors';
 import { startDogfood } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
@@ -119,12 +120,18 @@ for (const width of [1440, 390]) {
       const workspace = (await fixture.workspaceHost.host.listWorkspaces()).workspaces.find(workspace => workspace.displayName === 'Workspace A')!;
       await fixture.workspaceHost.host.configureWorkspace(workspace.id, fixture.endpoint, { kind: 'reconcile' });
       await page.getByRole('tab', { name: 'Chat', exact: true }).click();
-      const adopt = page.getByRole('button', { name: 'Adopt configuration', exact: true });
-      await expect(adopt).toBeEnabled();
-      await adopt.click();
+      // Native commits the prepared configuration itself at the idle
+      // Session's safe boundary; nothing in the browser adopts it.
       await expect.poll(async () => {
-        const current = await effective();
-        return { tools: current.root_agent.tools?.builtin, workflows: current.root_agent.workflows };
+        try {
+          const current = await effective();
+          return { tools: current.root_agent.tools?.builtin, workflows: current.root_agent.workflows };
+        } catch (error) {
+          // Automatic commit can retire a projection between its header and
+          // field reads. Poll a new complete cut; other refusals still fail.
+          if (error instanceof RpcFailure && error.error.data?.kind === 'read_cut_expired') return 'read_cut_expired';
+          throw error;
+        }
       }).toEqual({ tools: [], workflows: [] });
       await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Continue after capability removal');
       await page.getByRole('button', { name: 'Send', exact: true }).click();

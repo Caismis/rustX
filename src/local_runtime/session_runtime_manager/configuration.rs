@@ -1,5 +1,5 @@
-//! Configuration adoption and source settings for resident runtimes: test
-//! gates, process limits, configuration hosts and applications, adoption,
+//! Configuration application and source settings for resident runtimes: test
+//! gates, process limits, configuration hosts and applications,
 //! reconciliation, and source repair/read/write.
 
 use super::super::session::SessionId;
@@ -52,7 +52,7 @@ impl SessionRuntimeManager {
             let _admission = admission;
             #[cfg(test)]
             if let Some(gate) = start_gate {
-                gate.enter();
+                tokio::task::block_in_place(|| gate.enter());
             }
             let mut observed = 0;
             loop {
@@ -65,7 +65,17 @@ impl SessionRuntimeManager {
                 let revision = *publications.borrow_and_update();
                 if revision != observed {
                     observed = revision;
-                    owner.rebase_runtime_catalog(&session, incarnation, &runtime);
+                    let owner = owner.clone();
+                    let session = session.clone();
+                    let runtime = runtime.clone();
+                    if tokio::task::spawn_blocking(move || {
+                        owner.rebase_runtime_catalog(&session, incarnation, &runtime);
+                    })
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
                 }
                 tokio::select! {
                     () = &mut changed => {},
@@ -75,38 +85,71 @@ impl SessionRuntimeManager {
         })
     }
 
-    fn rebase_runtime_catalog(
+    /// Whether `incarnation` is the Session's resident now. Callers hold the
+    /// application lock, so the answer stands until they release it: the
+    /// registry lock is taken after it, never before.
+    /// The incarnation of the Session's resident allocation, if one is loaded.
+    pub(in crate::local_runtime) fn resident_incarnation(
+        &self,
+        session: &SessionId,
+    ) -> Option<super::RuntimeIncarnationId> {
+        let registry = self.registry.0.lock().expect("registry mutex");
+        registry
+            .by_session
+            .get(session)
+            .and_then(|id| match registry.entries.get(id) {
+                Some(super::Entry::Loaded(current)) => Some(current.identity.incarnation),
+                _ => None,
+            })
+    }
+
+    pub(super) fn is_current_resident(
+        &self,
+        session: &SessionId,
+        incarnation: super::RuntimeIncarnationId,
+    ) -> bool {
+        self.resident_incarnation(session) == Some(incarnation)
+    }
+
+    pub(super) fn rebase_runtime_catalog(
         &self,
         session: &SessionId,
         incarnation: super::RuntimeIncarnationId,
         runtime: &ConversationRuntime,
     ) {
         let mut application = self.applications.lock();
-        let current = {
-            let registry = self.registry.0.lock().expect("registry mutex");
-            registry
-                .by_session
-                .get(session)
-                .and_then(|id| registry.entries.get(id))
-                .is_some_and(|entry| {
-                    matches!(entry, super::Entry::Loaded(current)
-                    if current.identity.incarnation == incarnation)
-                })
-        };
-        if !current {
+        if !self.is_current_resident(session, incarnation) {
             return;
         }
         let revision = runtime.configuration_cut().binding_revision;
+        #[cfg(test)]
+        {
+            let hook = self
+                .registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .catalog_rebase_cut
+                .take();
+            if let Some(hook) = hook {
+                tokio::task::block_in_place(|| hook.enter());
+            }
+        }
+        // A staged commit retains its binding from inside the runtime's
+        // coordinator, without this lock, so it may have retained a newer
+        // revision since the cut. Binding revisions only grow (a reload
+        // restores the persisted one), so an older cut never replaces it.
         if let Some(binding) = self
             .sessions
             .configuration_bindings
             .lock()
             .expect("Session configuration bindings")
             .get_mut(session)
+            .filter(|binding| binding.binding_revision < revision)
         {
             binding.binding_revision = revision;
         }
-        let queued = application.rebase_runtime_catalog(session.as_ref(), revision);
+        let queued = application.rebase_runtime_catalog(session.as_ref());
         if queued {
             self.applications.notify(&application);
         }
@@ -201,13 +244,19 @@ impl SessionRuntimeManager {
 
     /// The resident runtime together with the resource preparation of the
     /// same composition, read under one composition lock.
+    /// The resident allocation a preparation runs against, with the
+    /// incarnation it observed: `None` when no allocation is loaded. The
+    /// runtime is absent when that allocation is not `Running`.
     pub(in crate::local_runtime) fn configuration_preparation(
         &self,
         id: &SessionId,
-    ) -> Option<(
-        ConversationRuntime,
-        std::sync::Arc<crate::local_runtime::composition::LocalRuntimeResourceLoader>,
-    )> {
+    ) -> (
+        Option<super::RuntimeIncarnationId>,
+        Option<(
+            ConversationRuntime,
+            std::sync::Arc<crate::local_runtime::composition::LocalRuntimeResourceLoader>,
+        )>,
+    ) {
         let resident = {
             let state = self.registry.0.lock().expect("registry mutex");
             state.by_session.get(id).and_then(|conversation| {
@@ -216,13 +265,41 @@ impl SessionRuntimeManager {
                     _ => None,
                 }
             })
-        }?;
+        };
+        let Some(resident) = resident else {
+            return (None, None);
+        };
+        let incarnation = Some(resident.identity.incarnation);
         let composition = resident.composition.lock().expect("composition mutex");
-        let composition = composition.as_ref()?;
-        Some((
-            composition.runtime().clone(),
-            std::sync::Arc::clone(composition.resource_loader()?),
-        ))
+        let Some(composition) = composition.as_ref() else {
+            return (incarnation, None);
+        };
+        // A runtime that left `Running` on its own (a failed physical
+        // reclamation drains it in place) can commit nothing; its application
+        // defers to the next allocation exactly as a cold Session does.
+        if composition.runtime().lifecycle_state()
+            != crate::runtime::ConversationLifecycleState::Running
+        {
+            return (incarnation, None);
+        }
+        let prepared = composition
+            .resource_loader()
+            .map(|loader| (composition.runtime().clone(), std::sync::Arc::clone(loader)));
+        (incarnation, prepared)
+    }
+
+    /// Parks the configuration worker after it looked up the resident
+    /// allocation, before it takes the application lock.
+    #[cfg(test)]
+    pub(crate) async fn park_configuration_resident(&self) {
+        let gate = self
+            .registry
+            .0
+            .lock()
+            .expect("registry mutex")
+            .configuration_resident
+            .clone();
+        gate.park().await;
     }
 
     /// The resident Session's Runtime Client host, for observing the
@@ -243,6 +320,20 @@ impl SessionRuntimeManager {
             .expect("composition mutex")
             .as_ref()
             .map(|composition| composition.host().clone())
+    }
+
+    /// Parks a staged candidate's settlement report after the runtime
+    /// committed it, before the application owner hears of it.
+    #[cfg(test)]
+    pub(crate) async fn park_configuration_settlement(&self) {
+        let gate = self
+            .registry
+            .0
+            .lock()
+            .expect("registry mutex")
+            .configuration_settlement
+            .clone();
+        gate.park().await;
     }
 
     pub(crate) fn configuration_application(
@@ -285,17 +376,16 @@ impl SessionRuntimeManager {
         self.applications.lock().next_view(versions)
     }
 
-    pub(crate) fn adopt_configuration(
+    /// Read immediately when ingestion does not own the application lock.
+    pub(crate) fn try_next_configuration_application(
         &self,
-        session: &SessionId,
-        identity: &super::super::configuration::application::ApplicationIdentity,
-        expected_binding: u64,
-    ) -> Result<
-        super::super::configuration::application::ConfigurationApplication,
-        crate::runtime::adoption::AdoptionError,
-    > {
-        self.applications
-            .adopt(self, session, identity, expected_binding)
+        versions: &std::collections::BTreeMap<String, u64>,
+    ) -> super::super::configuration::application::ApplicationRead {
+        use super::super::configuration::application::ApplicationRead;
+        let Some(application) = self.applications.try_lock() else {
+            return ApplicationRead::Busy;
+        };
+        ApplicationRead::Ready(application.next_view(versions))
     }
 
     pub(crate) async fn reconcile_configuration(
@@ -309,13 +399,21 @@ impl SessionRuntimeManager {
         let target = target.clone();
         tokio::spawn(async move {
             owner.coordinate_source(&target).await?;
-            owner
-                .applications
-                .lock()
-                .view(&target.application_scope())
-                .ok_or(SourceSettingsError::Source(
+            tokio::task::spawn_blocking(move || {
+                owner
+                    .applications
+                    .lock()
+                    .view(&target.application_scope())
+                    .ok_or(SourceSettingsError::Source(
+                        super::super::configuration::settings::SettingsError::Io,
+                    ))
+            })
+            .await
+            .map_err(|_| {
+                SourceSettingsError::Source(
                     super::super::configuration::settings::SettingsError::Io,
-                ))
+                )
+            })?
         })
         .await
         .map_err(|_| {
@@ -323,6 +421,30 @@ impl SessionRuntimeManager {
                 super::super::configuration::settings::SettingsError::Committed,
             )
         })?
+    }
+
+    /// Capture an externally observed change of `target` exactly like a
+    /// native source write: repair, capture and native application. Unlike
+    /// explicit reconciliation it never retries MCP discovery, so file churn
+    /// cannot become a reconnect loop. An unchanged healthy source is a no-op.
+    pub(super) async fn observe_source_change(
+        &self,
+        target: &super::super::configuration::settings::SourceTarget,
+    ) {
+        let owner = self.clone();
+        let target = target.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if target.validate().is_err() {
+                return;
+            }
+            owner.repair_sources(&target);
+            let mut application = owner.applications.lock();
+            owner.capture_source_consumers(&mut application, &target);
+            owner.applications.notify(&application);
+            drop(application);
+            owner.applications.run(owner.clone());
+        })
+        .await;
     }
 
     async fn coordinate_source(

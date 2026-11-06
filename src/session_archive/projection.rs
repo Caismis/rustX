@@ -443,6 +443,7 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         // Native values here carry identities, authored content, closed semantic
         // outcomes, measurements or model-visible Tool results; no provider binding.
         RuntimeEvent::Goal { .. }
+        | RuntimeEvent::ConfigurationApplied { .. }
         | RuntimeEvent::AttemptStarted { .. }
         | RuntimeEvent::AttemptCancelled { .. }
         | RuntimeEvent::AttemptTimedOut { .. }

@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
-import { useContext, useId, useRef, useState, type RefObject } from 'react';
-import type { Model, Modality } from '../../../../../protocol/app-server/v69';
+import { useContext, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import type { Model, Modality } from '../../../../../protocol/app-server/v72';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
@@ -85,6 +85,7 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
   const [adding, setAdding] = useState(false);
   const [identity, setIdentity] = useState('');
   const [selected, setSelected] = useState<string>();
+  const [appended, setAppended] = useState<string>();
   // Enter/Escape can focus the plus button before React removes the input;
   // its resulting blur must not commit the same entry again or undo cancel.
   const addingDraft = useRef(false);
@@ -92,9 +93,10 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
   const chips = useRef<HTMLDivElement>(null);
   const errorId = useId();
   const Bound = form.Field as unknown as Field;
-  return <Bound name="request_params">{params => <Bound name="default_profile">{fallback => <Bound name="profiles">{field => {
+  return <Bound name="request_params">{params => <Bound name="default_profile">{fallback => <Bound name="reasoning_profile_order">{ranking => <Bound name="profiles">{field => {
     const profiles = (field.state.value as ProfileMap | null | undefined) ?? {};
     const identities = Object.keys(profiles);
+    const order = ranking.state.value as string[] | null | undefined;
     const current = selected && Object.hasOwn(profiles, selected) ? selected : identities[0];
     const name = identity.trim();
     const duplicate = Object.hasOwn(profiles, name);
@@ -119,6 +121,7 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
       const seed = identities.length ? {} : (params.state.value as ProfileMap[string]['request_params'] | null | undefined) ?? {};
       if (!identities.length) { params.handleChange(undefined as never); fallback.handleChange(name as never); }
       update(name, { request_params: seed });
+      if (order) { ranking.handleChange([...order, name] as never); setAppended(name); }
       setSelected(name);
       setIdentity('');
       setAdding(false);
@@ -135,6 +138,8 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
             if (fallback.state.value === id) fallback.handleChange((remaining[0] ?? undefined) as never);
             if (id === current) setSelected(remaining[0]);
             setProfiles(next);
+            if (order) ranking.handleChange((remaining.length ? order.filter(value => value !== id) : undefined) as never);
+            if (appended === id) setAppended(undefined);
             focusAdd();
           }}>×</Button>
         </div>)}
@@ -154,9 +159,59 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
       {identities.length > 0 && <Choice label={tx('settings:models-page.default-profile')} value={(fallback.state.value as string | null | undefined) ?? ''}
         options={[['', tx('settings:copy.unspecified')], ...identities.map(id => [id, id] as const)]}
         onChange={id => fallback.handleChange((id || undefined) as never)} />}
+      <ReasoningOrder identities={identities} order={order ?? undefined} appended={appended}
+        change={next => { ranking.handleChange(next as never); setAppended(undefined); }} />
       {!identities.length && <p className={css.hint}>{tx('settings:models-page.no-profiles')}</p>}
     </fieldset>;
-  }}</Bound>}</Bound>}</Bound>;
+  }}</Bound>}</Bound>}</Bound>}</Bound>;
+}
+
+/** Only this dedicated editor uses semantic order. Profile panels and the
+ * default selector keep their existing identity enumeration and local buffers. */
+function ReasoningOrder({ identities, order, appended, change }: {
+  identities: string[]; order?: string[]; appended?: string; change: (next: string[] | undefined) => void;
+}) {
+  const tx = useTranslation();
+  const label = useId();
+  const list = useRef<HTMLOListElement>(null);
+  const focus = useRef<{ id: string; direction: string } | null>(null);
+  useLayoutEffect(() => {
+    const target = focus.current;
+    if (!target) return;
+    const row = [...(list.current?.children ?? [])].find(row => row.getAttribute('data-profile-order') === target.id);
+    row?.querySelector<HTMLButtonElement>(`[data-move="${target.direction}"]`)?.focus();
+    focus.current = null;
+  }, [order]);
+  const move = (from: number, to: number, direction: string) => {
+    if (!order || to < 0 || to >= order.length) return;
+    const next = [...order];
+    [next[from], next[to]] = [next[to], next[from]];
+    focus.current = { id: order[from], direction };
+    change(next);
+  };
+  return <section className={cards.reasoningOrder} aria-labelledby={label}>
+    <div className={cards.reasoningHeading}><span id={label}>{tx('settings:models-page.reasoning-order')}</span>
+      {identities.length > 0 && (order
+        ? <Button size="sm" onClick={() => change(undefined)}>{tx('settings:models-page.clear-reasoning-order')}</Button>
+        : <Button size="sm" variant="outline" onClick={() => change([...identities].sort())}>{tx('settings:models-page.configure-reasoning-order')}</Button>)}
+    </div>
+    {!identities.length ? <p className={css.hint}>{tx('settings:models-page.reasoning-requires-profiles')}</p>
+      : !order ? <p className={css.hint}>{tx('settings:models-page.reasoning-not-configured')}</p>
+      : <>
+        <ol ref={list} className={cards.reasoningList} aria-label={tx('settings:models-page.reasoning-order')}>
+          {order.map((id, index) => <li key={id} data-profile-order={id}>
+            <span>{id}</span>
+            <Button size="sm" data-move="up" aria-label={tx('settings:models-page.reasoning-move-up', { p0: id })}
+              aria-disabled={index === 0} onClick={() => move(index, index - 1, 'up')}>↑</Button>
+            <Button size="sm" data-move="down" aria-label={tx('settings:models-page.reasoning-move-down', { p0: id })}
+              aria-disabled={index === order.length - 1} onClick={() => move(index, index + 1, 'down')}>↓</Button>
+          </li>)}
+        </ol>
+        <p className={css.hint}>{tx('settings:models-page.reasoning-draft-help')}</p>
+        {appended && <p role="status" className={css.hint}>{tx('settings:models-page.reasoning-appended', { p0: appended })}</p>}
+      </>}
+    <p className={css.hint}>{tx('settings:models-page.reasoning-help')}</p>
+  </section>;
 }
 
 function ProfileFields({ id, profile, change }: { id: string; profile: ProfileMap[string]; change: (next: ProfileMap[string]) => void }) {

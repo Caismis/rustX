@@ -19,9 +19,6 @@
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
               "effective_approval_mode": "policy",
-              "configuration_adoption_eligibility": {
-                "status": "unavailable"
-              },
               "messages": [],
               "message_descriptors": [],
               "publication_settlements": [],
@@ -92,6 +89,15 @@
                   "requestParams": {},
                   "summaryModel": {
                     "mode": "session"
+                  },
+                  "titleModel": {
+                    "mode": "session"
+                  },
+                  "classificationModel": {
+                    "mode": "session"
+                  },
+                  "btwModel": {
+                    "mode": "session"
                   }
                 },
                 "effective": {
@@ -107,7 +113,8 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -115,10 +122,20 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   }
                 },
                 "summary": {
+                  "mode": "session"
+                },
+                "title": {
+                  "mode": "session"
+                },
+                "classification": {
+                  "mode": "session"
+                },
+                "btw": {
                   "mode": "session"
                 }
               },
@@ -756,9 +773,6 @@
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
               "effective_approval_mode": "policy",
-              "configuration_adoption_eligibility": {
-                "status": "unavailable"
-              },
               "messages": [
                 {
                   "role": "user",
@@ -884,6 +898,15 @@
                   "requestParams": {},
                   "summaryModel": {
                     "mode": "session"
+                  },
+                  "titleModel": {
+                    "mode": "session"
+                  },
+                  "classificationModel": {
+                    "mode": "session"
+                  },
+                  "btwModel": {
+                    "mode": "session"
                   }
                 },
                 "effective": {
@@ -899,7 +922,8 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -907,10 +931,20 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   }
                 },
                 "summary": {
+                  "mode": "session"
+                },
+                "title": {
+                  "mode": "session"
+                },
+                "classification": {
+                  "mode": "session"
+                },
+                "btw": {
                   "mode": "session"
                 }
               },
@@ -1196,9 +1230,6 @@
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
               "effective_approval_mode": "policy",
-              "configuration_adoption_eligibility": {
-                "status": "unavailable"
-              },
               "messages": [
                 {
                   "role": "user",
@@ -1324,6 +1355,15 @@
                   "requestParams": {},
                   "summaryModel": {
                     "mode": "session"
+                  },
+                  "titleModel": {
+                    "mode": "session"
+                  },
+                  "classificationModel": {
+                    "mode": "session"
+                  },
+                  "btwModel": {
+                    "mode": "session"
                   }
                 },
                 "effective": {
@@ -1339,7 +1379,8 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -1347,10 +1388,20 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   }
                 },
                 "summary": {
+                  "mode": "session"
+                },
+                "title": {
+                  "mode": "session"
+                },
+                "classification": {
+                  "mode": "session"
+                },
+                "btw": {
                   "mode": "session"
                 }
               },
@@ -2078,9 +2129,6 @@
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
               "effective_approval_mode": "policy",
-              "configuration_adoption_eligibility": {
-                "status": "unavailable"
-              },
               "messages": [
                 {
                   "role": "user",
@@ -2251,6 +2299,15 @@
                   "requestParams": {},
                   "summaryModel": {
                     "mode": "session"
+                  },
+                  "titleModel": {
+                    "mode": "session"
+                  },
+                  "classificationModel": {
+                    "mode": "session"
+                  },
+                  "btwModel": {
+                    "mode": "session"
                   }
                 },
                 "effective": {
@@ -2266,7 +2323,8 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -2274,10 +2332,20 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   }
                 },
                 "summary": {
+                  "mode": "session"
+                },
+                "title": {
+                  "mode": "session"
+                },
+                "classification": {
+                  "mode": "session"
+                },
+                "btw": {
                   "mode": "session"
                 }
               },
@@ -2592,9 +2660,6 @@
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
               "effective_approval_mode": "policy",
-              "configuration_adoption_eligibility": {
-                "status": "unavailable"
-              },
               "messages": [],
               "message_descriptors": [],
               "publication_settlements": [],
@@ -2665,6 +2730,15 @@
                   "requestParams": {},
                   "summaryModel": {
                     "mode": "session"
+                  },
+                  "titleModel": {
+                    "mode": "session"
+                  },
+                  "classificationModel": {
+                    "mode": "session"
+                  },
+                  "btwModel": {
+                    "mode": "session"
                   }
                 },
                 "effective": {
@@ -2680,7 +2754,8 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -2688,10 +2763,20 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   }
                 },
                 "summary": {
+                  "mode": "session"
+                },
+                "title": {
+                  "mode": "session"
+                },
+                "classification": {
+                  "mode": "session"
+                },
+                "btw": {
                   "mode": "session"
                 }
               },
@@ -2959,9 +3044,6 @@
                       "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                       "shutting_down": false,
                       "effective_approval_mode": "policy",
-                      "configuration_adoption_eligibility": {
-                        "status": "unavailable"
-                      },
                       "messages": [
                         {
                           "role": "user",
@@ -3132,6 +3214,15 @@
                           "requestParams": {},
                           "summaryModel": {
                             "mode": "session"
+                          },
+                          "titleModel": {
+                            "mode": "session"
+                          },
+                          "classificationModel": {
+                            "mode": "session"
+                          },
+                          "btwModel": {
+                            "mode": "session"
                           }
                         },
                         "effective": {
@@ -3147,7 +3238,8 @@
                             ],
                             "outputModalities": [
                               "text"
-                            ]
+                            ],
+                            "jsonSchemaOutput": false
                           },
                           "declaredCapabilities": {
                             "inputModalities": [
@@ -3155,10 +3247,20 @@
                             ],
                             "outputModalities": [
                               "text"
-                            ]
+                            ],
+                            "jsonSchemaOutput": false
                           }
                         },
                         "summary": {
+                          "mode": "session"
+                        },
+                        "title": {
+                          "mode": "session"
+                        },
+                        "classification": {
+                          "mode": "session"
+                        },
+                        "btw": {
                           "mode": "session"
                         }
                       },
@@ -3516,9 +3618,6 @@
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
               "effective_approval_mode": "policy",
-              "configuration_adoption_eligibility": {
-                "status": "unavailable"
-              },
               "messages": [
                 {
                   "role": "user",
@@ -3689,6 +3788,15 @@
                   "requestParams": {},
                   "summaryModel": {
                     "mode": "session"
+                  },
+                  "titleModel": {
+                    "mode": "session"
+                  },
+                  "classificationModel": {
+                    "mode": "session"
+                  },
+                  "btwModel": {
+                    "mode": "session"
                   }
                 },
                 "effective": {
@@ -3704,7 +3812,8 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -3712,10 +3821,20 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   }
                 },
                 "summary": {
+                  "mode": "session"
+                },
+                "title": {
+                  "mode": "session"
+                },
+                "classification": {
+                  "mode": "session"
+                },
+                "btw": {
                   "mode": "session"
                 }
               },
@@ -4030,9 +4149,6 @@
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
               "effective_approval_mode": "policy",
-              "configuration_adoption_eligibility": {
-                "status": "unavailable"
-              },
               "messages": [
                 {
                   "role": "assistant",
@@ -4213,6 +4329,15 @@
                   "requestParams": {},
                   "summaryModel": {
                     "mode": "session"
+                  },
+                  "titleModel": {
+                    "mode": "session"
+                  },
+                  "classificationModel": {
+                    "mode": "session"
+                  },
+                  "btwModel": {
+                    "mode": "session"
                   }
                 },
                 "effective": {
@@ -4228,7 +4353,8 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -4236,10 +4362,20 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   }
                 },
                 "summary": {
+                  "mode": "session"
+                },
+                "title": {
+                  "mode": "session"
+                },
+                "classification": {
+                  "mode": "session"
+                },
+                "btw": {
                   "mode": "session"
                 }
               },
@@ -5522,9 +5658,6 @@
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
               "effective_approval_mode": "policy",
-              "configuration_adoption_eligibility": {
-                "status": "unavailable"
-              },
               "messages": [
                 {
                   "role": "assistant",
@@ -5825,6 +5958,15 @@
                   "requestParams": {},
                   "summaryModel": {
                     "mode": "session"
+                  },
+                  "titleModel": {
+                    "mode": "session"
+                  },
+                  "classificationModel": {
+                    "mode": "session"
+                  },
+                  "btwModel": {
+                    "mode": "session"
                   }
                 },
                 "effective": {
@@ -5840,7 +5982,8 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   },
                   "declaredCapabilities": {
                     "inputModalities": [
@@ -5848,10 +5991,20 @@
                     ],
                     "outputModalities": [
                       "text"
-                    ]
+                    ],
+                    "jsonSchemaOutput": false
                   }
                 },
                 "summary": {
+                  "mode": "session"
+                },
+                "title": {
+                  "mode": "session"
+                },
+                "classification": {
+                  "mode": "session"
+                },
+                "btw": {
                   "mode": "session"
                 }
               },

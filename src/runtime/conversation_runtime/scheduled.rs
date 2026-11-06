@@ -128,6 +128,7 @@ impl RuntimeInner {
             || state.current_attempt.is_some()
             || state.scheduled.is_some()
             || state.manual_compaction.is_some()
+            || state.configuration_commit_waiting
             || self.durability_gate.is_failed()
         {
             return false;

@@ -3,6 +3,7 @@ use crate::runtime::workflow::{WorkflowBlock, WorkflowDefinition};
 use serde::{Deserialize, Serialize};
 
 mod editor;
+mod expansion;
 #[cfg(test)]
 mod tests;
 pub use editor::*;
@@ -68,9 +69,9 @@ impl std::ops::DerefMut for WorkflowFileDocument {
     }
 }
 
-/// Whole-file and expanded transport bound, separate from executable budgets.
-pub const MAX_WORKFLOW_FILE_BYTES: usize = 1024 * 1024;
-pub const MAX_WORKFLOW_DOCUMENT_BYTES: usize = 768 * 1024;
+/// Independent source-file and expanded-document byte bounds, separate from executable budgets.
+pub const MAX_WORKFLOW_FILE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_WORKFLOW_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 
 impl WorkflowFileDocument {
     /// Validate file/presentation capacity without requiring a finished graph.
@@ -81,12 +82,11 @@ impl WorkflowFileDocument {
         if let Some(editor) = &self.editor {
             editor.validate()?;
         }
-        if serde_json::to_vec(self).map_or(true, |bytes| bytes.len() > MAX_WORKFLOW_DOCUMENT_BYTES)
-        {
+        if !crate::bounded_file::json_fits(self, MAX_WORKFLOW_DOCUMENT_BYTES) {
             return Err(WorkflowPresentationDiagnostic::new(
                 "$",
                 "file_size",
-                "expanded Workflow document exceeds 768 KiB",
+                "expanded Workflow document exceeds 16 MiB",
             ));
         }
         Ok(())
@@ -95,23 +95,24 @@ impl WorkflowFileDocument {
     /// The complete canonical candidate. Compilation and executable validation
     /// remain the caller's separate admission step.
     /// # Errors
-    /// Rejects invalid presentation or a serialized file exceeding 1 MiB.
+    /// Rejects invalid presentation or a serialized file exceeding 16 MiB.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, WorkflowPresentationDiagnostic> {
         self.validate()?;
         let failure = || {
             WorkflowPresentationDiagnostic::new(
                 "$",
                 "file_size",
-                "Workflow file cannot be serialized within 1 MiB",
+                "Workflow file cannot be serialized within 16 MiB",
             )
         };
         let mut value = serde_yaml::to_value(self).map_err(|_| failure())?;
         if let Some(block) = value.get_mut("block") {
             omit_ordinary_ports(block);
         }
-        let bytes = serde_yaml::to_string(&value)
-            .map_err(|_| failure())?
-            .into_bytes();
+        let mut encoded =
+            crate::bounded_file::LimitedWriter::new(Vec::new(), MAX_WORKFLOW_FILE_BYTES);
+        serde_yaml::to_writer(&mut encoded, &value).map_err(|_| failure())?;
+        let bytes = encoded.inner;
         if bytes.len() > MAX_WORKFLOW_FILE_BYTES {
             return Err(failure());
         }
@@ -156,4 +157,8 @@ fn omit_ordinary_ports(block: &mut serde_yaml::Value) {
             }
         }
     }
+}
+
+pub(crate) fn yaml_expansion_within_bound(bytes: &[u8]) -> bool {
+    expansion::within_bound(bytes)
 }

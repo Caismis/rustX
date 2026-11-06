@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Add `--delivery-access-token-file /private/user/delivery-token` when the server
 operator provisioned committed-delivery access for this client (see `/files`).
 
-Both modes use App Server protocol v69. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v72. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -222,21 +222,22 @@ Enter uses the current native projection to choose Send or Steer.
 Native owns initial MCP readiness, including the submission-triggered absolute
 budget from `[mcp_startup_policy].wait_timeout_ms` (default 15000). An attachment
 waiting before submission consumes no such budget. Successful live discovery
-needs no TUI configuration adoption; authored configuration changes retain their
-ordinary explicit adoption rules.
+needs no TUI configuration adoption, and neither do authored configuration
+changes: native commits them at the Session's safe boundary.
 
 Root Tool/Skill/Plugin/Agent/Workflow capability selection is authored in
 `rustx.toml`; named Agents own independent complete profiles. `/settings` shows
 native authored sources independently of Session existence. `/model` changes only
-Session intent. `/session settings` inspects native application and `/session adopt`
-explicitly adopts the inspected candidate. Source commits transfer automatic
-application to the native coordinator; context adoption remains explicit.
+Session intent. `/session settings` inspects native application. Source commits
+transfer application to the native coordinator, which commits a prepared Session
+configuration itself at the Session's safe boundary; nothing in the TUI confirms
+or adopts it.
 
 ## Startup sequence
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v69)
+  -> initialize (App Server protocol v72)
   -> session/create or choose a durable Session
   -> resolve the exact Session/node; begin session/attach and editable connecting
        -> first explicit Send records session/submissionIntent
@@ -590,9 +591,9 @@ the transcript, combined for User and Workspace; an `unresolved` or
 `commit_uncertain` receipt shows as a warning or error. The first keystroke
 acknowledges it, a receipt identity is announced once across reconnects, and the
 line is never a conversation Turn or model input. Source notices are routed by the
-host itself, independently of any attached Session. `/session settings` reports native preparation,
-candidate and eligibility; `/session adopt` submits the inspected candidate and
-binding. Uncertain mutations are reread, never replayed. Runtime approval prompts
+host itself, independently of any attached Session. `/session settings` reports native
+preparation and application; native commits the prepared configuration at the
+Session's safe boundary. Uncertain mutations are reread, never replayed. Runtime approval prompts
 remain independent of these source-authoring commands.
 
 To add a file while preserving prompt text, press Ctrl+P and enter
@@ -1136,8 +1137,8 @@ Use `/model profile set <id>` or `/model profile clear` to select request parame
 `/show-reasoning on|off` for display only. `/reasoning` is no longer a command.
 
 There are no `/defaults`, `/save-default`, `/permissions`, or `/configuration`
-compatibility aliases. `/model` does not save defaults. Explicit context adoption
-is checked at the native Session admission gate, never queued for later idleness.
+compatibility aliases. `/model` does not save defaults. Native commits a prepared Session configuration
+at its safe boundary, under the same lock as Attempt admission.
 See [the complete source/lifetime matrix and write guarantee](../docs/effective-settings.md).
 
 ### Delete historical Sessions inside `/resume`

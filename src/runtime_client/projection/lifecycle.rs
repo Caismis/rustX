@@ -37,11 +37,6 @@ pub(super) fn initial_client_snapshot(
         conversation_id,
         shutting_down: false,
         effective_approval_mode: ApprovalMode::Policy,
-        // A host binds before activation, and an inspection projection
-        // has no live runtime: neither can adopt until the runtime
-        // publishes otherwise.
-        configuration_adoption_eligibility:
-            crate::runtime::adoption::AdoptionEligibility::Unavailable,
         durability_failure: None,
         messages: initial_messages,
         message_descriptors: Vec::new(),

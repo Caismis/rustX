@@ -15,7 +15,7 @@ pub(crate) mod protocol;
 mod residency_policy;
 mod source_repair;
 mod startup_measurements;
-mod transports;
+pub(crate) mod transports;
 use super::*;
 use crate::events::types::RuntimeEvent;
 use crate::local_runtime::configuration::SessionConfigInput;
@@ -72,6 +72,14 @@ impl AsyncGate {
         let _leave = Leave(&self.parked);
         self.entered.send_replace(true);
         self.release.subscribe().wait_for(|v| *v).await.unwrap();
+    }
+    /// Parks the first synchronous caller after arming on a multi-threaded
+    /// runtime; later callers, and every caller of an unarmed gate, pass.
+    pub(super) fn park_first_blocking(&self) {
+        if *self.release.borrow() || *self.entered.borrow() {
+            return;
+        }
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(self.park()));
     }
     async fn entered(&self) {
         self.entered.subscribe().wait_for(|v| *v).await.unwrap();

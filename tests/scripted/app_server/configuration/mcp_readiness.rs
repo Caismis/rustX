@@ -270,28 +270,9 @@ async fn wait_runtime_catalog(
     assert!(runtime.runtime_resources().revision().get() > 1);
 }
 
-async fn ready_rebased(
-    fixture: &Fixture,
-    session: &SessionSnapshot,
-    runtime: &crate::runtime::ConversationRuntime,
-) -> crate::local_runtime::configuration::application::AvailableConfiguration {
-    let mut changes = fixture.manager.configuration_changes();
-    loop {
-        if let Some(candidate) = fixture
-            .manager
-            .configuration_application(&session.id)
-            .and_then(|application| application.candidate)
-            && candidate.expected_binding == runtime.configuration_cut().binding_revision
-        {
-            return candidate;
-        }
-        changes.changed().await.unwrap();
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
-async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_intent() {
+async fn live_schema_recovery_preserves_whole_attempt_and_commits_authored_intent_after_it() {
     Box::pin(bounded(async {
         let mcp = McpFixture::start().await;
         let replacement = McpFixture::named("unadopted_tool").await;
@@ -336,8 +317,8 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
             admitted
         );
 
-        // Capturing a different source and instructions creates an authored
-        // candidate, which live recovery must never pull into the runtime.
+        // Capturing a different source and instructions stages an authored
+        // candidate; neither it nor live recovery reaches the admitted Attempt.
         std::fs::write(
             fixture.workspaces[0].join(".agents/mcp.toml"),
             format!("[mcp_servers.late]\nurl = {:?}\n", replacement.endpoint),
@@ -352,7 +333,12 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
         )
         .await;
         let pending = settled(&fixture, 0).await;
-        assert!(pending.candidate.is_some());
+        assert!(
+            pending
+                .units
+                .values()
+                .any(|unit| *unit == UnitApplication::Ready)
+        );
         let selected = crate::model::session::SessionModelConfig::of(
             crate::model::catalog::ModelRef::parse("local/b").unwrap(),
         );
@@ -362,7 +348,12 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
             .await
             .unwrap();
         let pending = settled(&fixture, 0).await;
-        assert!(pending.candidate.is_some());
+        assert!(
+            pending
+                .units
+                .values()
+                .any(|unit| *unit == UnitApplication::Ready)
+        );
         assert_eq!(
             runtime.configuration_cut().admitted_attempt.unwrap(),
             admitted
@@ -372,7 +363,9 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
         fixture.gates[0].release();
         settlement.wait().await;
         wait_runtime_catalog(&runtime, &mut publications, before).await;
-        let candidate = ready_rebased(&fixture, &session, &runtime).await;
+        // After the frozen Attempt settles, the runtime publishes the live
+        // catalog and commits the authored candidate prepared over it.
+        applied(&fixture, 0).await;
         let requests = fixture.provider.request_bodies();
         assert_eq!(
             requests.len(),
@@ -397,46 +390,6 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
                 .config
                 .agent
                 .instructions,
-            frozen.configuration().unwrap().config.agent.instructions
-        );
-        assert!(
-            runtime
-                .runtime_resources()
-                .capability()
-                .tool_registry()
-                .definitions()
-                .iter()
-                .all(|tool| tool.name != "unadopted_tool")
-        );
-
-        runtime
-            .submit_inbound(input("request-B: automatic schema publication"))
-            .unwrap();
-        fixture.gates[1].wait_entered().await;
-        let requests = fixture.provider.request_bodies();
-        assert_eq!(tool_schema(&requests[2]).as_deref(), Some("integer"));
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&requests[2]).unwrap()["model"],
-            "b"
-        );
-        assert!(!requests[2].contains("unadopted instructions"));
-        let mut settlement = SettlementReceiptWait::capture(&runtime);
-        fixture.gates[1].release();
-        settlement.wait().await;
-        runtime.wait_for_configuration_admissions().await;
-        fixture
-            .manager
-            .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
-        assert_eq!(runtime.model_view().configured, selected);
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
             "unadopted instructions"
         );
         assert!(
@@ -448,6 +401,20 @@ async fn live_schema_recovery_preserves_whole_attempt_and_pending_authored_inten
                 .iter()
                 .any(|tool| tool.name == "unadopted_tool")
         );
+
+        runtime
+            .submit_inbound(input("request-B: committed authored intent"))
+            .unwrap();
+        fixture.gates[1].wait_entered().await;
+        let requests = fixture.provider.request_bodies();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[2]).unwrap()["model"],
+            "b"
+        );
+        assert!(requests[2].contains("unadopted instructions"));
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[1].release();
+        settlement.wait().await;
         assert_eq!(
             mcp.control.lists.load(Ordering::SeqCst),
             2,
@@ -633,12 +600,7 @@ async fn failed_explicit_runtime_refresh_retains_last_good_without_automatic_ret
             },
         )
         .await;
-        let authored = settled(&fixture, 0).await.candidate.unwrap();
-        runtime.wait_for_configuration_admissions().await;
-        fixture
-            .manager
-            .adopt_configuration(&session.id, &authored.identity, authored.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         let adopted = runtime.runtime_resources();
         assert_eq!(
             adopted.capability().tool_registry().definitions(),
@@ -1530,7 +1492,8 @@ async fn live_catalog_publication_never_parks_on_background_ownership() {
         let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
         background.install_commit_boundary_hook(hook.clone());
         let _release_commit = ReleaseCommit(hook.clone());
-        let (executor, mut started, release) = super::adoption::GatedBackgroundExecutor::new();
+        let (executor, mut started, release) =
+            super::automatic_commit::GatedBackgroundExecutor::new();
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
         let invocation = crate::tools::types::ToolInvocation {
             id: crate::tools::types::ToolInvocationId::Agent {
@@ -1762,12 +1725,7 @@ async fn superseded_refresh_completion_cannot_publish_into_authored_source_bindi
                 },
             )
             .await;
-            let candidate = settled(&fixture, 0).await.candidate.unwrap();
-            runtime.wait_for_configuration_admissions().await;
-            fixture
-                .manager
-                .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
-                .unwrap();
+            applied(&fixture, 0).await;
             let adopted = runtime.configuration_cut();
             assert!(
                 adopted
@@ -1847,12 +1805,7 @@ async fn pending_success_publishes_without_erasing_newer_explicit_refresh_failur
             },
         )
         .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        runtime.wait_for_configuration_admissions().await;
-        fixture
-            .manager
-            .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
         mcp.control.fail.store(false, Ordering::SeqCst);
         let before = *publications.borrow();
@@ -2098,12 +2051,7 @@ async fn completed_recovery_rebases_over_todo_adoption_and_sibling_replacement()
             },
         )
         .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        runtime.wait_for_configuration_admissions().await;
-        fixture
-            .manager
-            .adopt_configuration(&session.id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         let before = *runtime.runtime_catalog_publications().borrow();
         let mut publications = runtime.runtime_catalog_publications();
         drop(release);
@@ -2395,4 +2343,374 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
         f.close().await;
         mcp.close().await;
     }
+}
+
+/// Moving a source to another server that offers byte-identical Tool
+/// declarations replaces the Tool implementation: the commit records those
+/// Tools as `changed`, never as no change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn implementation_only_tool_change_records_one_changed_fact() {
+    bounded(async {
+        let first = McpFixture::start().await;
+        let second = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        configure(&fixture, &[("moved", &first)]);
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let declarations = runtime
+            .runtime_resources()
+            .capability()
+            .tool_registry()
+            .model_definitions();
+        std::fs::write(
+            fixture.workspaces[0].join(".agents/mcp.toml"),
+            format!("[mcp_servers.moved]\nurl = {:?}\n", second.endpoint),
+        )
+        .unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        applied(&fixture, 0).await;
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .capability()
+                .tool_registry()
+                .model_definitions(),
+            declarations,
+            "the model-visible declarations are unchanged"
+        );
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(changes[0].tools.added.is_empty() && changes[0].tools.removed.is_empty());
+        assert_eq!(changes[0].tools.changed.total, 1, "{changes:?}");
+        // The fact retains the successor's definition and a digest of what
+        // its server executes, never the binding or its credentials.
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        let [tool] = catalog["tools"].as_array().unwrap().as_slice() else {
+            panic!("one affected Tool: {catalog}");
+        };
+        assert_eq!(tool["change"], "changed");
+        assert!(
+            tool["after"]["definition"]["input_schema"].is_object(),
+            "{tool}"
+        );
+        for state in ["before", "after"] {
+            assert!(
+                tool[state]["server_binding_digest"]
+                    .as_str()
+                    .is_some_and(|digest| digest.starts_with("sha256:")),
+                "{tool}"
+            );
+        }
+        assert_ne!(
+            tool["before"]["server_binding_digest"],
+            tool["after"]["server_binding_digest"]
+        );
+        assert!(!catalog.to_string().contains("credentials"), "{catalog}");
+        fixture.close().await;
+        first.close().await;
+        second.close().await;
+    })
+    .await;
+}
+
+async fn reconcile_workspace(fixture: &Fixture) {
+    fixture
+        .manager
+        .reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: fixture.workspaces[0].clone(),
+            },
+        )
+        .await
+        .unwrap();
+    applied(fixture, 0).await;
+}
+
+fn servers(fixture: &Fixture, sources: &[(&str, &McpFixture)]) {
+    use std::fmt::Write as _;
+    let mut document = String::new();
+    for (id, server) in sources {
+        writeln!(document, "[mcp_servers.{id}]\nurl = {:?}", server.endpoint).unwrap();
+    }
+    let agents = fixture.workspaces[0].join(".agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(agents.join("mcp.toml"), document).unwrap();
+}
+
+fn reviewer(fixture: &Fixture, skills: &str) {
+    let agents = fixture.workspaces[0].join(".agents/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::write(
+        agents.join("reviewer.toml"),
+        format!("description='Review'\ninstructions='Review'\nskills={skills}\n[tools.sources]\nmoved='all'\n"),
+    )
+    .unwrap();
+}
+
+/// Readiness is not identity: a Named Agent whose MCP source Root never
+/// prepares still records the Skill versions and the source binding it runs,
+/// so editing its Skill or moving its source changes `subagent`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lazy_child_source_hides_neither_its_skills_nor_its_binding() {
+    bounded(async {
+        let first = McpFixture::start().await;
+        let second = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = fixture.workspaces[0].clone();
+        servers(&fixture, &[("moved", &first)]);
+        reviewer(&fixture, "['guide']");
+        let skill = |body: &str| {
+            let guide = workspace.join(".agents/skills/guide");
+            std::fs::create_dir_all(&guide).unwrap();
+            std::fs::write(
+                guide.join("SKILL.md"),
+                format!("---\nname: guide\ndescription: Guide\n---\n{body}\n"),
+            )
+            .unwrap();
+        };
+        skill("body A");
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\nagents=['reviewer']\nskills=[]\n",
+        )
+        .unwrap();
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let unprepared = |runtime: &crate::runtime::ConversationRuntime| {
+            runtime
+                .runtime_resources()
+                .capability()
+                .tool_registry()
+                .definitions()
+                .iter()
+                .all(|definition| definition.name != TOOL)
+        };
+        assert!(
+            unprepared(&runtime),
+            "Root never prepares the child's source"
+        );
+        let reviewer_states = || {
+            let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+                .pop()
+                .unwrap();
+            let [tool] = catalog["tools"].as_array().unwrap().as_slice() else {
+                panic!("one affected Tool: {catalog}");
+            };
+            assert_eq!(tool["name"], "subagent", "{tool}");
+            (
+                tool["before"]["agents"]["reviewer"].clone(),
+                tool["after"]["agents"]["reviewer"].clone(),
+            )
+        };
+        let facts = configuration_changes(&runtime).len();
+        skill("body B");
+        reconcile_workspace(&fixture).await;
+        assert!(unprepared(&runtime));
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].tools.changed.names, ["subagent"]);
+        let (before, after) = reviewer_states();
+        assert_ne!(before["skills"]["guide"], after["skills"]["guide"]);
+        assert!(
+            after["runs"]["sources"]["moved"].as_str().is_some(),
+            "{after}"
+        );
+        assert_eq!(before["runs"], after["runs"]);
+        let endpoint = |runtime: &crate::runtime::ConversationRuntime| {
+            serde_json::to_value(
+                &runtime
+                    .runtime_resources()
+                    .capability()
+                    .mcp_servers()
+                    .get(&McpServerId::new("moved"))
+                    .unwrap()
+                    .transport,
+            )
+            .unwrap()["endpoint"]
+                .clone()
+        };
+        assert_eq!(endpoint(&runtime), first.endpoint.as_str());
+        servers(&fixture, &[("moved", &second)]);
+        reconcile_workspace(&fixture).await;
+        assert_eq!(
+            endpoint(&runtime),
+            second.endpoint.as_str(),
+            "the child runs on B"
+        );
+        assert!(unprepared(&runtime));
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 2, "{changes:?}");
+        assert_eq!(changes[facts + 1].tools.changed.names, ["subagent"]);
+        let (before, after) = reviewer_states();
+        assert_ne!(
+            before["runs"]["sources"]["moved"],
+            after["runs"]["sources"]["moved"]
+        );
+        assert_eq!(before["skills"], after["skills"]);
+        fixture.close().await;
+        first.close().await;
+        second.close().await;
+    })
+    .await;
+}
+
+/// The implementation of a Workflow Tool includes every source beneath it:
+/// moving the MCP source its node runs on, Root selecting none of it,
+/// changes that Workflow Tool once, while moving a source nothing runs
+/// changes nothing.
+async fn a_moved_source_beneath_a_workflow_changes_it(node: serde_json::Value, agent: bool) {
+    bounded(async {
+        let first = McpFixture::start().await;
+        let second = McpFixture::start().await;
+        let idle = McpFixture::start().await;
+        let elsewhere = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = fixture.workspaces[0].clone();
+        servers(&fixture, &[("moved", &first), ("idle", &idle)]);
+        let mut agents = String::new();
+        if agent {
+            reviewer(&fixture, "[]");
+            agents.push_str("agents=['reviewer']\n");
+        }
+        let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+        let workflow = workspace.join(".agents/workflows/review.yaml");
+        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+        std::fs::write(&workflow, serde_json::to_string(&serde_json::json!({
+            "description": "Review",
+            "block": {"input": schema, "nodes": {"workflow_start": {"type": "start"}, "work": node,
+                "done": {"type": "return", "outputs": []}},
+                "edges": [{"from": "workflow_start", "to": "work"}, {"from": "work", "to": "done"}]}
+        })).unwrap()).unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            format!("[agent]\nworkflows=['review']\n{agents}"),
+        )
+        .unwrap();
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let resources = runtime.runtime_resources();
+        let registry = resources.capability().tool_registry();
+        assert!(registry.definitions().iter().any(|definition| definition.name == "review"));
+        assert!(
+            registry.definitions().iter().all(|definition| definition.name != TOOL),
+            "Root selects no MCP Tool"
+        );
+        let facts = configuration_changes(&runtime).len();
+        servers(&fixture, &[("moved", &first), ("idle", &elsewhere)]);
+        reconcile_workspace(&fixture).await;
+        assert_eq!(configuration_changes(&runtime).len(), facts, "nothing runs idle");
+        servers(&fixture, &[("moved", &second), ("idle", &elsewhere)]);
+        reconcile_workspace(&fixture).await;
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert!(changes[facts].tools.changed.names.contains(&"review".to_owned()), "{changes:?}");
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        let tool = catalog["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "review")
+            .unwrap();
+        let moved = |state: &str| {
+            if agent {
+                tool[state]["agents"]["reviewer"]["runs"]["sources"]["moved"].clone()
+            } else {
+                tool[state]["runs"]["sources"]["moved"].clone()
+            }
+        };
+        assert!(moved("before").as_str().is_some(), "{tool}");
+        assert_ne!(moved("before"), moved("after"), "{tool}");
+        assert!(!catalog.to_string().contains(&second.endpoint), "{catalog}");
+        fixture.close().await;
+        for server in [first, second, idle, elsewhere] {
+            server.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_moved_source_beneath_a_workflow_agent_changes_the_workflow() {
+    let schema = serde_json::json!({"type":"object","properties":{},"required":[],"additionalProperties":false});
+    a_moved_source_beneath_a_workflow_changes_it(
+        serde_json::json!({"type": "agent", "profile": "reviewer", "task": [{"type": "literal", "value": "Review"}], "output": {"type": "json_schema", "schema": schema}}),
+        true,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_moved_source_beneath_a_workflow_tool_node_changes_the_workflow() {
+    a_moved_source_beneath_a_workflow_changes_it(
+        serde_json::json!({"type": "tool", "selector": {"origin": "source", "source_id": "moved", "name": TOOL}, "arguments": {"type": "literal", "value": {}}, "result": {"type": "text"}}),
+        false,
+    )
+    .await;
+}
+
+/// A hidden source compares its whole binding, credentials included, as a
+/// Root Tool's binding does: switching only the credential reference of the
+/// source a lazy child runs on changes `subagent`, and the catalog carries no
+/// credential.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hidden_source_credential_switch_changes_the_tool_that_runs_it() {
+    bounded(async {
+        let server = McpFixture::start().await;
+        let mut fixture = Fixture::with_session_count(None, 0).await;
+        let workspace = fixture.workspaces[0].clone();
+        let credential = |reference: &str| {
+            std::fs::create_dir_all(workspace.join(".agents")).unwrap();
+            std::fs::write(
+                workspace.join(".agents/mcp.toml"),
+                format!(
+                    "[mcp_servers.moved]\nurl = {:?}\n[mcp_servers.moved.sensitive_headers]\nAuthorization = '{reference}'\n",
+                    server.endpoint
+                ),
+            )
+            .unwrap();
+        };
+        credential("$TOKEN_ALPHA");
+        reviewer(&fixture, "[]");
+        std::fs::write(workspace.join("rustx.toml"), "[agent]\nagents=['reviewer']\n").unwrap();
+        let session = create(&fixture).await;
+        fixture.sessions.push(session.clone());
+        fixture.manager.load(&session.id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let facts = configuration_changes(&runtime).len();
+        credential("$TOKEN_BRAVO");
+        reconcile_workspace(&fixture).await;
+        let changes = configuration_changes(&runtime);
+        assert_eq!(changes.len(), facts + 1, "{changes:?}");
+        assert_eq!(changes[facts].tools.changed.names, ["subagent"]);
+        let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
+            .pop()
+            .unwrap();
+        let tool = &catalog["tools"][0];
+        let digest = |state: &str| tool[state]["agents"]["reviewer"]["runs"]["sources"]["moved"].clone();
+        assert!(digest("after").as_str().is_some(), "{tool}");
+        assert_eq!(digest("before"), digest("after"), "the digest never covers credentials");
+        let text = catalog.to_string();
+        assert!(!text.contains("TOKEN_ALPHA") && !text.contains("TOKEN_BRAVO"), "{text}");
+        fixture.close().await;
+        server.close().await;
+    })
+    .await;
 }

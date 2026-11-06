@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 impl SessionRuntimeManager {
     /// Permanently close native initialization admission before host drain inventories.
     pub(crate) fn begin_draining(&self) -> Vec<Arc<super::Initialization>> {
+        self.configuration.resource_io.cancel();
         let mut registry = self.registry.0.lock().expect("registry mutex");
         registry.draining = true;
         let mut initializations = Vec::new();

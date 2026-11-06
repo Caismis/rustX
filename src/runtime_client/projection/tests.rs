@@ -238,59 +238,6 @@ fn checkpoint_keeps_goal_control_state_when_history_exhausts_inline_budget() {
     );
 }
 
-/// Adoption eligibility is runtime-domain projection state: a published
-/// change folds into the snapshot and publishes one event, and an
-/// unchanged value folds into nothing. It invalidates no derived read
-/// domain, because it is not conversation history.
-#[test]
-fn adoption_eligibility_publishes_only_changes() {
-    use crate::runtime::adoption::AdoptionEligibility;
-    let mut projection = projection();
-    let (snapshot, cursor) = projection.snapshot().unwrap();
-    assert_eq!(
-        snapshot.configuration_adoption_eligibility,
-        AdoptionEligibility::Unavailable
-    );
-    let (subscriber, _) = projection.subscribe(cursor).unwrap();
-    for eligibility in [
-        AdoptionEligibility::Unavailable,
-        AdoptionEligibility::Eligible,
-        AdoptionEligibility::Eligible,
-        AdoptionEligibility::Busy,
-        AdoptionEligibility::Busy,
-        AdoptionEligibility::Eligible,
-    ] {
-        projection.apply(ConversationObservation::AdoptionEligibility(eligibility));
-    }
-    assert!(projection.read_domain_cut().is_none());
-    let mut published = Vec::new();
-    while let SubscriberPoll::Event(event) = projection.poll_subscriber(subscriber) {
-        let crate::runtime_client::RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
-            eligibility,
-        } = single_fact(&event)
-        else {
-            panic!("only eligibility changes are published: {:?}", event.event);
-        };
-        published.push(eligibility.clone());
-    }
-    assert_eq!(
-        published,
-        vec![
-            AdoptionEligibility::Eligible,
-            AdoptionEligibility::Busy,
-            AdoptionEligibility::Eligible
-        ]
-    );
-    assert_eq!(
-        projection
-            .snapshot()
-            .unwrap()
-            .0
-            .configuration_adoption_eligibility,
-        AdoptionEligibility::Eligible
-    );
-}
-
 #[test]
 fn t14_t20_workflow_native_revision_gaps_preserve_complete_replay_and_checkpoint() {
     let event: RuntimeClientEvent = serde_json::from_str(include_str!(

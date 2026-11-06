@@ -357,11 +357,6 @@ async fn snapshot_dto_round_trips() {
         checkpoint.snapshot.conversation_id()
     );
     let (snapshot, cursor) = (checkpoint.snapshot, checkpoint.cursor);
-    // The baseline is the actual published bootstrap cut, never a guessed ordinal.
-    assert_eq!(
-        snapshot.configuration_adoption_eligibility,
-        rustx::runtime::adoption::AdoptionEligibility::Eligible
-    );
     let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
     let decoded: rustx::runtime_client::RuntimeClientSnapshot =
         serde_json::from_str(&json).expect("deserialize snapshot");

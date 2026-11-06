@@ -74,8 +74,11 @@ test('source dockkit floats, docks, restores and collapses the last content tab'
   expect(errors).toEqual([]);
 });
 
-test('interactive HTML packs local assets and executes inside an opaque sandbox',async({page})=>{
-  await page.addInitScript(()=>{ if(localStorage.getItem('rustx-html-interactive-v1')===null)localStorage.setItem('rustx-html-interactive-v1','true'); });
+test('interactive HTML packs local assets and executes inside an opaque sandbox',async({page},info)=>{
+  await page.addInitScript(()=>{
+    if(window!==window.top)return;
+    if(localStorage.getItem('rustx-html-interactive-v1')===null)localStorage.setItem('rustx-html-interactive-v1','true');
+  });
   await page.goto(`${origin}/test/fixtures/workbench.html`);
   await page.locator('[data-preview-toggle]').click();
   const panel=page.locator('[data-workbench]');
@@ -84,20 +87,24 @@ test('interactive HTML packs local assets and executes inside an opaque sandbox'
   await panel.getByRole('button',{name:'interactive.html',exact:true}).click();
   const frame=panel.frameLocator('iframe');
   await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
+  await expect(panel.locator('iframe')).toBeInViewport({ratio:1});
   await frame.getByRole('button',{name:'Count 0'}).click();
   await expect(frame.getByRole('button',{name:'Count 1'})).toBeVisible();
   await expect(frame.locator('#boundary')).toHaveText('isolated');
   expect(await frame.getByRole('button').evaluate(el=>getComputedStyle(el).color)).toBe('rgb(12, 34, 56)');
   await expect(panel.locator('iframe')).toHaveAttribute('sandbox','allow-scripts');
+  await page.screenshot({path:info.outputPath('html-interactive.png')});
   await page.evaluate(()=>localStorage.setItem('rustx-html-interactive-v1','false'));
   await page.reload();await page.locator('[data-preview-toggle]').click();
   await expect(panel.locator('iframe')).toHaveAttribute('sandbox','');
-  // The iframe's own button is stable while the containing sidebar is moving.
-  // Gate on the host too so cross-frame hit testing uses settled coordinates.
+  // Wait for the sliding dock to settle before cross-frame hit testing.
+  await expect(panel.locator('iframe')).toBeInViewport({ratio:1});
+  await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
   await panel.locator('iframe').click({trial:true});
   await frame.getByRole('button',{name:'Count 0'}).click();
   await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
   await expect(frame.locator('#boundary')).toHaveText('');
+  await page.screenshot({path:info.outputPath('html-static.png')});
 });
 
 test('workspace HTML stays static until the user explicitly opts into scripts',async({page})=>{

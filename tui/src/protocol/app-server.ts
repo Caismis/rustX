@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v69.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v72.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v69.schema.json
+ * protocol/app-server/v72.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v69.ts       (generated)
+ * protocol/app-server/v72.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -56,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundaryObservation,
   Success,
-} from "../../../protocol/app-server/v69.ts";
+} from "../../../protocol/app-server/v72.ts";
 
 export type {
   AttemptIdentitySource,
@@ -68,11 +68,11 @@ export type {
   ConfigRepairReceipt,
   ConfigRepairStatus,
   ConfigurationApplication,
+  BoundedNames,
+  ConfigurationChange,
   NativeToolRemoval,
   SourceSettings,
   SourceTarget,
-  AdoptionEligibility,
-  AvailableConfiguration,
   AdmittedSettings,
   EffectiveConfiguration,
   AgentStatusGenerationMetadata,
@@ -145,7 +145,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v69.ts";
+} from "../../../protocol/app-server/v72.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -507,8 +507,8 @@ export function describeRpcError(error: RpcError): string {
       return `unknown session ${data.session_id}`;
     case "unknown_node":
       return `unknown node ${data.node_id} in session ${data.session_id}`;
-    case "configuration_adoption":
-      return `Configuration adoption: ${data.rejection.status === "failed" ? data.rejection.diagnostic : data.rejection.status.replaceAll("_", " ")}`;
+    case "model_selection_conflict":
+      return "the Session configuration changed during this model selection; nothing was changed";
     case "model_unavailable":
       return `the configured model is not in the published catalog; choose one with /model (${data.diagnostic})`;
     case "source_conflict":

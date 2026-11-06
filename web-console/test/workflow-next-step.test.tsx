@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { rootBlock } from './workflow-root';
 import { nodePresentation } from '../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../src/app/workflows/document/model';
-import type { WorkflowToolSource } from '../../protocol/app-server/v69';
+import type { WorkflowToolSource } from '../../protocol/app-server/v72';
 import type { WorkflowScopePort } from '../src/app/workflows/port';
 import { NextStep } from '../src/app/workflows/ui/editor/NextStep';
 import { ToolCatalogProvider } from '../src/app/workflows/ui/editor/toolCatalog';

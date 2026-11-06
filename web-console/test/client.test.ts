@@ -2,7 +2,7 @@ import {applicationReceipt} from './fixture';
 import {readCut} from './fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v69';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v72';
 import { interactionKey } from '../src/client/contracts';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/errors';
 import { conversation } from '../src/bindings/projection';
@@ -53,7 +53,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 69 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 72 } });
     expect(JSON.stringify(s.client.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -406,13 +406,13 @@ it.each(['preview', 'blocked', 'stale', 'not_found'] as const)('recovery settles
 it('T12 native configuration notifications reject stale versions independently per Session', async () => {
   const s = server(); await s.attached('A', 'B');
   const desired = { input_revision: 'input', attempt: '9007199254740993' };
-  const application = { eligibility: { status: 'unavailable' as const }, scope: 'A', sources: [{ kind: 'user' as const }], version: '9007199254740993', desired, units: { execution_policy: { status: 'applied' as const } }, candidate: null };
+  const application = { eligibility: { status: 'unavailable' as const }, scope: 'A', sources: [{ kind: 'user' as const }], version: '9007199254740993', desired, units: { execution_policy: { status: 'applied' as const } } };
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application:applicationReceipt(application) } });
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: (applicationReceipt(({ ...application, version: '9007199254740992', units: { execution_policy: { status: 'preparing' } } }))) } });
   s.socket.deliver({ jsonrpc: '2.0', method: 'configuration/changed', params: { application: (applicationReceipt(({ ...application, scope: 'B', version: '2' }))) } });
   expect(s.client.getSnapshot().configuration?.A).toEqual(application);
   expect(s.client.getSnapshot().configuration?.B?.version).toBe('2');
-  expect(s.requests.filter(({ request }) => ['configuration/sourceWrite', 'configuration/reconcile', 'session/adoptConfiguration'].includes(request.method))).toHaveLength(0);
+  expect(s.requests.filter(({ request }) => ['configuration/sourceWrite', 'configuration/reconcile'].includes(request.method))).toHaveLength(0);
 });
 
 it('first-submit authority retirement drops a capacity-queued admission before dispatch', async () => {

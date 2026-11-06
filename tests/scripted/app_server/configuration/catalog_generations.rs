@@ -9,9 +9,9 @@ use super::*;
 /// its `local/a` and changes the instructions; the Session's future selection
 /// authority advances (the catalog, `local/a` unavailable) while the Attempt
 /// snapshot does not, and both its Tool proposal and the continuation are
-/// sent with `local/a` and the instructions it froze. After it settles,
-/// `local/c` is selected explicitly and the next Attempt freezes `local/c`
-/// with the still-adopted instructions.
+/// sent with `local/a` and the instructions it froze. Its settlement commits
+/// the staged instructions; `local/c` is then selected explicitly and the
+/// next Attempt freezes `local/c` with the committed instructions.
 #[allow(clippy::too_many_lines)] // one ordered acceptance sequence
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
@@ -25,7 +25,7 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         let host = fixture.manager.configuration_host(&id).unwrap();
         let model = |id: &str| SessionModelConfig::of(ModelRef::parse(id).unwrap());
-        issue459_adopt_instructions(&fixture, "issue459 adopted instructions").await;
+        issue459_apply_instructions(&fixture, "issue459 adopted instructions").await;
         fixture
             .manager
             .set_model(&id, model("local/a"))
@@ -38,8 +38,6 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
             .capability()
             .tool_registry()
             .clone();
-        let mut eligibility = EligibilityStream::open(&fixture, &id);
-
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
@@ -62,7 +60,11 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
             UnitApplication::Applied,
             "{application:?}"
         );
-        assert!(application.candidate.is_some(), "{application:?}");
+        assert_eq!(
+            application.units[&ApplyUnit::Instructions],
+            UnitApplication::Ready,
+            "{application:?}"
+        );
         // Future selection authority advanced; the admitted Attempt did not.
         assert_eq!(issue459_model_refs(&runtime), ["local/b", "local/c"]);
         assert!(runtime.model_view().unavailable.is_some());
@@ -100,8 +102,7 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
             Some(invocation.view().primary)
         );
 
-        eligibility.until(AdoptionEligibility::Busy).await;
-        eligibility.until(AdoptionEligibility::Eligible).await;
+        applied(&fixture, 0).await;
         let view = fixture
             .manager
             .set_model(&id, model("local/c"))
@@ -109,7 +110,7 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
             .unwrap()
             .0;
         assert!(view.unavailable.is_none());
-        settled(&fixture, 0).await;
+        applied(&fixture, 0).await;
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(issue459_text("on c")).unwrap();
         settlement.wait().await;
@@ -120,8 +121,8 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
             (&body["model"], &body["temperature"], &body["seed"]),
             (&json!("c"), &json!(0.25), &json!(7))
         );
-        assert!(bodies[2].contains("issue459 adopted instructions"));
-        assert!(!bodies[2].contains("issue459 new instructions"));
+        assert!(bodies[2].contains("issue459 new instructions"));
+        assert!(!bodies[2].contains("issue459 adopted instructions"));
         assert!(Arc::ptr_eq(
             &tools,
             runtime.runtime_resources().capability().tool_registry()
@@ -249,7 +250,8 @@ impl Issue459Observations {
 /// The two orderings of one race: a generation that removes Profile `fast`,
 /// changes the instructions and admits the Named Agent `reviewer`, and
 /// `session/setModel(fast)` from a Session on `balanced`. The desired Agent
-/// never holds the catalog back and is admitted only by adoption.
+/// never holds the catalog back and commits with its closure; a commit never
+/// overwrites the newer explicit selection.
 #[allow(clippy::too_many_lines)] // both orderings share one setup and one ledger
 async fn issue459_publication_selection_race(selection_first: bool) {
     use serde_json::json;
@@ -276,17 +278,13 @@ async fn issue459_publication_selection_race(selection_first: bool) {
         ),
     )
     .await;
-    let candidate = settled(&fixture, 0).await.candidate.unwrap();
-    fixture
-        .manager
-        .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-        .unwrap();
+    applied(&fixture, 0).await;
     fixture
         .manager
         .set_model(&id, issue459_pinned(Some("balanced")))
         .await
         .unwrap();
-    settled(&fixture, 0).await;
+    applied(&fixture, 0).await;
     let retained = || {
         fixture
             .manager
@@ -346,30 +344,25 @@ async fn issue459_publication_selection_race(selection_first: bool) {
             .0;
         assert!(selected.unavailable.is_none());
         probe.before_catalog_publication.release();
-        let application = settled(&fixture, 0).await;
-        assert_eq!(
-            application.units[&ApplyUnit::Provider],
-            UnitApplication::Applied,
+        let application = applied(&fixture, 0).await;
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit == UnitApplication::Applied),
             "{application:?}"
         );
-        let stale = application.candidate.clone().expect("instructions wait");
-        // One selection commit, then one publication, no partial binding.
-        assert_eq!(stale.expected_binding, binding + 2);
-        assert_eq!(retained(), binding + 2);
-        assert_eq!(
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
-            )
-            .unwrap()
-            .adopted_binding,
-            binding + 2
+        assert!(
+            retained() > binding + 1,
+            "the selection, then the generation"
         );
-        assert_eq!(runtime.runtime_resources().revision(), revision.next());
         assert_eq!(profiles(), ["balanced", "deep"]);
         let view = runtime.model_view();
         assert_eq!(view.configured, issue459_pinned(Some("fast")));
         assert!(view.unavailable.as_deref().unwrap().contains("fast"));
-        // The published removal now refuses the same selection.
+        // The published removal now refuses the same selection, changing
+        // nothing.
+        let before = retained();
         assert!(matches!(
             fixture
                 .manager
@@ -379,53 +372,42 @@ async fn issue459_publication_selection_race(selection_first: bool) {
                 crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
             ))
         ));
-        assert_eq!(retained(), binding + 2);
+        assert_eq!(retained(), before);
         let marker = issue459_pinned(Some("deep"));
         fixture
             .manager
             .set_model(&id, marker.clone())
             .await
             .unwrap();
-        assert!(matches!(
-            fixture
-                .manager
-                .adopt_configuration(&id, &stale.identity, stale.expected_binding),
-            Err(AdoptionError::Conflict)
-        ));
         let observed = observations.through(&marker).await;
-        let kinds: Vec<_> = observed.iter().map(|(kind, _)| *kind).collect();
-        assert_eq!(kinds, ["model", "resources", "model"], "{observed:?}");
+        assert_eq!(observed[0].0, "model", "{observed:?}");
         assert!(observed[0].1.unavailable.is_none());
-        assert!(observed[1].1.unavailable.is_some());
-        assert_eq!(observed[1].1.configured, issue459_pinned(Some("fast")));
-        let recaptured = settled(&fixture, 0).await.candidate.unwrap();
-        assert_eq!(recaptured.expected_binding, binding + 3);
-        assert!(reviewers().is_empty());
-        // The recaptured candidate admits `reviewer` and keeps `deep`.
-        fixture
-            .manager
-            .adopt_configuration(&id, &recaptured.identity, recaptured.expected_binding)
-            .unwrap();
+        assert!(
+            observed.iter().any(|(kind, view)| *kind == "resources"
+                && view.configured == issue459_pinned(Some("fast"))
+                && view.unavailable.is_some()),
+            "{observed:?}"
+        );
+        applied(&fixture, 0).await;
         assert_eq!(reviewers(), ["reviewer"]);
         assert_eq!(runtime.model_view().configured, marker);
-        assert_eq!(retained(), binding + 4);
     } else {
         issue459_edit(&fixture, generation).await;
-        let application = settled(&fixture, 0).await;
-        assert_eq!(
-            application.units[&ApplyUnit::Provider],
-            UnitApplication::Applied,
+        let application = applied(&fixture, 0).await;
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit == UnitApplication::Applied),
             "{application:?}"
         );
-        let candidate = application.candidate.clone().expect("instructions wait");
-        assert_eq!(candidate.expected_binding, binding + 1);
-        assert_eq!(retained(), binding + 1);
-        assert_eq!(runtime.runtime_resources().revision(), revision.next());
+        assert!(runtime.runtime_resources().revision() > revision);
         assert_eq!(profiles(), ["balanced", "deep"]);
         // The unselected removal leaves `balanced` available.
         assert!(runtime.model_view().unavailable.is_none());
         // Linearizes second: the published removal refuses it, changing nothing.
         let view = runtime.model_view();
+        let before = retained();
         assert!(matches!(
             fixture
                 .manager
@@ -436,16 +418,11 @@ async fn issue459_publication_selection_race(selection_first: bool) {
             ))
         ));
         assert_eq!(runtime.model_view(), view);
-        assert_eq!(retained(), binding + 1);
+        assert_eq!(retained(), before);
         assert_eq!(
             fixture.manager.configuration_application(&id).unwrap(),
             application
         );
-        // So the candidate is still current and adopts.
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
         let marker = issue459_pinned(Some("deep"));
         fixture
             .manager
@@ -453,33 +430,37 @@ async fn issue459_publication_selection_race(selection_first: bool) {
             .await
             .unwrap();
         let observed = observations.through(&marker).await;
-        let kinds: Vec<_> = observed.iter().map(|(kind, _)| *kind).collect();
-        assert_eq!(kinds, ["resources", "resources", "model"], "{observed:?}");
-        assert!(observed.iter().take(2).all(|(_, view)| view.configured
-            == issue459_pinned(Some("balanced"))
-            && view.unavailable.is_none()));
-        assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
-            "issue459 raced instructions"
+        assert!(
+            observed[..observed.len() - 1]
+                .iter()
+                .all(
+                    |(_, view)| view.configured == issue459_pinned(Some("balanced"))
+                        && view.unavailable.is_none()
+                ),
+            "{observed:?}"
         );
+        applied(&fixture, 0).await;
         assert_eq!(reviewers(), ["reviewer"]);
         assert_eq!(runtime.model_view().configured, marker);
     }
+    assert_eq!(
+        runtime
+            .runtime_resources()
+            .configuration()
+            .unwrap()
+            .config
+            .agent
+            .instructions,
+        "issue459 raced instructions"
+    );
     assert!(fixture.provider.request_bodies().is_empty());
     fixture.close().await;
 }
 
 /// Issue #459: `session/setModel(fast)` linearizes before the publication
 /// that removes `fast`. The selection commits against the published catalog;
-/// the parked generation is overtaken and recaptured, publishes exactly once
-/// after it and reports `fast` unavailable; the candidate prepared before
-/// the later selection is fenced.
+/// the parked generation is overtaken and recaptured, publishes after it and
+/// reports `fast` unavailable; its commit keeps the later explicit selection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_selection_before_mixed_publication_is_reported_unavailable() {
     Box::pin(bounded(issue459_publication_selection_race(true))).await;
@@ -487,8 +468,7 @@ async fn issue459_selection_before_mixed_publication_is_reported_unavailable() {
 
 /// Issue #459: the publication that removes `fast` linearizes before
 /// `session/setModel(fast)`. The selection is refused against the published
-/// catalog and changes nothing, so the pending Instructions candidate stays
-/// current and adopts.
+/// catalog and changes nothing; the generation's commit stands.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_selection_after_mixed_publication_is_refused_without_effect() {
     Box::pin(bounded(issue459_publication_selection_race(false))).await;
@@ -513,17 +493,13 @@ async fn issue459_pin_fast(fixture: &Fixture) {
         ),
     )
     .await;
-    let candidate = settled(fixture, 0).await.candidate.unwrap();
-    fixture
-        .manager
-        .adopt_configuration(id, &candidate.identity, candidate.expected_binding)
-        .unwrap();
+    applied(fixture, 0).await;
     fixture
         .manager
         .set_model(id, issue459_pinned(Some("fast")))
         .await
         .unwrap();
-    settled(fixture, 0).await;
+    applied(fixture, 0).await;
 }
 
 fn issue459_profile_ids(
@@ -561,7 +537,7 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
         let probe = fixture
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
-        issue459_adopt_instructions(&fixture, "issue459 adopted instructions").await;
+        issue459_apply_instructions(&fixture, "issue459 adopted instructions").await;
         issue459_pin_fast(&fixture).await;
         let ledger = || {
             let binding = fixture
@@ -586,7 +562,13 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
         };
         let good = ledger();
         let failed = |application: &ConfigurationApplication, capabilities_applied: bool| {
-            assert!(application.candidate.is_none(), "{application:?}");
+            assert!(
+                application
+                    .units
+                    .values()
+                    .all(|unit| *unit != UnitApplication::Ready),
+                "{application:?}"
+            );
             assert_eq!(
                 application.units[&ApplyUnit::Capabilities] == UnitApplication::Applied,
                 capabilities_applied,
@@ -705,7 +687,7 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
                 .unwrap()
                 .contains("fast")
         );
-        assert_eq!(runtime.runtime_resources().revision(), good.2.next());
+        assert!(runtime.runtime_resources().revision() > good.2);
         assert!(fixture.provider.request_bodies().is_empty());
         fixture.close().await;
     }))
@@ -715,9 +697,9 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
 /// Issue #459: a valid catalog publishes even when the Capability change of
 /// the same generation fails to prepare. The Session reports its removed
 /// `fast` unavailable and discovers `deep` while the capability closure
-/// stays the adopted one; the unchanged instructions are settled. Selecting
+/// stays the committed one; the unchanged instructions are settled. Selecting
 /// `deep` recaptures the generation, and the Capability change then
-/// prepares and adopts.
+/// prepares and commits automatically.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_failed_capability_preparation_keeps_published_catalog_and_retries() {
     Box::pin(bounded(async {
@@ -748,7 +730,13 @@ async fn issue459_failed_capability_preparation_keeps_published_catalog_and_retr
         })
         .await;
         let application = settled(&fixture, 0).await;
-        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready),
+            "{application:?}"
+        );
         assert_eq!(
             application.units[&ApplyUnit::Provider],
             UnitApplication::Applied,
@@ -796,19 +784,12 @@ async fn issue459_failed_capability_preparation_keeps_published_catalog_and_retr
             .set_model(&id, issue459_pinned(Some("deep")))
             .await
             .unwrap();
-        let retried = settled(&fixture, 0).await;
-        let candidate = retried.candidate.clone().expect("retried capabilities");
-        assert!(
-            matches!(
-                retried.units[&ApplyUnit::Capabilities],
-                UnitApplication::Ready { .. }
-            ),
+        let retried = applied(&fixture, 0).await;
+        assert_eq!(
+            retried.units[&ApplyUnit::Capabilities],
+            UnitApplication::Applied,
             "{retried:?}"
         );
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
         assert!(
             runtime
                 .runtime_resources()
@@ -841,12 +822,11 @@ async fn issue459_failed_capability_preparation_keeps_published_catalog_and_retr
     .await;
 }
 
-/// Issue #459: nothing prepared against older authority can restore it. An
-/// Instructions candidate prepared before a publication that removes the
-/// pinned `fast` is fenced by it and re-prepared over the published
-/// binding. A generation overtaken while parked before its fence never
-/// becomes visible: only the newer one publishes, exactly once, and only its
-/// candidate can adopt.
+/// Issue #459: nothing prepared against older authority can restore it.
+/// Instructions committed before a publication that removes the pinned
+/// `fast` survive it, which keeps the selection explicitly unavailable. A
+/// generation overtaken while parked before its fence never becomes visible:
+/// only the newer one publishes and commits.
 #[allow(clippy::too_many_lines)] // two fencing cases share one ledger
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_older_candidates_and_overtaken_generations_never_restore_authority() {
@@ -859,8 +839,13 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         issue459_pin_fast(&fixture).await;
+        let root_instructions = || {
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
+                .unwrap()
+                .root_agent
+                .instructions
+        };
 
-        // A candidate prepared before the newer publication.
         write(
             &fixture,
             0,
@@ -869,7 +854,7 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
             },
         )
         .await;
-        let older = settled(&fixture, 0).await.candidate.unwrap();
+        applied(&fixture, 0).await;
         let revision = runtime.runtime_resources().revision();
         issue459_edit(&fixture, |document| {
             document["models"]["local/a"]["profiles"]
@@ -879,31 +864,14 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
                 .unwrap();
         })
         .await;
-        let application = settled(&fixture, 0).await;
+        let application = applied(&fixture, 0).await;
         assert_eq!(
             application.units[&ApplyUnit::Provider],
             UnitApplication::Applied,
             "{application:?}"
         );
-        let rebased = application
-            .candidate
-            .clone()
-            .expect("re-prepared instructions");
-        assert_eq!(rebased.expected_binding, older.expected_binding + 1);
-        assert!(matches!(
-            fixture
-                .manager
-                .adopt_configuration(&id, &older.identity, older.expected_binding),
-            Err(AdoptionError::Conflict)
-        ));
         assert_eq!(issue459_profile_ids(&runtime), ["balanced", "deep"]);
-        assert_eq!(runtime.runtime_resources().revision(), revision.next());
-        fixture
-            .manager
-            .adopt_configuration(&id, &rebased.identity, rebased.expected_binding)
-            .unwrap();
-        // Adoption keeps the published catalog and the unavailable selection.
-        assert_eq!(issue459_profile_ids(&runtime), ["balanced", "deep"]);
+        assert!(runtime.runtime_resources().revision() > revision);
         assert!(
             runtime
                 .model_view()
@@ -912,18 +880,9 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
                 .unwrap()
                 .contains("fast")
         );
-        assert_eq!(
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
-            )
-            .unwrap()
-            .root_agent
-            .instructions,
-            "issue459 first instructions"
-        );
+        assert_eq!(root_instructions(), "issue459 first instructions");
 
         // An overtaken generation never becomes visible.
-        let revision = runtime.runtime_resources().revision();
         let profile = |document: &mut toml::Value, name: &str| {
             let mut table = toml::Table::new();
             table.insert("request_params".into(), "{\"temperature\":0.3}".into());
@@ -939,6 +898,7 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
         })
         .await;
         probe.before_catalog_publication.entered().await;
+        let changes = configuration_changes(&runtime).len();
         issue459_edit(&fixture, |document| {
             document["models"]["local/a"]["profiles"]
                 .as_table_mut()
@@ -950,26 +910,16 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
         })
         .await;
         probe.before_catalog_publication.release();
-        let application = settled(&fixture, 0).await;
-        let candidate = application.candidate.clone().expect("newest instructions");
-        assert_eq!(candidate.identity, application.desired);
+        applied(&fixture, 0).await;
         assert_eq!(
             issue459_profile_ids(&runtime),
             ["balanced", "deep", "newest"]
         );
-        assert_eq!(runtime.runtime_resources().revision(), revision.next());
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        assert_eq!(root_instructions(), "issue459 newest instructions");
         assert_eq!(
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
-            )
-            .unwrap()
-            .root_agent
-            .instructions,
-            "issue459 newest instructions"
+            configuration_changes(&runtime).len(),
+            changes + 1,
+            "only the newest generation committed a change"
         );
         assert!(fixture.provider.request_bodies().is_empty());
         fixture.close().await;
@@ -1059,12 +1009,16 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             issue459_set_instructions(document, "issue459 summary instructions 1");
         })
         .await;
-        let application = settled(&fixture, 0).await;
+        let application = applied(&fixture, 0).await;
         assert_eq!(
             application.units[&ApplyUnit::Provider],
             UnitApplication::Applied
         );
-        assert!(application.candidate.is_some(), "{application:?}");
+        assert_eq!(
+            application.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied,
+            "{application:?}"
+        );
         let view = runtime.model_view();
         assert!(view.unavailable.as_deref().unwrap().contains("fast"));
         assert_eq!(view.configured.summary_model, summary_on("local/b"));
@@ -1091,12 +1045,12 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             issue459_set_instructions(document, "issue459 summary instructions 2");
         })
         .await;
-        let application = settled(&fixture, 0).await;
+        // The idle Session commits the prepared instructions by itself.
+        let application = applied(&fixture, 0).await;
         assert_eq!(
             application.units[&ApplyUnit::Provider],
             UnitApplication::Applied
         );
-        let pending = application.candidate.clone().expect("instructions wait");
         let view = runtime.model_view();
         assert!(view.unavailable.as_deref().unwrap().contains("local/b"));
         assert_eq!(
@@ -1114,21 +1068,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .unwrap()
             .0;
         assert!(view.unavailable.is_none());
-        // The Session owner's commit advanced the binding the candidate expected.
-        assert!(matches!(
-            fixture
-                .manager
-                .adopt_configuration(&id, &pending.identity, pending.expected_binding),
-            Err(AdoptionError::Conflict)
-        ));
-        let recaptured = settled(&fixture, 0).await.candidate.unwrap();
-        let model = Box::new(runtime.model_view());
-        assert_eq!(view, *model);
-        assert_eq!(runtime.model_view(), view);
-        fixture
-            .manager
-            .adopt_configuration(&id, &recaptured.identity, recaptured.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         assert_eq!(runtime.model_view(), view);
         assert_eq!(
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(

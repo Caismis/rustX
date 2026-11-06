@@ -105,14 +105,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             ),
         )
         .await;
-        let candidate = settled(&fixture, 0)
-            .await
-            .candidate
-            .expect("the selected Model gained Profiles");
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         fixture
             .manager
             .set_model(&id, pinned("balanced"))
@@ -144,7 +137,13 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             );
         };
         let applied = |application: ConfigurationApplication| {
-            assert!(application.candidate.is_none(), "{application:?}");
+            assert!(
+                application
+                    .units
+                    .values()
+                    .all(|unit| *unit != UnitApplication::Ready),
+                "{application:?}"
+            );
             assert!(
                 application
                     .units
@@ -153,6 +152,76 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
                 "{application:?}"
             );
         };
+
+        // Reasoning metadata publishes normally, with no preparation or
+        // invocation change. The retained Attempt snapshot stays identical.
+        for order in [
+            Some(["fast", "balanced", "creative"]),
+            Some(["creative", "fast", "balanced"]),
+            None,
+        ] {
+            let before = runtime.runtime_resources().revision();
+            let binding =
+                crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                    &runtime,
+                )
+                .unwrap()
+                .adopted_binding;
+            let catalog = runtime.model_read_source().catalog_source();
+            let model_position = (0..catalog.model_count() as u64)
+                .find(|position| catalog.model_at(*position).unwrap().model.as_str() == "local/a")
+                .unwrap();
+            let mut mutation = model(
+                "balanced",
+                &[balanced.clone(), fast.clone(), creative.clone()],
+            );
+            let ConfigMutation::Model {
+                authored: Some(definition),
+                ..
+            } = &mut mutation
+            else {
+                unreachable!()
+            };
+            definition.reasoning_profile_order =
+                order.map(|ids| ids.map(ModelProfileId::new).into());
+            write(&fixture, 0, mutation).await;
+            applied(settled(&fixture, 0).await);
+            published((
+                Some("balanced"),
+                &[("balanced", None), ("creative", None), ("fast", Some(64))],
+            ));
+            assert_eq!(runtime.runtime_resources().revision(), before.next());
+            assert!(matches!(
+                fixture
+                    .manager
+                    .select_catalog_model(
+                        &id,
+                        crate::model::session::CatalogModelSelection {
+                            binding_revision: binding,
+                            model_position,
+                            profile_position: Some(0),
+                        }
+                    )
+                    .await,
+                Err(ModelSelectionError::Model(
+                    crate::runtime::conversation_runtime::ModelUpdateError::Conflict
+                ))
+            ));
+            let catalog = runtime.model_read_source().catalog_source();
+            assert_eq!(
+                catalog.profile_at(model_position, 0).unwrap().id.as_str(),
+                "balanced"
+            );
+            let full = runtime.model_catalog();
+            assert_eq!(
+                full.models
+                    .iter()
+                    .find(|row| row.model.to_string() == "local/a")
+                    .unwrap()
+                    .reasoning_profile_order,
+                order.map(|ids| ids.map(ModelProfileId::new).to_vec())
+            );
+        }
 
         // An edited unselected Profile is published.
         let fast_edited: Authored = ("fast", Some(32), json!({"temperature": 1.5, "top_p": 0.9}));
@@ -334,7 +403,13 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
         )
         .await;
         let application = settled(&fixture, 0).await;
-        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready),
+            "{application:?}"
+        );
         let resident = fixture
             .manager
             .configuration_runtime(&id)
@@ -396,13 +471,13 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
     .await;
 }
 
-/// Issue #459: recovery leaves ordinary adoption intact. A selected Profile
-/// whose parameters change (and stays valid) is still prepared as a
-/// candidate; the live invocation is not replaced, the admitted Attempt keeps
-/// its frozen parameters, and a selection committed after preparation
-/// overtakes the candidate's expected binding so it can no longer adopt.
+/// Issue #459: a selected Profile whose parameters change (and stays valid)
+/// is prepared and staged; the live invocation is not replaced while the
+/// admitted Attempt keeps its frozen parameters, and a selection committed
+/// after preparation supersedes the staged candidate so a commit can never
+/// overwrite it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
+async fn issue459_changed_selected_profile_is_staged_and_never_overwrites_selection() {
     use serde_json::json;
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
@@ -425,11 +500,7 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
             ),
         )
         .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         fixture
             .manager
             .set_model(&id, issue459_pinned(Some("balanced")))
@@ -461,14 +532,10 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
         )
         .await;
         let application = settled(&fixture, 0).await;
-        let candidate = application
-            .candidate
-            .clone()
-            .expect("a changed invocation is prepared");
         assert!(
             matches!(
                 application.units[&ApplyUnit::Provider],
-                UnitApplication::Ready { .. }
+                UnitApplication::Ready
             ),
             "{application:?}"
         );
@@ -490,22 +557,20 @@ async fn issue459_changed_selected_profile_still_needs_fenced_adoption() {
             serde_json::from_str(&fixture.provider.request_bodies()[0]).unwrap();
         assert_eq!(body["temperature"], json!(0.5));
 
-        // A selection committed after preparation advances the binding the
-        // candidate expected: it cannot overwrite that selection.
+        // Settlement committed the staged invocation for future work; a
+        // later explicit selection then stands, and no commit overwrites it.
+        applied(&fixture, 0).await;
+        assert_eq!(
+            runtime.model_view().effective.unwrap().request_params["temperature"],
+            json!(0.7)
+        );
         let model = fixture
             .manager
             .set_model(&id, issue459_pinned(Some("fast")))
             .await
             .unwrap()
             .0;
-        assert!(matches!(
-            fixture.manager.adopt_configuration(
-                &id,
-                &candidate.identity,
-                candidate.expected_binding
-            ),
-            Err(AdoptionError::Conflict)
-        ));
+        applied(&fixture, 0).await;
         assert_eq!(runtime.model_view(), model);
         assert_eq!(
             model.effective.unwrap().request_params["temperature"],
@@ -552,11 +617,7 @@ async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authori
             ),
         )
         .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         fixture
             .manager
             .set_model(&id, issue459_pinned(Some("balanced")))
@@ -587,7 +648,13 @@ async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authori
         );
         probe.before_catalog_publication.release();
         let application = settled(&fixture, 0).await;
-        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready),
+            "{application:?}"
+        );
         assert!(
             application
                 .units
@@ -669,11 +736,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             issue459_profiles(&authored, "deep", &[fast.clone(), deep.clone()]),
         )
         .await;
-        let candidate = settled(&fixture, 0).await.candidate.unwrap();
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        applied(&fixture, 0).await;
         let summary_on = |model: &str| AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(model).unwrap(),
             profile: None,
@@ -829,7 +892,13 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             .unwrap();
         let application = settled(&fixture, 0).await;
         let published_revision = application.desired.input_revision.clone().unwrap();
-        assert!(application.candidate.is_none(), "{application:?}");
+        assert!(
+            application
+                .units
+                .values()
+                .all(|unit| *unit != UnitApplication::Ready),
+            "{application:?}"
+        );
         assert_eq!(
             application.units[&ApplyUnit::ProcessBindings],
             UnitApplication::ProcessRestart
@@ -923,7 +992,7 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
         assert_eq!(again.desired, application.desired);
         assert!(Arc::ptr_eq(&after, &runtime.runtime_resources()));
 
-        // Adopting a real context change moves the baseline forward.
+        // Committing a real context change moves the baseline forward.
         write(
             &fixture,
             0,
@@ -932,14 +1001,7 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             },
         )
         .await;
-        let candidate = settled(&fixture, 0)
-            .await
-            .candidate
-            .expect("an instruction change is prepared");
-        fixture
-            .manager
-            .adopt_configuration(&id, &candidate.identity, candidate.expected_binding)
-            .unwrap();
+        let committed = applied(&fixture, 0).await;
         let adopted = runtime.runtime_resources().configuration().unwrap().clone();
         let binding = retained();
         assert_ne!(
@@ -947,9 +1009,9 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             old.authored.source_revisions
         );
         assert_eq!(adopted.authored.source_revisions, binding.source_revisions);
-        // A context adoption composes the Instructions and Provider units at
+        // A context commit composes the Instructions and Provider units at
         // its revision; units it did not compose keep theirs.
-        let revision = candidate.identity.input_revision.unwrap();
+        let revision = committed.desired.input_revision.unwrap();
         for unit in [ApplyUnit::Instructions, ApplyUnit::Provider] {
             assert_eq!(
                 adopted.authored.component_revisions[&unit], revision,
@@ -971,7 +1033,7 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
             adopted.authored.effective.models.as_ref().unwrap()["local/b"].max_output_tokens,
             1024
         );
-        // Adoption re-resolves through its own registry; the invocation's
+        // The commit re-resolves through its own registry; the invocation's
         // value is unchanged.
         assert_eq!(runtime.model_snapshot().view(), invocation.view());
         fixture.close().await;

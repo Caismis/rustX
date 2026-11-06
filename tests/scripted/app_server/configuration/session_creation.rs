@@ -620,13 +620,15 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 retained.config().agent.instructions
             );
             publication.before_catalog_publication.release();
-            let application = session_settled(&f, &id).await;
-            assert!(matches!(
+            // The catalog publishes, then the desired instructions commit
+            // automatically; the Session's own selection is never replaced.
+            let application = session_applied(&f, &id).await;
+            assert_eq!(
                 application.units[&ApplyUnit::Instructions],
-                UnitApplication::Ready { .. }
-            ));
+                UnitApplication::Applied
+            );
             let published = f.manager.sessions.configuration_bindings.lock().unwrap()[&id].clone();
-            assert_eq!(published.binding_revision, retained.binding_revision + 1);
+            assert!(published.binding_revision > retained.binding_revision);
             assert_eq!(
                 runtime.configuration_cut().binding_revision,
                 published.binding_revision
@@ -640,7 +642,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                     .config
                     .agent
                     .instructions,
-                retained.config().agent.instructions
+                "configuration B"
             );
             assert_eq!(
                 f.manager.load(&id, None).await.unwrap().incarnation_id(),
