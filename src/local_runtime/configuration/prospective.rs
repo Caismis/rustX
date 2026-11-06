@@ -151,6 +151,13 @@ impl ProspectiveSessionConfig {
             && self.root_agent_project_files == other.root_agent_project_files
     }
 
+    /// Invocation overrides may select any eligible discovered Skill, including
+    /// one outside the statically selected dependency closure. Catalog changes
+    /// still need immutable publication, but never physical preparation.
+    pub(crate) fn same_skill_catalog(&self, other: &Self) -> bool {
+        self.skill_discovery == other.skill_discovery
+    }
+
     /// Whether every invocation an Attempt of this Session would freeze is
     /// effectively unchanged: the primary and explicit Summary selection,
     /// those of every admitted named Agent and of every direct Model node of

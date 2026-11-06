@@ -60,7 +60,13 @@ only. An explicitly configured non-Skill input keeps its own owner's semantics.
 A body/asset edit or semantically identical YAML produces no configuration
 revision, capability preparation or `configuration_applied` fact. Changes outside
 the Root/admitted Named Agent/Workflow Skill selection closure do not prepare
-Session capabilities. Root dependency preparation merges only Root-selected
+Session capabilities. The inert discovery catalog still publishes at the same
+fenced safe boundary, so future invocation overrides observe additions, edits,
+disabling and removal. This metadata publication shares existing Tool/environment
+owners, preserves CapabilityRevision and records no effective configuration fact;
+admitted Attempts retain their original catalog. The capability coordinator retains
+that published catalog for subsequent live-source recovery. Root dependency
+preparation merges only Root-selected
 Skills; a child prepares only its frozen selected declarations through the
 existing supervised EnvironmentStore. Unselected conflicting declarations cannot
 start package managers or fail an unrelated Agent's environment.

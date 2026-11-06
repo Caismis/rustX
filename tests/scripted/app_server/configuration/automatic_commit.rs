@@ -1704,6 +1704,128 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
     .await;
 }
 
+/// Invocation overrides read the current inert catalog, even when no profile
+/// selects the changed Skill. Existing Attempt captures keep the old catalog;
+/// publication neither prepares dependencies nor records an effective change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unselected_skill_catalog_updates_future_overrides_without_preparation_or_facts() {
+    bounded(async {
+        use crate::runtime::subagent::{
+            SubagentInvocationOverride, SubagentName, SubagentResolution,
+            SubagentResolutionError, SubagentResolver,
+        };
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let agents = workspace.join(".agents/agents");
+        let skills = workspace.join(".agents/skills");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.toml"),
+            "description='Review'\ninstructions='Review the task'\nskills=[]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\nagents=['reviewer']\nskills=[]\n",
+        )
+        .unwrap();
+        let skill = |name: &str, description: &str, disabled: bool, pin: &str| {
+            std::fs::create_dir_all(skills.join(name)).unwrap();
+            std::fs::write(skills.join(name).join("SKILL.md"), format!(
+                "---\nname: {name}\ndescription: {description}\ndisable-model-invocation: {disabled}\nmetadata:\n  rustx.python-dependencies: '{{\"rustx-review-must-not-install\":\"{pin}\"}}'\n---\nbody\n"
+            )).unwrap();
+        };
+        skill("idle", "Original", false, "1.0");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let old = runtime.runtime_resources();
+        let capability_revision = old.capability().revision();
+        let facts = configuration_changes(&runtime).len();
+        let resolve = |resources: &crate::runtime::RuntimeResourceSnapshot, name: &str| {
+            let agent = SubagentName::parse("reviewer").unwrap();
+            let invocation = SubagentInvocationOverride {
+                skills: Some(vec![name.into()]),
+                ..Default::default()
+            };
+            let model = runtime.model_state_for_test();
+            SubagentResolver::resolve(&SubagentResolution {
+                resources,
+                agent: &agent,
+                attempt_model: model.config(),
+                models: &resources.configuration().unwrap().models,
+                invocation: Some(&invocation),
+            })
+        };
+        let reconcile = || async {
+            fixture.manager.reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+            ).await.unwrap();
+            settled(&fixture, 0).await
+        };
+        assert_eq!(resolve(&old, "idle").unwrap().skills[0].catalog_entry.description, "Original");
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        skill("idle", "Updated", false, "2.0");
+        skill("new-skill", "New", false, "1.0");
+        let staged = reconcile().await;
+        assert_eq!(staged.units[&ApplyUnit::Instructions], UnitApplication::Ready);
+        assert!(Arc::ptr_eq(&old, &runtime.runtime_resources()));
+        assert_eq!(runtime.capability().current_snapshot().skills(), old.capability().skills());
+        skill("idle", "Latest", false, "3.0");
+        let latest = reconcile().await;
+        assert_ne!(latest.desired, staged.desired);
+        assert!(Arc::ptr_eq(&old, &runtime.runtime_resources()));
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[0].release();
+        settlement.wait().await;
+        applied(&fixture, 0).await;
+        let updated = runtime.runtime_resources();
+        let idle = resolve(&updated, "idle").unwrap();
+        assert_eq!(idle.skills[0].catalog_entry.description, "Latest");
+        assert_eq!(idle.skills[0].dependencies.python["rustx-review-must-not-install"], "3.0");
+        assert_eq!(resolve(&updated, "new-skill").unwrap().skills[0].catalog_entry.description, "New");
+        assert_eq!(resolve(&old, "idle").unwrap().skills[0].catalog_entry.description, "Original");
+        assert!(matches!(resolve(&old, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
+        assert_eq!(runtime.capability().current_snapshot().skills(), updated.capability().skills());
+        runtime.refresh_runtime_catalogs().await.unwrap();
+        assert_eq!(resolve(&runtime.runtime_resources(), "idle").unwrap().skills, idle.skills);
+        skill("idle", "Disabled", true, "3.0");
+        std::fs::remove_dir_all(skills.join("new-skill")).unwrap();
+        reconcile().await;
+        applied(&fixture, 0).await;
+        let removed = runtime.runtime_resources();
+        assert!(matches!(resolve(&removed, "idle"), Err(SubagentResolutionError::SkillNotModelVisible { .. })));
+        assert!(matches!(resolve(&removed, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
+        assert_eq!(removed.capability().revision(), capability_revision);
+        assert_eq!(configuration_changes(&runtime).len(), facts);
+        assert!(removed.capability().python_environment().is_none());
+        fixture.manager.unload(&fixture.sessions[0].active_conversation_id).await.unwrap();
+        skill("cold-skill", "Added while cold", false, "1.0");
+        let mut changes = fixture.manager.configuration_changes();
+        fixture.manager.reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: workspace.clone(),
+            },
+        ).await.unwrap();
+        while !fixture.manager.applications.is_deferred(id.as_ref()) {
+            changes.changed().await.unwrap();
+        }
+        assert!(fixture.manager.configuration_runtime(&id).is_none());
+        fixture.manager.load(&id, None).await.unwrap();
+        applied(&fixture, 0).await;
+        let reloaded = fixture.manager.configuration_runtime(&id).unwrap();
+        let cold = reloaded.runtime_resources();
+        assert_eq!(resolve(&cold, "cold-skill").unwrap().skills[0].catalog_entry.description, "Added while cold");
+        assert!(matches!(resolve(&cold, "idle"), Err(SubagentResolutionError::SkillNotModelVisible { .. })));
+        assert_eq!(configuration_changes(&reloaded).len(), facts);
+        assert!(cold.capability().python_environment().is_none());
+        fixture.close().await;
+    }).await;
+}
+
 /// The Model domain compares the invocations that run, not the Session's
 /// client view: a parameter change of the model only a delegated Agent
 /// selects and a provider endpoint move under unchanged selections are each

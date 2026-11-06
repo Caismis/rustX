@@ -2245,6 +2245,71 @@ impl CapabilityCoordinator {
         self.commit_candidate(candidate, Some(publication), true)
     }
 
+    /// Publish a context-only generation's inert Skill catalog and root
+    /// instructions under the same runtime authority and lifecycle grant as
+    /// ordinary publication. Physical owners and `CapabilityRevision` stay fixed.
+    /// Runtime catalog recovery must subsequently use these admitted definitions,
+    /// rather than restoring the catalog from before this context commit.
+    pub(crate) fn try_publish_context(
+        &self,
+        publication: &RuntimeCapabilityPublication,
+        context: &CapabilitySnapshot,
+        agent: &crate::local_runtime::config::AgentProfileDocument,
+    ) -> Result<(), CapabilityCommitError> {
+        let mut state = self.inner.state.lock().expect("capability state");
+        if !Arc::ptr_eq(&self.inner, &publication.coordinator) {
+            return Err(CapabilityCommitError::RuntimePublicationRequired);
+        }
+        let lifecycle = state
+            .conversation_lifecycle
+            .clone()
+            .ok_or(CapabilityCommitError::RuntimePublicationRequired)?;
+        if context.revision() != state.revision {
+            return Err(CapabilityCommitError::StaleCandidate {
+                prepared_from: context.revision(),
+                current: state.revision,
+            });
+        }
+        lifecycle
+            .try_admit_running_commit(|_admission| {
+                let mut inputs = self
+                    .inner
+                    .resource_inputs
+                    .lock()
+                    .expect("capability inputs");
+                inputs
+                    .agent_activation
+                    .profile
+                    .instructions
+                    .clone_from(&agent.instructions);
+                inputs
+                    .agent_activation
+                    .profile
+                    .agents_md
+                    .clone_from(&agent.agents_md);
+                if let Some(profile) = context.resolved_profile() {
+                    inputs
+                        .agent_activation
+                        .project_files
+                        .clone_from(&profile.project_instructions.files);
+                }
+                state.snapshot = Arc::new(
+                    state
+                        .snapshot
+                        .as_ref()
+                        .clone()
+                        .with_skills(context.skills().clone())
+                        .with_resolved_profile(context.resolved_profile().cloned().map(Arc::new)),
+                );
+            })
+            .map_err(|refusal| match refusal {
+                crate::runtime::types::NativeAdmissionRefusal::Busy => CapabilityCommitError::Busy,
+                crate::runtime::types::NativeAdmissionRefusal::Closed(_) => {
+                    CapabilityCommitError::ConversationInactive
+                }
+            })
+    }
+
     fn commit_with_authority(
         &self,
         candidate: PreparedCapabilityCandidate,
