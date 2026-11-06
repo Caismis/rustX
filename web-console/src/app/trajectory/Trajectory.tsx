@@ -9,7 +9,7 @@ import { WorkflowNodeReadInspector, TrajectoryInspector, inspectorTabs } from '.
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
 import type { TrajectoryRowActions } from './TrajectoryRow';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
-import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, ledgerRows, rowOwnsKey, isInspectable, type InspectableDisplayItem, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
+import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, ledgerRows, withHistoryGaps, rowOwnsKey, isInspectable, type InspectableDisplayItem, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { searchItems } from './search';
 import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
@@ -38,7 +38,7 @@ function defaultToolRequestWidth(splitWidth: number): number {
 export interface TrajectoryProps {
   cache: TraceCache;
   onLatest?: () => void;
-  loadEarlier: () => void;
+  loadEarlier: (gapBefore?: string) => void;
   onSelect: (id?: string) => void;
   onLoadDetail: (id: string) => void;
 }
@@ -74,7 +74,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   const workflowMap = useMemo(() => workflowCalls(records), [records]);
   const workflowRoots = useMemo(() => [...new Map([...workflowMap.values()].map(root => [root.id, root])).values()], [workflowMap]);
   const { nodes: workflowNodes, retry: retryWorkflowNodes } = useWorkflowNodes(cache, workflowRoots, openedWorkflows);
-  const rows = useMemo(() => withWorkflowNodes(ledgerRows(tx, projection, visible, collapsedTurns, matches !== null), workflowMap, openedWorkflows, workflowNodes), [tx, projection, visible, collapsedTurns, matches, workflowMap, openedWorkflows, workflowNodes]);
+  const rows = useMemo(() => withHistoryGaps(withWorkflowNodes(ledgerRows(tx, projection, visible, collapsedTurns, matches !== null), workflowMap, openedWorkflows, workflowNodes), records, cache.gaps), [tx, projection, visible, collapsedTurns, matches, workflowMap, openedWorkflows, workflowNodes, records, cache.gaps]);
   const selectionItems = useMemo(() => displayUniverse(allItems, [...visible, ...rows.flatMap(row => row.item ? [row.item] : [])]), [allItems, visible, rows]);
   const matchingOwners = useMemo(() => matchedRecordIds(allItems, matches), [allItems, matches]);
   const timelineModel = useMemo(() => trajectoryTimeline(tx, projection, mode), [tx, projection, mode]);
@@ -130,8 +130,12 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   useLayoutEffect(() => {
     if (selection && selectedItem) {
       const active = document.activeElement as HTMLElement | null;
-      if (focusedDisplay.current === selection.display_key && (active === document.body || active?.dataset.displayKey === selection.display_key)) setPendingFocus(selectedItem.display_key);
-      if (selection.display_key !== selectedItem.display_key) setSelection({ ...selection, display_key: selectedItem.display_key });
+      const moved = selection.display_key !== selectedItem.display_key;
+      if (focusedDisplay.current === selection.display_key) {
+        if (moved && (active === document.body || active?.dataset.displayKey === selection.display_key)) setPendingFocus(selectedItem.display_key);
+        else if (active === document.body) ledger.current?.restoreFocus(selectedItem.display_key);
+      }
+      if (moved) setSelection({ ...selection, display_key: selectedItem.display_key });
     }
   }, [selection, selectedItem]);
   const activeKey = selection?.display_key;
@@ -192,7 +196,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   }}>
     <div className={css.toolbar} role="toolbar" aria-label={tx('trajectory:toolbar.aria')}>
       <div className={css.toolbarActions}>
-        {cache.located && onLatest && <button type="button" className={css.action} onClick={() => { select(); onLatest(); }}>{tx('agent:agent-transcript.return-to-latest')}</button>}
+        {cache.located && onLatest && <button type="button" className={css.action} onClick={() => { select(); ledger.current?.followTail(); onLatest(); }}>{tx('agent:agent-transcript.return-to-latest')}</button>}
         <button type="button" className={css.toggle} aria-label={tx('trajectory:toolbar.use-actual-duration')} aria-pressed={mode === 'duration'}
           title={mode === 'duration' ? tx('trajectory:toolbar.use-equal-width') : tx('trajectory:toolbar.use-actual-duration')}
           onClick={() => { setMode(mode === 'duration' ? 'sequence' : 'duration'); setRange(null); }}>

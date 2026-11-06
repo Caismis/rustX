@@ -312,6 +312,8 @@ export function selectionOf(item: InspectableDisplayItem): TrajectorySelection {
 export interface TrajectoryLedgerRow {
   display_key: string;
   kind: 'semantic' | 'marker' | 'structure' | 'summary' | 'history';
+  /** A middle boundary loads its own native continuation, not the oldest page. */
+  historyBefore?: string;
   height: 30 | 20 | 10;
   item?: InspectableDisplayItem;
   turn?: TurnStructure;
@@ -327,6 +329,24 @@ export interface TrajectoryLedgerRow {
   callsOwner?: string;
   /** End the workflow's visual branch on its last loaded node, including virtual rows. */
   workflowLast?: boolean;
+}
+
+export function withHistoryGaps(rows: TrajectoryLedgerRow[], records: readonly TraceRecord[], gaps: readonly { before: string }[] = []): TrajectoryLedgerRow[] {
+  if (!gaps.length) return rows;
+  const positions = new Map(records.map((record, index) => [record.id, index]));
+  const insertions = new Map<number, TrajectoryLedgerRow[]>();
+  for (const gap of gaps) {
+    const boundary = positions.get(gap.before);
+    if (boundary === undefined) continue;
+    const index = rows.findIndex(row => {
+      const owner = row.item?.owner_record_id ?? row.callsOwner;
+      return owner !== undefined && (positions.get(owner) ?? -1) >= boundary;
+    });
+    if (index >= 0) insertions.set(index, [...(insertions.get(index) ?? []), {
+      display_key: displayKey('history-gap', gap.before), historyBefore: gap.before, kind: 'history', height: 30, turnStart: false,
+    }]);
+  }
+  return rows.flatMap((row, index) => [...(insertions.get(index) ?? []), row]);
 }
 
 export function ledgerRows(tx: Translate, projection: TrajectoryProjection, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {

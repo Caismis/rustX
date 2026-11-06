@@ -194,7 +194,7 @@ const releaseChildObservation = new URL(location.href).searchParams.has('subagen
 if (new URL(location.href).searchParams.has('parent-messages')) childParentMessages(server);
 if (new URL(location.href).searchParams.has('message-attachments')) messageAttachments(server);
 if (new URL(location.href).searchParams.has('trace-live')) liveTrace(server);
-if (new URL(location.href).searchParams.has('trace-following')) traceFollowing(server);
+if (new URL(location.href).searchParams.has('trace-following')) traceFollowing(server, new URL(location.href).searchParams.has('trace-history'));
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 if (new URL(location.href).searchParams.has('child-message-continuation')) childMessageContinuation(server);
 let nativeDefault = 'fixture/native';

@@ -38,7 +38,7 @@ it('native root location selects an unloaded record, retains its interval throug
   expect(new TextDecoder().decode(range.bytes)).toBe(original);expect(range.next).toBeUndefined();
   expect(server.requests.filter(row=>row.request.method==='conversation/checkpointValueRead')).toHaveLength(1);
   const refreshed = refreshTrace(landed, { records: [traceTool(999)], next_cursor: 'trace:999' });
-  expect(refreshed.page.records.map(record => record.id)).toEqual(['trace:7']);
+  expect(refreshed.page.records.map(record => record.id)).toEqual(['trace:7', 'trace:999']);
   expect(refreshed.selection?.id).toBe('trace:7');
   server.handlers.set('session/trace', () => ({ type: 'trace', page: { read_cut: rootCut(), records: [traceTool(999)] } }));
   await server.client.returnToLatestTrace('A');
@@ -65,7 +65,7 @@ it('child location uses only the registered child authority and survives live up
   server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut: childCut, records: [traceTool(999)], next_cursor: null } }));
   expect(await reader.locate(locator)).toBe(true); await reader.refresh();
   expect(reader.snapshot().selection?.id).toBe('trace:7');
-  expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:7']);
+  expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:7', 'trace:999']);
   await reader.latest();
   expect(reader.snapshot().located).toBeUndefined();
   expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:999']);
@@ -89,12 +89,12 @@ it('no execution evidence does not select a neighbouring or proposed call', asyn
   await expect(server.client.locateToolTrace('A', locator)).rejects.toThrow('no native execution record');
   expect(server.client.getSnapshot().views.A.trace?.selection).toBeUndefined();
 });
-it('located records still receive native lifecycle repairs without concatenating a discontinuous latest page', () => {
+it('located records receive native lifecycle repairs while disjoint live events append', () => {
   const record = traceTool(7, { state: 'running' });
   const cache = selectTrace({ ...replaceTrace({ records: [record] }), located: true as const }, record.id);
   const next = refreshTrace(cache, { records: [traceTool(999)] }, [{ ...record, state: 'completed' }]);
   expect(next.selection?.state).toBe('completed');
-  expect(next.page.records.map(row => row.id)).toEqual(['trace:7']);
+  expect(next.page.records.map(row => row.id)).toEqual(['trace:7', 'trace:999']);
 });
 it('a root tool landing resumes live updates when the latest page overlaps its interval', async () => {
   await setup();
@@ -113,10 +113,10 @@ it('a root tool landing resumes live updates when the latest page overlaps its i
   const next = server.client.getSnapshot().views.A.trace!;
   expect(next.page.records.map(row => row.id)).toEqual(['trace:7', 'trace:8']);
   expect(next.selection).toMatchObject({ id: running.id, state: 'completed' });
-  expect(next.epoch).toBe(epoch); expect(next.located).toBeUndefined();
+  expect(next.epoch).toBe(epoch); expect(next.located).toBe(true);
   records = [traceTool(99)];
   await publish();
-  expect(server.client.getSnapshot().views.A.trace!.page.records.map(row => row.id)).toEqual(['trace:99']);
+  expect(server.client.getSnapshot().views.A.trace!.page.records.map(row => row.id)).toEqual(['trace:7', 'trace:8', 'trace:99']);
   expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
 });
 it('a child tool landing resumes live updates through the same native overlap', async () => {
@@ -129,7 +129,7 @@ it('a child tool landing resumes live updates through the same native overlap', 
     await reader.refresh();
     expect(reader.snapshot().page.records.map(row => row.id)).toEqual(['trace:7', 'trace:8']);
     expect(reader.snapshot().selection?.id).toBe('trace:7');
-    expect(reader.snapshot().located).toBeUndefined();
+    expect(reader.snapshot().located).toBe(true);
   } finally { reader.retire(); }
 });
 it('lifecycle-only interest pages cannot resume or extend a historical landing', () => {

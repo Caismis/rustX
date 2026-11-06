@@ -909,7 +909,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "3ae507ef81a790e0817f6f5c0f1934b525e3af789659ffc30afc712e1404eca4"
+      "local_sha256": "442ee8775f23f421857793057f9b73bf68c1f2551223ba357752ed961f47f216"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -1081,7 +1081,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "83261e42850431be4ec512f9ae0bab1a05328f9e2042086cdffa0675b8afd3e0",
+      "local_sha256": "89d66f5f7c87c4b0a6b27e23546f5422aa8e7438f06e195965b639ac0a0b3355",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -4215,7 +4215,7 @@
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream": "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
       "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1",
-      "treatment": "Adapts the Harness virtual ledger to exact rustX native focus, Turn/Step ownership and structural seats. rustX owns the loaded reading window, prepend anchors, composer clearance and native scroll extent. Virtualization initializes from the current viewport offset when enabled, preserving off-tail reading and tail following. Original upstream sources and MIT attribution are retained.",
+      "treatment": "Adapts the Harness virtual ledger to exact rustX native focus, Turn/Step ownership and structural seats. rustX owns the loaded reading window, prepend anchors, composer clearance and native scroll extent. Virtualization initializes from the current viewport offset when enabled, preserving off-tail reading and tail following. Original upstream sources and MIT attribution are retained. Native middle-history boundaries retain the visible reading anchor while live records continue to append.",
       "destination": "web-console/src/app/trajectory/TrajectoryLedger.tsx",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -4239,7 +4239,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "46d95e91f0b58e25f729a57d5288d41f0c31f7ef2c583969953a643ede062e7c"
+      "local_sha256": "70a6476da33049b680ba027eb30b13460ed7a56c491d962615d810db52482be0"
     },
     {
       "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",

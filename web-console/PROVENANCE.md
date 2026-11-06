@@ -2,11 +2,16 @@
 
 Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
 uses `ui-trajectory/src/client/TrajectoryTable.tsx`: location and reading position
-remain independent of live appends. Root and child rustX Trace caches resume
-following when the native latest page overlaps a located interval, retaining
-selection, detail readers and the interval epoch. Disjoint historical pages
-remain intact until an explicit return to latest; lifecycle-only interest pages
-repair existing rows without extending the interval or releasing that location.
+remain independent of live appends. Root and child rustX Trace caches keep
+updating throughout historical navigation, retaining loaded records, selection,
+detail readers and the navigation epoch. Disjoint native intervals retain their
+own bounded history continuation between the ranges; loading a middle boundary
+never replaces the latest tail. Lifecycle-only interest pages repair existing
+rows without extending the ledger. The ledger follows appends only at the tail;
+reading elsewhere, including loading a middle boundary, retains the visible
+row and its viewport offset. Live row refreshes never scroll to an unchanged
+selection; replacement DOM nodes recover keyboard focus with preventScroll,
+including when appends enable virtualization.
 
 ## Bash execution-reason summaries (2026-11-06)
 
