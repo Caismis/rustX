@@ -10,6 +10,19 @@ import { OfficePreviewCache } from './cache.ts';
 
 type SourceBytes = { data: Uint8Array; file?: DocumentResult['file']; version?: string };
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+/** Only the request's wait is cancellable. Its parser has already retired;
+ * the shared converter warmup remains owned by the Host until disposal. */
+async function waitForWarmup(warming: Promise<void>, signal: AbortSignal): Promise<void> {
+  let abort!: () => void;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      abort = () => reject(new Error('obsolete'));
+      signal.addEventListener('abort', abort, { once: true });
+      void warming.then(resolve, reject);
+      if (signal.aborted) abort();
+    });
+  } finally { signal.removeEventListener('abort', abort); }
+}
 /** One Host lifetime owns conversion reuse and its bounded successful PDFs. */
 export class OfficeDocuments {
   private readonly cache = new OfficePreviewCache();
@@ -85,7 +98,7 @@ export class OfficeDocuments {
     } finally { cleanup(); await worker.terminate(); worker.removeAllListeners(); }
     // Admission/parse never grants authority for conversion or publication. An
     // exact reread checks mutable bytes, mapping, root and attachment again.
-    await warming;
+    await waitForWarmup(warming, signal);
     await reauthorize();
     const pdf = await this.converter.render(bytes, extension, signal);
     await reauthorize();

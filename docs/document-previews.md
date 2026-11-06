@@ -173,6 +173,12 @@ loading completion.
 Host retirement aborts parser/converter work. Its slot is held until the worker
 terminates and the process pipes close and temporary directory cleanup completes.
 There are no automatic retries or unknown-outcome conversion joins.
+Converter startup belongs to the Host and may overlap request-owned OOXML
+preflight. After its parser has terminated, a cancelled request stops waiting
+for startup and releases document admission immediately. The same warming slot
+remains available to the next request; Host close still retires and awaits it.
+Once a request starts rendering, cancellation retains admission until the
+converter's physical retirement and private-file cleanup finish.
 
 Physical settlement failures preserve the owner whose obligation is unknown:
 
@@ -235,7 +241,8 @@ schema, authority or filesystem policy changes.
 
 ## Office boundary
 
-The Host preflights OOXML in a Node worker before starting LibreOffice. VBA,
+The Host preflights OOXML in a Node worker before submitting document bytes to
+LibreOffice; its Host-owned converter may warm concurrently. VBA,
 ActiveX, embeddings, external links/relationships and DTDs are rejected. Only
 DOCX and PPTX are submitted to the converter. A fresh private profile sets macro
 security to level 3. This setting alone is not the sandbox boundary.
@@ -338,7 +345,7 @@ cgroup) before closing its control handles. Thus even an unexpectedly failed wai
 client cannot hide surviving descendants. If retirement cannot be established, the
 Host retains its admission slot and reports converter_unavailable; it does not
 admit another operation on an unknown outcome.
-A healthy job closes its UNO document and removes the private output before sending a settlement trailer. The Host then removes the staged source and disarms its deadline before releasing the derivation seat. The private UNO Desktop, process tree, profile and converter slot remain for the next document. Cancellation, timeout, malformed output or an idle crash retires the whole tree and removes the private directory before replacement. Unknown retirement poisons the slot. Host close retires the converter and clears the bounded PDF cache. Failed/oversized output never publishes; stderr is discarded.
+A healthy job closes its UNO document and removes the private output before sending a settlement trailer. The Host then removes the staged source and disarms its deadline before releasing the derivation seat. The private UNO Desktop, process tree, profile and converter slot remain for the next document. Cancellation after rendering admission, timeout, malformed output or an idle crash retires the whole tree and removes the private directory before replacement. Unknown retirement poisons the slot. Host close retires the converter and clears the bounded PDF cache. Failed/oversized output never publishes; stderr is discarded.
 
 The Linux worker uses a private UNO named pipe with no Host socket mount or network listener. Hidden, read-only loading disables macro execution and linked-content updates. macOS retains one kit `createConverter` in its worker, matching Harness's converter-instance ownership. The kit's internal helper lifecycle is library-owned. Linux process reuse is covered by a real four-document test, independently of the successful-PDF cache. Local different-file measurements: initial startup and DOCX 1,795 ms, then DOCX 30 ms, PPTX 85 ms and a second PPTX 43 ms, with unchanged worker/engine identity. The first engine bootstrap remains a one-time cost.
 
