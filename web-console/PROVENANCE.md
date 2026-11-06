@@ -1,3 +1,15 @@
+## Quiet conversation loading (2026-11-06)
+
+Read-only study of sibling Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-conversation/src/client/skeleton/ConversationContent.tsx`,
+`ConversationSession.tsx` and `ConversationPanel.tsx`: retain the resident
+composer and scroll body, and resolve labels from already observed state.
+Existing rustX components keep those patterns. Initial configuration controls
+reserve their seats while loading; background reads avoid temporary copy.
+Accepted input keeps its dispatch-time presentation until native observation
+names its exact MessageId. This changes presentation only, with no protocol,
+native message, submission replay or read-authority change.
+
 ## Issue #518 — automatic Session configuration commit
 
 Read-only references, inspected outside rustX and never vendored:

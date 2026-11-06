@@ -24,9 +24,10 @@ export function WorkspaceControls({ client, host, workspaceId, children }: { cli
 }
 function useWorkspaceApproval(source?: SourceSettings) {
   const actor = useSettingsActor();
+  const readError = useSelector(actor, s => s.context.readError);
   const revision = source?.workspace?.revision ?? '';
   const unit = useUnitEditing<ApprovalMode>({ authored: source?.workspace?.authored?.approval_mode ?? undefined, blank: 'policy', revision, mutation: approvalMutation });
-  return { actor, revision, unit, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
+  return { actor, revision, unit, loading: !source && !readError, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
 }
 type WorkspaceApproval = ReturnType<typeof useWorkspaceApproval>;
 function ApprovalScope({ source, children }: { source?: SourceSettings; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {

@@ -762,7 +762,7 @@ describe('exact pending QueueDock mutations', () => {
   });
   it('omits provisional controls and disables unsafe typed-content editing', () => {
     const mixed = { ...row(), message: { ...row().message, content: [{ type: 'text' as const, text: 'one' }, { type: 'uploaded_file' as const, batch_id: 'owned-batch', name: 'report.pdf' }] } };
-    const ui = render(<QueueDock rows={[]} submissions={[{ messageId: 'echo', content: [{ type: 'text', text: 'provisional' }] }]} running edit={vi.fn()} remove={vi.fn()} />);
+    const ui = render(<QueueDock rows={[]} submissions={[{ messageId: 'echo', content: [{ type: 'text', text: 'provisional' }], submittedWhileRunning: true }]} running edit={vi.fn()} remove={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
     ui.rerender(<QueueDock rows={[mixed]} submissions={[]} running edit={vi.fn()} remove={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Edit' })).toHaveProperty('disabled', true);

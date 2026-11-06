@@ -3,7 +3,6 @@ import type { AttachmentTarget, ContentBinding, ContentChunk, ContentRef } from 
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
 import { contentRefKey, contentSourceKey } from '../../../../protocol/app-server/content-identity';
 import type { AppServerClient } from '../../client/app-server';
-import { useTranslation } from '../../locale/react';
 
 export { readContentText } from '../../client/content-text';
 import { readContentText } from '../../client/content-text';
@@ -41,7 +40,7 @@ export function SourceContent({ client, target, agentId, bindings, owned, read, 
   /** A logical presentation scope retains released text, never read capabilities. */
   presentationOwner?: symbol; inlineText?: string;
 }) {
-  const tx = useTranslation(), latestOwned = useRef(owned); latestOwned.current = owned;
+  const latestOwned = useRef(owned); latestOwned.current = owned;
   const selected = bindings.filter(binding => explicit || binding.deferred);
   const scope = JSON.stringify([target, agentId]), references = selected.map(binding => binding.content_ref);
   const identity = JSON.stringify([scope, references.map(contentRefKey)]);
@@ -80,6 +79,6 @@ export function SourceContent({ client, target, agentId, bindings, owned, read, 
   const text = selected.length ? (loaded ?? released.current)?.text : [inlineText!];
   return <>{error && <p role="alert">{error}</p>}
     {text ? text.map((text, index) => <Fragment key={index}>{children ? children(text) : <pre>{text}</pre>}</Fragment>)
-      : !error && <Fragment key={0}>{fallback ?? <p role="status">{tx('trajectory:details.loading')}</p>}</Fragment>}
+      : !error && <Fragment key={0}>{fallback}</Fragment>}
   </>;
 }

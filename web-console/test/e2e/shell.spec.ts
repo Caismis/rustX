@@ -3,6 +3,36 @@ import { test, expect, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { openWorkspaceSettings } from './shell-actions';
 
+for (const width of [390, 1440]) test(`later accepted input stays visible through attempt updates (${width}px)`, async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await page.clock.setFixedTime(new Date('2026-09-25T00:00:05Z'));
+  await page.setViewportSize({ width, height: 1000 });
+  await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
+  await page.evaluate(() => window.sessionFixture.state('idle'));
+  await page.evaluate(() => window.sessionFixture.holdInput());
+  const input = page.getByRole('textbox', { name: 'Message', exact: true });
+  await input.fill('Later input remains visible');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(row => row.method === 'turn/start').length)).toBe(1);
+  await page.evaluate(() => window.sessionFixture.settleInput());
+  await expect(input).toHaveValue('');
+  const message = page.locator('[data-provisional-message-id="accepted-user"]');
+  await expect(message).toContainText('Later input remains visible');
+  await expect(page.getByLabel('Session status', { exact: true })).toHaveCount(0);
+  await message.evaluate(element => element.setAttribute('data-retained-accepted-input', ''));
+  await page.evaluate(() => window.sessionFixture.stream('A continuous reply'));
+  await expect(page.getByLabel('Streaming response')).toContainText('A continuous reply');
+  expect(await message.evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[aria-label="Streaming response"]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  await expect(page.locator('[data-retained-accepted-input]')).toHaveCount(1);
+  await expect(page.locator('[data-submission-echo]')).toHaveCount(0);
+  await expect(page.getByText('Later input remains visible', { exact: true })).toHaveCount(1);
+  await expect(page.getByText('Ready for a task.', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: `/tmp/rustx-continuous-conversation-${width}.png` });
+  expect(errors).toEqual([]);
+});
+
 /** The shell reference owns its cold-load interleaving. Present the unclassified
  * baseline before publishing the Host reply, then await both shared consumers.
  * An immediately resolved fixture reply can collapse those paints; Chromium's

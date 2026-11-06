@@ -57,6 +57,6 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
   if (view.modelMutation) return { status: 'waiting', severity: 'quiet' };
   if (snapshot.pending_interactions?.length) return { status: 'waiting', label: tx('common:session-product.waiting-for-your-response'), severity: 'quiet' };
   if (snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type)) return { status: 'working', severity: 'quiet' };
-  if (snapshot.inbound.pending?.length || view.submissions?.length) return { status: 'queued', label: tx('common:session-product.queued'), severity: 'quiet' };
+  if (snapshot.inbound.pending?.length || view.submissions?.some(value => value.submittedWhileRunning)) return { status: 'queued', label: tx('common:session-product.queued'), severity: 'quiet' };
   return { status: 'idle', severity: 'quiet' };
 }

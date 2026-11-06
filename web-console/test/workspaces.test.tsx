@@ -703,14 +703,14 @@ it.each(['success', 'failure'] as const)('UX-04 normal next-page demand settles 
   await act(async () => b.resolve([{ authorized: true, workspaceId: 'wB' }]));
   const group = () => screen.getByRole('button', { name: 'Open Session B' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group');
   expect(group()).toBe('wB');
-  expect(screen.queryByText(translator('en')('workspace:association.refreshing'))).toBeNull();
+  expect(screen.queryByText('Refreshing Workspace associations…')).toBeNull();
   // A remains unresolved until B's group and aggregate ready notice are proven.
   await act(async () => {
     if (outcome === 'success') a.resolve([{ authorized: true, workspaceId: 'wA' }]);
     else a.reject(new Error('old page failed'));
   });
   expect(group()).toBe('wB');
-  expect(screen.queryByText(translator('en')('workspace:association.refreshing'))).toBeNull();
+  expect(screen.queryByText('Refreshing Workspace associations…')).toBeNull();
   expect(screen.queryByText(translator('en')('workspace:association.unavailable'))).toBeNull();
   expect(host.classifyLocations).toHaveBeenCalledTimes(2);
   expect(host.listWorkspaces).toHaveBeenCalledTimes(lists);
@@ -777,7 +777,7 @@ it.each(['success', 'failure', 'unavailable'] as const)('current page notice ign
   expect(screen.getByRole('button', { name: 'Open Session B' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group')).toBe('wB');
   if (outcome === 'success') await act(async () => resolve([{ authorized: true, workspaceId: 'wA' }, { authorized: true, workspaceId: 'wB' }]));
   if (outcome === 'failure') await act(async () => reject(new Error('obsolete error')));
-  expect(screen.queryByText(translator('en')('workspace:association.refreshing'))).toBeNull();
+  expect(screen.queryByText('Refreshing Workspace associations…')).toBeNull();
   expect(screen.queryByText(translator('en')('workspace:association.unavailable'))).toBeNull();
 });
 
@@ -799,7 +799,7 @@ it('one refresh moves sidebar and selected Session together to the replacement r
   expect(screen.getByRole('button', { name: 'Select Workspace Replacement A' }).getAttribute('aria-current')).toBe('page');
 });
 
-it.each(['en', 'zh'] as const)('selected off-page pending and unavailable demand remains visible in %s', async locale => {
+it.each(['en', 'zh'] as const)('selected off-page demand refreshes silently and reports failures in %s', async locale => {
   const host = await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
@@ -809,12 +809,12 @@ it.each(['en', 'zh'] as const)('selected off-page pending and unavailable demand
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
   act(() => localeController.setLocale(locale)); const tx = translator(locale);
-  expect(screen.getByText(tx('workspace:association.refreshing'))).toBeTruthy();
+  expect(screen.queryByText(/Refreshing Workspace associations|正在刷新工作区关联/)).toBeNull();
   expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['B']);
   expect(vi.mocked(host.classifyLocations).mock.calls.at(-1)?.[0]).toEqual(['/workspace/A', '/workspace/B']);
   await act(async () => gate.resolve([{ authorized: false, reason: 'unavailable' }, { authorized: true, workspaceId: 'wB' }]));
   expect(screen.getByText(tx('workspace:association.unavailable'))).toBeTruthy();
-  expect(screen.queryByText(tx('workspace:association.refreshing'))).toBeNull();
+  expect(screen.queryByText(/Refreshing Workspace associations|正在刷新工作区关联/)).toBeNull();
 });
 
 it('current blank conversation is pinned, reused, relocated and hidden on departure without native creation', async () => {

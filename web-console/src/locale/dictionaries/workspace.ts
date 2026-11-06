@@ -1,6 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
-  "association.refreshing": "Refreshing Workspace associations…",
   "association.unavailable": "Workspace associations unavailable. Last confirmed groups are shown.",
   "association.disconnected": "Disconnected. Last confirmed groups are shown.",
   "association.unclassified": "Workspace not yet classified",
@@ -96,7 +95,6 @@ export const en = {
 } as const;
 export type WorkspaceKey = keyof typeof en;
 export const zh = {
-  "association.refreshing": "正在刷新工作区关联…",
   "association.unavailable": "工作区关联暂不可用。显示上次确认的分组。",
   "association.disconnected": "连接已断开。显示上次确认的分组。",
   "association.unclassified": "工作区尚未分类",

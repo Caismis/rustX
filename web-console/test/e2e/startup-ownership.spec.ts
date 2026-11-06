@@ -3,6 +3,26 @@ import { test, expect, type Page } from '@playwright/test';
 const fixture = `${fixtureOrigin}/test/fixtures/startup.html`;
 const methods = (page: Page): Promise<string[]> => page.evaluate(() => (window as any).startupFixture.requests().map((r: any) => r.method));
 const release = (page: Page, method: string, failure?: string) => page.evaluate(({ method, failure }) => (window as any).startupFixture.release(method, failure), { method, failure });
+for (const width of [390, 1440]) test(`initial Workspace reads are silent and preserve composer geometry (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  await page.goto(`${fixture}?source-gate`);
+  await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
+  const input = page.getByRole('textbox', { name: 'Message', exact: true }), card = page.locator('[data-composer-card]');
+  await input.fill('Typing while configuration loads');
+  await input.evaluate(element => { element.setAttribute('data-retained-editor', ''); (element as HTMLTextAreaElement).setSelectionRange(2, 8); });
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+  await expect(page.getByText('Awaiting authoritative Workspace permissions.', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Model and thinking effort' })).toBeHidden();
+  const before = await card.boundingBox();
+  await page.evaluate(() => (window as any).startupFixture.releaseSource());
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Model and thinking effort' })).toContainText('fixture/native');
+  await expect(page.locator('[data-retained-editor]')).toBeFocused();
+  await expect(input).toHaveValue('Typing while configuration loads');
+  expect(await input.evaluate(element => [(element as HTMLTextAreaElement).selectionStart, (element as HTMLTextAreaElement).selectionEnd])).toEqual([2, 8]);
+  expect(await card.boundingBox()).toEqual(before);
+});
 async function begin(page: Page, language = 'en', files = false, model?: 'explicit' | 'preference') {
   await page.addInitScript(({ language, model }) => { localStorage.clear(); localStorage.setItem('rustx-locale-v1', language); if (model === 'preference') localStorage.setItem('rustx-new-session-model-v1', JSON.stringify({ 'ws://127.0.0.1:8080/': { model: 'fixture/second' } })); }, { language, model });
   await page.goto(fixture);
@@ -166,7 +186,8 @@ test('existing Session accepts text and files before connection, then sends once
   await page.locator('textarea').fill('Ready when connected');
   await page.locator('input[type=file]').setInputFiles({ name: 'queued.txt', mimeType: 'text/plain', buffer: Buffer.from('queued attachment') });
   await page.locator('[data-composer-primary]').click();
-  await expect(page.locator('[data-pending-message]').getByText('Connecting…', { exact: true })).toBeVisible();
+  await expect(page.locator('[data-pending-message]').getByRole('status', { name: 'Sending…', exact: true })).toBeVisible();
+  await expect(page.locator('[data-pending-message]')).not.toContainText('Connecting…');
   expect((await methods(page)).filter(method => ['turn/start', 'session/uploadPrepare'].includes(method))).toEqual([]);
   await expect(page.getByText('Retained first input outside this Conversation')).toHaveCount(0);
   await page.screenshot({ path: 'test-results/existing-connecting.png', fullPage: true });

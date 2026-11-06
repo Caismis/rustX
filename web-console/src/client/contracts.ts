@@ -77,6 +77,8 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
 export interface Submission {
   messageId: string;
   content: readonly UserInputBlock[];
+  /** Observed activity at dispatch, solely for provisional placement. */
+  submittedWhileRunning: boolean;
 }
 /** Settled local outcome of one CAS-bound native Goal control. A known outcome is
  * not projection convergence: `observed` reports whether an authoritative snapshot

@@ -68,8 +68,9 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         : message('agent:copy.this-item-cannot-be-edited-with-the-text-editor'));
     }
   };
-  // An ordinary idle send is admitted directly, not queued: its echo is not a queue row.
-  const echoes = running ? submissions : [];
+  // The caller places only submissions dispatched during an active attempt
+  // here. Keep them until exact observation, including after that attempt ends.
+  const echoes = submissions;
   const count = rows.length + echoes.length;
   useEffect(() => { if (count === 0) setCollapsed(true); }, [count]);
   if (count === 0 && !draft && !notice) return null;
