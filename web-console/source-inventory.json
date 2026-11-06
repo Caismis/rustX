@@ -4551,7 +4551,7 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "1edeb3ea847d7e37b8f443741e3e270e6fcad2fd25458a20e2f1c36e967cb75b",
       "classification": "B",
-      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls. Latest main integration: preserve native preview identity, MCP startup and selected-Workspace ownership as applicable. Combined App Server v63 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Review request ownership ends when its last docked or floating content tab closes. Scheduler UI alignment: mandatory App Server v63 imports and native task navigation; original upstream baseline retained.",
+      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls. Latest main integration: preserve native preview identity, MCP startup and selected-Workspace ownership as applicable. Combined App Server v63 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Review request ownership ends when its last docked or floating content tab closes. Scheduler UI alignment: mandatory App Server v63 imports and native task navigation; original upstream baseline retained. Independent PR review: atomically replace preview content in its current docked or floating seat using existing reversible operations; preserve floating geometry, independent open copies, focus and closed-reader disposal.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../client/preview-policy",
@@ -4586,7 +4586,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "819b6848abd094d987b48f8fd7b0af5f8a03e78abc6641ef84a1ac6162e576c0",
+      "local_sha256": "7d127d597cf7fdb7752cd06d22125e676cb3210dcc0aedad5d86a6389f941f05",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -5324,7 +5324,7 @@
       "upstream": "packages/client/ui-dockkit/src/engine/controller.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "44045b13ed82ff502cb502f24d50d72e539c7df9b9ba9d66d1b295b730db0a8f",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Independent PR review: atomically replace preview content in its current docked or floating seat using existing reversible operations; preserve floating geometry, independent open copies, focus and closed-reader disposal.",
       "destination": "web-console/src/presentation/dockkit/engine/controller.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5338,7 +5338,7 @@
         "./planner.ts",
         "./sequence.ts"
       ],
-      "local_sha256": "9c80f9c493d9457fd6bf1d3995e1685bec90c4b75b721d9eb6deb2827d786830",
+      "local_sha256": "4d259cc51256b2963a6ec1e85b17061f73aeffd5a7d1226dfc0c80c7b5a302f7",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-right/src/client/stores.ts",
@@ -5400,7 +5400,7 @@
       "upstream": "packages/client/ui-dockkit/src/engine/planner.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "4c3080aa23799a3feec54c533f444d86925a659f0a28526bc239ad814962bb73",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Independent PR review: atomically replace preview content in its current docked or floating seat using existing reversible operations; preserve floating geometry, independent open copies, focus and closed-reader disposal.",
       "destination": "web-console/src/presentation/dockkit/engine/planner.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -5413,7 +5413,7 @@
         "./operations.ts",
         "./tree.ts"
       ],
-      "local_sha256": "60292632eda33a6ff8b2d7b41002363e37380fc49ef8f01342af7c0ec986bbc3"
+      "local_sha256": "a0bb7a69e6f7a09eb04ae9fe815fcd45bfbc285273ec447c5c7ec79cf37958a2"
     },
     {
       "upstream": "packages/client/ui-dockkit/src/engine/sequence.ts",
@@ -5991,7 +5991,7 @@
       "upstream": "packages/client/ui-dockkit/tests/controller.client.spec.ts",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "ac66f1925efb4a8ddb3fc43c588e3bf19150ab6a4e8154ecb6e092764cddf54b",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Independent PR review: atomically replace preview content in its current docked or floating seat using existing reversible operations; preserve floating geometry, independent open copies, focus and closed-reader disposal.",
       "destination": "web-console/test/dockkit/controller.test.ts",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -6005,7 +6005,7 @@
         "./fixtures.client.ts",
         "vitest"
       ],
-      "local_sha256": "aef933a467272239eb8599dbf7c0f38e44363af0e0d9e5bf9dad58531b397e87"
+      "local_sha256": "b5b6d3f2ecec2966f04ad874eba4917f15b3067e83e8ac997b978d3900e7cb05"
     },
     {
       "upstream": "packages/client/ui-dockkit/tests/fixtures.client.ts",

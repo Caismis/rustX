@@ -94,14 +94,20 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
   },[host,scope?.authorityId,scope?.endpoint,session?.session_id,session?.active_node,workspace]);
   const available=!!host.workbench && !!scope && !!target;
   const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string;title?:string},replace = false)=>{
-    if (!replace && tab.kind === 'file' && !Object.values(state.tabs).some(existing => existing.contentId === `file:${tab.path}`) && Object.values(state.tabs).filter(existing => existing.kind === 'file').length >= PREVIEW_POLICY.tabsPerSession) { setError(tx('artifacts:workspace.tabs')); return; }
-    navigation.current++;
-    if (!replace || !navigatorFor(paneId).open) focusRequest.current = { paneId, origin: document.activeElement };
     const before=dock.getSnapshot().state;
     const pane=getPane(before,paneId), active=pane.activeTabId && before.tabs[pane.activeTabId];
+    const replacing = !!active && (pane.host === 'float' || replace && active.kind === 'file');
+    const files = Object.values(before.tabs).filter(existing => existing.kind === 'file');
+    const reusesFile = !replacing && files.some(existing => existing.contentId === `file:${tab.path}`);
+    if (tab.kind === 'file' && !(replacing && active.kind === 'file') && !reusesFile && files.length >= PREVIEW_POLICY.tabsPerSession) { setError(tx('artifacts:workspace.tabs')); return; }
+    navigation.current++;
+    if (!replace || !navigatorFor(paneId).open) focusRequest.current = { paneId, origin: document.activeElement };
     const contentId=tab.kind==='file' ? `file:${tab.path}` : tab.kind==='files' ? `files:${paneId}` : tab.id ?? crypto.randomUUID();
-    const opened = dock.openContent({paneId,kind:tab.kind,contentId,title:tab.title ?? tab.path ?? ''});
-    if(active && active.id !== opened && (active.kind==='start' || replace && active.kind==='file')) dock.closeTab(active.id);
+    if (replacing) dock.replaceContent(active.id, { kind: tab.kind, contentId, title: tab.title ?? tab.path ?? '' });
+    else {
+      const opened = dock.openContent({paneId,kind:tab.kind,contentId,title:tab.title ?? tab.path ?? ''});
+      if(active && active.id !== opened && active.kind==='start') dock.closeTab(active.id);
+    }
   };
   useImperativeHandle(fileRef, () => ({ openTask: (id, title) => open(dock.activeDockPaneId(), { kind: 'schedule', id, title }), openChanges: request => {
     const id = `changes:${request.target.attachment_id}:${request.attemptId}`;

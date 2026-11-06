@@ -20,7 +20,7 @@ import { replay } from './operations';
 import { canSplit } from './constraints.ts'
 import { createIdMinter, createInitialState, type IdMinter, type TabFactory } from './initial.ts'
 import {
-  activeDockPaneId as dockedActivePane, planAddTab, planDropTab, planDuplicateTab, planFloatTab, planOpenContent, planPlaceTab,
+  activeDockPaneId as dockedActivePane, planAddTab, planDropTab, planDuplicateTab, planFloatTab, planOpenContent, planReplaceContent, planPlaceTab,
   planResizeSplit, planSettle, planSetExpanded, planSetMode, planSplitPane, planUnfloatPane,
   type OpenContentInput,
 } from './planner.ts'
@@ -174,6 +174,13 @@ export class DockController {
    */
   openContent(input: OpenContentInput): TabId {
     const planned = planOpenContent(this.state, this.mint, input)
+    this.run(planned.ops)
+    return planned.tabId
+  }
+
+  /** Replace a tab without moving its pane or revealing another open copy. */
+  replaceContent(tabId: TabId, input: Pick<OpenContentInput, 'contentId' | 'title' | 'kind'>): TabId {
+    const planned = planReplaceContent(this.state, this.mint, tabId, input)
     this.run(planned.ops)
     return planned.tabId
   }

@@ -19,7 +19,7 @@ import type {
 import { canSplit, clampSizes, FLOAT_DEFAULT_SIZE, zoneSplit } from './constraints.ts'
 import type { TabFactory } from './initial.ts'
 import { applyOp } from './operations.ts'
-import { dockPaneIds, findTabPane, firstDockPaneId, getNode, getPane, getTab } from './tree.ts'
+import { dockPaneIds, findTabPane, firstDockPaneId, floatIndex, getNode, getPane, getTab } from './tree.ts'
 
 /** Mints ids for the operations a planner produces: the one place a string becomes an id. */
 export interface Mint {
@@ -206,6 +206,28 @@ export function planOpenContent(state: LayoutState, mint: Mint, input: OpenConte
     ops: [{ type: 'openTab', paneId, tab, index: input.index ?? getPane(state, paneId).tabs.length }],
     tabId: tab.id,
   }
+}
+
+/** Replace one tab in its current seat, independently of other copies of the content. */
+export function planReplaceContent(state: LayoutState, mint: Mint, tabId: TabId, input: Pick<OpenContentInput, 'contentId' | 'title' | 'kind'>): PlannedTab {
+  const previous = getTab(state, tabId)
+  if (previous.contentId === input.contentId && previous.kind === input.kind) {
+    return { ops: [{ type: 'focusTab', tabId }], tabId }
+  }
+  const pane = findTabPane(state, tabId)
+  const tab: TabRecord = { id: mint('tab'), ...input }
+  // Publish the complete replacement as one intent. In particular, closing a
+  // floating tab alone destroys its pane; restore that same seat and rectangle
+  // before settlement or subscribers can observe an intermediate layout.
+  const ops: LayoutOp[] = pane.host === 'dock' ? [
+    { type: 'openTab', paneId: pane.id, tab, index: pane.tabs.indexOf(tabId) },
+    { type: 'closeTab', tabId },
+  ] : [
+    { type: 'closeTab', tabId },
+    { type: 'insertPane', pane: { ...pane, tabs: [tab.id], activeTabId: tab.id }, tabs: [tab], attach: { mode: 'float', index: floatIndex(state, pane.id) } },
+    { type: 'focusPane', paneId: pane.id },
+  ]
+  return { ops, tabId: tab.id }
 }
 
 /**

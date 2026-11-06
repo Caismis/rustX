@@ -1,3 +1,15 @@
+## Independent review: floating navigator replacement (2026-11-06)
+
+The pane navigator now replaces content through a single DockKit intent built
+from its existing reversible operations. A floating preview keeps its pane ID,
+rectangle, navigator state and focus when selecting another file, including a
+file already open elsewhere. Other copies remain independent. The replaced
+tab receives a new identity so the existing preview owner disposes its readers,
+document worker and observation rather than retaining the closed file. No new
+layout operation or persisted schema is introduced. Controller undo/redo,
+actual Workbench ownership tests and the pinned-browser floating navigator
+regression cover this rustX adaptation to the retained Harness docking port.
+
 ## Remember an unsent Workspace choice (2026-11-06)
 
 Harness `ce7073d51254c26cd63b22a60835b8f948deb447` persists the current
