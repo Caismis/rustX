@@ -122,6 +122,48 @@ it.each(attachingReturns)('a known creation from $page retains its original Send
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
 });
 
+it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('an admitted creation from %s follows native readiness after Home authorization resumes during resync', async page => {
+  const { session, create, incarnation } = await firstSend();
+  await navigate(page);
+  const classify = server.workspaceHost.classifyLocations;
+  let entered!: () => void, releaseHome!: () => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { releaseHome = resolve; });
+  let first = true;
+  server.workspaceHost.classifyLocations = async (...args) => {
+    if (first) { first = false; entered(); await held; }
+    return classify(...args);
+  };
+  await act(async () => fireEvent.click(primary('Home')));
+  await reached;
+  let updates = 0;
+  let stop = () => {};
+  try {
+    await act(async () => server.reply(create));
+    await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('admitted'));
+    stop = firstSubmissions(server.client).subscribe(() => { updates++; });
+    const count = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    server.held.add('session/checkpoint');
+    let recovery!: Promise<unknown>;
+    await act(async () => { recovery = server.client.refresh(session.id); });
+    const checkpoint = await server.waitFor('session/checkpoint', count + 1);
+    const proof = server.client.getSnapshot().views[session.id].attachmentObservation;
+    expect(server.client.isAttachmentObservationCurrent(session.id, proof)).toBe(true);
+    expect(server.client.isAttachmentControlCurrent(session.id, proof)).toBe(false);
+    await act(async () => releaseHome());
+    await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session-draft'));
+    expect(updates).toBe(0);
+    await act(async () => { server.held.delete('session/checkpoint'); server.reply(checkpoint); await recovery; });
+    expect(server.client.isAttachmentControlCurrent(session.id, proof)).toBe(true);
+    expect(updates).toBe(0);
+    await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session'));
+    expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+    expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  } finally { stop(); releaseHome(); }
+});
+
 it('primary page return preserves the selected HTML iframe instead of only its tab and cached bytes', async () => {
   const data = new TextEncoder().encode('<input value="Local document state"><button>Count 0</button>');
   server.workspaceHost.workbench = async (_scope, { request }) => request.kind === 'files'

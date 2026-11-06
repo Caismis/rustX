@@ -29,6 +29,8 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
   resumes first-submission publication by its existing binding, keeps selected
   workbench iframe bodies within the existing budget, and scopes Settings-owned
   portals/focus to its primary-page activation. Native operation owners are unchanged.
+  Resumed creation publication observes native readiness as well as first-submit
+  progress, so a settled same-claim resync wakes an already-admitted owner's route.
 - FULL CI run `42179185106`, job `127766440468`, artifact `13485828418` measured
   exactly four rounded input-border rasterizer pixels in
   `model-advanced-light-390-linux.png`. The live manifest records their raw RGBA

@@ -174,8 +174,10 @@ async function prepare(input: { client: AppServerClient; host: ProductHostWorksp
         }
       };
       const release = firstSubmissions(client).subscribe(inspect);
+      // An admitted owner is quiet while native resync can still suspend controls.
+      const releaseNative = client.subscribe(inspect);
       const retired = () => { cleanup(); reject(new Error('Conversation publication retired.')); };
-      const cleanup = () => { release(); signal.removeEventListener('abort', retired); };
+      const cleanup = () => { release(); releaseNative(); signal.removeEventListener('abort', retired); };
       signal.addEventListener('abort', retired, { once: true }); inspect();
     });
   }

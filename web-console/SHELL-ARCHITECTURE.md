@@ -122,6 +122,9 @@ A returned New Conversation resumes observation of its original binding's
 Home authorization. The correlated observer publishes the known Session and
 its completed attachment without creating, opening or sending again. A newer
 editor retires this observation; the old acknowledgement cannot replace it.
+The observer also follows native readiness: an already-admitted owner can stay
+quiet while a same-claim resync suspends controls, then finish publication when
+those controls recover. Both subscriptions retire with the preparation actor.
 Same-editor attachment and creation promotions retain its control fence as well
 as its binding. Generation, authority and exact native attachment observations
 remain the execution fences; explicit editor/Node/history replacement retires
