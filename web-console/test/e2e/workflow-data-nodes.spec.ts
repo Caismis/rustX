@@ -28,7 +28,7 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     const directory=join(fixture.workspaceA,'.agents/workflows');mkdirSync(directory,{recursive:true});
     const file=join(directory,'data_nodes.yaml');writeFileSync(file,JSON.stringify(dataNodesDocument()));
     await routeWorkspaceHost(page,fixture);await page.goto('/');await connectRemote(page,fixture.endpoint,fixture.token);await openEmptySession(page,fixture,'Workspace A');
-    await page.getByRole('navigation',{name:'Global panels'}).getByRole('button',{name:'Workflows',exact:true}).click();
+    await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'Workflows',exact:true}).click();
     await page.getByRole('button',{name:'data_nodes',exact:true}).click();await expect(page).toHaveTitle(/rustX$/);
     await expect(canvas(page).locator('.react-flow__node')).toHaveCount(9);
 

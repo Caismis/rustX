@@ -15,13 +15,13 @@ The shell decision from #345 remains in force. #346 completes the Agent seats;
 | Button/Input/Pill/StateDot/Menu/HoverCard/Tooltip | A direct reuse | Preserve DOM/CSS/interaction; local imports |
 | Modal | A direct reuse, accessibility adaptation | Preserve mask/panel; focus containment/restoration |
 | Markdown/code | A bounded reuse | Audited incremental machinery and native-safe links; current styles |
-| AppFrame/column solver | A environment adaptation | Measured grid/drag, 280/56px Sidebar, 1024px collapse; React state/content seats replace plugin injection |
-| SidebarRoot | B Harness UI + rustX binding | Preserve brand/new/rail/region/footer; callbacks replace registry |
+| AppFrame/column solver | A environment adaptation | Permanent 56px primary rail, resizable 280px Home sidebar, 1024px overlay breakpoint and retained right-panel seat |
+| HomeSidebar / PrimaryNavigationRail | B adapted Home sidebar + C original rail | Home owns brand/new/workspace/session browsing; the separate rail binds to the committed Shell destination |
 | Workspace browser/rows | B Harness UI + rustX binding | Compact tree/search/hover/menu; native DTO projections; archive becomes native deletion preview |
-| SettingsRoot | B Harness UI + rustX binding | Modal/nav/content seats; existing CFG3 editors; no Settings Controller |
+| SettingsRoot | B Harness UI + rustX binding | Independent page/nav/content seats; existing CFG3 editors; no modal visibility authority or Settings Controller |
 | Conversation/composer/tools/interactions/model/permission | B Harness UI + rustX binding | Pinned Agent presentation, bounded native adapters; see AGENT-ARCHITECTURE.md |
 | Connection/CFG3 scopes | C rustX extension | Harness primitives/panel seats; native product semantics |
-| Workflows library and editor (#491) | C rustX extension | One Sidebar global-panel entry; content seat beside the unchanged Sidebar; React Flow canvas only, native file semantics |
+| Workflows library and editor (#491) | C rustX extension | One primary-rail destination; content seat without the Home sidebar; React Flow canvas only, native file semantics |
 
 ## Boundary
 
@@ -77,8 +77,11 @@ intent. Browser-lifetime Shell/Settings actors and Session admission belong to
 `App`; `AppSurface` is their disposable projection. Remounting that surface does
 not retire an admitted startup continuation or recreate route authority. A
 lifetime callback actor observes native authority directly. Its correlated completion and native proof guard publish routes atomically;
-preparation and failure preserve committed controls. Settings handoff retires
-preparation before the separate Settings actor opens its overlay. AppServerClient
+preparation and failure preserve committed controls. Settings is a committed Shell route. Its separate actor owns only the exact
+configuration target, authorized section, detail and disposable owner lookup.
+Leaving Settings fences that lookup and its inspection, never the configuration
+transaction actors. An unresolved owner renders a pending/unavailable page, not
+the previous owner's authoring UI. AppServerClient
 and Session Lifecycle own authoritative reconnect/resync and admitted mutation
 settlement. Fork View Source publishes a read-only history route using authorized
 exact native Node and Message reads; it never attaches or switches the source.
@@ -87,11 +90,73 @@ uploads across history unmounts; the existing AttachmentIntakes owner retains
 local Files. History and Return preserve this draft binding while each route
 publication replaces control authority. Native attachment/generation replacement
 keeps recoverable local text/Files but retires receipts and upload operations;
-restoration never replays them. Other executable destinations replace the draft.
+restoration never replays them. Another conversation destination replaces the draft; primary pages retain it.
 ChatViewport owns its exact anchor landing and scroll cancellation. View Source
 registers cancellation in the initiating click stack against the exact Shell
 pending intent. A correlated CANCEL cannot retire a newer or committed route. Unmount/collapse/search/navigation never cancel committed work.
 Only widths, collapse, menus, theme, search text and section selection are local.
+
+## Primary navigation and Home retention (#536)
+
+`ShellNavigationMachine` owns Home conversation routes, Workflows, Scheduled
+Tasks and Settings. The permanent rail derives selection from that committed
+route; a pending authorization or Workflow leave request cannot select its
+prospective destination. Home's last conversation route remains in the same
+actor, with its logical editor binding, local files and native operation fences.
+The retained Home and Settings presentations stay mounted and hidden/inert on
+other pages. Native lifecycle, configuration and submission owners keep settling;
+React page visibility cannot attach, detach, cancel, create, send or replay work.
+
+Returning Home reads fresh Product Host authorization and current Session
+lifecycle evidence. It never issues Open. A same-authority disconnected Session
+returns as a non-executable local draft; an uncertain or released attachment
+does not relinquish that editor's text or files. Only existing lifecycle recovery
+can establish executable controls; Home never reacquires a released claim.
+Deleted, unauthorized or unavailable targets fall
+back to an ordinary empty Home without native Session creation. Authority
+replacement clears remembered identities. A newer gesture stops the old return
+preparation, so its later authorization result cannot publish.
+
+A returned New Conversation resumes observation of its original binding's
+`FirstSubmissions` owner, including creation acknowledgements arriving during
+Home authorization. If creation finishes during that wait, Home re-reads the
+binding and validates the Session against fresh lifecycle and Workspace evidence;
+a Session deleted during authorization returns to the ordinary empty Home.
+The correlated observer publishes the known Session and
+its completed attachment without creating, opening or sending again. A newer
+editor retires this observation; the old acknowledgement cannot replace it.
+The observer also follows native readiness: an already-admitted owner can stay
+quiet while a same-claim resync suspends controls, then finish publication when
+those controls recover. Both subscriptions retire with the preparation actor.
+A known Session stays publishable while its first input is failed, uncertain or
+paused: explicit upload recovery never creates or attaches that Session again.
+Discarding that input clears its text/files while retaining the known Session.
+Failures without a Session, replacement navigation and authority retirement
+still end publication interest.
+Same-editor attachment and creation promotions retain its control fence as well
+as its binding. Generation, authority and exact native attachment observations
+remain the execution fences; explicit editor/Node/history replacement retires
+the prior control owner.
+
+Every external exit from Workflows passes through Shell's correlated leave
+request and `workflowSurfaceMachine`. The latest request replaces the previous
+one, cancellation retires its callback, and confirmation publishes once. The
+Workflow editor owns unsaved/unsettled edit protection; Shell owns destination
+commit. No presentation callback maintains a competing route.
+
+`AppFrame` composes four regions: fixed primary rail, optional Home sidebar,
+content, optional Home workbench. Collapsing Home releases its entire track.
+The workspace browser stays resident without an alternate collapsed UI. Below
+1024px its overlay starts beside the primary rail, leaves the rail interactive,
+and dismisses with Escape/backdrop/toggle. Programmatic publication closes only
+geometry; dismissal never cancels committed native work. Width/collapse hints
+are browser preferences bound from `app/`; presentation has no storage access.
+Other primary pages have no Home preview track. The right-panel subtree retains
+its selected files, bounded document bodies and HTML browsing contexts for return.
+Page activation gates workbench interaction separately from tab-body retention;
+tab closure, target replacement and existing content budgets still retire bodies.
+Existing native ownership,
+configuration authorization, revisions/CAS and transaction convergence are unchanged.
 
 ## Exclusions and deviations
 

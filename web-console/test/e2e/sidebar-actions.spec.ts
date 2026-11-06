@@ -11,8 +11,8 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-    const showSidebar = async () => { const expand = page.getByRole('button', { name: zh ? '打开侧边栏' : 'Expand Sidebar', exact: true }); if (await expand.isVisible()) await expand.click(); };
-    const dismissSidebar = async () => { const close = page.getByRole('button', { name: zh ? '关闭导航' : 'Close navigation', exact: true }); if (await close.isVisible()) await close.click({ position: { x: width - 20, y: 400 } }); };
+    const showSidebar = async () => { const expand = page.getByRole('button', { name: zh ? '主页' : 'Home', exact: true }); if (await expand.isVisible()) await expand.click(); };
+    const dismissSidebar = async () => { const close = page.getByRole('button', { name: zh ? '关闭导航' : 'Close navigation', exact: true }); if (await close.isVisible()) await close.click({ position: { x: width - 56 - 20, y: 400 } }); };
     const actions = async (id: string) => { await showSidebar(); await page.locator(`button[data-session-id="${id}"]`).hover(); await page.locator(`button[data-session-actions="${id}"]`).click(); };
     const message = page.getByRole('textbox', { name: zh ? '消息' : 'Message', exact: true });
     const send = async (text: string) => { await dismissSidebar(); await message.fill(text); await page.getByRole('button', { name: zh ? '发送' : 'Send', exact: true }).click(); };
@@ -27,7 +27,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       const source = (await selected())!;
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文'); await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文'); await page.getByRole('button', { name: '主页' }).click();
       }
       await send('Sidebar source'); await expect(page.getByText('Completed sidebar answer.', { exact: true })).toBeVisible();
       // Observe the client's admitted settlement instead of competing with its

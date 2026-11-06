@@ -241,7 +241,8 @@ attaching or cold-loading the Session to discover the outcome. Only a later
 explicit **Open Session** sets wanted intent again. A fresh attach
 cannot by itself prove the previous mutation's outcome, so uncertainty remains.
 
-The endpoint/openViews navigation hints retain only wanted views for automatic
+The endpoint/openViews navigation hints order the last Home Session first and
+retain only wanted views for automatic
 page-reload restoration only at the same normalized endpoint; they never choose
 connection material. Replacing App Server authority closes active browser views
 and focus instead of reinterpreting their IDs against the new server. Old uncertain
@@ -257,17 +258,22 @@ AppFrame owns narrow-sidebar visibility and reports explicit Escape, backdrop,
 toggle and breakpoint dismissal to the XState v5 ShellNavigationMachine. Its
 committed route is independent from its single disposable preparing actor. Beginning or retiring a
 pending gesture leaves the displayed conversation's Stop/upload controls valid;
-only route publication or authority replacement revokes its committed fence.
+only a different conversation publication or authority replacement revokes its
+committed fence. Primary-page publication retains Home operation ownership.
 Sidebar catalog search owns only its directory read identity; it cannot replace
 the route or retire an unrelated navigation intent.
 Failure retires only its own pending intent, without refreshing, reopening or
 releasing an attachment. Stale cleanup cannot retire a newer intent. Overlay
-user dismissal retires sidebar preparation; successful programmatic closure
-does not cancel the committed route. Settings, connection Settings and
+dismissal retires only viewport-close interest for an already selected cold
+Session; its pending executable promotion remains current. Uncommitted
+History/Fork/sidebar preparation retains its own cancellation rules. Successful
+programmatic closure does not cancel the committed route. Settings, connection Settings and
 owning-Workspace Settings synchronously retire preparation from every
-conversation entry point before dispatching to the
-independent Settings machine. Idle Settings and overlay dismissal preserve
-committed controls and continuation fences. A current authoritative attachment permits
+conversation entry point before committing the Settings page. The Settings machine owns internal
+target/section/detail navigation; its visibility belongs only to Shell. Primary
+pages and overlay dismissal preserve Home native operation fences, draft identity
+and admitted continuation ownership. Returning Home revalidates its authorization
+and never replays attachment or execution. A current authoritative attachment permits
 immediate presentation navigation without an
 attachment refresh. Cold navigation commits only after lifecycle admission and
 the final gesture, generation and attachment-control checks. Dismissal or a newer
@@ -445,14 +451,23 @@ which observations were automated versus manually inspected.
 
 ## Harness presentation shell
 
-[SHELL-ARCHITECTURE.md](SHELL-ARCHITECTURE.md) records the #345 reset. Direct imports
-from `presentation/` form one Harness-derived foundation. AppFrame accepts Sidebar,
-main, right-panel and overlay seats. Its measured columns retain the upstream
-280px Sidebar, 56px rail, 1024px responsive collapse and right-panel constraints.
-The Sidebar Settings entry opens **Overview** in the shared modal/navigation frame; existing CFG3
-editors supply its content. File previews and the workbench use the right panel.
-Connection is an explicit Settings section. Connection recovery **Show details**
-opens that section directly without changing the ordinary Settings default.
+[SHELL-ARCHITECTURE.md](SHELL-ARCHITECTURE.md) records the #345 baseline and
+#536 navigation ownership. `AppFrame` composes a permanent 56px primary rail,
+Home's resizable 280px secondary sidebar, the selected page and a retained Home
+preview/workbench. The Home sidebar collapses completely; below 1024px it opens
+as an overlay beside the still-interactive rail. Only UI geometry is stored in
+`rustx-shell-layout-v1` by the application binding.
+
+Home restores its last authorized conversation or draft with the same logical
+editor, unsent text and local attachments. Switching primary pages preserves
+admitted native work, configuration transactions and the right-side workbench.
+Settings is an independent page with General, Models, Agent, Tools, MCP,
+Extensions and Advanced; internal scoped/detail navigation stays with its own
+machine. The rail returns to the previous Settings section. Exact Workspace,
+Connection and repair-inspection entry points select their own target/detail.
+There is no top-level Settings mask, focus trap, backdrop close or Escape close.
+Every Workflow exit uses its existing dirty/unsettled-edit confirmation through
+the Shell route owner. Native runtime invariants and protocol contracts are unchanged.
 
 Menus, HoverCards, Tooltips and Modals own only presentation/focus state. The
 workspace adapter projects native list/cwd, Host classification and current

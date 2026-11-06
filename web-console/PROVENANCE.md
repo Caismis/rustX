@@ -1,3 +1,93 @@
+## Issue #536 — dual-sidebar navigation shell
+
+The approved Codex-style navigation hierarchy informs original rustX composition;
+no Codex branding, assets, routing framework or runtime is imported. The existing
+Harness pin and all immutable upstream hashes below remain unchanged.
+Earlier issue records describe their historical presentation; the #536 contract
+supersedes their collapsed-sidebar and modal-Settings geometry.
+
+- `presentation/sidebar/HomeSidebar` replaces `SidebarRoot`: retained Harness
+  brand/new-conversation/workspace geometry, without the obsolete collapsed rail
+  or duplicate global destinations. Its moved inventory records preserve lineage.
+- `presentation/sidebar/PrimaryNavigationRail` is original rustX composition over
+  existing tokens, icons and Tooltip; Shell supplies the selected destination.
+- The right-panel fullscreen bounds leave the primary rail accessible, including
+  narrow windows and platform titlebar insets. Preview chips retain shared
+  dockkit dimensions within their available strip width, keeping keyboard focus
+  fully visible when rail and header controls reduce that space.
+- `presentation/layout/AppFrame` and `columns` adapt the measured Harness shell to
+  a permanent rail plus conditional Home sidebar and right-panel tracks.
+- `presentation/settings/SettingsRoot` and `app/settings/Settings` retain internal
+  section navigation and configuration editors as a page, removing top-level
+  modal geometry, focus containment and dismissal. Transient dialogs stay shared.
+- The workspace browser removes its unused collapsed-icon variant. Local source
+  hashes and retained import closures are updated for every changed derived file.
+- The full-width Workflow canvas moves the former Start-icon rasterizer site.
+  Its obsolete one-pixel allowance is removed; that site and its neighbors remain
+  exact. Frozen comparator fixtures retain their measured historical evidence.
+- Follow-up review separates retained local Home editors from attachment intent,
+  resumes first-submission publication by its existing binding, keeps selected
+  workbench iframe bodies within the existing budget, and scopes Settings-owned
+  portals/focus to its primary-page activation. Native operation owners are unchanged.
+  Resumed creation publication observes native readiness as well as first-submit
+  progress, so a settled same-claim resync wakes an already-admitted owner's route.
+  Once creation identifies a Session, recoverable first-input failure or pause
+  retains publication interest; native attachment proof still gates its route.
+  Discard clears the first input rather than the known Session. A fresh editor
+  gesture still fences the old publication and cannot be overridden by resync.
+  Creation that settles during Home authorization is re-read and validated with
+  fresh Session lifecycle evidence, so an already-deleted target is not restored.
+- FULL CI run `42179185106`, job `127766440468`, artifact `13485828418` measured
+  exactly four rounded input-border rasterizer pixels in
+  `model-advanced-light-390-linux.png`. The live manifest records their raw RGBA
+  pairs and four one-pixel regions with individual channel bounds `1, 3, 1, 1`.
+  No global threshold or neighboring-pixel allowance is added; the original
+  reference is unchanged and comparator regressions reject excess or outside noise.
+  The strict local `Dark 390` recheck after the portal repair independently measured
+  the same four corner sites and bounds in the dark reference. Its separate manifest
+  entry records that capture's own RGBA pairs; the dark reference is also unchanged.
+- FULL CI run `42193746361`, job `127814031930`, evidence artifact `13494105808`
+  measured 547 curved-edge coverage pixels in `workflow-editor-linux.png`.
+  Independent reconstruction of the failed CI and passing strict local capture
+  found byte-identical SVG viewport DOM, path coordinates, paint order, selected
+  state, z-index, transforms and CSS resources. The canonical viewport SHA256 is
+  `4dd88f424c85838ec552a68dd847042bea37c16301ef972160d4935636929e25`.
+  The observed variation is raster coverage; Chromium's internal cause is not
+  established. The manifest records raw RGBA pairs and PNG hashes, with a separate
+  one-pixel region and actual observed channel bound for each of the 547 sites
+  (maximum 26). No surrounding rectangle inherits a bound. Comparator regressions
+  reject neighboring sites, foreign references, excess deltas and the retired
+  Start-icon allowance. The PNG reference and comparator implementation are unchanged.
+- FULL CI run `42229926383`, job `127936183721`, evidence artifact `13513095611`
+  measured a second stable capture with 602 changed pixels (maximum delta 31).
+  Its three actual graph capture checkpoints `36286`, `36291` and `36295` have
+  the same canonical viewport hash above; all five CSS resources also match.
+  It adds 92 measured sites and exceeds 192 previous per-site channel bounds.
+  The live manifest records the exact 639-site union as separate one-pixel
+  regions, each bounded by its largest actually observed delta. Each top-level
+  RGBA tuple is an actual maximum-delta exemplar from one capture; `captures`
+  preserves both complete raw observations and their PNG hashes. Tests replay
+  both, prove that the regions and bounds equal that observed union, and reject
+  unmeasured neighbors, excessive deltas and foreign-reference use. There is no
+  enclosing rectangle or global allowance; internal Chromium causes remain unproven.
+- FULL CI run `42239006386`, job `127967664835`, artifact `13516078875` measured
+  ten light conflict-state disclosure glyph-edge pixels: x=243 at y=841–845
+  and 896–900, each `[255,255,251,255]` to `[255,255,255,255]` (delta 4).
+  A strict local reproduction produced the byte-identical actual PNG. CI/local
+  Settings DOM matches after normalizing generated React Aria ID prefixes;
+  form values and selected-state annotations remain, and all 132 stylesheet
+  text blocks match. The markers are React Aria Disclosure `▸` spans. The strict
+  local observation independently reproduced the same reference mismatch.
+  Ten separate one-pixel regions retain the raw measurements and image hashes;
+  regressions reject neighboring sites, excessive deltas and foreign references.
+  The reference and comparator remain unchanged; no internal browser cause is inferred.
+- Workflow browser acceptance waits for a reopened Model's measured card to be
+  visible, dispatches its keyboard action there and checks its Inspector.
+  Each multi-MiB Global/Workspace authoring case has its own normal
+  test budget while retaining native save/reread and bounded-frame assertions.
+
+Navigation, authoring, authorization and native lifecycle remain rustX-owned.
+
 ## Issue #518 — automatic Session configuration commit
 
 Read-only references, inspected outside rustX and never vendored:
@@ -1314,8 +1404,8 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
 | `ui-theme/src/styles/design-platform.css` | `presentation/theme/design-platform.css` | A |
 | `ui-theme/src/styles/corner-shape.css` | `presentation/theme/corner-shape.css` | A |
 | `ui-layout/src/client/columns.ts` | `presentation/layout/columns.ts` | A |
-| `ui-sidebar/src/client/SidebarRoot.tsx` | `presentation/sidebar/SidebarRoot.tsx` | B |
-| `ui-sidebar/src/client/SidebarRoot.module.css` | `presentation/sidebar/SidebarRoot.module.css` | B |
+| `ui-sidebar/src/client/SidebarRoot.tsx` | `presentation/sidebar/HomeSidebar.tsx` | B |
+| `ui-sidebar/src/client/SidebarRoot.module.css` | `presentation/sidebar/HomeSidebar.module.css` | B |
 | `ui-workspace/src/client/rows/Rows.tsx` | `presentation/workspace/Rows.tsx` | B |
 | `ui-workspace/src/client/rows/Rows.module.css` | `presentation/workspace/Rows.module.css` | B |
 | `ui-workspace/src/client/rows/WorkspaceBrowser.module.css` | `presentation/workspace/WorkspaceBrowser.module.css` | B |
@@ -1332,22 +1422,22 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
   come from the current upstream sheets. `reset.css` supplies rustX's browser root
   sizing and accessible focus outline. The old token file and accent overrides
   were deleted. `data-ds-dark-theme` is a styling marker, not product branding.
-- AppFrame retains the measured three-column grid and pointer-captured drag
-  handle. The pure upstream column solver retains 280px default / 264–420px
-  Sidebar, 56px rail, 1024px auto-collapse, 400px protected center and 300px minimum
-  right panel. Explicit React render seats replace Cordis slots/layout stores.
-  Local widths and expansion are disposable, not persisted preferences.
-- SidebarRoot retains brand/new/global/region/footer DOM, 150ms fade/unmount,
-  frozen expanded width during collapse, rail glyphs and scrollbar linger.
-  rustX `rX`/wordmark replaces upstream product artwork. Global Connection and
-  Settings callbacks are supplied by the product composition root.
+- AppFrame adapts the measured grid and pointer-captured drag handle to four
+  tracks: permanent 56px primary rail, optional 280px default / 264–420px Home
+  sidebar, 400px protected center and optional 300px minimum right panel.
+  Explicit React render seats replace Cordis slots/layout stores. Browser
+  width/collapse preferences are owned by `app/`, with a 1024px overlay breakpoint.
+- HomeSidebar retains the brand/new/Workspace geometry and scrollbar linger.
+  rustX `rX`/wordmark replaces upstream product artwork. The separate original
+  primary rail owns global destinations supplied by product composition.
 - WorkspaceBrowser and Rows retain tree/header/search/hover/menu geometry.
   Native metadata search uses upstream contextual search rows; it does not claim
   conversation-content search. Project hover cards omit unavailable creation time.
   Schedule, provisional Session, archive and browser reorder paths are removed.
   Session Delete opens native revision-checked preview, never a local archive.
   Additional labelled buttons expose row gestures to keyboard users.
-- Settings retains the mask/panel/navigation/content frame. Sections and bodies
+- Settings retains the navigation/content vocabulary as an independent page,
+  removing the mask, modal focus containment and close lifecycle. Sections and bodies
   are adapter seats for existing CFG3 editors. A narrow Settings panel replaces
   the rail with a section menu (#393; the earlier horizontal section strip is
   deleted). No Settings Controller, mirror, source cache or publication

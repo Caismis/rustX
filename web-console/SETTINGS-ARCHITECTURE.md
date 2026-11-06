@@ -32,7 +32,7 @@ app/settings/machines/port.ts                  the one native I/O boundary of a 
 app/settings/machines/settings-target.ts       the Settings authority of one exact target
 app/settings/machines/unit-transaction.ts      one native semantic unit's CAS editing transaction
 app/settings/machines/session-configuration.ts Session observation + Session adoption
-app/settings/machines/navigation.ts            top-level Settings navigation and owner lookup
+app/settings/machines/navigation.ts            internal Settings navigation and owner lookup
 app/settings/machines/system.ts                lifetime ownership of the actors above
 app/settings/machines/react.ts                 the React subscription boundary
 ```
@@ -53,7 +53,7 @@ ConfigurationSystem(client)                    keyed by (endpoint, authority rev
 
 client publication ──(authority, TRANSPORT)──▶ every live actor of the current lifetime
                       └─ Settings target: port.publication(configuration) → its own scope only
-React Settings dialog ──ATTACH/DETACH──▶ an existing target actor
+React Settings page ──ATTACH/DETACH──▶ an existing target actor
 React Session region  ──retain/release, ADOPT──▶ its Session actor
 ```
 
@@ -432,7 +432,8 @@ not.
 
 ## Entry and target ownership
 
-The global Settings entry opens **User Settings** directly against the User source.
+The permanent Settings entry resumes its retained target and section. An explicit
+**Open User Settings** action selects the User source directly.
 The exact Workspace object action opens **Workspace Settings — <workspace>**, bound
 to that Product-Host-authorized Workspace for the whole lifetime of the Settings
 instance. There is no ordinary `Configuration owner` selector and no second editor
@@ -531,17 +532,21 @@ identity for a Session application — and is never a source owner.
 `applicationOwners` reads the native `sources` projection instead, so no code
 parses a scope string, guesses from a Session `cwd` or rebuilds source ownership.
 
-Settings navigation itself is one machine owned by the product shell
-(`machines/navigation.ts`), and every user action that changes Settings
-navigation is an event on it: open User Settings, open an exact Workspace, open
-an owning Workspace, open Connection Settings — including the disconnected
-recovery "Show details" gesture — select a page inside the open dialog, focus
-a detail inside that page, close Settings, and authority replacement. The
-machine's `target`, `page` and per-page `focus` are the one owner of the
-displayed Settings surface: `Settings` takes the navigation actor itself, renders
-its state as it is and sends `SELECT` / `FOCUS` / `CLOSE`, and holds no page
-state of its own, so a top-level decision taken while the dialog stays mounted is
-exactly what it shows. The unit-test Settings surface composes the same machine
+`ShellNavigationMachine` owns the independent Settings destination. Its retained
+internal navigation machine (`machines/navigation.ts`) owns the exact target,
+section, detail and asynchronous owner lookup. Explicit User, Workspace,
+Connection and repair entry points select their requested target through Shell;
+the primary Settings item resumes the previous internal selection. `Settings`
+renders that actor and sends `SELECT` / `FOCUS`, with no duplicate section state.
+Leaving the page sends `SUSPEND`, fencing owner lookup and repair inspection
+while preserving the committed target, section, detail and configuration actors.
+The retained page's `OverlayScope` owns a body-level portal container with the same
+hidden/inert activation as its inline subtree, preserving viewport overlay geometry.
+Dialogs, menus and selects share that scope. Inactive pages cannot activate
+their overlays or focus scopes; model forms remain mounted and native configuration
+writes continue settling under their existing actors. Authority replacement may
+retain internal model focus, but it cannot expose that dialog over Home.
+There is no modal visibility state or `CLOSE` event. The unit-test Settings surface composes the same machine
 and a real `ConnectionController`, so no test can reach or hide a navigation state
 the product could not.
 
@@ -564,7 +569,7 @@ Each of those re-enters `idle`, which **stops** the owning-Workspace lookup
 actor. Owner lookup (`listWorkspaces`) is asynchronous *preparation*, never
 standing authority to commit navigation later, and that is now structural rather
 than a comparison: a stale lookup has no completion path at all, so neither its
-success nor its failure can overwrite a newer decision, reopen a closed dialog or
+success nor its failure can overwrite a newer decision, change the primary route or
 publish an obsolete error. A lookup that completes under a replaced App Server
 authority answers `retired`, which is neither a navigation decision nor an
 error — the lookup has no error channel that could report one. There is exactly
@@ -664,7 +669,7 @@ configuration/sourcesRead ──▶ SourceSettings.user_repair / workspace_repai
   `pendingInspection` while a Workspace owner lookup is in flight, as
   `inspection` once navigation has landed at the owner's Advanced → Auto
   Repair — and every other navigation decision (`OPEN`, `OPEN.OWNER`,
-  `OPEN.CONNECTION`, `SELECT`, `FOCUS`, `CLOSE`, `RETIRE` on authority
+  `OPEN.CONNECTION`, `SELECT`, `FOCUS`, `SUSPEND`, `RETIRE` on authority
   replacement, or an unregistered, failed or retired lookup) discards it.
   `AutoRepairSection` reports `INSPECTED` with the receipt id it displays and
   the source of the authoritative read, only after it rendered from a current
@@ -848,16 +853,16 @@ The `COMMITTED` transition clears the confirmed draft unless the browser intent
 has already moved on to a newer one the user is still editing. A confirmed commit whose
 post-write authoritative reread failed therefore leaves an unsettled transaction
 that carries no secret-bearing payload, across editor unmount, section navigation
-and Settings close, until a later authoritative projection carrying its committed
+and primary page navigation, until a later authoritative projection carrying its committed
 revision settles it — with no replay and no second write.
 
 ## Composition
 
-`presentation/settings/SettingsRoot` remains the sole modal/navigation owner. Its
-overlay, focus containment and restoration use the shared Base UI-backed
-`DialogSurface`; vertical page tabs remain React Aria `Tabs`. Both retain the
-Harness classes. It
-also owns the narrow section menu (see *Presentation (#393)*).
+`presentation/settings/SettingsRoot` presents a normal full-content-area page.
+It owns generic section tabs, the narrow section menu and responsive focus
+handoff (see *Presentation (#393)*). Vertical tabs remain React Aria `Tabs` with
+Harness classes. The page has no mask, focus trap, close control or Escape close;
+transient operation confirmations retain the shared Base UI `DialogSurface`.
 `SettingsContent.module.css` adapts the pinned Harness Models editor and Plugin
 field/inventory vocabulary: outlined identity cards, filled editing modules,
 compact field rows, disclosures, diagnostics and narrow layouts. `Switch` is the
@@ -867,8 +872,8 @@ rustX-authored presentation seats, with no protocol imports or persistence.
 `app/settings/Settings` renders one Settings presentation and owns no
 asynchronous configuration semantics at all: it attaches to the Settings
 authority actor of its exact target, selects presentation state from that
-actor's snapshot, and sends user intent. It composes the six product pages
-(`general/`, `models/`, `agent/`, `tools/`, `extensions/`, `advanced/`).
+actor's snapshot, and sends user intent. It composes the seven product sections
+(`general/`, `models/`, `agent/`, `tools/`, `mcp/`, `extensions/`, `advanced/`).
 `forms/bridge.tsx` holds `useUnitEditing`, `UnitShell`, `UnitForm` and
 `TypedUnitForm`. `UnitForm` presents one
 native mutation's editable intent, reading that unit's transaction actor and
@@ -999,7 +1004,7 @@ mutation state — while suspending reading, convergence and every presentation
 fact. It does not fence a definitive native
 `sourceWrite` acknowledgement: the write is invoked by the target actor, not by
 the dialog, so it completes and is recorded on the transaction that submitted it
-even when the editor, or the whole Settings dialog, unmounted first. A
+even when the editor, or the whole Settings page, unmounted first. A
 presentation lifetime can stop an old operation from updating the current UI, but
 it never reinterprets a definitive commit as a failed submission — which would
 strand an already committed secret-bearing draft and a stale CAS base. Actors are
@@ -1195,8 +1200,8 @@ mutations, settlement, fencing, navigation, observation and adoption.
 **One frame with explicit regions.** `SettingsPanel` is one grid: the page rail,
 a fixed header and one scrolling page pane. The header holds the owner label,
 the observation lifecycle and **Reload configuration**, so every page shares
-them and page changes never move or resize the frame (≈1000 px wide bounded by
-the viewport, `min(820 px, viewport − 48 px)` high, r24). The header lives
+them and section changes never move or resize the frame. Since #536 it fills
+the shell content area beside the permanent primary rail. The header lives
 outside React Aria `Tabs` on purpose: RAC renders a `Tabs` subtree a second time
 into a detached collection document to discover its tabs, and the header's
 section menu measures real DOM.
@@ -1207,12 +1212,12 @@ section menu measures real DOM.
 and the header shows the section menu; content rules (field grids, rows, the
 header context) follow the same query. There is no media-query store, resize
 observer, breakpoint prop or machine state for it, and a narrow panel inside a
-wide window is narrow. Only the modal shell's own viewport bound stays on a
-media query. The deleted horizontal page strip, its `aria-orientation` styling
+wide window is narrow. The page has no separate modal viewport bound.
+The deleted horizontal page strip, its `aria-orientation` styling
 and its strip-scrolling tab label have no replacement.
 
 **Section menu.** The narrow page selector is the shared rustX `Menu`
-(`autoFocus`), whose rows are the same six pages with the same glyphs; selecting a
+(`autoFocus`), whose rows are the same authorized sections with the same glyphs; selecting a
 row sends the same `SELECT` the rail sends, the current row is marked with a
 check and `aria-current`, and the trigger names the current page. Its
 open/closed flag is the one transient state `SettingsPanel` holds. When the
@@ -1230,7 +1235,7 @@ the same `focusout`, with `preventScroll`, a hidden rail tab hands the keyboard
 to the section trigger and a hidden trigger hands it to the selected rail tab,
 so the keyboard stays on the same page in the presentation now shown and no
 rendered frame finds it on the page body. A counterpart that is not rendered
-refuses focus and the Settings dialog takes it instead; the handoff never
+refuses focus and the Settings page takes it instead; the handoff never
 bounces between the two presentations. It does not measure the panel or know
 the 680px rule, so the container query stays the only layout authority, and
 it never selects a page, opens the menu or touches drafts or native state. An
@@ -1263,7 +1268,8 @@ selection replaces it; with the keyboard back on the parent list, hover shows
 submenus again. Each surface retains
 `data-react-aria-top-layer`, the attribute React Aria's overlay focus containment,
 `ariaHideOutside` and interact-outside detection honour, and Escape on an open
-menu is stopped in the document capture phase so the modal never also sees it.
+menu is stopped in the document capture phase so a containing transient dialog
+never also sees it. The Settings page itself has no Escape-close behavior.
 Tooltip and HoverCard keep their existing geometry.
 
 **Anchor liveness.** A floating surface exists only while its reference is a
@@ -1289,7 +1295,7 @@ on `autoUpdate`'s next scroll, resize or layout-shift signal. The Menu does
 not infer that owner from the DOM — a nearest `[tabindex]` ancestor may be
 missing (a Workspace Session row has none up to the page) or may itself be the
 clipped row — so a host whose anchor can disappear under normal layout names
-it: the Settings section menu names the Settings dialog, Workspace project and
+it: the Settings section menu names the Settings page, Workspace project and
 Session row menus name the Session tree, and JSON copy menus name the
 Trajectory inspector body. With no owner named, the keyboard is released to the
 document, never left on a removed row or a hidden anchor. Ordinary closes
@@ -1305,7 +1311,7 @@ setup treats every anchor as rendered; Chromium proves the contract.
 
 **Dialog behavior owns close lifecycle; Settings workflows provide the intended
 focus destination.** `DialogSurface` wraps Base UI 1.8.0 Dialog/AlertDialog for
-the one Settings panel and its transient confirmations. Base UI owns layering,
+transient Settings confirmations. Base UI owns layering,
 containment, Escape, outside dismissal, initial focus and the public `finalFocus`
 lifecycle. rustX retains Harness DOM styling, tokens, icons and vocabulary.
 Portaled menus and selects share the containing dialog portal as siblings of
@@ -1391,7 +1397,7 @@ clipped the surface is never live and the keyboard is already on its owner
 and never to the body or the hidden anchor, that the owner was asked to close
 exactly once, and that the scroll stands. The Settings spec
 widens a narrow panel under an open section menu and proves that the menu closes,
-the Settings dialog holds the keyboard and wide navigation works; it narrows the
+the Settings page holds the keyboard and wide navigation works; it narrows the
 panel under a focused rail tab and widens it under a focused closed section
 trigger, inside a wide window, and proves that the keyboard moves to the other
 presentation's control for the same page, no frame finds it on the body, no page

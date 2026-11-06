@@ -157,6 +157,7 @@ server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_
 // The native requests this page issued, for browser assertions of exact
 // identity, ordering and request counts. Test fixture only.
 (window as unknown as { rustxNativeRequests: () => unknown[] }).rustxNativeRequests = () => server.requests.map(item => item.request);
+(window as unknown as { rustxReplaceAuthority: () => Promise<void> }).rustxReplaceAuthority = async () => { server.authorityId = 'replacement-authority'; await server.connect(); };
 // Streams one long answer for Session A through the production client fold,
 // one delta per task so every delta can paint. Test fixture only.
 (window as unknown as { rustxStream: (deltas: number) => Promise<void> }).rustxStream = async deltas => {

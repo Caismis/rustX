@@ -7,7 +7,8 @@ test('new conversation appears above history and disappears when leaving the uns
   await page.getByRole('button', { name: 'Open Session A', exact: true }).click();
   const group = page.locator('[data-workspace-group] [role=treeitem][aria-expanded]').first();
   await group.press('Enter');
-  await page.getByRole('button', { name: 'New Conversation', exact: true }).nth(1).click();
+  const create = page.locator('#home-sidebar button[aria-label="New Conversation"]');
+  await create.click();
   const draft = page.locator('[data-draft-conversation]');
   await expect(draft).toBeVisible();
   await expect(draft).toHaveAttribute('aria-selected', 'true');
@@ -17,7 +18,7 @@ test('new conversation appears above history and disappears when leaving the uns
   await page.locator('textarea').fill('unsent input');
   await draft.getByRole('button').click();
   await expect(page.locator('textarea')).toBeFocused();
-  await page.getByRole('button', { name: 'New Conversation', exact: true }).nth(1).click();
+  await create.click();
   await expect(draft).toHaveCount(1);
   await expect(page.locator('textarea')).toHaveValue('unsent input');
   await page.screenshot({ path: '/tmp/rustx-nav-qa/draft-sidebar.png' });

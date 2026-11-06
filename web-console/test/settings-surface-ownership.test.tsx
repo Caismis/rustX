@@ -648,10 +648,10 @@ const commitsProvider = async (op: { method: string }, source: SourceSettings) =
   if (op.method === 'configuration/sourceWrite') source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
 };
 
-it('S1-16 a definitive acknowledgement outlives the whole Settings dialog and retires the submitted secret-bearing transaction', async () => {
+it('S1-16 a definitive acknowledgement outlives the whole Settings surface and retires the submitted secret-bearing transaction', async () => {
   const s = cfg3Client(commitsProvider);
   const { ui, host, release } = await heldSecretSave(s);
-  // The whole Settings dialog closes — not merely the editor section — while
+  // The whole Settings surface unmounts, including its editor section, while
   // the definitive acknowledgement is still in flight.
   ui.unmount();
   await release();
@@ -669,7 +669,7 @@ it('S1-16 a definitive acknowledgement outlives the whole Settings dialog and re
   await waitFor(() => expect(retained(s)).not.toContain('"committed"'));
   expect(retained(s)).not.toContain(SECRET_SENTINEL);
   expect(document.body.innerHTML).not.toContain(SECRET_SENTINEL);
-  // The committed revision is the base, so closing Settings never manufactures
+  // The committed revision is the base, so unmounting Settings never manufactures
   // an external conflict or a reviewed-revision gesture.
   await openResourceRow('secret');
   expect(credentialSource()).toContain('Keep the credential this scope already authored');

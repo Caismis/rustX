@@ -27,8 +27,8 @@ import type { ChangesReviewRequest } from '../changes-review';
 const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
 export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void; openChanges(request:ChangesReviewRequest):void; openTask(id: string, title: string): void }
-export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, host, previews, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  renderAgent?: (id: string, visible: boolean) => ReactNode; renderTask?: (id: string) => ReactNode; renderTaskTitle?: (id: string, fallback: string) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
+export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, host, previews, scope, target, active = true, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
+  renderAgent?: (id: string, visible: boolean) => ReactNode; renderTask?: (id: string) => ReactNode; renderTaskTitle?: (id: string, fallback: string) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; active?: boolean; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
 }) {
   const tx = useTranslation();
   const session = target && 'session_id' in target ? target : undefined;
@@ -118,7 +118,7 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
   }}));
   const [, setFileFocus] = useState(0);
   useEffect(()=>{
-    if(!visible || !available) return;
+    if(!active || !visible || !available) return;
     const abort=new AbortController();
     void call({kind:'terminals'},abort.signal).then(value=>{
       if(abort.signal.aborted)return;
@@ -131,7 +131,7 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
       if(focused && dock.getSnapshot().state.tabs[focused])dock.focusTab(focused);
     },cause=>{if(!abort.signal.aborted)setError(String(cause));});
     return()=>abort.abort();
-  },[call,visible,available,dock]);
+  },[call,active,visible,available,dock]);
   const create=async(paneId:PaneId,selectedShell=shell)=>{
     if(busy || !selectedShell)return;
     const admittedNavigation = ++navigation.current;
@@ -191,7 +191,7 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
     moveFloat:(id,x,y)=>dock.moveFloat(id,x,y),resizeFloat:(id,rect)=>dock.resizeFloat(id,rect),resizeSplit:(id,sizes)=>dock.resizeSplit(id,sizes),
   };
   useEffect(()=>{
-    if(!visible && !floatingVisible)return;
+    if(!active || !visible && !floatingVisible)return;
     const composition=observeComposition(document);
     const key=(e:KeyboardEvent)=>{
       if(e.defaultPrevented||composition.guards(e)||document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]'))return;
@@ -218,13 +218,14 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
   const visibleFiles = Object.values(state.tabs).filter(tab => {
     const pane = findTabPane(state, tab.id);
     // Collapsing the dock preserves its selected body (notably HTML iframe state).
-    // Preview mode retires both surfaces; retained content still shares the body cap.
+    // Primary pages hide interaction separately; selected documents keep their
+    // browsing contexts under the same body cap. Preview mode still retires them.
     return tab.kind === 'file' && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible || floatingVisible);
   }).sort((left, right) => Number(findTabPane(state, right.id).id === state.activePaneId) - Number(findTabPane(state, left.id).id === state.activePaneId)).slice(0, PREVIEW_POLICY.activeBodies);
   const body=(tab:TabRecord)=>{
     const pane=findTabPane(state,tab.id);
     return <div className={css.body}>
-    {tab.kind==='schedule' ? renderTask?.(tab.contentId) : tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
+    {tab.kind==='schedule' ? renderTask?.(tab.contentId) : tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={active && pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, active && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
         <span className={css.hero}><CompassGlyph size={56}/></span>
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
         <div className={`${css.entry} ${css.terminalEntry}`}><button type="button" className={css.launch} aria-label={tx('artifacts:workbench.new-terminal')} aria-keyshortcuts="Control+`" disabled={!available || busy || !shell} onClick={() => void create(pane.id)}/><span className={css.entryIcon}><PluginArtworkTerminal size={26}/></span><span className={css.entryText}><span className={css.titleRow}><span className={css.entryTitle}>{tx('artifacts:workbench.new-terminal')}</span><Menu open={menu === pane.id} autoFocus align="end" items={shells.map(s => ({ id: s, label: s.split('/').at(-1)! }))} selectedId={shell} onClose={() => setMenu(undefined)} onSelect={s => { setShell(s); setMenu(undefined); void create(pane.id, s); }} anchor={<button type="button" className={css.shellTrigger} disabled={busy || !shells.length} aria-label={tx('artifacts:workbench.shell')} aria-haspopup="menu" aria-expanded={menu === pane.id} onClick={() => setMenu(menu === pane.id ? undefined : pane.id)}><IconChevronDownOutline14/></button>}/></span><span className={css.entryDescription}>{tx('artifacts:workbench.terminal-description')}</span></span><ShortcutKeys keys={[isMac ? '⌃' : 'Ctrl', '`']}/></div>
@@ -232,14 +233,14 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
     </div>;
   };
   const usesWorkspaceTools = Object.values(state.tabs).some(tab => !['subagent','changes','schedule'].includes(tab.kind) && findTabPane(state, tab.id).activeTabId === tab.id);
-  return <div ref={root} className={css.root} hidden={!visible && !floatingVisible} data-workbench>
+  return <div ref={root} className={css.root} hidden={!active || !visible && !floatingVisible} inert={!active} data-workbench>
     {visible&&error&&<p role="alert" className={css.notice}>{error}</p>}
     {visible&&!available&&usesWorkspaceTools&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
-    <DockLayout state={state} active={visible || floatingVisible} canSplit={dockPaneIds(state).length<2} dropZones="horizontal" minPaneFraction={0.2} intents={intents}
+    <DockLayout state={state} active={active && (visible || floatingVisible)} canSplit={dockPaneIds(state).length<2} dropZones="horizontal" minPaneFraction={0.2} intents={intents}
       canAddTab={id=>!getPane(state,id).tabs.some(t=>state.tabs[t].kind==='start')}
       canCloseTab={id=>canCloseTab(state,id)} onRoom={fits=>{room.current=fits;}}
       labels={{emptyPane:tx('artifacts:workbench.empty-pane'),splitPane:tx('artifacts:workbench.split'),splitPaneDisabled:tx('artifacts:workbench.split-limit'),splitPaneNarrow:tx('artifacts:workbench.split-room'),splitPaneShortcut:isMac?'Meta+\\':'Control+\\',splitPaneKeys:isMac?['⌘','\\']:['Ctrl','+','\\'],closeTab:tx('artifacts:workbench.close-tab'),closeTabShortcut:isMac?'Alt+Meta+W':'Alt+Control+W',closeTabKeys:isMac?['⌥','⌘','W']:['Ctrl','+','Alt','+','W'],addTab:tx('artifacts:workbench.add-tab'),dockFloat:tx('artifacts:workbench.dock'),closeFloat:tx('artifacts:workbench.close-tab'),dropZone:{center:tx('artifacts:workbench.drop-center'),left:tx('artifacts:workbench.drop-left'),right:tx('artifacts:workbench.drop-right'),top:tx('artifacts:workbench.drop-top'),bottom:tx('artifacts:workbench.drop-bottom')}}}
-      keepMounted={tab=>tab.kind==='subagent'||tab.kind==='schedule'} renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='schedule'?<IconClockOutline16/>:tab.kind==='subagent'?<IconAgentPresetOutline16/>:tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{tab.kind==='schedule' && renderTaskTitle ? renderTaskTitle(tab.contentId,title(tab)??'') : title(tab)}</span></span>}
+      keepMounted={tab=>tab.kind==='subagent'||tab.kind==='schedule'||visibleFiles.some(file=>file.id===tab.id)} renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='schedule'?<IconClockOutline16/>:tab.kind==='subagent'?<IconAgentPresetOutline16/>:tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{tab.kind==='schedule' && renderTaskTitle ? renderTaskTitle(tab.contentId,title(tab)??'') : title(tab)}</span></span>}
       chrome={<>
         <Tooltip label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} shortcutKeys={isMac?['⌥','⌘','↩']:['Ctrl','+','Alt','+','Enter']} side="bottom" delayMs={500}>
           <button type="button" className={panelCss.iconButton} aria-label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} aria-keyshortcuts={isMac?'Alt+Meta+Enter':'Alt+Control+Enter'} data-sidebar-right-mode={fullscreen?'push':'fullscreen'} onClick={toggleFullscreen}>{fullscreen?<ExitFullscreenGlyph/>:<FullscreenGlyph/>}</button>

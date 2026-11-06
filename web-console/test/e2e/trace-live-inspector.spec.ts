@@ -11,7 +11,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await page.goto(`${origin}/test/fixtures/startup.html?existing&models&trace-live`);
   await page.waitForFunction(() => (window as any).startupFixture);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
-  if (zh) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click();
+  if (zh) await page.getByRole('button', { name: '主页', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('tab', { name: zh ? '轨迹' : 'Trajectory', exact: true }).click();

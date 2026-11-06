@@ -49,8 +49,8 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await connectRemote(page, fixture.endpoint, fixture.token); sessionId = await openEmptySession(page, fixture, 'Workspace A');
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       await send('Earlier question'); await expect(page.getByText('Earlier answer stays.', { exact: true })).toBeVisible(); const earlier = await settled();
       // Chat hides the initial system prompt (Harness hidden rows): no late

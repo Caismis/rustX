@@ -30,7 +30,7 @@ it('switches the complete active shell and General through Language, preserving 
   fireEvent.click(screen.getByRole('button', { name: /语言$/ }));
   expect(screen.getByRole('option', { name: 'English' })).toBeTruthy();
   fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
-  fireEvent.click(screen.getByRole('button', { name: text('settings:settings-root.close-settings') }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: text('sidebar:navigation.home') })));
   expect(screen.getByRole('tree', { name: text('workspace:workspace-browser.session-browser') })).toBeTruthy();
   expect(screen.getByRole('region', { name: text('common:conversation-composer.new-conversation') })).toBeTruthy();
   expect(screen.getByRole('textbox', { name: text('agent:agent-composer.message') })).toBe(composer);

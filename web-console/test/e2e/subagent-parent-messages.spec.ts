@@ -12,7 +12,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await page.goto(fixture);
   await page.waitForFunction(() => (window as any).startupFixture);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
-  if (zh) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click();
+  if (zh) await page.getByRole('button', { name: '主页', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   const rootInput = page.getByRole('textbox', { name: zh ? '消息' : 'Message', exact: true });
   await rootInput.fill('Keep parent draft');

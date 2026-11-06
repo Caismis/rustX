@@ -84,9 +84,9 @@ it('cold grouping and Workspace selection issue no attach, cancel, unload, setti
   expect(host.resolveWorkspace).toHaveBeenCalledWith('wA', endpoint); expect(methods()).not.toContain('session/create'); expect(server.loaded.size).toBe(0);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(server.coldLoads.get('A')).toBe(1);
-  // Session focus changes beneath the Settings modal, which hides the page it
-  // covers from the accessibility tree.
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B', hidden: true })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
   expect(server.loaded.has('A')).toBe(true);
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
 });
@@ -119,7 +119,7 @@ it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completio
   await act(async () => {
     stop = owner.start();
     render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
-      endpoint={endpoint} wide expand={vi.fn()} metadataChanged={metadataChanged}
+      endpoint={endpoint} metadataChanged={metadataChanged}
       selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
       createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
   });
@@ -230,7 +230,7 @@ it.each(['add', 'rename', 'remove'] as const)('Sidebar %s preserves the opened i
   await act(async () => {
     stop = owner.start();
     render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
-      endpoint={endpoint} wide expand={vi.fn()} metadataChanged={metadataChanged}
+      endpoint={endpoint} metadataChanged={metadataChanged}
       selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
       createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
   });
@@ -607,7 +607,7 @@ it('S1-10 an unregistered owning Workspace reports an explicit error and never f
   const before = methods().length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/revoked' })));
   expect(screen.getAllByRole('alert').some(alert => alert.textContent?.includes('/workspace/revoked is not registered by this Product Host'))).toBe(true);
-  // No Settings instance is opened at all, least of all User authoring.
+  // The Settings page reports the exact unavailable owner without User authoring.
   expect(screen.queryByRole('heading', { name: 'User Settings' })).toBeNull();
   expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
   // No hidden Workspace, Session or runtime is allocated to resolve it.
@@ -619,9 +619,9 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
   await failedSessionConfiguration([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' })));
   expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
-  // Session focus changes beneath the Settings modal, which hides the page it
-  // covers from the accessibility tree.
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B', hidden: true })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Select Workspace Workspace B' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
   expect(screen.getByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeTruthy();
 });
 
@@ -632,7 +632,7 @@ async function pendingOwnershipLookup(sources: readonly import('../../protocol/a
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();
-  host.listWorkspaces = vi.fn(() => gate.promise);
+  host.listWorkspaces = vi.fn().mockImplementationOnce(() => gate.promise).mockResolvedValue(catalog);
   fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A' }));
   return { gate, catalog };
 }
@@ -648,6 +648,7 @@ it('S1-10 a newer User Settings decision rejects a late owning Workspace lookup'
 
 it('S1-10 a newer Workspace B Settings decision rejects a late owning Workspace A lookup', async () => {
   const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace B' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' })));
   await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
@@ -656,13 +657,13 @@ it('S1-10 a newer Workspace B Settings decision rejects a late owning Workspace 
   expect(screen.queryByRole('heading', { name: 'Workspace Settings — Workspace A' })).toBeNull();
 });
 
-it('S1-10 closing Settings rejects a late owning Workspace lookup', async () => {
+it('S1-10 leaving Settings rejects a late owning Workspace lookup', async () => {
   const { gate, catalog } = await pendingOwnershipLookup([{ kind: 'user' }, { kind: 'workspace', directory: '/workspace/A' }]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Settings' })));
   await screen.findByRole('heading', { name: 'User Settings' });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Close Settings' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
   await act(async () => { gate.resolve(catalog); });
-  expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+  expect(screen.queryByRole('region', { name: 'Settings' })).toBeNull();
 });
 
 it('S1-10 an authority replacement rejects a late owning Workspace lookup', async () => {
@@ -670,7 +671,8 @@ it('S1-10 an authority replacement rejects a late owning Workspace lookup', asyn
   const before = server.client.getSnapshot();
   vi.spyOn(server.client, 'getSnapshot').mockReturnValue({ ...before, authorityRevision: (before.authorityRevision ?? 0) + 1 });
   await act(async () => { gate.resolve(catalog); });
-  expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+  expect(screen.queryByRole('heading', { name: /^Workspace Settings/ })).toBeNull();
+  expect(screen.queryByText(/stale owner lookup/)).toBeNull();
 });
 
 it('UX-04 keeps confirmed groups while a cloned native page refresh is gated', async () => {
@@ -910,6 +912,29 @@ it.each(['admission', 'reply'] as const)('delayed initialization recovery %s can
   });
   expect(screen.getByRole('button', { name: 'Select Workspace Workspace B' }).getAttribute('aria-current')).toBe('page');
   expect(methods().filter(method => method === 'session/retryInitialization')).toHaveLength(boundary === 'reply' ? 1 : 0);
+  expect(methods().filter(method => method === 'session/attach')).toHaveLength(1);
+  expect(methods().filter(method => ['session/create', 'turn/start'].includes(method))).toEqual([]);
+});
+
+it.each(['Settings', 'Scheduled Tasks', 'Workflows'])('an admitted initialization recovery cannot steal the newer %s primary route', async destination => {
+  await mount();
+  server.handlers.set('workflow/list', request => {
+    if (request.method !== 'workflow/list') throw Error('Expected Workflow library read');
+    return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'missing', diagnostic: null, files: [] } };
+  });
+  server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'Initialization failed' }); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  server.handlers.delete('session/attach');
+  server.held.add('session/retryInitialization');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
+  const request = await server.waitFor('session/retryInitialization', 1);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: destination })));
+  const rail = screen.getByRole('navigation', { name: 'Primary navigation' });
+  const selected = rail.querySelector('[aria-current=page]');
+  await act(async () => server.reply(request));
+  expect(rail.querySelector('[aria-current=page]')).toBe(selected);
+  expect(selected?.getAttribute('aria-label')).toBe(destination);
+  expect(methods().filter(method => method === 'session/retryInitialization')).toHaveLength(1);
   expect(methods().filter(method => method === 'session/attach')).toHaveLength(1);
   expect(methods().filter(method => ['session/create', 'turn/start'].includes(method))).toEqual([]);
 });

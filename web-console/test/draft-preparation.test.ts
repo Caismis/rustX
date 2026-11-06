@@ -62,7 +62,7 @@ it('Send seals an exact target; navigation after transfer cannot cancel it or re
   await f.server.waitFor('mcp/draftPrepare', 2);
   expect(f.requests().filter(row => row.method === 'mcp/draftCancel').map(row => row.params)).toEqual([{ target: request.params.target }]);
 });
-it.each(['attachment', 'Settings', 'same Session', 'abandonment', 'discarded failure'] as const)('creation ACK preserves the submitted generation across %s, before native transfer can finish', async outcome => {
+it.each(['attachment', 'Settings', 'same Session', 'Workflows', 'discarded failure'] as const)('creation ACK preserves the submitted generation across %s, before native transfer can finish', async outcome => {
   const f = await fixture(), navigation = routeFixture(f.server.client, f.host, f.owner);
   navigation.actor.send({ type: 'DRAFT', workspaceId: 'workspace-a' });
   const prepared = await f.server.waitFor('mcp/draftPrepare', 1);
@@ -92,11 +92,8 @@ it.each(['attachment', 'Settings', 'same Session', 'abandonment', 'discarded fai
   expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([prepared]);
   if (outcome === 'Settings') navigation.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } });
   else if (outcome === 'same Session') navigation.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: session.id, sidebar: true } });
-  if (outcome === 'abandonment') {
-    navigation.actor.send({ type: 'WORKFLOWS' });
-    const cancel = await f.server.waitFor('mcp/draftCancel', 1);
-    expect(cancel.params).toEqual({ target: preparation });
-  } else expect(f.requests().filter(row => row.method === 'mcp/draftCancel')).toEqual([]);
+  if (outcome === 'Workflows') navigation.actor.send({ type: 'WORKFLOWS' });
+  expect(f.requests().filter(row => row.method === 'mcp/draftCancel')).toEqual([]);
   if (outcome === 'discarded failure') {
     f.server.socket.deliver({ jsonrpc: '2.0', id: attach.id, error: { code: -32000, message: 'initialization failed', data: { kind: 'operation_failed' } } });
     expect(await work).toBe(false);
@@ -114,11 +111,10 @@ it.each(['attachment', 'Settings', 'same Session', 'abandonment', 'discarded fai
     return;
   }
   f.server.reply(attach);
-  expect(await work).toBe(outcome !== 'abandonment');
-  expect(navigation.actor.getSnapshot().context.route).toEqual(outcome === 'abandonment' ? { kind: 'workflows' }
-    : { kind: outcome === 'Settings' ? 'session-draft' : 'session', sessionId: session.id });
+  expect(await work).toBe(true);
+  expect(navigation.actor.getSnapshot().context.route).toEqual(outcome === 'Workflows' ? { kind: 'workflows' } : outcome === 'Settings' ? { kind: 'settings' } : { kind: 'session', sessionId: session.id });
   expect(f.requests().filter(row => row.method === 'session/create')).toHaveLength(1);
-  expect(f.requests().filter(row => row.method === 'turn/start')).toHaveLength(outcome !== 'abandonment' ? 1 : 0);
+  expect(f.requests().filter(row => row.method === 'turn/start')).toHaveLength(1);
 });
 it.each([
   { outcome: 'admitted', next: 'Workspace selection' }, { outcome: 'admitted', next: 'New Conversation' },
@@ -147,11 +143,11 @@ it.each([
   const create = await f.server.waitFor('session/create', 1);
   navigation.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } });
   navigation.actor.send({ type: 'DRAFT', workspaceId: 'workspace-b' });
-  expect(navigation.actor.getSnapshot().context).toMatchObject({ binding, route: { kind: 'new-conversation', workspaceId: 'workspace-a' } });
+  expect(navigation.actor.getSnapshot().context).toMatchObject({ binding, route: { kind: 'settings' }, home: { kind: 'new-conversation', workspaceId: 'workspace-a' } });
   expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([prepared]);
   f.server.reply(create);
   const attach = await f.server.waitFor('session/attach', 1);
-  expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'new-conversation', workspaceId: 'workspace-a' });
+  expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'settings' });
   if (outcome === 'discarded failure') {
     f.server.socket.deliver({ jsonrpc: '2.0', id: attach.id, error: { code: -32000, message: 'initialization failed', data: { kind: 'operation_failed' } } });
     expect(await work).toBe(false);
@@ -164,7 +160,9 @@ it.each([
     expect(await work).toBe(true);
     expect(submissions.draft(String(binding))?.phase).toBe('admitted');
   }
-  navigation.settings.send({ type: 'CLOSE' });
+  navigation.actor.send({ type: 'HOME' });
+  await import('xstate').then(({ waitFor }) => waitFor(navigation.actor, state => state.matches('idle')));
+  if (next === 'Workspace picker') navigation.actor.send({ type: 'DRAFT' });
   if (next === 'Workspace picker') navigation.actor.send({ type: 'DRAFT.WORKSPACE', workspaceId: 'workspace-b' });
   else navigation.actor.send({ type: 'DRAFT', workspaceId: next === 'Workspace selection' ? 'workspace-b' : undefined });
   const fresh = navigation.actor.getSnapshot().context.binding;

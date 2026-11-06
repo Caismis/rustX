@@ -9,7 +9,7 @@ for (const width of [1440, 390]) test(`switching Chat after frame callbacks posi
   if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   await page.setViewportSize({ width, height: 900 });
   for (const id of ['B', 'A', 'B', 'A', 'B', 'A']) {
-    const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+    const expand = page.getByRole('button', { name: 'Home', exact: true });
     if (await expand.isVisible()) await expand.click();
     await expect(page.locator(`button[data-session-id="${id}"]`)).toBeAttached();
     // A navigation can commit after this frame's animation callbacks. Inspect
