@@ -1,7 +1,54 @@
 import { test, expect } from '@playwright/test';
-import { expectStableScreenshot } from './screenshot';
+import { captureEvidence, expectStableScreenshot } from './screenshot';
 declare global { interface Window { schedulerRecovery: { hold(held: boolean): void; reconnect(): Promise<void>; complete(): void; commands(): { command_id: string; mutation: unknown }[] } } }
 const origin = 'http://127.0.0.1:' + (process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174);
+for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) {
+  test(`native task creation dialog ${locale} ${theme} at ${width}`, async ({ page }) => {
+    const zh = locale === 'zh';
+    await page.setViewportSize({ width, height: 1000 }); await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: theme });
+    await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
+    await page.goto(origin + '/test/fixtures/scheduler.html?empty&locale=' + locale + '&theme=' + theme);
+    if (width === 390) await page.getByRole('button', { name: zh ? '打开侧边栏' : 'Expand Sidebar' }).click();
+    await page.getByRole('button', { name: zh ? '自动化任务' : 'Automation tasks', exact: true }).click();
+    await page.getByRole('button', { name: zh ? '新建' : 'New', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: zh ? '设置自动化任务' : 'Set up an automation task' });
+    await expect(dialog).toBeVisible();
+    const instruction = dialog.getByRole('textbox', { name: zh ? '任务内容' : 'Task instruction', exact: true });
+    const repeat = dialog.getByRole('button', { name: zh ? '重复' : 'Repeat', exact: true });
+    const workspace = dialog.getByRole('button', { name: zh ? '工作区' : 'Workspace', exact: true });
+    const create = dialog.getByRole('button', { name: zh ? '创建' : 'Create', exact: true });
+    const geometry = await Promise.all([instruction, repeat.locator('xpath=ancestor::section'), workspace.locator('xpath=../..'), create].map(locator => locator.boundingBox()));
+    const [instructionBox, timingBox, workspaceRowBox, createBox] = geometry;
+    const dialogBox = await dialog.boundingBox();
+    expect(instructionBox).not.toBeNull(); expect(timingBox).not.toBeNull(); expect(workspaceRowBox).not.toBeNull(); expect(createBox).not.toBeNull();
+    expect(Math.abs(instructionBox!.x - (dialogBox!.x + 24))).toBeLessThanOrEqual(1);
+    expect(Math.abs(dialogBox!.x + dialogBox!.width - instructionBox!.x - instructionBox!.width - 24)).toBeLessThanOrEqual(1);
+    expect(Math.abs(timingBox!.x - instructionBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(timingBox!.x + timingBox!.width - instructionBox!.x - instructionBox!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(workspaceRowBox!.x - instructionBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(workspaceRowBox!.x + workspaceRowBox!.width - instructionBox!.x - instructionBox!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(createBox!.x + createBox!.width - instructionBox!.x - instructionBox!.width)).toBeLessThanOrEqual(1);
+    await expect(dialog.getByRole('button', { name: zh ? '工作区' : 'Workspace', exact: true })).toHaveText('Workspace A');
+    const workspaceHeight = await dialog.getByRole('button', { name: zh ? '工作区' : 'Workspace', exact: true }).evaluate(button => button.getBoundingClientRect().height);
+    expect(workspaceHeight).toBeLessThanOrEqual(32);
+    await dialog.getByRole('textbox', { name: zh ? '任务内容' : 'Task instruction', exact: true }).fill(zh ? '检查仓库最新变更，汇总需要关注的事项。' : 'Review the latest repository changes and summarize anything that needs attention.');
+    await expect(dialog.getByRole('button', { name: zh ? '创建' : 'Create', exact: true })).toBeEnabled();
+    await captureEvidence(page, `scheduler-${locale}-${width}-${theme}-create`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    const rect = await dialog.boundingBox(); expect(rect!.width).toBeLessThanOrEqual(width - 24);
+    expect(await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string }[] } }).schedulerFixture.requests().some(row => row.method === 'session/create'))).toBe(false);
+    await dialog.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: zh ? '新建自动化任务' : 'New automation task', exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: zh ? '创建' : 'Create', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    const requests = await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string; params: unknown }[] } }).schedulerFixture.requests());
+    expect(requests.filter(row => row.method === 'session/create').map(row => row.params)).toEqual([{ settings: { cwd: '/workspace' } }]);
+    expect(requests.filter(row => row.method === 'schedule/command')).toHaveLength(1);
+    expect(requests.some(row => ['session/attach', 'turn/start'].includes(row.method))).toBe(false);
+    await expect(page.locator('[data-shell-route="schedules"]')).toBeVisible();
+  });
+}
 for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) {
   test(`Automation tasks ${locale} ${theme} at ${width}: list, rule, native Workflow records`, async ({ page }) => {
     const zh = locale === 'zh';

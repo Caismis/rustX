@@ -2,7 +2,6 @@ import { createRoot } from 'react-dom/client';
 import { App } from '../../src/app/App';
 import { schedulerFixture, task, workflowFixture } from '../scheduler-fixture';
 import { localeController } from '../../src/locale/controller';
-import { cfg3Source } from '../cfg3-data';
 import { sourceReceipt } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
@@ -18,12 +17,15 @@ const paused = task(zh ? '整理研究笔记' : 'Organize research notes', 'A', 
 paused.spec = { type: 'interval', every_seconds: 3600, anchor_utc: '2026-10-01T10:00:00Z' };
 const once = task(zh ? '准备发布说明' : 'Prepare release notes', 'B', 'node-B', '3'); once.spec = { type: 'at', at_utc: '2028-11-03T02:00:00Z' };
 const workflow = workflowFixture(); workflow.task.id.ordinal = '4'; workflow.task.title = zh ? '每周代码评审摘要' : 'Weekly code review summary';
-const f = schedulerFixture([daily, paused, once, workflow.task]);
+const f = schedulerFixture(params.has('empty') ? [] : [daily, paused, once, workflow.task]);
 f.server.summaries.set('A', { active_node: daily.binding.node_id });
 f.server.nodeSnapshots.set(daily.binding.node_id, f.server.snapshots.get('A')!);
 f.server.workspaceHost.classifyLocations = async cwds => cwds.map(cwd => ({ authorized: true, workspaceId: cwd.endsWith('/B') ? 'workspace-b' : 'workspace-a' }));
-f.server.workspaceHost.configureWorkspace = async (id, _endpoint, operation) => {
-  const projection = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: id === 'workspace-b' ? '/workspace/B' : '/workspace' } };
+const readWorkspace = f.server.workspaceHost.configureWorkspace!;
+f.server.workspaceHost.configureWorkspace = async (id, endpoint, operation) => {
+  const result = await readWorkspace(id, endpoint, { kind: 'read' });
+  if (result.kind !== 'read') throw Error('read');
+  const projection = result.projection;
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: sourceReceipt(projection), reread: { status: 'observed', projection } } };
   if (operation.kind === 'mcp_probe') return { kind: 'mcp_probe', result: { id: operation.id, revision: operation.expected_revision, outcome: 'reachable' } };
   return { kind: operation.kind, projection };

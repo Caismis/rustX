@@ -51,8 +51,21 @@ enabled task directly, or a task picker when several are enabled. The sidebar
 marks Sessions with enabled tasks and includes their upcoming times in its hover
 card. Details share one Rules/Task runs surface in the task page and Workbench.
 Opening its associated conversation selects the task's original Session/node.
-New task opens a conversation for a scheduling request to the Agent, matching
-the Harness creation flow.
+New task opens a centered configuration dialog. It accepts the instruction and
+native run-time rule directly, with registered Workspace, optional task name,
+and native Model/Profile choices in Advanced. Creating explicitly allocates one
+dedicated Session and writes its native Message schedule without attaching a
+runtime, sending a message or asking a model to author the rule. Later occurrences
+continue that same conversation. The displayed Workspace model default is not
+persisted as Session intent unless the user explicitly selects a model or profile.
+Cancel performs no mutation. Failed scheduling retains the acknowledged Session;
+retry reuses the exact command identity and payload rather than creating another
+Session. An uncertain Session creation is not automatically replayed.
+
+The root Agent must explicitly select `get_schedule`, `list_schedules`, and
+`schedule_command` in `[agent.tools] builtin` to use conversational Scheduler
+tools. These capabilities are unavailable to named subagents. Direct task creation
+does not require or automatically enable these model-facing capabilities.
 
 Task edits use the native command ID and expected revision. Name/instruction-only
 edits retain the saved timing and interval anchor. Workflow name/timing edits use
