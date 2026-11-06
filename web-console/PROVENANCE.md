@@ -1,3 +1,21 @@
+## Startup and New Conversation Workspace selection (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,
+`ui-workspace/src/client/navigation.ts` (`startSession`, `restoreSelection`,
+`recentWorkspace`). Explicit Workspace choices win; unscoped New inherits the
+current Session's confirmed Workspace before selecting the most recent native
+Session activity. Startup preserves restored Session navigation. Native transport
+connection already waits for the initial Session catalog; automatic selection
+also waits for the matching Host catalog and classification. Equal/no known
+activity uses stable Host order (the rustX registration contract has no creation
+timestamp). The existing 128-entry association cache retains activity metadata
+across list searches, without new reads or persisted selection authority.
+The resident draft keeps its editor/binding while its default is filled. A
+pending origin remains navigation-owned until classification settles; newer
+manual choices or navigation supersede it. Native Send admission and the
+existing draft/MCP preparation lifecycle remain the owners; no eager upstream
+Session creation or default-directory initialization is introduced.
+
 ## Shared sidebar preview and reusable Office converter (2026-11-06)
 
 Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`.

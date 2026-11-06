@@ -26,6 +26,7 @@ import type { WorkbenchTarget } from '../workspaces/workbench';
 import { HttpWorkspaceHost } from '../workspaces/http-host';
 import { WorkspaceAuthority } from '../workspaces/authority';
 import { WorkspaceAssociations } from '../workspaces/associations';
+import { preferredWorkspace } from '../workspaces/preferred';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { WorkspaceSessionAdmission } from '../workspaces/session-admission';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -165,7 +166,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const command = routeState.context.command;
   const restored = routeState.context.restored;
   const commandCurrent = () => !!command && shell.getSnapshot().context.command === command && shell.getSnapshot().context.route === command.route && client.getSnapshot().generation === command.generation;
-  useEffect(() => associations.select(selected), [associations, selected]);
+  const draftWorkspaceSession = center.kind === 'new-conversation' ? routeState.context.draftWorkspaceSession : undefined;
+  useEffect(() => associations.select(selected ?? draftWorkspaceSession), [associations, selected, draftWorkspaceSession]);
+  const workspaceAssociations = useSyncExternalStore(associations.subscribe, associations.getSnapshot);
   const selectedCwd = state.sessions.find(row => row.id === selected)?.cwd ?? (selected ? state.views[selected]?.summary?.cwd ?? state.views[selected]?.settings?.cwd : undefined);
   const associatedWorkspace = useSyncExternalStore(associations.subscribe, () => {
     const association = selected ? associations.getSnapshot().entries.get(selected) : undefined;
@@ -259,6 +262,12 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     }
   }, [client, shell, endpoint, preferences, state.connection, settingsOpen]);
   useEffect(() => {
+    const context = shell.getSnapshot().context;
+    if (context.control !== routeState.context.control || context.route.kind !== 'new-conversation' || context.route.workspaceId || context.pending) return;
+    const workspaceId = preferredWorkspace(associations.getSnapshot(), client.getSnapshot(), context.draftWorkspaceSession);
+    if (workspaceId) shell.send({ type: 'DRAFT.WORKSPACE', workspaceId });
+  }, [associations, workspaceAssociations, client, shell, routeState.context.control, center]);
+  useEffect(() => {
     try {
       // Persist only safe navigation. Never the token, drafts, snapshots or requests.
       if (endpoint) localStorage.setItem(PREFERENCES, json({ endpoint, openViews: JSON.parse(resumeViews) }));
@@ -290,7 +299,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     runGlobal(() => Promise.all(closing.map(id => client.release(id))));
   });
   const focusDraft = () => document.querySelector<HTMLTextAreaElement>('[data-resident-composer] textarea')?.focus();
-  const createInWorkspace = (id?: string) => leaveWorkflows(() => {
+  const createInWorkspace = (id = workspace) => leaveWorkflows(() => {
     shell.send({ type: 'DRAFT', workspaceId: id }); focusDraft();
   });
   const newConversationCurrent = useMemo(() => committedRouteCurrent(shell), [shell, routeState.context.control, state.generation, state.authorityRevision]);

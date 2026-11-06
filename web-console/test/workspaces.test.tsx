@@ -205,12 +205,14 @@ it.each(['success', 'failure'] as const)('UX-04 pending unregister survives App 
   expect(owner.getSnapshot().catalog?.workspaces.map(row => row.id)).toEqual(['wB']);
   expect(owner.getSnapshot().entries.get('A')?.confirmed).toEqual({});
   const settled = owner.getSnapshot();
+  const settledLists = vi.mocked(host.listWorkspaces).mock.calls.length;
+  expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Workspace B');
   await act(async () => {
     if (outcome === 'success') r1.resolve(baseline); else r1.reject(new Error('late pre-commit failure'));
   });
   expect(owner.getSnapshot()).toBe(settled);
   expect(screen.queryByRole('button', { name: 'Select Workspace Workspace A' })).toBeNull();
-  expect(host.listWorkspaces).toHaveBeenCalledTimes(lists + 1);
+  expect(host.listWorkspaces).toHaveBeenCalledTimes(settledLists);
 });
 it.each(['add', 'rename', 'remove'] as const)('Sidebar %s preserves the opened intent scope after Host replacement', async kind => {
   await server.connect(); const host = hostFixture();
@@ -456,7 +458,7 @@ it('Sidebar selection synchronizes Workspace context and /new drafts in A after 
   expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Workspace A');
   expect(methods()).not.toContain('session/create');
 });
-it('focusing an authorized-unregistered Session clears old Workspace context and /new cannot reuse B', async () => {
+it('focusing an authorized-unregistered Session clears old context and /new selects a registered recent Workspace', async () => {
   const host = await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
@@ -467,8 +469,8 @@ it('focusing an authorized-unregistered Session clears old Workspace context and
   expect(document.querySelector('[aria-label^="Select Workspace"][aria-current="page"]')).toBeNull();
   vi.mocked(host.resolveWorkspace).mockClear();
   await invokeNew();
-  expect(host.resolveWorkspace).not.toHaveBeenCalled(); expect(methods()).not.toContain('session/create');
-  expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Choose Workspace');
+  expect(host.resolveWorkspace).toHaveBeenCalledWith('wB', endpoint); expect(methods()).not.toContain('session/create');
+  expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Workspace B');
 });
 it('browser binding accepts the same URL normalization as Host routing', async () => {
   const host = hostFixture(), catalog = await host.listWorkspaces();
@@ -563,7 +565,7 @@ it('classification belongs to exactly the native summary page that requested it'
   await act(async () => pending.resolve([{ authorized: true, workspaceId: 'wB' }]));
   expect(groupContaining()).toContain('Workspace B');
   expect(JSON.stringify(localStorage)).not.toContain('workspaceId');
-  expect(withoutTaskReads()).toEqual(['initialize', 'session/list', 'session/list']);
+  expect(withoutTaskReads()).toEqual(['initialize', 'session/list', 'mcp/draftPrepare', 'session/list']);
 });
 
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
@@ -694,7 +696,6 @@ it.each(['success', 'failure'] as const)('UX-04 normal next-page demand settles 
   await mount(host);
   expect(host.classifyLocations).toHaveBeenCalledTimes(1);
   expect(vi.mocked(host.classifyLocations).mock.calls[0][0]).toEqual(['/workspace/A']);
-  const lists = vi.mocked(host.listWorkspaces).mock.calls.length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Next$/ })));
   expect(server.client.getSnapshot().sessions.map(row => row.id)).toEqual(['B']);
   expect(host.classifyLocations).toHaveBeenCalledTimes(2);
@@ -704,6 +705,10 @@ it.each(['success', 'failure'] as const)('UX-04 normal next-page demand settles 
   const group = () => screen.getByRole('button', { name: 'Open Session B' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group');
   expect(group()).toBe('wB');
   expect(screen.queryByText('Refreshing Workspace associations…')).toBeNull();
+  // Default selection may now prepare B; the old page must cause no further reads.
+  const readyClassifications = vi.mocked(host.classifyLocations).mock.calls.length;
+  const readyLists = vi.mocked(host.listWorkspaces).mock.calls.length;
+  expect(methods().filter(method => method === 'mcp/draftPrepare')).toHaveLength(1);
   // A remains unresolved until B's group and aggregate ready notice are proven.
   await act(async () => {
     if (outcome === 'success') a.resolve([{ authorized: true, workspaceId: 'wA' }]);
@@ -712,8 +717,8 @@ it.each(['success', 'failure'] as const)('UX-04 normal next-page demand settles 
   expect(group()).toBe('wB');
   expect(screen.queryByText('Refreshing Workspace associations…')).toBeNull();
   expect(screen.queryByText(translator('en')('workspace:association.unavailable'))).toBeNull();
-  expect(host.classifyLocations).toHaveBeenCalledTimes(2);
-  expect(host.listWorkspaces).toHaveBeenCalledTimes(lists);
+  expect(host.classifyLocations).toHaveBeenCalledTimes(readyClassifications);
+  expect(host.listWorkspaces).toHaveBeenCalledTimes(readyLists);
 });
 
 it('UX-04 shares selected membership across a gated reconnect without authorizing attachment', async () => {
@@ -746,10 +751,11 @@ it('UX-04 native authority replacement at the same endpoint retires presentation
   server.authorityId = 'replacement-native';
   await act(async () => { await server.client.disconnect(); await server.connect(); });
   expect(server.client.getSnapshot().authorityRevision).toBe(revision + 1);
-  expect(document.querySelector('[aria-label^="Select Workspace"][aria-current="page"]')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Workspace A');
   expect(server.client.getSnapshot().views).toEqual({});
   await act(async () => old.resolve([{ authorized: true, workspaceId: 'wB' }, { authorized: true, workspaceId: 'wA' }]));
   expect(screen.getByRole('button', { name: 'Open Session A' }).closest('[data-workspace-group]')?.getAttribute('data-workspace-group')).toBe('wA');
+  expect(screen.getByRole('button', { name: 'Choose Workspace' }).textContent).toContain('Workspace A');
 });
 
 it('UX-04 replacement of the Product Host admission owner fences an older successful admission', async () => {
@@ -820,8 +826,9 @@ it.each(['en', 'zh'] as const)('selected off-page demand refreshes silently and 
 it('current blank conversation is pinned, reused, relocated and hidden on departure without native creation', async () => {
   await mount();
   const draft = () => document.querySelector('[data-draft-conversation]')!;
-  expect(draft()).toBeNull();
+  const initial = draft(); expect(initial).not.toBeNull();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  expect(draft()).toBe(initial);
   expect(draft().getAttribute('aria-selected')).toBe('true');
   expect(draft().closest('[data-workspace-group]')?.textContent).toContain('Workspace A');
   expect(draft().nextElementSibling?.querySelector('[data-session-id]')?.getAttribute('data-session-id')).toBe('A');
