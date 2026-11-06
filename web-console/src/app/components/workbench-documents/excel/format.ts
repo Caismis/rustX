@@ -3,7 +3,7 @@
 import { ExcelPreviewError } from './error.ts'
 
 /** File formats admitted by the spreadsheet preview. */
-export type ExcelFormat = 'xlsx' | 'xls' | 'csv' | 'tsv'
+export type ExcelFormat = 'xlsx' | 'csv' | 'tsv'
 
 /**
  * Resolve a registered filename to its parser.
@@ -12,6 +12,6 @@ export type ExcelFormat = 'xlsx' | 'xls' | 'csv' | 'tsv'
  */
 export function excelFormat(path: string): ExcelFormat {
   const suffix = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
-  if (suffix === 'xlsx' || suffix === 'xls' || suffix === 'csv' || suffix === 'tsv') return suffix
+  if (suffix === 'xlsx' || suffix === 'csv' || suffix === 'tsv') return suffix
   throw new ExcelPreviewError('invalid')
 }

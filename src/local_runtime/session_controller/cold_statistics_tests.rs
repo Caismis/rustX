@@ -121,7 +121,7 @@ async fn t08_t12_t14_t19_cold_statistics_model_reads_keep_the_original_cut_witho
 async fn cold_statistics_read_model(
     controller: &SessionController,
     session: &SessionSnapshot,
-    cut: &crate::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
 ) -> String {
     use base64::Engine;

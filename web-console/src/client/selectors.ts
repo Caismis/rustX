@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react';
-import type { AppServerClient, ClientView, SessionView } from './app-server';
+import type { AppServerClient } from './app-server';
+import type { ClientView, SessionView } from './contracts';
 
 /** Selected snapshots are cached across publications, not debounced. */
 export function useClientSelector<T>(client: AppServerClient, select: (state: ClientView) => T, equal: (a: T, b: T) => boolean = Object.is): T {
@@ -36,7 +37,6 @@ export const selectShell = (state: ClientView): ShellView => ({
     deleting: view.deleting, deletionRecovery: view.deletionRecovery, recoveringDeletion: view.recoveringDeletion,
   }])),
 });
-export const selectClient = (state: ClientView) => state;
 
 /** Fixed responsibility slices compare their immediate immutable fields only. */
 export function shallowEqual<T extends object | undefined>(a: T, b: T): boolean {

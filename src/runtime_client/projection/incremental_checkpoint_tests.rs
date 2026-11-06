@@ -1,7 +1,7 @@
-use crate::runtime_client::projection::{compact_replay_storage, encoded_event_bytes};
-use crate::durable::ConversationStore;
+use crate::runtime_client::projection::{publication::compact_replay_storage, encoded_event_bytes};
 use crate::runtime_client::projection::CheckpointSeed;
-use crate::runtime_client::{checkpoint, preflight};
+use crate::runtime_client::checkpoint;
+use crate::observation::preflight;
 
 fn compare_original(seed: &CheckpointSeed) {
     let (mut original, eviction) = seed.checkpoint_unfitted().unwrap();
@@ -13,7 +13,7 @@ fn compare_original(seed: &CheckpointSeed) {
     );
     if let Some(budget) = budget {
         let direct =
-            preflight::required_safe_integer_budget(&actual, checkpoint::CHECKPOINT_TARGET_BYTES);
+            preflight::required_safe_integer_budget(&actual, crate::observation::bounded::CHECKPOINT_TARGET_BYTES);
         assert!(
             direct.is_some_and(|direct| direct <= budget),
             "additive certificate is conservative"
@@ -51,13 +51,13 @@ fn incremental_checkpoint_reuses_unchanged_domains_without_capture_or_whole_fit(
     }
     let historical = projection.checkpoint_seed();
     let old = historical.checkpoint_candidate().unwrap();
-    checkpoint::take_capture_work();
+    crate::observation::capture::take_capture_work();
     checkpoint::metadata_fragment::take_array_work();
     publish_source_fact(&mut projection, |projection| {
         projection.publish(RuntimeClientEvent::TraceChanged);
     });
     let current = projection.checkpoint_seed();
-    let work = checkpoint::take_capture_work();
+    let work = crate::observation::capture::take_capture_work();
     assert_eq!(
         checkpoint::metadata_fragment::take_array_work(),
         [0, 0, 2],
@@ -136,12 +136,12 @@ fn transcript_capture_seed() -> CheckpointSeed {
     let mut seed = (*projection.checkpoint_seed()).clone();
     seed.snapshot.transcript.source_cut = Some(store.observation_read_cut().unwrap());
     seed.snapshot.transcript.statistics =
-        Some(crate::runtime_client::response::ConversationStatistics::default()).into();
+        Some(crate::observation::statistics::ConversationStatistics::default()).into();
     seed.snapshot.transcript.entries = (1..=8)
         .map(
-            |index| crate::runtime_client::RuntimeClientTranscriptEntry {
-                cursor: crate::runtime_client::RuntimeClientTranscriptCursor::new(index),
-                item: crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+            |index| crate::observation::transcript::RuntimeClientTranscriptEntry {
+                cursor: crate::observation::transcript::RuntimeClientTranscriptCursor::new(index),
+                item: crate::observation::transcript::RuntimeClientTranscriptItem::Message {
                     message: compactable_user(&format!("transcript-{index}")),
                 },
                 turn_process: None,
@@ -152,7 +152,7 @@ fn transcript_capture_seed() -> CheckpointSeed {
         )
         .map(std::sync::Arc::new).collect::<Vec<_>>().into();
     seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
-    seed.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
+    seed.transcript_head = crate::observation::transcript::PreparedTranscriptHead::from_entries(
         &seed.snapshot.conversation_id,
         &seed.snapshot.transcript.entries,
     );
@@ -170,7 +170,7 @@ fn change_transcript_seed(
     if serde_json::to_vec(&next.snapshot.transcript.entries).unwrap()
         != serde_json::to_vec(&previous.snapshot.transcript.entries).unwrap()
     {
-        next.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
+        next.transcript_head = crate::observation::transcript::PreparedTranscriptHead::from_entries(
             &next.snapshot.conversation_id,
             &next.snapshot.transcript.entries,
         );
@@ -190,10 +190,10 @@ fn incremental_transcript_cut_changes_reuse_rows_and_keep_current_envelope() {
             seed.read_cut.revision = revision;
             let page = &mut seed.snapshot.transcript;
             page.source_cut.as_mut().unwrap().read.journal = revision;
-            page.next_cursor = Some(crate::runtime_client::RuntimeClientTranscriptCursor::new(1));
+            page.next_cursor = Some(crate::observation::transcript::RuntimeClientTranscriptCursor::new(1));
             page.inherited_through =
-                Some(crate::runtime_client::RuntimeClientTranscriptCursor::new(1));
-            page.collections.push(checkpoint::CollectionFrontier {
+                Some(crate::observation::transcript::RuntimeClientTranscriptCursor::new(1));
+            page.collections.push(crate::observation::cut::CollectionFrontier {
                 domain: "transcript.native".into(),
                 revision,
                 total: 8,
@@ -201,9 +201,9 @@ fn incremental_transcript_cut_changes_reuse_rows_and_keep_current_envelope() {
                 next_offset: None,
             });
         });
-        checkpoint::take_capture_work();
+        crate::observation::capture::take_capture_work();
         let captured = current.capture_checkpoint().unwrap();
-        let work = checkpoint::take_capture_work();
+        let work = crate::observation::capture::take_capture_work();
         assert_eq!(
             work[0], 0,
             "cut changes must not normalize any rows: {work:?}"
@@ -235,7 +235,7 @@ fn incremental_transcript_statistics_and_deferred_rows_have_independent_admissio
         seed.snapshot
             .transcript
             .deferred_entries
-            .push(checkpoint::CheckpointPageItem {
+            .push(crate::observation::cut::CheckpointPageItem {
                 body_complete: None,
                 key: None,
                 offset: 8,
@@ -251,10 +251,10 @@ fn incremental_transcript_statistics_and_deferred_rows_have_independent_admissio
     ] {
         assert!(seed.transcript_head.same_owners(&original.transcript_head));
         assert!(!seed.prepared.shared(&original.prepared, changed));
-        checkpoint::take_capture_work();
+        crate::observation::capture::take_capture_work();
         seed.capture_checkpoint().unwrap();
         assert_eq!(
-            checkpoint::take_capture_work()[0],
+            crate::observation::capture::take_capture_work()[0],
             1,
             "only {changed} rebuilt"
         );
@@ -291,9 +291,9 @@ fn incremental_transcript_split_capture_keeps_shared_budget_pressure_exact() {
                 .collect::<Vec<_>>().into();
         });
         assert!(seed.transcript_head.same_owners(&original.transcript_head));
-        checkpoint::take_capture_work();
+        crate::observation::capture::take_capture_work();
         seed.checkpoint_prepared().unwrap();
-        let work = checkpoint::take_capture_work();
+        let work = crate::observation::capture::take_capture_work();
         if count == 32 && text_bytes == 12_000 {
             assert!(work[2] > 0, "pressure exercises actual admission: {work:?}");
         }
@@ -305,7 +305,7 @@ fn incremental_transcript_split_capture_keeps_shared_budget_pressure_exact() {
 fn incremental_transcript_row_ownership_keeps_opaque_json_encoding_exact() {
     use crate::message::types::{AssistantContentBlock, AssistantMessageBlock};
     let mut original = transcript_capture_seed();
-    let argument = |value| crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+    let argument = |value| crate::observation::transcript::RuntimeClientTranscriptItem::Message {
         message: MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("transcript-call"),
             content: vec![AssistantContentBlock::ToolCall(
@@ -332,7 +332,7 @@ fn incremental_transcript_row_ownership_keeps_opaque_json_encoding_exact() {
     ] {
         std::sync::Arc::make_mut(&mut original.snapshot.transcript.entries[0]).item = argument(before);
         original.prepared = super::super::prepared_capture::PreparedCaptures::default();
-        original.transcript_head = checkpoint::PreparedTranscriptHead::from_entries(
+        original.transcript_head = crate::observation::transcript::PreparedTranscriptHead::from_entries(
             &original.snapshot.conversation_id,
             &original.snapshot.transcript.entries,
         );
@@ -381,9 +381,9 @@ fn retained_vector_compaction_preserves_exact_event_bytes_and_rows() {
     let mut events = Vec::with_capacity(128);
     events.push(RuntimeClientEvent::TraceChanged);
     let mut event = RuntimeClientEvent::ProjectionTransition { events, metadata };
-    let before = encoded_event_bytes(&event, checkpoint::CHECKPOINT_TARGET_BYTES).unwrap();
+    let before = encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES).unwrap();
     compact_replay_storage(&mut event);
-    assert_eq!(encoded_event_bytes(&event, checkpoint::CHECKPOINT_TARGET_BYTES).unwrap(), before);
+    assert_eq!(encoded_event_bytes(&event, crate::observation::bounded::CHECKPOINT_TARGET_BYTES).unwrap(), before);
     let RuntimeClientEvent::ProjectionTransition { events, metadata } = &event else { unreachable!() };
     assert!(events.capacity() <= events.len()*2);
     assert!(metadata.content.capacity() <= metadata.content.len().max(1)*2);

@@ -6,9 +6,10 @@ pub mod connection;
 pub mod editor_read;
 pub mod protocol;
 pub(crate) mod registration;
+mod rpc_error;
 pub mod schema;
 pub mod session_deletion;
-mod wire;
+pub(crate) mod wire;
 
 pub mod process;
 pub mod transport;
@@ -21,3 +22,5 @@ pub(crate) mod delivery_access;
 pub(crate) mod product_host;
 
 pub mod upload_transfer;
+
+pub(crate) mod workflow_documents;

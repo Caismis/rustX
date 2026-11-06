@@ -1,5 +1,4 @@
-use crate::durable::ConversationStore;
-use crate::durable::inbox::{ModelTurnBoundary, ModelTurnSettlement};
+use crate::durable::{ModelTurnBoundary, ModelTurnSettlement};
 use crate::durable::observation::{
     ModelTurnObservationBoundary, NativeObservationBatch, NativeObservationTransition,
 };
@@ -8,7 +7,7 @@ fn apply_split_model_member(
     projection: &mut RuntimeClientProjection,
     family: &NativeObservationBatch,
     witness: &crate::durable::observation::ObservationEventWitness,
-    canonical: Option<Arc<crate::durable::inbox::CanonicalObservationBatch>>,
+    canonical: Option<Arc<crate::durable::CanonicalObservationBatch>>,
 ) {
     // Independent former per-member receipt shape, kept inside one outer test
     // publication so byte/cursor differences do not hide semantic differences.
@@ -70,9 +69,9 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
             .unwrap();
         let mut pending = None;
         for index in 0..pending_count {
-            let accepted = ConversationStore::accept_inbound(
+            let accepted = crate::durable::InboxStore::accept_inbound(
                 &store,
-                crate::durable::inbox::InboundDraft {
+                crate::durable::InboundDraft {
                     message_id: Some(MessageId::new(format!("model-family-user-{index}"))),
                     source: crate::message::types::UserSource::Human,
                     kind: crate::message::types::InboundKind::Message,
@@ -149,6 +148,7 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
                 provider: source_tool_event(
                     &store,
                     RuntimeEvent::ModelRequestCompleted {
+                        owner: crate::model::ModelRequestOwner::Agent { identity: crate::model::RequestIdentity { attempt_id: start.attempt_id.clone(), turn: start.turn_id.clone(), retry_number: 0 } },
                         request_id: start.request_id.clone(),
                         finish_reason: crate::model::ModelFinishReason::Stop,
                         usage: None,

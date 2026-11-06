@@ -320,9 +320,6 @@ async fn child_fixture_scoped_at(
                 rustx::context::ContextAssembly::new(),
                 capability.current_snapshot(),
             )),
-            resource_loader: Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
-                &workspace,
-            )),
             clock: None,
             initial_messages,
             // A child has no subagent registry: recursion is absent by
@@ -377,6 +374,7 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
 /// path.
 fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
     ResolvedSubagentSpec {
+        resource_sources: std::collections::BTreeSet::new(),
         environment: Vec::new(),
         generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
         skill_roots: Vec::new(),
@@ -661,9 +659,6 @@ async fn compose_parent_runtime_plane(
             None,
             rustx::context::ContextAssembly::new(),
             capability.current_snapshot(),
-        )),
-        resource_loader: Arc::new(rustx::runtime::FilesystemRuntimeResourceLoader::new(
-            &workspace,
         )),
         clock: None,
         initial_messages: Vec::new(),
@@ -3121,8 +3116,8 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
                                     || subagent_id.as_str() == second.accepted.subagent_id.as_str()
                         )
                     {
-                        assert!(interactions.iter().all(|known: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
-                        interactions.push(interaction.clone());
+                        assert!(interactions.iter().all(|known: &crate::observation::interaction::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
+                        interactions.push(*interaction.clone());
                     }
                     }
                 }
@@ -3151,7 +3146,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .find(|interaction| {
             matches!(
                 interaction.kind,
-                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
+                rustx::observation::interaction::RuntimeClientInteractionKind::Questionnaire
             )
         })
         .cloned()
@@ -3161,7 +3156,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .find(|interaction| {
             matches!(
                 interaction.kind,
-                rustx::runtime_client::snapshot::RuntimeClientInteractionKind::Approval
+                rustx::observation::interaction::RuntimeClientInteractionKind::Approval
             )
         })
         .cloned()
@@ -3398,8 +3393,8 @@ async fn child_death_removes_only_its_routed_interactions() {
                                     || subagent_id.as_str() == second_wired.accepted.subagent_id.as_str()
                         )
                     {
-                        assert!(interactions.iter().all(|known: &crate::runtime_client::snapshot::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
-                        interactions.push(interaction.clone());
+                        assert!(interactions.iter().all(|known: &crate::observation::interaction::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
+                        interactions.push(*interaction.clone());
                     }
                     }
                 }
@@ -4516,12 +4511,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
                 "the child record commits",
             )
             .await;
-            Some(
-                bridge
-                    .as_ref()
-                    .expect("the stalled bridge")
-                    .queued_without_adoption(),
-            )
+            Some(bridge.as_ref().expect("the stalled bridge").queued_total())
         } else {
             None
         };
@@ -4570,11 +4560,11 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
                 "the parked activity lane retains one latest snapshot"
             );
             assert!(
-                bridge.queued_without_adoption() <= baseline + 1,
+                bridge.queued_total() <= baseline + 1,
                 "the parked queue holds the reliable baseline plus at most one coalesced \
                  activity entry — pending observation state is O(active subagents), not \
                  O(activity updates): baseline {baseline}, queued {}",
-                bridge.queued_without_adoption()
+                bridge.queued_total()
             );
         }
 
@@ -4854,7 +4844,7 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
     // asynchronously changes Eligible to Busy after the registry commits
     // Running; it is not a second child progress publication. Its monotonic,
     // change-only delivery is tested by the native adoption tests.
-    let baseline = bridge.queued_without_adoption();
+    let baseline = bridge.queued_total();
 
     // 200 live progress revisions flow while the consumer is stalled. The
     // wire may coalesce intermediates — that is the contract — but the
@@ -4885,9 +4875,9 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
         "200 revisions retain one latest activity snapshot"
     );
     assert!(
-        bridge.queued_without_adoption() <= baseline + 1,
+        bridge.queued_total() <= baseline + 1,
         "200 reported revisions, at most one queued activity entry: baseline {baseline}, queued {}",
-        bridge.queued_without_adoption()
+        bridge.queued_total()
     );
 
     // The stalled consumer resumes: the projection folds the coalesced
@@ -5137,7 +5127,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     .await;
     assert!(matches!(
         progress_occurrence.locator,
-        rustx::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { .. }
+        rustx::observation::content::CanonicalContentLocator::ByLedgerPosition { .. }
     ));
 
     // Gate A: the tool reports "phase 1" and parks again — provably
@@ -5285,7 +5275,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
             execution.call_id == Some(ToolCallId::new("call-phased"))
                 && matches!(
                     &execution.state,
-                    rustx::runtime_client::ForegroundToolState::Running {
+                    rustx::observation::tool::ForegroundToolState::Running {
                         progress: Some(progress),
                         ..
                     } if progress.message.as_deref() == Some("phase 1")
@@ -5865,7 +5855,7 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
     }
 
     // The Runtime Client view of the settled child is equally clean.
-    let view = crate::runtime_client::projection::agent_view(
+    let view = crate::runtime_client::projection::views::agent_view(
         &plane
             .registry
             .agent_snapshot(&settled.child_agent_id)
@@ -5987,7 +5977,6 @@ async fn snapshot_repair_serves_the_latest_subagent_observation() {
         Some(SubagentExecutionProfile {
             model: "local/model".to_owned(),
             profile: None,
-            reasoning_enabled: false,
         }),
         "the redacted profile repairs with the snapshot"
     );
@@ -6078,7 +6067,7 @@ async fn the_snapshot_projects_only_the_frozen_execution_profile() {
     // The Runtime Client view carries the same profile under the
     // `execution_profile` wire key; the obsolete bare `profile` key stays
     // retired.
-    let view = crate::runtime_client::projection::agent_view(
+    let view = crate::runtime_client::projection::views::agent_view(
         &plane
             .registry
             .agent_snapshot(&snapshot.child_agent_id)

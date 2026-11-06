@@ -1,6 +1,6 @@
 //! Finite read evidence captured at original native J/C/request boundaries.
 //! These headers are neither event authority nor execution input.
-use crate::runtime_client::trace::{
+use crate::observation::trace::{
     TraceArtifact, TraceFieldSource, TraceLocation, TracePreview, TraceToolCall, TraceToolOutcome,
 };
 use serde::{Deserialize, Serialize};
@@ -39,11 +39,16 @@ pub enum TraceFactKind {
     WorkflowCancelled,
     InteractionRequested,
     InteractionSettled,
+    ConfigurationApplied,
 }
 #[derive(Debug, Clone)]
 pub enum TraceFactScope {
     All,
-    Owner { anchor_sequence: u64 },
+    /// Primary Agent-owned model-request facts only.
+    Agent,
+    Owner {
+        anchor_sequence: u64,
+    },
 }
 #[derive(Debug, Clone)]
 pub struct TraceFactQuery {
@@ -59,6 +64,9 @@ pub struct TraceFactHeader {
     pub sequence: u64,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub kind: TraceFactKind,
+    /// Explicit request owner when this fact is itself a model-request fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<super::observation::RequestOwnerKind>,
     pub owner_anchor: Option<u64>,
     pub location: TraceLocation,
     pub fields: Vec<TraceFieldSource>,
@@ -129,6 +137,10 @@ pub enum TraceFactData {
     InteractionStart {
         native_id: Option<String>,
     },
+    /// A Session configuration commit; complete and instantaneous.
+    Configuration {
+        change: crate::runtime::configuration_commit::ConfigurationChange,
+    },
     CanonicalToolCommit {
         occurrence: Option<crate::events::types::ToolObservationOccurrence>,
         ledger_position: u64,
@@ -189,8 +201,8 @@ pub struct TraceRequestPredecessorHeader {
 pub struct TraceCanonicalSummary {
     pub source: Option<crate::message::types::UserSource>,
     pub ordinary_input: bool,
-    pub context_kind: Option<crate::runtime_client::trace::TraceContextKind>,
-    pub locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub context_kind: Option<crate::observation::trace::TraceContextKind>,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub identity: Option<crate::runtime::identity::MessageId>,
     pub preview: Option<TracePreview>,
     pub calls: Vec<TraceToolCall>,
@@ -199,7 +211,7 @@ pub struct TraceCanonicalSummary {
     pub tool_detail: Option<TracePreview>,
     pub truncated: bool,
     pub fields: Vec<TraceFieldSource>,
-    pub collections: Vec<crate::runtime_client::checkpoint::CollectionFrontier>,
+    pub collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceToolProposalSummary {
@@ -213,7 +225,7 @@ pub struct TraceToolProposalSummary {
 #[derive(Debug, Clone)]
 pub struct TraceRequestContextPage {
     pub total: u64,
-    pub items: Vec<crate::runtime_client::trace::TraceContextPresentation>,
+    pub items: Vec<crate::observation::trace::TraceContextPresentation>,
     pub next_offset: Option<u64>,
     pub domain: String,
 }

@@ -1,10 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use rustx::local_runtime::CurrentRuntimeConfig;
-use rustx::model::catalog::{
-    ChatReasoningReplay, MapCredentialEnvironment, ModelCatalog, ModelProfileId, ModelRef,
-};
-use rustx::model::session::SummaryModelPolicy;
+use rustx::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelProfileId, ModelRef};
+use rustx::model::session::AuxiliaryModelPolicy;
 use rustx::model::types::ModelProtocol;
 use rustx::skills::{SkillDiscovery, SkillDiscoveryConfig};
 use rustx::tools::Workspace;
@@ -57,20 +55,13 @@ fn committed_model_example_uses_the_production_catalog_contract() {
     assert_eq!(model.protocol, ModelProtocol::OpenAiChatCompletions);
     assert_eq!(model.context_window, 128_000);
     assert_eq!(model.max_output_tokens, 4_096);
-    assert!(model.capabilities.tool_calls);
-    assert!(model.capabilities.reasoning);
-    assert_eq!(
-        model.compat.chat_reasoning_replay,
-        Some(ChatReasoningReplay::Reasoning)
-    );
+    assert_eq!(model.compat, rustx::model::ModelCompat::default());
     // A Model with profiles declares no model-level native parameters.
     assert!(model.request_params.is_empty());
     assert_eq!(model.default_profile.as_ref().unwrap().as_str(), "off");
     assert_eq!(model.profiles.len(), 2);
     let off = ModelProfileId::new("off");
     let on = ModelProfileId::new("on");
-    assert!(!model.profiles[&off].reasoning_enabled);
-    assert!(model.profiles[&on].reasoning_enabled);
     assert_eq!(model.profiles[&off].max_output_tokens, None);
     assert_eq!(model.profiles[&on].max_output_tokens, Some(2_048));
     assert_eq!(
@@ -124,7 +115,7 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     assert_eq!(config.initial_model().max_output_tokens, Some(2_048));
     assert_eq!(
         config.initial_model().summary_model,
-        SummaryModelPolicy::Session
+        AuxiliaryModelPolicy::Session
     );
     assert_eq!(config.context.reserve_tokens, 4_096);
     assert_eq!(config.context.keep_recent_tokens, 12_000);
@@ -204,16 +195,16 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
         [&rustx::capabilities::ToolSourceId::ManagedPython("echo".into())]
         .as_ref()
         .expect("committed echo package must be valid");
-    assert_eq!(package.name, "echo");
+    assert_eq!(package.name(), "echo");
     let file_names: Vec<&str> = package
-        .files
+        .files()
         .iter()
-        .map(|(path, _)| path.to_str().expect("UTF-8 package path"))
+        .map(|path| path.to_str().expect("UTF-8 package path"))
         .collect();
     assert!(file_names.contains(&"server.py"));
     assert!(file_names.contains(&"requirements.txt"));
     // The example declares no dependencies; rustX pins FastMCP itself.
-    assert!(package.requirements.is_empty());
+    assert!(package.requirements().is_empty());
 }
 
 #[test]
@@ -268,20 +259,20 @@ fn reference_authoring_errors_fail_before_execution() {
             .unwrap();
     let cases = [
         (
-            "/block/nodes/plan/input/brief/path",
+            "/block/nodes/plan/task/2/path",
             serde_json::json!(["args", "missing"]),
         ),
         (
-            "/block/nodes/repair/body/nodes/implement/input/plan/path",
-            serde_json::json!(["plan"]),
+            "/block/nodes/repair/body/nodes/implement/task/2/path",
+            serde_json::json!(["implemented"]),
         ),
-        ("/block/nodes/repair/max_iterations", serde_json::json!(0)),
+        ("/block/nodes/repair/loop_count", serde_json::json!(0)),
         (
-            "/block/nodes/plan/input/brief/path",
+            "/block/nodes/plan/task/2/path",
             serde_json::json!(["repair"]),
         ),
         (
-            "/block/nodes/repair/body/entry",
+            "/block/nodes/repair/body/edges/0/to",
             serde_json::json!("missing_node"),
         ),
     ];
@@ -295,13 +286,13 @@ fn reference_authoring_errors_fail_before_execution() {
         )
         .unwrap_err();
         let diagnostic = error.to_string();
-        let expected_node = if pointer.ends_with("/entry") {
+        let expected_node = if pointer.ends_with("/to") {
             "missing_node"
         } else if pointer.contains("/check/") {
             "check"
         } else if pointer.contains("/implement/") {
             "implement"
-        } else if pointer.ends_with("max_iterations") {
+        } else if pointer.ends_with("loop_count") {
             "repair"
         } else {
             "plan"
@@ -354,10 +345,19 @@ fn current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
         // CLI unit tests deliberately exercise rejected historical spellings.
         let product = text.split("#[cfg(test)]").next().unwrap();
         for spelling in obsolete {
-            assert!(
-                !product.contains(spelling),
-                "{path} contains obsolete {spelling}"
-            );
+            // Match obsolete identifiers, allowing the distinct Model-owned
+            // reasoning_profile_order / reasoningProfileOrder metadata.
+            let present = if matches!(
+                spelling,
+                "reasoning_profile" | "reasoningProfile" | "ReasoningProfile"
+            ) {
+                product
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .any(|token| token == spelling)
+            } else {
+                product.contains(spelling)
+            };
+            assert!(!present, "{path} contains obsolete {spelling}");
         }
     }
 }
@@ -411,7 +411,6 @@ fn configuration_reference_model_example_parses_validates_and_resolves() {
         .resolve(&config.initial_model().selection())
         .unwrap();
     assert_eq!(invocation.profile().unwrap().as_str(), "fast");
-    assert!(invocation.reasoning_enabled());
     assert_eq!(invocation.max_output_tokens(), 2048);
     assert_eq!(
         serde_json::Value::Object(invocation.request_params().clone()),

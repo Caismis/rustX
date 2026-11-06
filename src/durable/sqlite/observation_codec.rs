@@ -34,7 +34,7 @@ pub(super) fn encode(
 
 /// Check the existing JSON admission without allocating a storage encoding.
 pub(super) fn admit(public: &impl Serialize, limit: usize) -> Result<(), ConversationStoreError> {
-    match crate::runtime_client::preflight::bounded_fit(public, limit) {
+    match crate::observation::preflight::bounded_fit(public, limit) {
         Some(false) => return Err(storage("native observation header exceeds public bound")),
         // The existing conservative certificate proves JSON representability
         // and its byte bound. Do not traverse the same header again as JSON.
@@ -318,7 +318,7 @@ pub(super) fn validate_public(
     value: &impl Serialize,
     maximum: usize,
 ) -> Result<(), ConversationStoreError> {
-    if crate::runtime_client::preflight::bounded_fit(value, maximum) != Some(true) {
+    if crate::observation::preflight::bounded_fit(value, maximum) != Some(true) {
         public_length(value, maximum)?;
     }
     Ok(())

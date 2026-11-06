@@ -8,9 +8,9 @@ import { useTranslation } from '../../locale/react';
 // offers Pause and a stopped one offers Resume — never both, and never a
 // separate arm/play step. There is no create, clear or complete control here.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { GoalMutation, GoalRef, RuntimeClientGoalSnapshot } from '../../../../protocol/app-server/v52';
+import type { GoalMutation, GoalRef, RuntimeClientGoalSnapshot } from '../../../../protocol/app-server/v73';
 import type { GoalDockState } from '../../bindings/composer-context';
-import type { GoalControlOutcome } from '../../client/app-server';
+import type { GoalControlOutcome } from '../../client/contracts';
 import {
   IconCheckOutline14, IconCloseOutline16, IconEditOutline16, IconGoalOutline16, IconPauseOutline16, IconPlayOutline16,
 } from '../../presentation/primitives/icons';
@@ -162,7 +162,7 @@ export function GoalDock({ state, observation, disabled, mutate, loadObjective }
       </>}</div>
     </div>
     {goal.phase === 'blocked' && goal.blocked_reason && <p className={css.note}>{tx('agent:goal-dock.blocked')}{' '}{goal.blocked_reason}</p>}
-    {(goal.objective_deferred || goal.blocked_reason_deferred) && <p className={css.note} role="status">{tx('common:activity.content-deferred')}</p>}
+    {(goal.objective_deferred || goal.blocked_reason_deferred) && <p className={css.note} role="status">{tx('common:activity.loading')}</p>}
     {error && <p className={css.error} role="alert">{error}</p>}
     {locking && <p className={css.note} role="status">{AWAITING[locking.kind]}</p>}
   </section>;

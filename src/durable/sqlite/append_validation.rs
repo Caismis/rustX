@@ -4,8 +4,8 @@
 use super::statements::FixedStatements;
 use super::{
     Arc, AtomicU64, Connection, ConversationStoreError, MessageBlock, MessageId, Mutex, Ordering,
-    SurfaceRevision, Transaction, TranscriptCursor, head_frontier, materialize_head, nonnegative,
-    storage,
+    SurfaceRevision, Transaction, TranscriptCursor, canonical::ledger::head_frontier,
+    canonical::ledger::materialize_head, nonnegative, storage,
 };
 use rusqlite::hooks::PreUpdateCase;
 
@@ -20,7 +20,12 @@ impl Versions {
         let read = |sql| {
             connection
                 .query_row_cached(sql, [], |row| row.get(0))
-                .map_err(|error| storage(format!("append validation version: {error}")))
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("append validation version: {error}"),
+                    )
+                })
         };
         Ok(Self {
             data: read("PRAGMA main.data_version")?,
@@ -46,10 +51,10 @@ pub(super) struct Owner {
 impl Owner {
     pub(super) fn new(connection: &Connection) -> Result<Arc<Self>, ConversationStoreError> {
         let mut statement = connection.prepare("SELECT cid,name FROM pragma_table_xinfo('message_ledger') WHERE name IN ('position','message_id') ORDER BY name")
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let columns = statement
             .query_map([], |row| row.get::<_, i32>(0))
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(error.to_string()))?;
         let identity_columns = columns
@@ -192,7 +197,7 @@ impl<'a> Batch<'a> {
                     .active_message_ids
                     .len()
             } else {
-                super::validate_append_identities(transaction, ledger)?
+                super::canonical::ledger::validate_append_identities(transaction, ledger)?
             }
         };
         self.proof = reusable.then_some(Certificate {
@@ -228,7 +233,7 @@ impl<'a> Batch<'a> {
         publication_header: Option<&mut Option<super::observation::PublicationHeader>>,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
         let head = self.head(transaction)?;
-        let cursor = super::append_message_with_head(
+        let cursor = super::canonical::ledger::append_message_with_head(
             transaction,
             message,
             allowed_pending,

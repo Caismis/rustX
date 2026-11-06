@@ -7,12 +7,12 @@ import { materializeSource } from '../../protocol/app-server/source-observation'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
-import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v52';
+import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v73';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
 import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';
 import { settingsNavigationMachine, type OwnerResolution, type RepairInspection } from '../src/app/settings/machines/navigation';
-import { RpcFailure } from '../src/client/app-server';
+import { RpcFailure } from '../src/client/errors';
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { translator } from '../src/locale/translation';
@@ -608,7 +608,7 @@ class Native {
     return source;
   }
   application(): ConfigurationApplication {
-    return { scope: 'source:user', sources: [{ kind: 'user' }], version: String(this.version), desired: { input_revision: this.revision, attempt: String(this.version) }, units: { execution_policy: { status: 'applied' } }, candidate: null };
+    return { scope: 'source:user', sources: [{ kind: 'user' }], version: String(this.version), desired: { input_revision: this.revision, attempt: String(this.version) }, units: { execution_policy: { status: 'applied' } } };
   }
 }
 
@@ -662,8 +662,8 @@ it('shows an unresolved repair as a failure next to the manual repair', async ()
   expect(within(section).getByRole('alert').textContent).toBe('Automatic repair could not fix this source. It is unchanged.');
   expect(within(section).getByText(/malformed TOML at line 3, column 1/)).toBeTruthy();
   expect(within(section).getByText('No backup copy was made.')).toBeTruthy();
-  expect(within(section).getByText('Use Repair malformed source below to correct the document by hand.')).toBeTruthy();
-  expect(screen.getByRole('button', { name: /Save Repair malformed source/ })).toBeTruthy();
+  expect(within(section).getByText('Use Repair invalid source below to correct the document by hand.')).toBeTruthy();
+  expect(screen.getByRole('button', { name: /Save Repair invalid source/ })).toBeTruthy();
   s.client.disconnect();
 });
 

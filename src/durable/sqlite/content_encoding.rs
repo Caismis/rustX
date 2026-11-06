@@ -2,7 +2,7 @@
 //! Encoding uses at most two 64 KiB buffers, independent of payload size.
 use super::{Connection, ConversationStoreError, params, storage};
 use crate::durable::sqlite::statements::FixedStatements;
-use crate::runtime_client::content::{CONTENT_SAFE_INTEGER_MAX, ContentRepresentation};
+use crate::observation::content::{CONTENT_SAFE_INTEGER_MAX, ContentRepresentation};
 use serde::Serialize;
 use std::io::Write as _;
 
@@ -26,7 +26,7 @@ pub(super) fn put_native<T: Serialize + schemars::JsonSchema>(
     value: &T,
 ) -> Result<u64, ConversationStoreError> {
     let mut writer = SegmentWriter::new(connection, key, revision, false);
-    crate::runtime_client::structural_json::to_writer(&mut writer, value)
+    crate::observation::structural_json::to_writer(&mut writer, value)
         .map_err(|error| storage(error.to_string()))?;
     writer.finish()
 }
@@ -84,7 +84,7 @@ impl<'a> SegmentWriter<'a> {
         self.connection.execute_cached(
             "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             params![self.key.0, self.key.1, self.key.2, self.key.3.key(), self.revision, self.written, first],
-        ).map_err(|error| storage(error.to_string()))?;
+        ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(self.written)
     }
 }
@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn immutable_encoder_lazily_allocates_a_bounded_second_buffer() {
         let mut connection = Connection::open_in_memory().unwrap();
-        super::super::create_schema(&mut connection).unwrap();
+        crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
         let mut small = SegmentWriter::new(
             &connection,
             ("canonical", "small", 0, ContentRepresentation::Utf8Text),

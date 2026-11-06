@@ -3,10 +3,10 @@
 #[cfg(test)]
 use super::PUBLICATION_CAPTURE_WORK;
 use super::{
-    Connection, ConversationStoreError, HEADER_ENCODED_MAX, MessageBlock, MessageBlockHeader,
-    OptionalExtension, PublicationHeader, block_bytes, identity, message_header_bytes, params,
-    seq_to_i64, storage,
+    Connection, ConversationStoreError, HEADER_ENCODED_MAX, MessageBlock, OptionalExtension,
+    PublicationHeader, block_bytes, identity, message_header_bytes, params, seq_to_i64, storage,
 };
+use crate::durable::observation::MessageBlockHeader;
 use crate::durable::sqlite::statements::FixedStatements;
 
 impl PublicationHeader {
@@ -41,15 +41,15 @@ impl PublicationHeader {
                 .last()
                 .is_some_and(|field| field == "arguments")
             {
-                let raw = super::super::content::descriptor(
+                let raw = crate::durable::sqlite::content::descriptor(
                     connection,
                     &conversation,
                     &binding.content_ref.source,
-                    crate::runtime_client::content::ContentRepresentation::RawJsonUtf8,
+                    crate::observation::content::ContentRepresentation::RawJsonUtf8,
                 )?;
                 // Match canonical_bindings' original eager integrity check of
                 // the structural representation even when raw bytes exist.
-                let structural = super::super::content::descriptor(
+                let structural = crate::durable::sqlite::content::descriptor(
                     connection,
                     &conversation,
                     &binding.content_ref.source,
@@ -63,16 +63,16 @@ impl PublicationHeader {
         self.header.transcript_cursor = connection.query_row_cached(
             "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
             [message.id().as_str()], |row| row.get::<_, u64>(0),
-        ).optional().map_err(|error| storage(error.to_string()))?.map(crate::durable::TranscriptCursor::new);
+        ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.map(crate::durable::TranscriptCursor::new);
         let bytes = message_header_bytes(&mut self.header)?;
         let actual: Option<Vec<u8>> = connection.query_row_cached(
             "SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1 AND ledger_position=?2",
             params![message.id().as_str(),position], |row|row.get(0),
-        ).optional().map_err(|error|storage(error.to_string()))?;
+        ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if actual.as_deref() != Some(bytes.as_slice()) {
             // This also repairs a failed/over-budget T patch. Use the same
             // upsert as the original final capture, with its exact typed budget.
-            connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),seq_to_i64(position)?,bytes]).map_err(|error|storage(error.to_string()))?;
+            connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),seq_to_i64(position)?,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         }
         #[cfg(test)]
         PUBLICATION_CAPTURE_WORK.with(|work| {
@@ -91,7 +91,7 @@ fn rebind_tool_block(
     let bytes: Vec<u8> = connection.query_row_cached(
         "SELECT header_json FROM observation_block_headers WHERE message_id=?1 AND block_index=?2",
         params![message.id().as_str(), index], |row| row.get(0),
-    ).map_err(|error| storage(error.to_string()))?;
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical block header"));
     }
@@ -115,7 +115,7 @@ fn rebind_tool_block(
         connection.execute_cached(
             "UPDATE observation_block_headers SET header_json=?3 WHERE message_id=?1 AND block_index=?2",
             params![message.id().as_str(), index, rebound],
-        ).map_err(|error| storage(error.to_string()))?;
+        ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
     Ok(())
 }

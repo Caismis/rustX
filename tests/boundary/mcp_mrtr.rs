@@ -87,7 +87,7 @@ impl ToolExecutor for CountingExecutor {
 struct RecordingRoute {
     events: Mutex<Vec<String>>,
     /// Every routed request exactly as the root surface receives it.
-    routed: Mutex<Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader>>,
+    routed: Mutex<Vec<crate::observation::interaction::RuntimeClientInteractionHeader>>,
 }
 
 impl RecordingRoute {
@@ -95,7 +95,7 @@ impl RecordingRoute {
         self.events.lock().expect("route lock").clone()
     }
 
-    fn routed(&self) -> Vec<crate::runtime_client::snapshot::RuntimeClientInteractionHeader> {
+    fn routed(&self) -> Vec<crate::observation::interaction::RuntimeClientInteractionHeader> {
         self.routed.lock().expect("route lock").clone()
     }
 }
@@ -1736,7 +1736,7 @@ async fn a_routed_child_coordinator_still_owns_the_mrtr_questionnaire() {
     assert_eq!(routed[0].interaction, request.interaction_ref());
     assert_eq!(
         routed[0].kind,
-        crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire
+        crate::observation::interaction::RuntimeClientInteractionKind::Questionnaire
     );
     assert!(
         routed[0].body.is_none(),

@@ -125,7 +125,7 @@ impl ContributionStart {
         observer: &dyn crate::agent::AgentExecutionObserver,
         attempt: &crate::runtime::identity::AttemptId,
         turn: u32,
-        source: Option<&crate::durable::inbox::StatusObservationSource>,
+        source: Option<&crate::durable::StatusObservationSource>,
     ) {
         observer.observe_contribution_status(self, attempt, turn, source);
     }

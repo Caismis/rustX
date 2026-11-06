@@ -13,7 +13,7 @@
  * ```text
  * reasoningVisible     a client presentation setting  (do I want to read it?)
  * profile              a model request configuration  (what did we ask for?)
- * reasoningEnabled     a model request configuration  (was it requested?)
+ * requestParams        provider request configuration (what was requested?)
  * ```
  *
  * Hiding reasoning here never changes what rustX asked the provider for, and

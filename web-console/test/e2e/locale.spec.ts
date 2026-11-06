@@ -59,10 +59,18 @@ test('Chinese new conversation preserves the user draft and localizes composer c
 test('Chinese approval localizes actions while preserving the native request reason', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'zh'));
   await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=approval`);
-  await expect(page.locator('.interaction').getByText('bash：Developer approval required', { exact: true })).toBeVisible();
-  const allow = page.getByRole('button', { name: '允许一次', exact: true });
+  const approval = page.getByRole('region', { name: '审批', exact: true });
+  const details = approval.getByRole('group', { name: '审批详情', exact: true });
+  await expect(details.getByText('bash', { exact: true })).toBeVisible();
+  await expect(details.getByText('Developer approval required', { exact: true })).toBeVisible();
+  await expect(details.locator('pre')).toHaveText('printf rustX');
+  await expect(approval.getByText('等待你的回复', { exact: true })).toBeVisible();
+  await expect(approval.getByRole('button', { name: '拒绝', exact: true })).toBeVisible();
+  await expect(approval.getByRole('button')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: '取消交互', exact: true })).toHaveCount(0);
+  const allow = approval.getByRole('button', { name: '允许一次', exact: true });
   await expect(allow).toBeVisible();
   await allow.click();
-  await expect(allow).toHaveCount(0);
+  await expect(approval).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible();
 });

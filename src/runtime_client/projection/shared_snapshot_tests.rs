@@ -30,7 +30,7 @@ fn shared_snapshot_reuses_opaque_model_without_comparison_or_normalization() {
     projection.initialize_publication_view();
     let previous = projection.checkpoint_seed();
     let original = previous.checkpoint_candidate().unwrap();
-    checkpoint::take_capture_work();
+    crate::observation::capture::take_capture_work();
     publish_source_fact(&mut projection, |projection| {
         projection.publish(RuntimeClientEvent::TraceChanged);
     });
@@ -38,7 +38,7 @@ fn shared_snapshot_reuses_opaque_model_without_comparison_or_normalization() {
     assert!(current.snapshot.model.same_owner(&previous.snapshot.model));
     assert!(current.prepared.shared(&previous.prepared, "model"));
     assert_eq!(
-        checkpoint::take_capture_work()[0],
+        crate::observation::capture::take_capture_work()[0],
         0,
         "unchanged maps and floats do not recapture"
     );

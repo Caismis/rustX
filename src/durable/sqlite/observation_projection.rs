@@ -3,7 +3,7 @@ use super::{Connection, ConversationStoreError, OptionalExtension, Transaction, 
 use crate::context::checkpoint::{CheckpointCandidate, ProjectionActivation};
 use crate::durable::projection::ProjectionCheckpoint;
 use crate::durable::sqlite::statements::FixedStatements;
-use crate::runtime_client::snapshot::RuntimeClientProjectionHeadView;
+use crate::observation::head::RuntimeClientProjectionHeadView;
 use sha2::{Digest, Sha256};
 const MAX: usize = 16_384;
 #[cfg(test)]
@@ -22,6 +22,7 @@ fn witness(fingerprint: &str, activation: &str, bytes: &[u8]) -> [u8; 32] {
     digest.finalize().into()
 }
 fn view(
+    connection: &Connection,
     candidate: &CheckpointCandidate,
     activation: &ProjectionActivation,
 ) -> Result<RuntimeClientProjectionHeadView, ConversationStoreError> {
@@ -46,7 +47,7 @@ fn view(
                 crate::model::projected::ProjectedMessage::User { content, .. } => {
                     content.iter().find_map(|block| match block {
                         crate::message::types::UserContentBlock::Text(text) => Some(
-                            crate::runtime_client::trace::TraceText::bounded(&text.text, 512),
+                            crate::observation::trace::TraceText::bounded(&text.text, 512),
                         ),
                         _ => None,
                     })
@@ -56,9 +57,25 @@ fn view(
         }
         _ => None,
     });
+    // Local activation observes pending inputs, publication audits and terminal
+    // controls as well as canonical messages. An inherited activation instead
+    // uses the destination's translated canonical prefix, never the source's T.
+    let transcript_anchor: u64 = if activation.destination_installation.is_none() {
+        connection.query_row(
+            "SELECT next_transcript_position FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+    } else {
+        connection.query_row("SELECT coalesce((SELECT native_transcript FROM message_ledger WHERE position<=?1 AND native_transcript IS NOT NULL ORDER BY position DESC LIMIT 1),0)", [activation.ledger.0], |row| row.get(0))
+    }
+    .map_err(|error| storage(error.to_string()))?;
     Ok(RuntimeClientProjectionHeadView {
         checkpoint_id: candidate.checkpoint_id.clone(),
         activation_id: activation.activation,
+        transcript_anchor: crate::observation::transcript::RuntimeClientTranscriptCursor::new(
+            transcript_anchor,
+        ),
         base_frontier: candidate.base_frontier,
         activation_ledger: activation.ledger,
         origin: activation.origin.clone(),
@@ -68,33 +85,38 @@ fn view(
         summary_preview,
     })
 }
-pub(super) fn index(transaction: &Transaction<'_>, checkpoint: &ProjectionCheckpoint) {
+pub(super) fn index(
+    transaction: &Transaction<'_>,
+    checkpoint: &ProjectionCheckpoint,
+) -> Result<(), ConversationStoreError> {
     index_activation(
         transaction,
         &checkpoint.candidate,
         &checkpoint.fingerprint,
         &checkpoint.activation,
-    );
+    )
 }
 /// Capture from the already validated native activation before its Completed J
-/// witness is built. Failure affects only optional display availability.
+/// witness is built. Contained layout failure affects only display availability;
+/// transaction-integrity failure still aborts the original write.
 pub(super) fn index_activation(
     transaction: &Transaction<'_>,
     candidate: &CheckpointCandidate,
     fingerprint: &str,
     activation: &ProjectionActivation,
-) {
+) -> Result<(), ConversationStoreError> {
     let _ = super::optional_display_layout(transaction, || {
-        let value = view(candidate, activation)?;
-        let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, MAX)
+        let value = view(transaction, candidate, activation)?;
+        let bytes = crate::observation::bounded::bounded_bytes(&value, MAX)
             .ok_or_else(|| storage("projection display header exceeds bound"))?;
-        let native:Option<String>=transaction.query_row("SELECT CASE WHEN typeof(activation_digest)='text' AND octet_length(activation_digest)=64 THEN activation_digest END FROM projection_activations WHERE activation=?1",[activation.activation.0],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let native:Option<String>=transaction.query_row("SELECT CASE WHEN typeof(activation_digest)='text' AND octet_length(activation_digest)=64 THEN activation_digest END FROM projection_activations WHERE activation=?1",[activation.activation.0],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let native =
             native.ok_or_else(|| storage("projection activation integrity unavailable"))?;
         let integrity = witness(fingerprint, &native, &bytes);
-        transaction.execute("UPDATE projection_activations SET observation_header=?1,observation_header_witness=?2 WHERE activation=?3",params![bytes,integrity.as_slice(),activation.activation.0]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute("UPDATE projection_activations SET observation_header=?1,observation_header_witness=?2 WHERE activation=?3",params![bytes,integrity.as_slice(),activation.activation.0]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(())
-    });
+    })?;
+    Ok(())
 }
 pub(super) fn read(
     connection: &Connection,
@@ -113,7 +135,7 @@ pub(super) fn pending_completion(
     read_id(connection, id)
 }
 
-fn read_id(
+pub(crate) fn read_id(
     connection: &Connection,
     id: u64,
 ) -> Result<RuntimeClientProjectionHeadView, ConversationStoreError> {
@@ -127,7 +149,7 @@ fn read_id(
         u64,
         Option<String>,
     );
-    let row:Row=connection.query_row("SELECT CASE WHEN typeof(a.observation_header)='blob' AND length(a.observation_header)<=16384 THEN a.observation_header END,CASE WHEN typeof(a.observation_header_witness)='blob' AND length(a.observation_header_witness)=32 THEN a.observation_header_witness END,CASE WHEN typeof(c.candidate_fingerprint)='text' AND octet_length(c.candidate_fingerprint)=64 AND c.candidate_fingerprint NOT GLOB '*[^0-9a-f]*' THEN c.candidate_fingerprint END,CASE WHEN typeof(a.activation_digest)='text' AND octet_length(a.activation_digest)=64 AND a.activation_digest NOT GLOB '*[^0-9a-f]*' THEN a.activation_digest END,CASE WHEN octet_length(a.checkpoint_id)<=1024 THEN a.checkpoint_id END,a.ledger_frontier,a.visible_journal,CASE WHEN octet_length(a.installation_id)<=1024 THEN a.installation_id END FROM projection_activations a JOIN projection_checkpoints c ON c.checkpoint_id=a.checkpoint_id WHERE a.activation=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(||storage("projection display original row missing"))?;
+    let row:Row=connection.query_row("SELECT CASE WHEN typeof(a.observation_header)='blob' AND length(a.observation_header)<=16384 THEN a.observation_header END,CASE WHEN typeof(a.observation_header_witness)='blob' AND length(a.observation_header_witness)=32 THEN a.observation_header_witness END,CASE WHEN typeof(c.candidate_fingerprint)='text' AND octet_length(c.candidate_fingerprint)=64 AND c.candidate_fingerprint NOT GLOB '*[^0-9a-f]*' THEN c.candidate_fingerprint END,CASE WHEN typeof(a.activation_digest)='text' AND octet_length(a.activation_digest)=64 AND a.activation_digest NOT GLOB '*[^0-9a-f]*' THEN a.activation_digest END,CASE WHEN octet_length(a.checkpoint_id)<=1024 THEN a.checkpoint_id END,a.ledger_frontier,a.visible_journal,CASE WHEN octet_length(a.installation_id)<=1024 THEN a.installation_id END FROM projection_activations a JOIN projection_checkpoints c ON c.checkpoint_id=a.checkpoint_id WHERE a.activation=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(||storage("projection display original row missing"))?;
     let (bytes, integrity, fingerprint, native, checkpoint, ledger, journal, installation) = row;
     #[cfg(test)]
     READ_WORK.with(|work| {
@@ -170,10 +192,13 @@ fn read_id(
 fn provenance_key(activation: u64, item: u64) -> String {
     format!("projection-provenance/{activation}/{item}")
 }
-pub(super) fn index_provenance(transaction: &Transaction<'_>, checkpoint: &ProjectionCheckpoint) {
+pub(super) fn index_provenance(
+    transaction: &Transaction<'_>,
+    checkpoint: &ProjectionCheckpoint,
+) -> Result<(), ConversationStoreError> {
     let _ = super::optional_display_layout(transaction, || {
         use crate::context::checkpoint::CheckpointMessage;
-        use crate::runtime_client::trace::TraceInputProvenance;
+        use crate::observation::trace::TraceInputProvenance;
         for (ordinal, item) in checkpoint.candidate.items.iter().enumerate() {
             let key = provenance_key(checkpoint.activation.activation.0, ordinal as u64);
             match &item.message {
@@ -184,8 +209,10 @@ pub(super) fn index_provenance(transaction: &Transaction<'_>, checkpoint: &Proje
                             [reference.message_id.as_str()],
                             |row| row.get(0),
                         )
-                        .map_err(|error| storage(error.to_string()))?;
-                    let view=TraceInputProvenance::Original {source:None,conversation_id:reference.conversation_id.clone(),content_digest:reference.content_digest.clone(),locator:Some(crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition{position}),message_id_source:None};
+                        .map_err(|error| {
+                            crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                        })?;
+                    let view=TraceInputProvenance::Original {source:None,conversation_id:reference.conversation_id.clone(),content_digest:reference.content_digest.clone(),locator:Some(crate::observation::content::CanonicalContentLocator::ByLedgerPosition{position}),message_id_source:None};
                     let original =
                         super::observation_request::provenance::Raw::Original(reference, &view);
                     super::observation_request::index_state(
@@ -207,7 +234,8 @@ pub(super) fn index_provenance(transaction: &Transaction<'_>, checkpoint: &Proje
             }
         }
         Ok(())
-    });
+    })?;
+    Ok(())
 }
 #[allow(clippy::too_many_arguments)] // One source-owned range: identity, cut, selected item/path, and byte window.
 pub(super) fn provenance_read(
@@ -220,7 +248,7 @@ pub(super) fn provenance_read(
     offset: u64,
     max_bytes: u32,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    if activation == 0 || item > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX {
+    if activation == 0 || item > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err(ConversationStoreError::InvalidReference(
             "invalid projection provenance coordinate".into(),
         ));

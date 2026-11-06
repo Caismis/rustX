@@ -25,8 +25,7 @@ use super::ToolSourceId;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilitySourceState {
     /// Bootstrap/prospective source whose first preparation has not completed.
-    /// The coordinator exposes this before its first commit; normal composition
-    /// publishes a Session only after preparation, so it need not appear there.
+    /// This does not describe an initializer that is already running.
     Unprepared,
     /// The source initialized; its capabilities are part of the committed
     /// executable set.

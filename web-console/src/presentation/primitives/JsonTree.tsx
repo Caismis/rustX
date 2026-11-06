@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Derived from pinned Harness ui-primitives/src/JsonTree.tsx; see PROVENANCE.md. */
 import clsx from 'clsx'
+import { isJsonNumber } from './json';
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type {
   CSSProperties,
@@ -120,7 +121,7 @@ function JsonCopyAction({ store, target, persistent, labels, focusOwner, onCopy,
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const state = snapshot?.state ?? 'idle'
-  const object = typeof target.value === 'object' && target.value !== null
+  const object = isExpandableValue(target.value)
   const copyTitle = state === 'copied'
     ? labels.copied
     : state === 'failed'
@@ -168,7 +169,7 @@ function JsonCopyAction({ store, target, persistent, labels, focusOwner, onCopy,
 }
 
 function isExpandableValue(value: unknown): value is object | unknown[] {
-  return typeof value === 'object' && value !== null && !(value instanceof Date)
+  return typeof value === 'object' && value !== null && !(value instanceof Date) && !isJsonNumber(value)
 }
 
 function entriesOf(value: object | unknown[]): readonly (readonly [string, unknown])[] {
@@ -186,6 +187,7 @@ function bracketOf(value: object | unknown[]): readonly [string, string] {
 }
 
 function previewPrimitive(value: unknown): ReactNode {
+  if (isJsonNumber(value)) return <span className={css.numberValue}>{value.rawJSON}</span>
   if (value === null) return <span className={css.keywordValue}>null</span>
   if (typeof value === 'string') {
     return <span className={css.stringValue}>{JSON.stringify(value)}</span>
@@ -246,6 +248,7 @@ function previewValue(value: unknown, depth: number): ReactNode {
 }
 
 function primitiveValue(value: unknown): ReactNode {
+  if (isJsonNumber(value)) return <span className={css.numberValue}>{value.rawJSON}</span>
   if (value === null) return <span className={css.keywordValue}>null</span>
   if (typeof value === 'string') {
     return <span className={css.stringValue}>{JSON.stringify(value)}</span>

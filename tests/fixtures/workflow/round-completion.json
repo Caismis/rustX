@@ -1,0 +1,548 @@
+[
+  {
+    "name": "iteration conditional",
+    "available": false,
+    "definition": {
+      "description": "Round completion scope",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "flag": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "items",
+            "flag"
+          ],
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "each": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "args",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "check",
+                "label"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "check": {
+                  "type": "tool",
+                  "selector": {
+                    "origin": "builtin",
+                    "name": "check"
+                  },
+                  "arguments": {
+                    "type": "literal",
+                    "value": {}
+                  },
+                  "result": {
+                    "type": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "ok"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "choose": {
+                  "type": "branch",
+                  "cases": [
+                    {
+                      "id": "yes",
+                      "condition": {
+                        "type": "boolean",
+                        "value": {
+                          "type": "reference",
+                          "path": [
+                            "args",
+                            "flag"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "choose"
+                },
+                {
+                  "from": "choose",
+                  "to": "check",
+                  "port": "yes"
+                }
+              ]
+            }
+          },
+          "done": {
+            "type": "return",
+            "outputs": []
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "each"
+          },
+          {
+            "from": "each",
+            "to": "done"
+          }
+        ]
+      }
+    },
+    "query": {
+      "consumer": {
+        "address": {
+          "block": [],
+          "node": "each"
+        },
+        "field": {
+          "kind": "iteration_output"
+        },
+        "path": []
+      },
+      "reference": [
+        "check",
+        "label"
+      ],
+      "limit": 128
+    }
+  },
+  {
+    "name": "iteration unconditional",
+    "available": true,
+    "definition": {
+      "description": "Round completion scope",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "flag": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "items",
+            "flag"
+          ],
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "each": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "args",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "check",
+                "label"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "check": {
+                  "type": "tool",
+                  "selector": {
+                    "origin": "builtin",
+                    "name": "check"
+                  },
+                  "arguments": {
+                    "type": "literal",
+                    "value": {}
+                  },
+                  "result": {
+                    "type": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "ok"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "check"
+                }
+              ]
+            }
+          },
+          "done": {
+            "type": "return",
+            "outputs": []
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "each"
+          },
+          {
+            "from": "each",
+            "to": "done"
+          }
+        ]
+      }
+    },
+    "query": {
+      "consumer": {
+        "address": {
+          "block": [],
+          "node": "each"
+        },
+        "field": {
+          "kind": "iteration_output"
+        },
+        "path": []
+      },
+      "reference": [
+        "check",
+        "label"
+      ],
+      "limit": 128
+    }
+  },
+  {
+    "name": "loop conditional",
+    "available": false,
+    "definition": {
+      "description": "Round completion scope",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "flag": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "items",
+            "flag"
+          ],
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "repeat": {
+            "type": "loop",
+            "loop_count": 2,
+            "loop_variables": [],
+            "break_condition": {
+              "type": "boolean",
+              "value": {
+                "type": "reference",
+                "path": [
+                  "check",
+                  "ok"
+                ]
+              }
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "check": {
+                  "type": "tool",
+                  "selector": {
+                    "origin": "builtin",
+                    "name": "check"
+                  },
+                  "arguments": {
+                    "type": "literal",
+                    "value": {}
+                  },
+                  "result": {
+                    "type": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "ok"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "choose": {
+                  "type": "branch",
+                  "cases": [
+                    {
+                      "id": "yes",
+                      "condition": {
+                        "type": "boolean",
+                        "value": {
+                          "type": "reference",
+                          "path": [
+                            "args",
+                            "flag"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "choose"
+                },
+                {
+                  "from": "choose",
+                  "to": "check",
+                  "port": "yes"
+                }
+              ]
+            }
+          },
+          "done": {
+            "type": "return",
+            "outputs": []
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "repeat"
+          },
+          {
+            "from": "repeat",
+            "to": "done"
+          }
+        ]
+      }
+    },
+    "query": {
+      "consumer": {
+        "address": {
+          "block": [],
+          "node": "repeat"
+        },
+        "field": {
+          "kind": "break_condition"
+        },
+        "path": [
+          {
+            "kind": "value"
+          }
+        ]
+      },
+      "reference": [
+        "check",
+        "ok"
+      ],
+      "limit": 128
+    }
+  },
+  {
+    "name": "loop unconditional",
+    "available": true,
+    "definition": {
+      "description": "Round completion scope",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "flag": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "items",
+            "flag"
+          ],
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "repeat": {
+            "type": "loop",
+            "loop_count": 2,
+            "loop_variables": [],
+            "break_condition": {
+              "type": "boolean",
+              "value": {
+                "type": "reference",
+                "path": [
+                  "check",
+                  "ok"
+                ]
+              }
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "check": {
+                  "type": "tool",
+                  "selector": {
+                    "origin": "builtin",
+                    "name": "check"
+                  },
+                  "arguments": {
+                    "type": "literal",
+                    "value": {}
+                  },
+                  "result": {
+                    "type": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "ok": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "ok"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "check"
+                }
+              ]
+            }
+          },
+          "done": {
+            "type": "return",
+            "outputs": []
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "repeat"
+          },
+          {
+            "from": "repeat",
+            "to": "done"
+          }
+        ]
+      }
+    },
+    "query": {
+      "consumer": {
+        "address": {
+          "block": [],
+          "node": "repeat"
+        },
+        "field": {
+          "kind": "break_condition"
+        },
+        "path": [
+          {
+            "kind": "value"
+          }
+        ]
+      },
+      "reference": [
+        "check",
+        "ok"
+      ],
+      "limit": 128
+    }
+  }
+]

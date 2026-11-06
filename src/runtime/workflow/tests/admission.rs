@@ -1,17 +1,12 @@
 //! Atomic Workflow admission against deterministic candidate facts.
 use super::*;
+use crate::durable::JournalStore;
 
-fn cfg274_agent_source(overrides: Option<Value>) -> WorkflowProgram {
-    let mut agent = json!({"type":"agent","profile":"reviewer","task":"Review","output":schema(json!({}), &[])});
-    if let Some(overrides) = overrides {
-        agent["override"] = overrides;
-    }
+fn cfg274_agent_source() -> WorkflowProgram {
+    let agent = json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":{"type":"json_schema","schema":schema(json!({}), &[])}});
     WorkflowProgram::compile(WorkflowId::parse("review").unwrap(), serde_json::from_value(json!({
         "description":"Static review", "block": {
-            "input":schema(json!({}), &[]), "output":schema(json!({}), &[]), "entry":"agent",
-            "nodes":{"agent":agent,"done":{"type":"return","output":{"type":"literal","value":{}}}},
-            "edges":[{"from":"agent","to":"done"}]
-        }
+            "input":schema(json!({}), &[]), "nodes": {"workflow_start":{"type":"start"},"agent":agent,"done":{"type":"return","outputs":[]}},"edges": [{"from":"workflow_start","to":"agent"},{"from":"agent","to":"done"}],}
     })).unwrap()).unwrap()
 }
 
@@ -70,7 +65,7 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
     let available = crate::capabilities::AvailableToolCatalog::default();
     let availability = crate::capabilities::CapabilityAvailability::new();
     let absent = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &crate::runtime::subagent::AgentCatalog::empty(),
         &available,
         &availability,
@@ -105,27 +100,13 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
     );
     assert!(ordinary.tools.is_empty());
     assert_eq!(ordinary.diagnostics.len(), 1);
-    let disabled = cfg274_admit_child(
-        cfg274_agent_source(None),
-        &agents,
-        &available,
-        &ready,
-        &skills,
-    );
+    let disabled = cfg274_admit_child(cfg274_agent_source(), &agents, &available, &ready, &skills);
     assert_eq!(
         cfg274_reasons(&disabled)[0].reason,
         WorkflowDependencyFailure::Agent(ordinary.diagnostics[0].clone())
     );
-    let overridden = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{"sources":{"github":["missing"]}}}))),
-        &cfg274_agents("description='Review'\ninstructions='Review'"),
-        &available,
-        &ready,
-        &skills,
-    );
-    assert_eq!(cfg274_reasons(&disabled), cfg274_reasons(&overridden));
     let offline = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &agents,
         &available,
         &availability,
@@ -142,7 +123,7 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
 }
 
 #[test]
-fn cfg274_replacements_remove_entire_defaults_and_known_goal_disables_child() {
+fn cfg274_missing_defaults_and_known_goal_disable_child() {
     let agents = cfg274_agents(
         "description='Review'\ninstructions='Review'\nskills=['missing']\n[tools.sources]\ngithub=['missing']\n[plugins.goal]\nenabled=true",
     );
@@ -150,7 +131,7 @@ fn cfg274_replacements_remove_entire_defaults_and_known_goal_disables_child() {
     let skills = SkillSnapshot::new(Vec::new());
     let availability = crate::capabilities::CapabilityAvailability::new();
     let disabled = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &agents,
         &available,
         &availability,
@@ -163,34 +144,14 @@ fn cfg274_replacements_remove_entire_defaults_and_known_goal_disables_child() {
             crate::runtime::agent_profile::AgentProfileDiagnostic::ScopeUnsupported { .. }
         )
     )));
-    let enabled = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{},"skills":[],"plugins":{}}))),
-        &agents,
-        &available,
-        &availability,
-        &skills,
-    );
-    let program = enabled
-        .executable(&WorkflowId::parse("review").unwrap())
-        .unwrap();
-    assert_eq!(program.agent_nodes().len(), 1);
-    assert!(program.agent_nodes()[0].resolved.is_some());
-    // Present tools cannot leave a source member inherited from the default.
-    let goal_only = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"tools":{},"skills":[]}))),
-        &agents,
-        &available,
-        &availability,
-        &skills,
-    );
-    assert_eq!(cfg274_reasons(&goal_only).len(), 1);
 }
 
 #[test]
 fn cfg274_all_freezes_exact_source_set_and_recovery_readmits_only_new_catalog() {
     let plane = workflow_test_plane(1);
     let context = workflow_test_context(&plane);
-    let agents = cfg274_agents("description='Review'\ninstructions='Review'");
+    let agents =
+        cfg274_agents("description='Review'\ninstructions='Review'\n[tools.sources]\ngithub='all'");
     let source = crate::capabilities::ToolSourceId::Mcp(
         crate::runtime::identity::McpServerId::new("github"),
     );
@@ -206,7 +167,7 @@ fn cfg274_all_freezes_exact_source_set_and_recovery_readmits_only_new_catalog() 
             tool
         }))
     };
-    let program = || cfg274_agent_source(Some(json!({"tools":{"sources":{"github":"all"}}})));
+    let program = cfg274_agent_source;
     let skills = SkillSnapshot::new(Vec::new());
     let r1 = cfg274_admit_child(program(), &agents, &available(&["a", "b"]), &ready, &skills);
     let r2 = cfg274_admit_child(program(), &agents, &available(&["c"]), &ready, &skills);
@@ -276,15 +237,27 @@ async fn cfg274_disabled_direct_start_runs_zero_nodes_tools_and_children() {
     };
     *selector = crate::capabilities::selection::ExactToolSelector::Builtin {
         name: "missing".into(),
-    };
+    }
+    .into();
     // A child is the entry node; the unavailable Tool occurs later.
-    source.block.nodes.insert("first_child".into(), serde_json::from_value(json!({"type":"agent","profile":"reviewer","task":"Review","output":schema(json!({}), &[])})).unwrap());
+    source.block.nodes.insert("first_child".into(), serde_json::from_value(json!({"type":"agent","profile":"reviewer","task":[{"type":"literal","value":"Review"}],"output":{"type":"json_schema","schema":schema(json!({}), &[])}})).unwrap());
     source.block.edges.push(WorkflowEdgeDefinition {
         from: "first_child".into(),
         to: "check".into(),
         port: None,
     });
-    source.block.entry = "first_child".into();
+    source
+        .block
+        .edges
+        .retain(|edge| edge.from != "workflow_start");
+    source.block.edges.insert(
+        0,
+        crate::runtime::workflow::WorkflowEdgeDefinition {
+            from: "workflow_start".into(),
+            to: "first_child".into(),
+            port: None,
+        },
+    );
     let source = Arc::new(compile_test(source).unwrap());
     let context = context.with_test_workflow(&source);
     let before = plane.registry.listing(false, 100);
@@ -419,7 +392,7 @@ fn cfg274_child_skills_use_merged_catalog_explicitly_and_remain_lazy() {
             .unwrap()
     };
     let child = cfg274_admit_child(
-        cfg274_agent_source(None),
+        cfg274_agent_source(),
         &agents,
         &available,
         &availability,
@@ -430,8 +403,8 @@ fn cfg274_child_skills_use_merged_catalog_explicitly_and_remain_lazy() {
         "root automatic visibility must not enter a named child"
     );
     let selected = cfg274_admit_child(
-        cfg274_agent_source(Some(json!({"skills":["review"]}))),
-        &agents,
+        cfg274_agent_source(),
+        &cfg274_agents("description='Review'\ninstructions='Review'\nskills=['review']"),
         &available,
         &availability,
         &skills,
@@ -442,8 +415,10 @@ fn cfg274_child_skills_use_merged_catalog_explicitly_and_remain_lazy() {
     assert!(!format!("{selected:?}").contains("SECRET_LAZY_BODY"));
     for name in ["absent", "invalid", "excluded"] {
         let catalog = cfg274_admit_child(
-            cfg274_agent_source(Some(json!({"skills":[name]}))),
-            &agents,
+            cfg274_agent_source(),
+            &cfg274_agents(&format!(
+                "description='Review'\ninstructions='Review'\nskills=['{name}']"
+            )),
             &available,
             &availability,
             &skills,
@@ -625,15 +600,12 @@ fn tool_node_admission_is_capability_plane_selection_without_agents() {
     let program = |name: &str| {
         WorkflowProgram::compile(WorkflowId::parse("verify").unwrap(), serde_json::from_value(json!({
             "description":"Source verification", "block": {
-                "input":schema(json!({}), &[]), "output":schema(json!({}), &[]), "entry":"check",
-                "nodes":{
+                "input":schema(json!({}), &[]), "nodes": {"workflow_start":{"type":"start"},
                     "check":{"type":"tool","selector":{"origin":"source","source_id":"github","name":name},
                         "arguments":{"type":"literal","value":{}},
-                        "result":{"type":"json","part":0,"schema":{"type":"object"}}},
-                    "done":{"type":"return","output":{"type":"literal","value":{}}}
-                },
-                "edges":[{"from":"check","to":"done"}]
-            }
+                        "result":{"type":"json","schema":{"type":"object"}}},
+                    "done":{"type":"return","outputs":[]}
+                },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"done"}],}
         })).unwrap()).unwrap()
     };
     let ready: crate::capabilities::CapabilityAvailability = [(
@@ -690,4 +662,99 @@ fn tool_node_admission_is_capability_plane_selection_without_agents() {
             }]
         );
     }
+}
+
+#[test]
+fn resource_authority_follows_effective_workflow_agent_selection_and_frozen_generation() {
+    let plane = workflow_test_plane(1);
+    let context = workflow_test_context(&plane);
+    let source = crate::capabilities::ToolSourceId::Mcp(
+        crate::runtime::identity::McpServerId::new("github"),
+    );
+    let root_only = crate::capabilities::ToolSourceId::Mcp(
+        crate::runtime::identity::McpServerId::new("root-only"),
+    );
+    let resources = crate::capabilities::AvailableToolCatalog::default()
+        .with_resource_sources([source.clone(), root_only.clone()].into());
+    let availability = [
+        (
+            source.clone(),
+            crate::capabilities::CapabilitySourceState::Ready,
+        ),
+        (root_only, crate::capabilities::CapabilitySourceState::Ready),
+    ]
+    .into();
+    let skills = SkillSnapshot::new(Vec::new());
+    let agents =
+        cfg274_agents("description='Review'\ninstructions='Review'\n[tools.sources]\ngithub='all'");
+    let bind = |catalog: &WorkflowCatalog| {
+        context
+            .bind_workflow_agent(
+                catalog
+                    .executable(&WorkflowId::parse("review").unwrap())
+                    .unwrap()
+                    .agent_nodes()[0]
+                    .resolved
+                    .as_ref()
+                    .unwrap(),
+            )
+            .unwrap()
+    };
+    let original = cfg274_admit_child(
+        cfg274_agent_source(),
+        &agents,
+        &resources,
+        &availability,
+        &skills,
+    );
+    let frozen = bind(&original);
+    assert!(frozen.tools.is_empty());
+    assert_eq!(frozen.resource_sources, [source.clone()].into());
+    assert_eq!(
+        frozen
+            .materialization
+            .sources
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        [source.clone()].into()
+    );
+    let replaced = cfg274_admit_child(
+        cfg274_agent_source(),
+        &cfg274_agents("description='Review'\ninstructions='Review'"),
+        &resources,
+        &availability,
+        &skills,
+    );
+    assert!(bind(&replaced).resource_sources.is_empty());
+    assert!(bind(&replaced).materialization.is_empty());
+
+    let mut tool = definition();
+    tool.name = "lookup".into();
+    tool.origin = ToolOrigin::Mcp {
+        server_id: crate::runtime::identity::McpServerId::new("github"),
+    };
+    let with_tool = crate::capabilities::AvailableToolCatalog::metadata([tool])
+        .with_resource_sources([source].into());
+    let exact = cfg274_admit_child(
+        cfg274_agent_source(),
+        &cfg274_agents(
+            "description='Review'\ninstructions='Review'\n[tools.sources]\ngithub=['lookup']",
+        ),
+        &with_tool,
+        &availability,
+        &skills,
+    );
+    assert_eq!(bind(&exact).tools.len(), 1);
+    assert!(bind(&exact).resource_sources.is_empty());
+
+    let later = cfg274_admit_child(
+        cfg274_agent_source(),
+        &agents,
+        &crate::capabilities::AvailableToolCatalog::default(),
+        &availability,
+        &skills,
+    );
+    assert!(bind(&later).resource_sources.is_empty());
+    assert_eq!(bind(&original), frozen);
 }

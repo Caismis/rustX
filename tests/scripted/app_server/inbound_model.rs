@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn clients_cannot_manufacture_canonical_upload_facts() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let managed = f.load(0).await.unwrap().unwrap();
         let reference = crate::message::content::UploadedFileRef {
             batch_id: "forged".into(),

@@ -1,0 +1,73 @@
+{
+  "scenario": "send_after_ready",
+  "width": 390,
+  "locale": "zh",
+  "selection_to_ready_ms": 396.1980849999818,
+  "controlled_list_gate_ms": 85.46688500000164,
+  "send_to_first_model_request_ms": 1083.7798000000184,
+  "composer_bounds": {
+    "x": 56,
+    "y": 364,
+    "width": 327,
+    "height": 192
+  },
+  "counts": {
+    "processes": 1,
+    "initializations": 1,
+    "probes": 1,
+    "lists": 1,
+    "completedLists": 1
+  },
+  "processes": [
+    {
+      "pid": 2176919,
+      "supervisorPid": 2176918,
+      "pgid": 2176918
+    }
+  ],
+  "events": [
+    {
+      "kind": "P",
+      "at": 466807.786836
+    },
+    {
+      "kind": "D",
+      "at": 466807.805015
+    },
+    {
+      "kind": "I",
+      "at": 466808.308161
+    },
+    {
+      "kind": "L",
+      "at": 466809.161661
+    },
+    {
+      "kind": "T",
+      "at": 466895.175411
+    }
+  ],
+  "first_request_tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "startup_echo",
+        "description": "Echo from the prepared source",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "message"
+          ]
+        }
+      }
+    }
+  ],
+  "provider_requests": 1,
+  "clock": "Node performance.now; readiness is the native diagnostic, request is the emulator gate",
+  "limits": "Single fixture sample; includes the controlled discovery gate, browser, Host and observation overhead; no claim of faster MCP networking."
+}

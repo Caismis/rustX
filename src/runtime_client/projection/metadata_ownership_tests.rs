@@ -1,14 +1,15 @@
+use super::super::publication::{event_kind, stamp_event_trace_cut};
 use super::super::{
-    DomainSources, EncodedPublication, PublicationDraft, encoded_event_bytes, event_kind,
-    set_checkpoint_transition_cursor, stamp_event_trace_cut,
+    DomainSources, EncodedPublication, PublicationDraft, encoded_event_bytes,
+    set_checkpoint_transition_cursor,
 };
-use crate::runtime_client::checkpoint::{
-    CHECKPOINT_TARGET_BYTES, ContentBinding, ProjectionMetadata, fit_checkpoint,
-};
-use crate::runtime_client::content::{
+use crate::observation::bounded::CHECKPOINT_TARGET_BYTES;
+use crate::observation::content::{
     CanonicalContentComponent, CanonicalContentLocator, ContentRef, ContentRepresentation,
     ContentSource,
 };
+use crate::observation::cut::ContentBinding;
+use crate::runtime_client::checkpoint::{ProjectionMetadata, fit_checkpoint};
 
 #[derive(Debug, Default)]
 #[allow(clippy::struct_excessive_bools)] // Independent branch witnesses can overlap.
@@ -177,10 +178,7 @@ fn traced_draft() -> PublicationDraft {
             transition: "nested-native-cut".into(),
             checkpoint: Box::new(nested),
         },
-        RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged {
-            eligibility:
-                crate::local_runtime::configuration::application::AdoptionEligibility::Eligible,
-        },
+        RuntimeClientEvent::TraceChanged,
     ];
     draft
 }
@@ -288,7 +286,7 @@ fn normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order() {
     let [
         RuntimeClientEvent::TraceChanged,
         RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. },
-        RuntimeClientEvent::ConfigurationAdoptionEligibilityChanged { .. },
+        RuntimeClientEvent::TraceChanged,
     ] = events.as_slice()
     else {
         panic!("original three facts retain their order");
@@ -432,7 +430,7 @@ fn existing_cursor_and_journal_failures_remain_identical() {
 
 #[test]
 fn metadata_first_publication_skips_snapshot_copies_and_repeated_preflight() {
-    use crate::runtime_client::checkpoint::{self, take_capture_work};
+    use crate::observation::capture::take_capture_work;
     for forced in [false, true] {
         let mut draft = empty_draft();
         draft.replacement = forced;
@@ -493,7 +491,13 @@ fn metadata_first_publication_skips_snapshot_copies_and_repeated_preflight() {
                     .windows(2)
                     .all(|rows| rows[0].path <= rows[1].path)
             );
-            assert!(checkpoint::bounded_structural_len(&actual.event, actual.bytes - 1).is_none());
+            assert!(
+                crate::observation::bounded::bounded_structural_len(
+                    &actual.event,
+                    actual.bytes - 1
+                )
+                .is_none()
+            );
         }
     }
 }
@@ -501,7 +505,8 @@ fn metadata_first_publication_skips_snapshot_copies_and_repeated_preflight() {
 #[test]
 fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
     use super::super::prepared_capture::FitBudget;
-    use crate::runtime_client::{checkpoint, preflight};
+    use crate::observation::preflight;
+    use crate::runtime_client::checkpoint;
     let mut draft = empty_draft();
     draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
     for revision in [9, 99, 999, 9_007_199_254_740_990] {
@@ -557,8 +562,12 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
                 CHECKPOINT_TARGET_BYTES,
             ] {
                 assert_eq!(
-                    checkpoint::bounded_structural_len_with_budget(&event, limit, Some(budget)),
-                    checkpoint::bounded_structural_len(&event, limit),
+                    crate::observation::bounded::bounded_structural_len_with_budget(
+                        &event,
+                        limit,
+                        Some(budget)
+                    ),
+                    crate::observation::bounded::bounded_structural_len(&event, limit),
                     "revision={revision}, replacement={replacement}, limit={limit}",
                 );
                 assert_eq!(
@@ -569,7 +578,7 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
                         limit,
                         None
                     ),
-                    checkpoint::bounded_structural_len(&event, limit),
+                    crate::observation::bounded::bounded_structural_len(&event, limit),
                     "fragment exact composition: revision={revision}, replacement={replacement}, limit={limit}",
                 );
             }
@@ -580,7 +589,7 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
 #[test]
 fn native_metadata_heads_reuse_fragments_across_publication_and_keep_old_paths() {
     use super::super::prepared_capture::{PreparedBindingHead, take_binding_work};
-    use crate::runtime_client::checkpoint::metadata_fragment::take_work;
+    use crate::observation::metadata::take_work;
     let mut draft = empty_draft();
     let message = compactable_user("immutable-native-evidence");
     let raw = binding(
@@ -666,7 +675,7 @@ fn native_metadata_heads_reuse_fragments_across_publication_and_keep_old_paths()
 
 #[test]
 fn indexed_metadata_merge_preserves_existing_duplicates_and_first_source_path() {
-    use crate::runtime_client::checkpoint::Capture;
+    use crate::observation::capture::Capture;
     let mut draft = empty_draft();
     let message = compactable_user("metadata-path-priority");
     let raw = binding(
@@ -700,8 +709,9 @@ fn indexed_metadata_merge_preserves_existing_duplicates_and_first_source_path() 
 
 #[test]
 fn merged_frontier_pass_preserves_cut_and_duplicate_override_precedence() {
+    use crate::observation::capture::Capture;
+    use crate::observation::cut::CollectionFrontier;
     use crate::runtime::identity::ObservationCollectionCut;
-    use crate::runtime_client::checkpoint::{Capture, CollectionFrontier};
     let mut draft = empty_draft();
     let seed = &mut draft.seed;
     seed.live_block_total = 11;
@@ -788,7 +798,8 @@ fn merged_frontier_pass_preserves_cut_and_duplicate_override_precedence() {
 
 #[test]
 fn cached_raw_evidence_merge_rechecks_current_resolution_and_preserves_old_cut() {
-    use crate::runtime_client::checkpoint::{Capture, metadata_fragment::take_evidence_work};
+    use crate::observation::capture::Capture;
+    use crate::runtime_client::checkpoint::metadata_fragment::take_evidence_work;
     let mut draft = empty_draft();
     let message = compactable_user("raw-cache-authority");
     let raw = binding(
@@ -893,9 +904,7 @@ fn content_resolution_keeps_argument_precedence_and_missing_representation_seman
                         || representation == ContentRepresentation::RawJsonUtf8)
                 {
                     20
-                } else if available & 1 != 0
-                    && representation == ContentRepresentation::Utf8Text
-                {
+                } else if available & 1 != 0 && representation == ContentRepresentation::Utf8Text {
                     10
                 } else {
                     1

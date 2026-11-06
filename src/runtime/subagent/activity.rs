@@ -156,10 +156,8 @@ impl SubagentObservationProjector {
     ) -> bool {
         let applied = match observation {
             ConversationObservation::JournalFact(witness) => {
-                crate::runtime_client::structural_json::decode::<RuntimeEvent>(
-                    witness.value.clone(),
-                )
-                .is_ok_and(|event| self.fold_event(&event))
+                crate::observation::structural_json::decode::<RuntimeEvent>(witness.value.clone())
+                    .is_ok_and(|event| self.fold_event(&event))
             }
             #[cfg(test)]
             ConversationObservation::Event { event, .. } => self.fold_event(event),
@@ -174,11 +172,11 @@ impl SubagentObservationProjector {
             } => self.apply_tool_progress(tool_call_id, progress),
             ConversationObservation::InteractionPending { interaction, .. } => {
                 let on = match &interaction.kind {
-                    crate::runtime_client::snapshot::RuntimeClientInteractionKind::Approval => SubagentWaitReason::Approval {
+                    crate::observation::interaction::RuntimeClientInteractionKind::Approval => SubagentWaitReason::Approval {
                         tool_id: interaction.approval.as_ref().expect("approval header metadata").tool_id.clone(),
                     },
-                    crate::runtime_client::snapshot::RuntimeClientInteractionKind::Questionnaire => SubagentWaitReason::Questionnaire,
-                    crate::runtime_client::snapshot::RuntimeClientInteractionKind::Review => SubagentWaitReason::Review,
+                    crate::observation::interaction::RuntimeClientInteractionKind::Questionnaire => SubagentWaitReason::Questionnaire,
+                    crate::observation::interaction::RuntimeClientInteractionKind::Review => SubagentWaitReason::Review,
                 };
                 self.visible_tool = None;
                 self.observation.activity = SubagentActivity::Waiting { on };
@@ -222,7 +220,11 @@ impl SubagentObservationProjector {
                 self.observation.attempt_id = None;
                 true
             }
-            RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+            RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                request_id,
+                ..
+            } => {
                 // The retry ordinal of THIS request: whatever retry the
                 // scheduler armed, consumed exactly once. A later turn's
                 // fresh request therefore projects retry 0 regardless of
@@ -236,8 +238,14 @@ impl SubagentObservationProjector {
                 };
                 true
             }
-            RuntimeEvent::ModelRequestCompleted { .. }
-            | RuntimeEvent::ModelRequestFailed { .. }
+            RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                ..
+            }
+            | RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                ..
+            }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::CompactionFailed { .. } => {
                 self.visible_tool = None;
@@ -484,7 +492,7 @@ pub enum SubagentWaitReason {
 ///
 /// Derived from the frozen model authority exactly once by
 /// [`SubagentExecutionProfile::from_frozen`]: it carries only the effective
-/// model identity, Model Profile, and reasoning state. Credentials, endpoints, provider
+/// model identity and Model Profile. Credentials, endpoints, provider
 /// bindings, and every other binding internal are never projected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -495,8 +503,6 @@ pub struct SubagentExecutionProfile {
     /// The selected Model Profile, when the model declares any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ModelProfileId>,
-    /// Whether the invocation semantically enables reasoning.
-    pub reasoning_enabled: bool,
 }
 
 impl SubagentExecutionProfile {
@@ -506,7 +512,6 @@ impl SubagentExecutionProfile {
         Self {
             model: frozen.primary.model.to_string(),
             profile: frozen.primary.profile.clone(),
-            reasoning_enabled: frozen.primary.reasoning_enabled,
         }
     }
 }
@@ -596,6 +601,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -612,6 +624,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 finish_reason: crate::model::ModelFinishReason::Stop,
                 usage: None,
@@ -625,11 +644,67 @@ mod tests {
     }
 
     #[test]
+    fn auxiliary_request_and_call_facts_do_not_change_child_activity() {
+        let mut projector = SubagentObservationProjector::default();
+        let call_id = crate::runtime::identity::AuxiliaryCallId::new(
+            "aux_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        );
+        let owner = crate::model::ModelRequestOwner::Auxiliary {
+            call_id: call_id.clone(),
+            ordinal: 0,
+        };
+        let fingerprint = crate::model::AuxiliaryFingerprint::new("b".repeat(64)).unwrap();
+        assert_ignored(
+            &mut projector,
+            &event(RuntimeEvent::AuxiliaryCallStarted {
+                call_id,
+                purpose: crate::model::AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: crate::model::AuxiliaryAttribution::new("automatic").unwrap(),
+                semantic_input_fingerprint: fingerprint.clone(),
+                invocation_fingerprint: fingerprint,
+                business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
+                input: crate::model::auxiliary::AuxiliaryInputEvidence::Temporary,
+                selected_message_ids: Vec::new(),
+            }),
+        );
+        assert_ignored(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestStarted {
+                owner: owner.clone(),
+                request_id: RequestId::new("aux-request"),
+                model: "aux-model".into(),
+            }),
+        );
+        assert_ignored(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestCompleted {
+                owner,
+                request_id: RequestId::new("aux-request"),
+                finish_reason: crate::model::ModelFinishReason::Stop,
+                usage: None,
+                generation: None,
+            }),
+        );
+        assert_eq!(projector.observation.counters.model_requests, 0);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
+    }
+
+    #[test]
     fn a_scheduled_retry_marks_the_next_request_as_a_retry() {
         let mut projector = SubagentObservationProjector::default();
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -637,6 +712,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 error: model_error(),
                 usage: None,
@@ -665,6 +747,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 1,
+                    },
+                },
                 request_id: RequestId::new("req-2"),
                 model: "local/model".to_owned(),
             }),
@@ -685,6 +774,7 @@ mod tests {
     /// `retry: 1`, and a fresh request of a later turn projects `retry: 0`
     /// even though the counter stays cumulative.
     #[test]
+    #[allow(clippy::too_many_lines)] // Keep the interleaved event history visible with its assertions.
     fn a_fresh_request_of_a_later_turn_never_inherits_an_earlier_retry_ordinal() {
         let mut projector = SubagentObservationProjector::default();
 
@@ -693,6 +783,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
@@ -700,6 +797,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestFailed {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-1"),
                 error: model_error(),
                 usage: None,
@@ -717,6 +821,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 1,
+                    },
+                },
                 request_id: RequestId::new("req-2"),
                 model: "local/model".to_owned(),
             }),
@@ -732,6 +843,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("1"),
+                        retry_number: 1,
+                    },
+                },
                 request_id: RequestId::new("req-2"),
                 finish_reason: crate::model::ModelFinishReason::Stop,
                 usage: None,
@@ -744,6 +862,13 @@ mod tests {
         assert_folded(
             &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: crate::runtime::identity::TurnId::new("2"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("req-3"),
                 model: "local/model".to_owned(),
             }),
@@ -1002,8 +1127,10 @@ mod tests {
             conversation_id: crate::runtime::identity::ConversationId::new(
                 "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
             ),
-            attempt_id: AttemptId::new("attempt-1"),
-            turn: 1,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: 1,
+            },
             kind: InteractionKind::Approval {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: ToolCallId::new("call-1"),
@@ -1019,7 +1146,7 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                interaction: crate::runtime_client::checkpoint::interaction_request_header(
+                interaction: crate::observation::interaction::interaction_request_header(
                     &request,
                     crate::runtime::interaction::InteractionSource::Primary,
                 ),
@@ -1088,8 +1215,10 @@ mod tests {
             conversation_id: crate::runtime::identity::ConversationId::new(
                 "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
             ),
-            attempt_id: AttemptId::new("attempt-1"),
-            turn: 1,
+            execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: 1,
+            },
             kind: InteractionKind::Questionnaire {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
@@ -1120,7 +1249,7 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                interaction: crate::runtime_client::checkpoint::interaction_request_header(
+                interaction: crate::observation::interaction::interaction_request_header(
                     &request,
                     crate::runtime::interaction::InteractionSource::Primary,
                 ),
@@ -1203,7 +1332,6 @@ mod tests {
         let profile = SubagentExecutionProfile::from_frozen(&frozen);
         assert_eq!(profile.model, "local/model");
         assert_eq!(profile.profile, None);
-        assert!(!profile.reasoning_enabled);
         let serialized = serde_json::to_string(&profile).expect("serialize");
         assert!(
             !serialized.contains("test-only-secret"),
@@ -1412,14 +1540,16 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                interaction: crate::runtime_client::checkpoint::interaction_request_header(
+                interaction: crate::observation::interaction::interaction_request_header(
                     &crate::runtime::interaction::InteractionRequest {
                         id: crate::runtime::identity::InteractionId::new("interaction-1"),
                         conversation_id: crate::runtime::identity::ConversationId::new(
                             "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                         ),
-                        attempt_id: AttemptId::new("attempt-1"),
-                        turn: 1,
+                        execution: rustx::runtime::interaction::InteractionExecution::Attempt {
+                            attempt_id: AttemptId::new("attempt-1"),
+                            turn: 1,
+                        },
                         kind: InteractionKind::Approval {
                             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                                 call_id: ToolCallId::new("call-a"),

@@ -56,13 +56,14 @@ impl Parent {
         environment: &[(&str, &str)],
         session: Option<&SessionId>,
     ) -> Self {
-        let session_id = match session {
-            Some(session) => session.clone(),
-            None => {
-                rustx::local_runtime::session_controller::SessionController::open(
-                    &bindings.runtime_root,
-                )
-                .expect("the durable Session owner opens")
+        let session_id = if let Some(session) = session {
+            session.clone()
+        } else {
+            let controller = rustx::local_runtime::session_controller::SessionController::open(
+                &bindings.runtime_root,
+            )
+            .expect("the durable Session owner opens");
+            let session = controller
                 .create_session(
                     rustx::local_runtime::session::SessionPersistentState::from_input(
                         &rustx::local_runtime::SessionConfigInput::new(bindings.workspace.clone()),
@@ -70,9 +71,13 @@ impl Parent {
                 )
                 .await
                 .expect("the parent Session is created")
-                .session
-                .id
-            }
+                .session;
+            // These strict provider scenarios count child execution requests.
+            controller
+                .rename_session(&session.id, "Subagent boundary fixture")
+                .await
+                .expect("the parent fixture has an explicit Session label");
+            session.id
         };
         std::fs::create_dir_all(&bindings.home).expect("isolated home");
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
@@ -227,7 +232,7 @@ impl Parent {
     /// Reads original Tool definitions at the advertised capability cut.
     pub(crate) async fn capability_tools(
         &mut self,
-    ) -> Vec<rustx::runtime_client::snapshot::RuntimeClientTool> {
+    ) -> Vec<rustx::observation::capability_source::RuntimeClientTool> {
         let Ok(MethodResult::DomainPage { page: header }) = self
             .call(Method::Capability {
                 target: self.target(),
@@ -274,7 +279,7 @@ impl Parent {
                     }
                 };
                 tools.push(
-                    rustx::runtime_client::checkpoint::decode_domain_value(value)
+                    rustx::observation::bounded::decode_domain_value(value)
                         .expect("original typed Tool definition"),
                 );
                 offset += 1;
@@ -292,7 +297,7 @@ impl Parent {
     pub(crate) async fn selected_value(
         &mut self,
         agent_id: Option<rustx::runtime::identity::AgentId>,
-        cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+        cut: &rustx::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
@@ -406,13 +411,36 @@ impl Parent {
             nix::sys::signal::Signal::SIGTERM,
         )
         .expect("SIGTERM the parent");
-        let status = tokio::time::timeout(LIVENESS, self.child.wait())
-            .await
-            .expect("the parent must exit after its explicit drain")
-            .expect("wait");
+        // A subscribed connection can still emit final records during drain.
+        // Keep both pipes flowing while waiting: an accepted JSONL record must
+        // finish before the server can exit, even after carrier retirement.
+        let mut stderr = self.child.stderr.take().expect("stderr is piped");
+        let mut diagnostics = String::new();
+        let (status, (), ()) = tokio::time::timeout(LIVENESS, async {
+            tokio::join!(
+                self.child.wait(),
+                async {
+                    while self
+                        .stdout
+                        .next_line()
+                        .await
+                        .expect("drain parent stdout")
+                        .is_some()
+                    {}
+                },
+                async {
+                    use tokio::io::AsyncReadExt;
+                    stderr
+                        .read_to_string(&mut diagnostics)
+                        .await
+                        .expect("drain parent stderr");
+                },
+            )
+        })
+        .await
+        .expect("the parent must exit after its explicit drain");
         drop(self.stdin.take());
-        let stderr = self.stderr().await;
-        (status, stderr)
+        (status.expect("wait"), diagnostics)
     }
 
     /// Closes the protocol input without an owner shutdown.

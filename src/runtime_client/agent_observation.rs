@@ -9,7 +9,7 @@ use super::{
         RuntimeClientResult,
     },
 };
-use crate::durable::ConversationStore;
+use crate::durable::ObservationStore;
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -134,7 +134,7 @@ impl Peer {
         request: RuntimeClientRequest,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let expected = request.id();
-        let mut bytes = super::checkpoint::bounded_bytes(
+        let mut bytes = crate::observation::bounded::bounded_bytes(
             &request,
             super::transport::stdio::STDIO_JSONL_MAX_RECORD_BYTES,
         )
@@ -168,9 +168,9 @@ impl Peer {
     }
     async fn trace_page(
         &mut self,
-        before: Option<super::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
-        records: Vec<super::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let id = self.next_id();
         let expected = records.len();
@@ -193,8 +193,11 @@ impl Peer {
         if *refreshed != expected
             || page.records.len() > 32
             || page.updates.len() > super::trace::TRACE_RECORD_LIMIT
-            || super::checkpoint::bounded_bytes(&result, super::checkpoint::CHECKPOINT_TARGET_BYTES)
-                .is_none()
+            || crate::observation::bounded::bounded_bytes(
+                &result,
+                crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
+            )
+            .is_none()
         {
             return Err(RuntimeClientError::ObservationCapacityExceeded);
         }
@@ -227,9 +230,9 @@ impl Peer {
             location.record_id.len() > 256
                 || location.page.records.len() > 32
                 || location.page.updates.len() > 32
-        }) || super::checkpoint::bounded_bytes(
+        }) || crate::observation::bounded::bounded_bytes(
             &result,
-            super::checkpoint::CHECKPOINT_TARGET_BYTES,
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
         )
         .is_none()
         {
@@ -241,7 +244,7 @@ impl Peer {
     }
     fn validate_cut(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
     ) -> Result<(), RuntimeClientError> {
         if cut.conversation_id != self.conversation_id
             || cut.activation_id.as_ref() != Some(&self.activation_id)
@@ -302,23 +305,23 @@ impl Peer {
             || actual_path != path
             || fields.len() > limit
             || fields.len() > 32
-            || *total > super::content::CONTENT_SAFE_INTEGER_MAX
+            || *total > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
             || end > *total
             || *next_offset != (end < *total).then_some(end)
             || (offset < *total && fields.is_empty())
             || fields.iter().enumerate().any(|(index, field)| {
                 field.offset != offset + index as u64
                     || field.key.as_ref().is_some_and(|key| key.len() > 256)
-                    || field.encoded_bytes > super::content::CONTENT_SAFE_INTEGER_MAX
-                    || field.children > super::content::CONTENT_SAFE_INTEGER_MAX
-                    || field
-                        .key_bytes
-                        .is_some_and(|bytes| bytes > super::content::CONTENT_SAFE_INTEGER_MAX)
+                    || field.encoded_bytes > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
+                    || field.children > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
+                    || field.key_bytes.is_some_and(|bytes| {
+                        bytes > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
+                    })
                     || field.value.as_ref().is_some_and(|value| {
                         field.children > 32
-                            || super::checkpoint::bounded_item_bytes(
+                            || crate::observation::bounded::bounded_item_bytes(
                                 value,
-                                super::checkpoint::CHECKPOINT_ITEM_BYTES,
+                                crate::observation::bounded::CHECKPOINT_ITEM_BYTES,
                             )
                             .is_none()
                     })
@@ -371,7 +374,7 @@ impl Peer {
                     usize::from(bytes_base64.ends_with('='))
                 }
                 > max_bytes as usize
-            || *readable_end > super::content::CONTENT_SAFE_INTEGER_MAX
+            || *readable_end > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
         {
             return Err(failed("pending interaction value source identity changed"));
         }
@@ -497,20 +500,22 @@ fn durable_host(
     super::host::RuntimeClientHost::new_durable(std::sync::Arc::new(store), None).map_err(failed)
 }
 
-// Cold Trace owns an immutable historical cut, authenticated by the Registry
-// activation. It does not carry a durable Host's publication/cache cut.
-fn cold_trace_selection(cut: &super::checkpoint::CheckpointReadCut, domain: &str) -> bool {
+// Historical inspection owns an immutable cut authenticated by the Registry
+// activation, independently of the live Host's publication/cache cut.
+fn historical_selection(cut: &crate::observation::cut::CheckpointReadCut, domain: &str) -> bool {
     cut.revision == 0
         && cut.canonical_foreground.is_none()
         && cut.live_publication.is_none()
         && cut.domain_revisions.is_empty()
         && cut.collection_cuts.is_empty()
-        && (super::trace_observation::selection(domain).is_some()
+        && (domain == "trace.records"
+            || super::trace_observation::selection(domain).is_some()
             || super::trace_observation::messages_selection(domain).is_some()
+            || super::trace_observation::workflow_selection(domain).is_some()
             || super::trace_observation::canonical_selection(domain)
             || super::trace_observation::context_selection(domain).is_some()
             || super::journal_observation::selection(domain).is_some()
-            || super::delivery::selection(domain).is_some()
+            || crate::runtime_client::delivery::selection(domain).is_some()
             || super::occupancy::selection(domain).is_some()
             || super::attempt_identity::selection(domain).is_some()
             || super::projection_history::selection(domain).is_some())
@@ -519,13 +524,13 @@ fn cold_trace_selection(cut: &super::checkpoint::CheckpointReadCut, domain: &str
 fn cold_agent_value_read(
     registry: &crate::runtime::subagent::SubagentRegistry,
     activation: &SubagentId,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     item_offset: u64,
     path: &[String],
     range: (u64, u32),
 ) -> Result<super::checkpoint::CheckpointValueChunk, RuntimeClientError> {
-    if cold_trace_selection(cut, domain) {
+    if historical_selection(cut, domain) {
         let store = registry
             .transcript_store(activation)
             .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
@@ -546,12 +551,12 @@ fn cold_agent_value_read(
 fn cold_agent_page(
     registry: &crate::runtime::subagent::SubagentRegistry,
     activation: &SubagentId,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     offset: u64,
     limit: usize,
 ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
-    if cold_trace_selection(cut, domain) {
+    if historical_selection(cut, domain) {
         let store = registry
             .transcript_store(activation)
             .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
@@ -562,7 +567,7 @@ fn cold_agent_page(
 }
 
 fn bind_cold_agent_trace(
-    page: &mut super::trace::TracePage,
+    page: &mut crate::observation::trace::TracePage,
     agent: &super::snapshot::RuntimeClientAgent,
 ) -> Result<(), RuntimeClientError> {
     let cut = page
@@ -589,7 +594,7 @@ async fn physical_read<T: Send + 'static>(
 }
 
 fn pending_fields_page(
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     result: RuntimeClientResult,
 ) -> Result<super::checkpoint::CheckpointPage, RuntimeClientError> {
@@ -611,7 +616,7 @@ fn pending_fields_page(
         .into_iter()
         .map(|field| {
             if field.children > 0 {
-                collections.push(super::checkpoint::CollectionFrontier {
+                collections.push(crate::observation::cut::CollectionFrontier {
                     domain: format!("{domain}.{}", field.offset),
                     revision,
                     total: field.children,
@@ -619,14 +624,14 @@ fn pending_fields_page(
                     next_offset: Some(0),
                 });
             }
-            super::checkpoint::CheckpointPageItem {
+            crate::observation::cut::CheckpointPageItem {
                 offset: field.offset,
                 identity: field.offset.to_string(),
                 key: field
                     .key
                     .zip(field.key_bytes)
                     .map(
-                        |(preview, encoded_bytes)| super::checkpoint::CheckpointKey {
+                        |(preview, encoded_bytes)| crate::observation::cut::CheckpointKey {
                             path: vec!["$key".into()],
                             preview,
                             encoded_bytes,
@@ -676,7 +681,7 @@ async fn peer_pending_bytes(
 
 async fn peer_routed_body(
     peer: &mut Peer,
-    header: &super::snapshot::RuntimeClientInteractionHeader,
+    header: &crate::observation::interaction::RuntimeClientInteractionHeader,
     range: (u64, u32),
 ) -> Result<(Vec<u8>, u64, Option<u64>), RuntimeClientError> {
     let (_, source_end, _) = peer_pending_bytes(peer, &header.interaction, &[], (0, 1)).await?;
@@ -702,7 +707,7 @@ fn validate_pending_bounds(
     if domain.len() > 256
         || path.len() > 32
         || path.iter().any(|part| part.len() > 256)
-        || offset > super::content::CONTENT_SAFE_INTEGER_MAX
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(RuntimeClientError::InvalidRequest {
             message: "invalid pending source read bounds".into(),
@@ -715,9 +720,9 @@ impl ClientInner {
     pub(crate) async fn agent_trace_via_inspection(
         self: &std::sync::Arc<Self>,
         id: &AgentId,
-        before: Option<super::trace::TraceCursor>,
+        before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
-        records: Vec<super::trace::TraceCursor>,
+        records: Vec<crate::observation::trace::TraceCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         if !(1..=super::trace::TRACE_PAGE_LIMIT).contains(&limit)
             || records.len() > super::trace::TRACE_RECORD_LIMIT
@@ -729,7 +734,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             let result = if matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
@@ -772,7 +777,7 @@ impl ClientInner {
                 .await?;
                 peer.trace_page(before, limit, records).await?
             };
-            let current = self.agent_view(id)?;
+            let current = self.child_view(id)?;
             if current.activation_id != agent.activation_id
                 || current.child_conversation_id != agent.child_conversation_id
             {
@@ -792,7 +797,7 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             let result = if matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
@@ -827,7 +832,7 @@ impl ClientInner {
                 .await?;
                 peer.trace_locate_tool(&locator).await?
             };
-            let current = self.agent_view(id)?;
+            let current = self.child_view(id)?;
             if current.activation_id != agent.activation_id
                 || current.child_conversation_id != agent.child_conversation_id
             {
@@ -914,7 +919,7 @@ impl ClientInner {
 
     async fn pending_peer(
         &self,
-        header: &super::snapshot::RuntimeClientInteractionHeader,
+        header: &crate::observation::interaction::RuntimeClientInteractionHeader,
     ) -> Result<Peer, RuntimeClientError> {
         let crate::runtime::interaction::InteractionSource::Subagent {
             child_conversation_id,
@@ -936,9 +941,9 @@ impl ClientInner {
 
     fn validate_pending_header(
         &self,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         ordinal: u64,
-        expected: &super::snapshot::RuntimeClientInteractionHeader,
+        expected: &crate::observation::interaction::RuntimeClientInteractionHeader,
     ) -> Result<(), RuntimeClientError> {
         let current = self.pending_read_header(cut, ordinal)?;
         if current != *expected {
@@ -957,7 +962,7 @@ impl ClientInner {
 
     pub(crate) async fn checkpoint_page_async(
         self: &std::sync::Arc<Self>,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -999,20 +1004,20 @@ impl ClientInner {
 
     pub(crate) async fn checkpoint_value_read_async(
         self: &std::sync::Arc<Self>,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
         range: (u64, u32),
     ) -> Result<super::checkpoint::CheckpointValueChunk, RuntimeClientError> {
         validate_pending_bounds(domain, path, range.0)?;
-        if item_offset > super::content::CONTENT_SAFE_INTEGER_MAX
+        if item_offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
             || range.1 == 0
             || range.1 > 65_536
             || range
                 .0
                 .checked_add(u64::from(range.1))
-                .is_none_or(|end| end > super::content::CONTENT_SAFE_INTEGER_MAX)
+                .is_none_or(|end| end > crate::observation::content::CONTENT_SAFE_INTEGER_MAX)
         {
             return Err(RuntimeClientError::InvalidRequest {
                 message: "invalid pending byte range".into(),
@@ -1105,7 +1110,7 @@ impl ClientInner {
             Ok(checkpoint)
         })
         .await?;
-        let current = self.agent_view(&agent.agent_id)?;
+        let current = self.child_view(&agent.agent_id)?;
         if current.activation_id != agent.activation_id
             || current.child_conversation_id != checkpoint.snapshot.conversation_id
         {
@@ -1116,25 +1121,31 @@ impl ClientInner {
     pub(crate) async fn agent_content_read(
         &self,
         id: &AgentId,
-        reference: &super::content::ContentRef,
+        reference: &crate::observation::content::ContentRef,
         offset: u64,
         max_bytes: u32,
-    ) -> Result<super::content::ContentChunk, RuntimeClientError> {
+    ) -> Result<crate::observation::content::ContentChunk, RuntimeClientError> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if reference.conversation_id != agent.child_conversation_id {
                 return Err(RuntimeClientError::ContentSourceUnavailable);
             }
+            // Canonical history is already durable, even while the Child runs.
+            // Its immutable reference is resolved by the same Registry store as
+            // historical pages, without borrowing the live publication source.
             if matches!(
+                reference.source,
+                crate::observation::content::ContentSource::CanonicalMessageBlock { .. }
+            ) || matches!(
                 agent.state,
                 crate::runtime::subagent::AgentState::Inactive
                     | crate::runtime::subagent::AgentState::Unavailable
             ) {
                 if matches!(
                     reference.source,
-                    super::content::ContentSource::LivePublicationPrefix { .. }
+                    crate::observation::content::ContentSource::LivePublicationPrefix { .. }
                 ) {
                     return Err(RuntimeClientError::ContentSourceUnavailable);
                 }
@@ -1150,7 +1161,7 @@ impl ClientInner {
                         .map_err(RuntimeClientError::content_read_error)
                 })
                 .await?;
-                if self.agent_view(id)?.activation_id != agent.activation_id {
+                if self.child_view(id)?.activation_id != agent.activation_id {
                     return Err(RuntimeClientError::ReadCutExpired);
                 }
                 return Ok(chunk);
@@ -1175,7 +1186,7 @@ impl ClientInner {
                     max_bytes,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1189,7 +1200,7 @@ impl ClientInner {
     pub(crate) async fn agent_checkpoint_value_read(
         &self,
         id: &AgentId,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         item_offset: u64,
         path: &[String],
@@ -1199,18 +1210,20 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if cut.conversation_id != agent.child_conversation_id
                 || cut.activation_id.as_ref() != Some(&agent.activation_id)
             {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             let mut native_cut = cut.clone();
-            if matches!(
-                agent.state,
-                crate::runtime::subagent::AgentState::Inactive
-                    | crate::runtime::subagent::AgentState::Unavailable
-            ) {
+            if historical_selection(&native_cut, domain)
+                || matches!(
+                    agent.state,
+                    crate::runtime::subagent::AgentState::Inactive
+                        | crate::runtime::subagent::AgentState::Unavailable
+                )
+            {
                 native_cut.activation_id = None;
                 let registry = self.agent_registry()?.clone();
                 let activation = agent.activation_id.clone();
@@ -1228,7 +1241,7 @@ impl ClientInner {
                     )
                 })
                 .await?;
-                let current = self.agent_view(id)?;
+                let current = self.child_view(id)?;
                 if current.activation_id != agent.activation_id
                     || current.child_conversation_id != agent.child_conversation_id
                 {
@@ -1260,7 +1273,7 @@ impl ClientInner {
                     max_bytes,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1278,7 +1291,7 @@ impl ClientInner {
     pub(crate) async fn agent_checkpoint_page(
         &self,
         id: &AgentId,
-        cut: &super::checkpoint::CheckpointReadCut,
+        cut: &crate::observation::cut::CheckpointReadCut,
         domain: &str,
         offset: u64,
         limit: usize,
@@ -1286,18 +1299,20 @@ impl ClientInner {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         tokio::time::timeout_at(deadline, async {
             let permit = self.reserve_inspection()?;
-            let agent = self.agent_view(id)?;
+            let agent = self.child_view(id)?;
             if cut.conversation_id != agent.child_conversation_id
                 || cut.activation_id.as_ref() != Some(&agent.activation_id)
             {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             let mut native_cut = cut.clone();
-            if matches!(
-                agent.state,
-                crate::runtime::subagent::AgentState::Inactive
-                    | crate::runtime::subagent::AgentState::Unavailable
-            ) {
+            if historical_selection(&native_cut, domain)
+                || matches!(
+                    agent.state,
+                    crate::runtime::subagent::AgentState::Inactive
+                        | crate::runtime::subagent::AgentState::Unavailable
+                )
+            {
                 native_cut.activation_id = None;
                 let registry = self.agent_registry()?.clone();
                 let activation = agent.activation_id.clone();
@@ -1306,7 +1321,7 @@ impl ClientInner {
                     cold_agent_page(&registry, &activation, &native_cut, &domain, offset, limit)
                 })
                 .await?;
-                let current = self.agent_view(id)?;
+                let current = self.child_view(id)?;
                 if current.activation_id != agent.activation_id
                     || current.child_conversation_id != agent.child_conversation_id
                 {
@@ -1336,7 +1351,7 @@ impl ClientInner {
                     limit,
                 })
                 .await?;
-            if self.agent_view(id)?.activation_id != agent.activation_id {
+            if self.child_view(id)?.activation_id != agent.activation_id {
                 return Err(RuntimeClientError::ReadCutExpired);
             }
             match result {
@@ -1357,7 +1372,7 @@ impl ClientInner {
         after: Option<AgentObservationCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         // One absolute budget covers Registry, IPC, initialization, checkpoint,
-        // event wait, and fallback. Nested steps never reset this deadline.
+        // event wait, and source transition. Nested steps never reset this deadline.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         self.agent_observe_with_deadline(id, after, deadline).await
     }
@@ -1387,7 +1402,7 @@ impl ClientInner {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let permit = self.reserve_inspection()?;
         let registry = self.agent_registry()?;
-        let mut agent = self.agent_view(id)?;
+        let mut agent = self.child_view(id)?;
         if agent.state == crate::runtime::subagent::AgentState::Admitting {
             tokio::time::timeout_at(
                 deadline,
@@ -1400,7 +1415,7 @@ impl ClientInner {
             .ok_or_else(|| RuntimeClientError::UnknownAgent {
                 agent_id: id.clone(),
             })?;
-            agent = self.agent_view(id)?;
+            agent = self.child_view(id)?;
         }
         let activation_id = agent.activation_id.clone();
         let conversation_id = agent.child_conversation_id.clone();
@@ -1437,30 +1452,60 @@ impl ClientInner {
             }
         }
         let observation = if durable {
-            AgentObservation::Checkpoint {
+            Ok(AgentObservation::Checkpoint {
                 agent_id: id.clone(),
                 conversation_id: conversation_id.clone(),
                 activation_id: activation_id.clone(),
                 source,
                 cursor: None,
                 checkpoint: Box::new(self.durable_agent_checkpoint(&agent, permit).await?),
-            }
+            })
         } else {
-            let path = registry
-                .agent_inspection_path(id)
-                .ok_or_else(|| failed("live inspection source unavailable"))?;
-            live_observation(id, &conversation_id, &activation_id, path, after, permit).await?
+            match registry.agent_inspection_path(id) {
+                Some(path) => {
+                    live_observation(id, &conversation_id, &activation_id, path, after, permit)
+                        .await
+                }
+                None => Err(failed("live inspection source unavailable")),
+            }
         };
-        let current = self.agent_view(id)?;
+        let current = self.child_view(id)?;
         if current.activation_id != activation_id {
             return Ok(resync("activation changed during observation"));
         }
-        Ok(RuntimeClientResult::AgentObserve { observation })
+        // A child may seal and close its inspection socket during an admitted
+        // read. Only the Registry's actual terminal owner state authorizes the
+        // switch to retained history; a transport failure alone never does.
+        if !durable
+            && matches!(
+                current.state,
+                crate::runtime::subagent::AgentState::Inactive
+                    | crate::runtime::subagent::AgentState::Unavailable
+            )
+            && matches!(
+                &observation,
+                Ok(_) | Err(RuntimeClientError::ObservationUnavailable { .. })
+            )
+        {
+            return Ok(RuntimeClientResult::AgentObserve {
+                observation: AgentObservation::ResyncRequired {
+                    agent_id: id.clone(),
+                    conversation_id,
+                    activation_id,
+                    source: ObservationSource::DurableOnly,
+                    reason: "live source ended during observation".into(),
+                },
+            });
+        }
+        Ok(RuntimeClientResult::AgentObserve {
+            observation: observation?,
+        })
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable::ObservationStore;
 
     fn identity_response(
         id: RequestId,

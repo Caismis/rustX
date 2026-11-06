@@ -207,6 +207,22 @@ export function highlightToHtml(code: string, lang: string | undefined): string 
   return highlighter().codeToHtml(code, { lang: resolved, theme: 'css-variables' })
 }
 
+/** Shiki's generated token markup, inside an owner-rendered stable pre/code. */
+export function highlightToCodeHtml(code: string, lang: string | undefined): string | undefined {
+  const resolved = lang === undefined ? undefined : LANG_ALIASES.get(lang.toLowerCase())
+  if (resolved === undefined || !ensureGrammar(resolved)) return undefined
+  return highlighter().codeToHtml(code, { lang: resolved, theme: 'css-variables', transformers: [{
+    name: 'rustx-code-content',
+    root(root) {
+      const pre = root.children[0]
+      if (pre?.type !== 'element' || pre.tagName !== 'pre') throw new Error('Unexpected Shiki pre tree')
+      const content = pre.children.find(node => node.type === 'element' && node.tagName === 'code')
+      if (content?.type !== 'element') throw new Error('Unexpected Shiki code tree')
+      root.children = content.children
+    },
+  }] })
+}
+
 /**
  * One highlighted run of a line: the text and the inline style shiki assigned
  * it. The css-variables theme colors every run through a `--shiki-*` custom

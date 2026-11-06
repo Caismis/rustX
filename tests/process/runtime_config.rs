@@ -29,9 +29,6 @@ max_output_tokens = 512
 [models."local/model-a".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."local/model-a".compat]
 chat_reasoning_replay = "omit"
 
@@ -45,9 +42,6 @@ max_output_tokens = 512
 [models."local/model-b".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."local/model-b".compat]
 chat_reasoning_replay = "omit"
 
@@ -61,9 +55,6 @@ max_output_tokens = 512
 [models."local/model-c".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."local/model-c".compat]
 chat_reasoning_replay = "omit"
 "#;
@@ -127,7 +118,7 @@ fn capability_tools(
     endpoint: &rustx::runtime_client::endpoint::RuntimeClientEndpoint,
     header: &rustx::runtime_client::checkpoint::CheckpointPage,
     field: &str,
-) -> Vec<rustx::runtime_client::snapshot::RuntimeClientTool> {
+) -> Vec<rustx::observation::capability_source::RuntimeClientTool> {
     let domain = format!("capabilities.{field}");
     let frontier = header
         .collections
@@ -157,7 +148,7 @@ fn capability_tools(
             assert_eq!(item.offset, offset);
             assert!(!item.deferred, "small fixture tool is fully readable");
             tools.push(
-                rustx::runtime_client::checkpoint::decode_domain_value(
+                rustx::observation::bounded::decode_domain_value(
                     item.value.expect("original finite Tool value"),
                 )
                 .expect("exact typed native Tool"),
@@ -191,6 +182,11 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         "old project instructions",
     )
     .expect("old project instructions");
+    let instructions_path = startup
+        .workspace
+        .join("AGENTS.md")
+        .canonicalize()
+        .expect("canonical project instructions path");
 
     let product = (startup)
         .compose(&dependencies())
@@ -198,7 +194,10 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         .expect("initial product");
     assert_eq!(
         product.runtime().runtime_resources().project_instructions(),
-        Some("old project instructions")
+        Some(format!(
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nold project instructions\n</project_instructions>",
+            instructions_path.display()
+        ).as_str())
     );
     assert_eq!(
         product.runtime().model_view().configured.model.to_string(),
@@ -256,7 +255,10 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let runtime = resumed.runtime();
     assert_eq!(
         runtime.runtime_resources().project_instructions(),
-        Some("new project instructions"),
+        Some(format!(
+            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nnew project instructions\n</project_instructions>",
+            instructions_path.display()
+        ).as_str()),
         "cold resume independently discovers current project resources"
     );
     assert_eq!(
@@ -353,7 +355,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     else {
         panic!("bounded capability error: {:?}", capability_view.error);
     };
-    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+    let capabilities: rustx::observation::capability_source::CapabilityView =
         crate::common::native_domain_single(RuntimeClientResult::DomainPage {
             page: capability_page.clone(),
         });

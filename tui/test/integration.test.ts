@@ -35,7 +35,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
-import { CommandDispatcher, renderModel } from "../src/commands/dispatcher.ts";
+import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { renderModel } from "../src/commands/presentation.ts";
 import { parseArguments } from "../src/cli.ts";
 import { prepareStartup } from "../src/startup.ts";
 
@@ -45,12 +46,14 @@ import { AppServerChild } from "../src/app-server/child-process.ts";
 import { StdioTransport } from "../src/app-server/stdio-transport.ts";
 import { WebSocketTransport } from "../src/app-server/websocket-transport.ts";
 import { TransportClosedError } from "../src/app-server/transport.ts";
+import { JsonlFramingError } from "../src/protocol/jsonl.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
 import type { SessionSettings, SourceTarget } from "../src/protocol/app-server.ts";
 import { SourceRepairStatus } from "../src/ui/components/source-repair-status.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/app-server-peer.ts";
+import { mcpStartupGate, requireMcpStartupSupervisor, startupToolSchema, startupWait } from './support/mcp-startup-gate.ts';
 
 /** The cargo target directory, overridable for a non-default layout. */
 const BINARY =
@@ -61,7 +64,7 @@ const SKIP = existsSync(BINARY)
   ? (await ProviderEmulator.available())
     ? undefined
     : "uv is not installed; the shared provider emulator cannot run"
-  : `the rustx binary is not built at ${BINARY}; run \`cargo build --bin rustx\``;
+  : `the rustx binary is not built at ${BINARY}; run \`cargo build --bins\``;
 
 if (SKIP !== undefined && process.env.RUSTX_REQUIRE_PROVIDER_EMULATOR) throw new Error(SKIP);
 
@@ -112,8 +115,6 @@ class ServerFixture {
         "--credential-env", CREDENTIAL_VARIABLE,
         "--context-window", "128000",
         "--max-output", "4096",
-        "--tool-calls", "true",
-        "--reasoning", "false",
         "--compat", 'chat_reasoning_replay = "omit"',
       ],
       { env, encoding: "utf8" },
@@ -207,8 +208,73 @@ async function openSession(
   settings: SessionSettings,
 ): Promise<AppServerSession> {
   const created = await host.createSession(settings);
+  await host.renameSession(created.session.id, "TUI integration fixture");
   return host.attach(created.session.id, created.session.active_node);
 }
+
+it('early TUI startup waits for live MCP discovery before its first provider request', { skip: SKIP, timeout: 120_000 }, async t => {
+  requireMcpStartupSupervisor(BINARY);
+  const provider = await ProviderEmulator.start('mcp_startup');
+  let fixture: ServerFixture | undefined;
+  let gate: Awaited<ReturnType<typeof mcpStartupGate>> | undefined;
+  let host: AppServerHost | undefined;
+  let passed = false;
+  let settled: Promise<void> | undefined;
+  const cleanup = () => settled ??= (async () => {
+    // Close the peer's held recv before joining native shutdown. The hook owns
+    // partial setup too, including cancellation before the test body unwinds.
+    try { await gate?.close(); }
+    finally {
+      try { await host?.shutdown(); }
+      finally {
+        try { fixture?.cleanup(); }
+        finally { if (passed) await provider.finish(); else await provider.stop(); }
+      }
+    }
+  })();
+  t.after(cleanup);
+  try {
+    fixture = ServerFixture.create('rustx-tui-mcp-startup-', provider.url());
+    const cwd = fixture.workspace('selected-source');
+    gate = await mcpStartupGate(cwd, t.signal);
+    const activeHost = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env, signal: t.signal });
+    host = activeHost;
+    const focus = await startupWait(() => prepareStartup(activeHost, parseArguments(['--binary', BINARY, '--workspace', cwd, '--name', 'MCP startup'])), t.signal);
+    assert.ok('connecting' in focus && focus.connecting, 'the editable TUI can open before attachment');
+    const connecting = focus.connecting;
+    const nodeId = connecting.nodeId;
+    assert.ok(nodeId, 'creation supplies the exact first-submission node');
+    assert.equal(gate.calls, 0, 'Session creation does not prepare an MCP source');
+    let attached = false;
+    const attaching = activeHost.attach(connecting.sessionId, nodeId).then(session => {
+      attached = true;
+      return session;
+    });
+    await gate.waitForDiscovery(attaching);
+    assert.equal(attached, false, 'attachment waits for the selected live catalog');
+    assert.deepEqual(await startupWait(() => provider.requests(), t.signal), [], 'no provider request may cross the held startup gate');
+    // The actual first Send reaches native independently of the held attach.
+    await startupWait(() => activeHost.submissionIntent(connecting.sessionId, nodeId), t.signal);
+    gate.release();
+    const session = await startupWait(() => attaching, t.signal);
+    await startupWait(() => session.submitInbound([{ type: 'text', text: 'mcp startup from the TUI' }]), t.signal);
+    await startupWait(() => provider.awaitGate('startup-request'), t.signal);
+    const requests = await startupWait(() => provider.requests(), t.signal);
+    assert.equal(requests.length, 1);
+    const body = requests[0]!.body as { tools: { function: { name: string; parameters: unknown } }[] };
+    assert.deepEqual(body.tools.map(tool => tool.function.name), ['startup_echo']);
+    assert.deepEqual(body.tools[0]!.function.parameters, startupToolSchema);
+    assert.equal(gate.calls, 1, 'first admission does not rediscover the prepared source');
+    await startupWait(() => provider.releaseGate('startup-request'), t.signal);
+    await startupWait(() => until(() => session.state.attempt?.phase.type === 'settled', 'first MCP-enabled attempt settles'), t.signal);
+    passed = true;
+  } catch (error) {
+    t.diagnostic(`${error instanceof Error ? error.stack : String(error)}\n${host?.stderrTail().text ?? ''}\n${provider.diagnostics}`);
+    throw error;
+  } finally {
+    await cleanup();
+  }
+});
 
 it("same-model TUI command persists inherited intent then delegates explicit NoOp to the native owner", { skip: SKIP, timeout: 120_000 }, async () => {
   const provider = await ProviderEmulator.start("tui_multi_session");
@@ -217,6 +283,7 @@ it("same-model TUI command persists inherited intent then delegates explicit NoO
   try {
     const settings = fixture.settings("inherited-model");
     const created = await host.createSession(settings);
+    await host.renameSession(created.session.id, "TUI inherited model fixture");
     await host.shutdown();
     // Public creation materializes its selected default. Seed a legitimate
     // inherited Session only while the native owner is stopped; the next
@@ -258,13 +325,13 @@ it("live profile selection crosses the real TUI/App Server boundary while the or
   const provider = await ProviderEmulator.start("tui_multi_session");
   const fixture = ServerFixture.create("rustx-tui-live-profile-", provider.url());
   const configPath = join(fixture.home, "rustx/rustx.toml");
-  const config = readFileSync(configPath, "utf8").replace('[models."fixture/integration-model"]', '[models."fixture/integration-model"]\ndefault_profile = "high"').replace('reasoning = false', 'reasoning = true');
-  writeFileSync(configPath, config + '\n[models."fixture/integration-model".profiles.high]\nreasoning_enabled = true\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nreasoning_enabled = false\nmax_output_tokens = 1024\n');
+  const config = readFileSync(configPath, "utf8").replace('[models."fixture/integration-model"]', '[models."fixture/integration-model"]\ndefault_profile = "high"');
+  writeFileSync(configPath, config + '\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n');
   const host = await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: fixture.runtimeRoot }, env: fixture.env });
   let passed = false;
   try {
     const settings = fixture.settings("live-profile");
-    settings.model = { model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: {}, max_output_tokens: 333 } };
+    settings.model = { classificationModel: { mode: "session" }, btwModel: { mode: "session" }, model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: {}, max_output_tokens: 333 }, titleModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: { title_tag: "preserved" }, max_output_tokens: 222 } };
     const session = await openSession(host, settings);
     await session.submitInbound([{ type: "text", text: "tui multi-session: session A long task" }]);
     await provider.awaitGate("session-a-holding");
@@ -283,7 +350,6 @@ it("live profile selection crosses the real TUI/App Server boundary while the or
     if (selected.kind === "transient") assert.equal(selected.level, "info", selected.text);
     const committed = await session.modelGet();
     assert.deepEqual(committed.configured, { ...settings.model, profile: "low" });
-    assert.equal(committed.effective?.reasoningEnabled, false);
     assert.equal(session.state.attempt?.phase.type, "running");
     assert.deepEqual(session.state.attempt?.model, frozen);
     assert.match(renderModel(session.state), /profile: high/);
@@ -522,13 +588,17 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
     // unknown outcome — not a failure, and never something to resend.
     assert.ok(failure instanceof UncertainOutcomeError, String(failure));
     assert.ok(failure.transportFailure instanceof TransportClosedError);
-    // SIGKILL can be observed first by the pending pipe write, stdout EOF,
-    // or the process-exit callback. These are all transport facts; callback
-    // ordering does not change the mutation's uncertain outcome.
+    // SIGKILL can be observed first by the pending pipe write, stdout EOF
+    // (at a boundary or mid-record), or the process-exit callback. These are
+    // all transport facts; their order never changes the uncertain outcome.
     if (failure.transportFailure.reason === "write_error") {
       const cause = failure.transportFailure.cause;
       assert.ok(cause instanceof Error && "code" in cause);
       assert.equal(cause.code, "EPIPE");
+    } else if (failure.transportFailure.reason === "framing_error") {
+      const cause = failure.transportFailure.cause;
+      assert.ok(cause instanceof JsonlFramingError, String(cause));
+      assert.equal(cause.kind, "truncated_record");
     } else {
       assert.ok(
         failure.transportFailure.reason === "process_exit" ||
@@ -893,6 +963,7 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
     } });
     const host = new AppServerHost({ client, ownership: "external" });
     const session = await openSession(host, server.settings("replay-session"));
+    sentMutations = 0; // Count only the mutation whose response is deliberately lost.
     loseResponse = true;
     await assert.rejects(host.renameSession(session.sessionId, "accepted-once"), UncertainOutcomeError);
     const recovered = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });

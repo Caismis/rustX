@@ -67,7 +67,9 @@ use std::sync::{Arc, Mutex, Weak};
 
 use super::attachment::RuntimeAttachment;
 use super::host::{EventDelivery, EventSubscription, RuntimeClientHost};
-use super::types::{RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResponse};
+use crate::runtime_client::types::{
+    RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResponse,
+};
 
 /// The transport-neutral semantic endpoint of one Runtime Client
 /// connection.

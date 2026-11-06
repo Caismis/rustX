@@ -10,14 +10,15 @@ test('connecting conversation accepts dropdown and slash model choices before qu
   await page.locator('button[data-session-id="A"]').click();
   const model = page.locator('[data-model-select]');
   await model.click();
-  await page.getByRole('menuitem', { name: 'fixture/second', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'fixture/second', exact: true }).click();
   await expect(model).toContainText('fixture/second');
   const input = page.getByRole('textbox', { name: 'Message', exact: true });
   await input.fill('/model');
   await page.getByRole('option', { name: 'fixture/native', exact: true }).click();
   await model.click();
-  await page.getByRole('menuitem', { name: 'Profile', exact: true }).hover();
-  await page.getByRole('menuitem', { name: 'low', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Thinking effort', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: 'low', exact: true }).click();
   await expect(model).toContainText('low');
   await page.evaluate(() => (window as any).startupFixture.hold('session/setModel'));
   await input.fill('Send with my selected model'); await input.press('Enter');

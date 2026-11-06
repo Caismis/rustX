@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { CodeBlock } from '../src/presentation/markdown/CodeBlock.tsx'
 import { StreamingHighlightSession } from '../src/presentation/markdown/highlight.ts'
+import { MarkdownText } from '../src/presentation/markdown/MarkdownText'
 const markdownLabels = { code: { copyLabel: 'Copy', copiedLabel: 'Copied' } }
 
 const LABELS = markdownLabels.code
@@ -39,6 +40,22 @@ function readPre(root: HTMLElement) {
 }
 
 describe('StreamingHighlightSession', () => {
+  it('keeps fenced-code focus through Markdown natural completion', () => {
+    const text = '```ts\nconst answer = 42\n```';
+    const view = render(<MarkdownText text={text} streaming/>);
+    const pre = view.container.querySelector<HTMLElement>('pre.shiki')!; pre.focus();
+    view.rerender(<MarkdownText text={text}/>);
+    expect(view.container.querySelector('pre.shiki')).toBe(pre); expect(document.activeElement).toBe(pre);
+  });
+  it('keeps the focused pre through natural completion with identical fenced code', () => {
+    const code = 'const answer = 42\n';
+    const view = render(<CodeBlock code={code} lang="ts" streaming {...LABELS}/>);
+    const pre = view.container.querySelector<HTMLElement>('pre.shiki')!; pre.focus();
+    view.rerender(<CodeBlock code={code} lang="ts" streaming {...LABELS}/>);
+    expect(view.container.querySelector('pre.shiki')).toBe(pre); expect(document.activeElement).toBe(pre);
+    view.rerender(<CodeBlock code={code} lang="ts" {...LABELS}/>);
+    expect(view.container.querySelector('pre.shiki')).toBe(pre); expect(document.activeElement).toBe(pre);
+  });
   it('reconstructs the code verbatim and colors tokens through --shiki-* properties', () => {
     const code = 'const a = 1\n// note\nconst b = "x"'
     const lines = new StreamingHighlightSession().update(code, 'ts')

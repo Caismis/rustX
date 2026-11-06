@@ -24,7 +24,8 @@ use crate::tools::types::ToolOrigin;
 /// The current schema version of [`RuntimeManifest`]. M7 version 2 adds
 /// provider-independent `ToolOrigin` provenance to every tool binding.
 /// Version 3 replaces the reasoning profile with the general Model Profile.
-pub const MANIFEST_SCHEMA_VERSION: u16 = 3;
+/// Version 4 removes semantic reasoning-enabled metadata.
+pub const MANIFEST_SCHEMA_VERSION: u16 = 4;
 
 /// The immutable execution description of one attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,8 +73,6 @@ pub struct ModelManifest {
     /// The selected Model Profile, when the model declares any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ModelProfileId>,
-    /// Whether the invocation semantically enables reasoning.
-    pub reasoning_enabled: bool,
 }
 
 /// The capability set observed by an attempt.
@@ -179,7 +178,6 @@ mod tests {
                 protocol: ModelProtocol::OpenAiResponses,
                 model: ModelRef::parse("provider-a/gpt-5-mini").expect("valid reference"),
                 profile: Some(ModelProfileId::new("high")),
-                reasoning_enabled: true,
             },
             capabilities: CapabilitiesManifest {
                 revision: CapabilityRevision::new(42),
@@ -225,6 +223,6 @@ mod tests {
     #[test]
     fn manifest_schema_version_is_explicit() {
         let value = serde_json::to_value(example_manifest()).expect("serialize manifest");
-        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["schema_version"], 4);
     }
 }

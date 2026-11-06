@@ -3,7 +3,7 @@ import { useTranslation } from '../../../locale/react';
 import type {
   AgentProfileDocument, AgentSkillSelection, McpWrite, ResourceFamily,
   SourceScope, SourceSettings, SourceToolSelection,
-} from '../../../../../protocol/app-server/v52';
+} from '../../../../../protocol/app-server/v73';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Badge, Facts } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
@@ -284,16 +284,18 @@ function RootAvailability({ source, scope, revision, family, name }: ExtensionDe
       </UnitForm>
     </section>;
   }
-  if (family === 'agent' || family === 'workflow') {
-    const unit = family === 'agent' ? 'agents' as const : 'workflows' as const;
+  // Workflows are enabled for Sessions on their cards in Workflows.
+  if (family === 'workflow') return <section aria-label={tx('settings:extension-detail.root-agent-availability')}><h4>{tx('settings:extension-detail.availability-to-the-root-agent')}</h4>
+    <p>{tx('settings:extension-detail.workflow-enabled-in-library')}</p></section>;
+  if (family === 'agent') {
     return <section aria-label={tx('settings:extension-detail.root-agent-availability')}><h4>{tx('settings:extension-detail.availability-to-the-root-agent')}</h4>
-      <p>{tx('settings:extension-detail.this-edits-the-root-agent-s')}{' '}{unit === 'agents' ? tx('settings:agent-page.agent') : tx('settings:extension-detail.workflow')} {tx('settings:extension-detail.allowlist-the-same-unit-as-the-one-on-tools-amp-permissions-shar')}</p>
-      <UnitForm<string[]> key={unit} title={unit === 'agents' ? tx('settings:extension-detail.agent-allowlist') : tx('settings:extension-detail.workflow-allowlist')}
-        authored={agent?.[unit] ?? undefined} blank={[]} revision={revision}
-        mutation={authored => ({ kind: 'config', mutation: { unit, authored } })}>
+      <p>{tx('settings:extension-detail.this-edits-the-root-agent-s')}{' '}{tx('settings:agent-page.agent')} {tx('settings:extension-detail.allowlist-the-same-unit-as-the-one-on-tools-amp-permissions-shar')}</p>
+      <UnitForm<string[]> key="agents" title={tx('settings:extension-detail.agent-allowlist')}
+        authored={agent?.agents ?? undefined} blank={[]} revision={revision}
+        mutation={authored => ({ kind: 'config', mutation: { unit: 'agents', authored } })}>
         {(value, change) => <>
           <MembershipToggle name={name} value={value} change={change} />
-          <Names label={unit} value={value} change={change} />
+          <Names label={/* i18n-raw: the authored config key */ 'agents'} value={value} change={change} />
         </>}
       </UnitForm>
     </section>;

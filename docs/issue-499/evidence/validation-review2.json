@@ -1,0 +1,489 @@
+{
+  "schema": "issue-499-owner-review-validation-v1",
+  "source": {
+    "native_source_sha256": "52692c18a189f515b3c86f22f614834fd46d92d576d0f36c898a3a32932d6aef",
+    "native_files": 1011,
+    "previous_head": "f7cae82a07e3c1fa8263aad596da157b5669ee4a",
+    "review_fix": {
+      "sha256": "55236d274ba140260c701b56f63cc3302b8733c740a27f8852ee25bd30708b1f",
+      "files": {
+        "src/capabilities/coordinator/readiness.rs": "3c395b0992fba1d1c4265883ab6adaf77ccdb58332fb87f5a2b1f8137b104b65",
+        "src/tools/mcp/connection/catalog.rs": "d2fe92866e9d99a877269aa49341cdb832f358c6e9d6b4b7fc2f6ddd7315a28a",
+        "src/tools/mcp/connection/catalog_tests.rs": "96464e298072b3381436c2242bed50543561af992684e3cfc6bd039179d5a087",
+        "test-support/fake-provider/src/fake_provider/scenarios/tui.py": "277967d9fa4997812ecd2ee42aaa6120f5169f849c9b182da7417ad350379182",
+        "tests/scripted/app_server/configuration/mcp_readiness.rs": "af98156a76c97b2ad666e64196a8dce9326dfc3dbbde5dc1bba035370cfc6b55",
+        "tests/scripted/app_server/configuration/mcp_readiness/profile_controls.rs": "925c63681cf06fe976f43e18c0fc08da6cfefd5b79264eabcec4c61c8e6dcdf3",
+        "web-console/src/app/new-conversation/port.ts": "82a4f7879a0099c397a710df8584f809648cc88282a5222c25d5d0c132283878",
+        "web-console/test/e2e/mcp-startup.spec.ts": "1a421eb61331c98af89adafc445ba12585b33ac04dd20f14dc492fca4252966c",
+        "web-console/test/workspace-host-admission.test.ts": "94fe9da13816c3d7ee0b8c07e645fce952e3b7a832298d8af9f710747c4c6757",
+        "test-support/fake-provider/tests/test_scenario.py": "e0aee81ddd65759ec0abeb01efa66544c45d204cc9989a28b4bc628927f30d9f",
+        "tui/test/integration.test.ts": "2c255786e69d57c7d89215010806a15ee62e35d0ca70553914419c818dca2a2a"
+      }
+    },
+    "recipe": "sorted path + NUL + ASCII sha256(file) + LF; SHA-256 concatenation"
+  },
+  "completed_checks": [
+    {
+      "id": "review2-final-format",
+      "receipt": {
+        "command": "cargo fmt --all -- --check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:47:45.054892+00:00",
+        "finished_at": "2026-10-24T06:47:51.026165+00:00",
+        "elapsed_seconds": 5.9712805899907835,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-clippy2",
+      "receipt": {
+        "command": "cargo clippy --all-targets --all-features -- -D warnings",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:18:12.590022+00:00",
+        "finished_at": "2026-10-24T06:19:38.001660+00:00",
+        "elapsed_seconds": 85.41164208203554,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+        },
+        "log_sha256": "ceb731b206cf3419a4eea1ee47d5c15bd3eb5de2367ba9c8a3ff27d5fb54384e"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-build-bins",
+      "receipt": {
+        "command": "cargo build --bins",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:19:48.143742+00:00",
+        "finished_at": "2026-10-24T06:21:34.644575+00:00",
+        "elapsed_seconds": 106.5008329640259,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+        },
+        "log_sha256": "f0810a7aef1cb9a4dcc6ba51e06f4f8c4825bb02da2bfc02f26d1674810a03fd"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-protocol-check",
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:15:30.608380+00:00",
+        "finished_at": "2026-10-24T06:18:01.133722+00:00",
+        "elapsed_seconds": 150.5253467260045,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "c54c667f5cfa75ed642811c4fe9a8d34749c3da2f5947bf98fcb4cf8a8e4d140"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-protocol-typecheck",
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:15:30.616752+00:00",
+        "finished_at": "2026-10-24T06:15:31.720110+00:00",
+        "elapsed_seconds": 1.1033614659681916,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-tui-typecheck2",
+      "receipt": {
+        "command": "pnpm --dir tui typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:32:12.763553+00:00",
+        "finished_at": "2026-10-24T06:32:17.293747+00:00",
+        "elapsed_seconds": 4.530198458000086,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-web-final-typecheck",
+      "receipt": {
+        "command": "pnpm --dir web-console typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:47:46.216514+00:00",
+        "finished_at": "2026-10-24T06:48:02.063388+00:00",
+        "elapsed_seconds": 15.846875844988972,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-final-tui2",
+      "receipt": {
+        "command": "pnpm --dir tui test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:45:40.512452+00:00",
+        "finished_at": "2026-10-24T06:46:26.643389+00:00",
+        "elapsed_seconds": 46.130952395964414,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "18765736e5431acac129c3423a0255006dec4aa28aa8c5ba6e2d9745fd98ef00"
+      },
+      "summaries": [
+        "# tests 1201",
+        "# suites 105",
+        "# pass 1200",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 1"
+      ]
+    },
+    {
+      "id": "review2-web-full",
+      "receipt": {
+        "command": "pnpm --dir web-console test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:19:49.297890+00:00",
+        "finished_at": "2026-10-24T06:20:28.285936+00:00",
+        "elapsed_seconds": 38.98804938903777,
+        "exit_code": 0,
+        "environment": {
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "e85794ba92a2fa05f82c07e02566b223656b6802620e1a1bda4c3eb159a48e3d"
+      },
+      "summaries": [
+        "Test Files  211 passed | 1 skipped (212)",
+        "Tests  3237 passed | 4 skipped (3241)"
+      ]
+    },
+    {
+      "id": "review2-web-i18n",
+      "receipt": {
+        "command": "pnpm --dir web-console check:i18n",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:15:30.615069+00:00",
+        "finished_at": "2026-10-24T06:15:31.610250+00:00",
+        "elapsed_seconds": 0.9951860060100444,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-web-provenance",
+      "receipt": {
+        "command": "pnpm --dir web-console check:provenance",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:15:30.612477+00:00",
+        "finished_at": "2026-10-24T06:15:31.775470+00:00",
+        "elapsed_seconds": 1.1629971350193955,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-dev-typecheck",
+      "receipt": {
+        "command": "pnpm --dir dev typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:21:45.738989+00:00",
+        "finished_at": "2026-10-24T06:21:49.691709+00:00",
+        "elapsed_seconds": 3.9527262119809166,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-dev-test",
+      "receipt": {
+        "command": "pnpm --dir dev test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:21:45.739417+00:00",
+        "finished_at": "2026-10-24T06:21:50.483277+00:00",
+        "elapsed_seconds": 4.743866945034824,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "a0e9e6bbb3c7462a3625c7f4541e3084b572fd0ad58c57b42f30bac83b39a2f3"
+      },
+      "summaries": [
+        "# tests 41",
+        "# suites 0",
+        "# pass 41",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0"
+      ]
+    },
+    {
+      "id": "review2-emulator2",
+      "receipt": {
+        "command": "uv run --frozen pytest -o addopts= -q",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider",
+        "started_at": "2026-10-24T06:15:50.967495+00:00",
+        "finished_at": "2026-10-24T06:15:51.281453+00:00",
+        "elapsed_seconds": 0.31396296399179846,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "dcf6f4a95b5da2901f8686b16f7654219714cde1c3c0283476d99edea989368a"
+      },
+      "summaries": [
+        "55 passed in 0.15s"
+      ]
+    },
+    {
+      "id": "review2-ci-scripts",
+      "receipt": {
+        "command": "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:19:06.830260+00:00",
+        "finished_at": "2026-10-24T06:19:06.921794+00:00",
+        "elapsed_seconds": 0.09153372998116538,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "171de80769506d427df68179ecb558ddf9aa8f348cbaaa97c585119fc5a24a1e"
+      },
+      "summaries": [
+        "Ran 64 tests in 0.017s"
+      ]
+    },
+    {
+      "id": "review2-lanes",
+      "receipt": {
+        "command": "cargo run --all-features --example check_test_lanes",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:50:50.960140+00:00",
+        "finished_at": "2026-10-24T06:51:15.456232+00:00",
+        "elapsed_seconds": 24.49609579402022,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "3d9478fcb2cd50c8aa49c9dfcc694a124db7a6494b1249e3805fa5457c4e9889"
+      },
+      "summaries": []
+    },
+    {
+      "id": "review2-web-focused3",
+      "receipt": {
+        "command": "pnpm --dir web-console exec vitest run test/workspace-host-admission.test.ts test/new-conversation.test.tsx test/conversation-residency.test.tsx test/first-submit.test.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:11:54.350567+00:00",
+        "finished_at": "2026-10-24T06:12:03.260362+00:00",
+        "elapsed_seconds": 8.909796721010935,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "1e6ee0cd83c566cd77469b2dfc6d079f09252f990d1a1f2f385c0348f47d4195"
+      },
+      "summaries": [
+        "Test Files  4 passed (4)",
+        "Tests  82 passed (82)"
+      ]
+    },
+    {
+      "id": "review2-browser-focused",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e test/e2e/mcp-startup.spec.ts",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:51:41.734931+00:00",
+        "finished_at": "2026-10-24T06:52:02.805288+00:00",
+        "elapsed_seconds": 21.070364047016483,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "e8eee9a328685a1d7cb04e3662436297a5868bf0004c311a3427858e052b2474"
+      },
+      "summaries": [
+        "2 passed (12.8s)"
+      ]
+    },
+    {
+      "id": "review2-final-measurement",
+      "receipt": {
+        "command": "cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:49:30.575532+00:00",
+        "finished_at": "2026-10-24T06:50:22.330233+00:00",
+        "elapsed_seconds": 51.75470651697833,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+        },
+        "log_sha256": "82128e5add13c5e4ebc68d182d0d6899cac93c32799d604357085001f807183b"
+      },
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4763 filtered out; finished in 51.49s"
+      ]
+    },
+    {
+      "id": "review2-managed-retry",
+      "receipt": {
+        "command": "cargo test --test tools --all-features mcp_managed::a_real_managed_child_negotiates_the_modern_mcp_revision -- --exact --nocapture",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:47:43.883193+00:00",
+        "finished_at": "2026-10-24T06:48:10.482329+00:00",
+        "elapsed_seconds": 26.599138235033024,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "c7f939300ebe00bb5cbf49d9e4ecb935a7629805bbfa59b342f7e05d2278ceae"
+      },
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 134 filtered out; finished in 26.28s"
+      ]
+    },
+    {
+      "id": "review2-whitespace",
+      "receipt": {
+        "command": "git diff --check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:21:35.888737+00:00",
+        "finished_at": "2026-10-24T06:21:35.906991+00:00",
+        "elapsed_seconds": 0.018250154971610755,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "summaries": []
+    }
+  ],
+  "superseded_attempts": [
+    {
+      "id": "review2-cargo-full",
+      "receipt": {
+        "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:24:02.639776+00:00",
+        "finished_at": "2026-10-24T06:44:23.798575+00:00",
+        "elapsed_seconds": 1221.1587992300047,
+        "exit_code": 101,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "a915d3bcbdbdacac6bfce0d24f795bb886a1b311bd8d252889c5403451f10cf6"
+      },
+      "explanation": "All native library4757/process67/provider188/subagent47 and other targets passed; Tool target134 passed/1 failed only because the fixed PyPI wheel download timed out. Its exact managed-MCP retry passed; complete command rerun is pending."
+    },
+    {
+      "id": "review2-final-tui",
+      "receipt": {
+        "command": "pnpm --dir tui test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:21:45.735872+00:00",
+        "finished_at": "2026-10-24T06:24:30.130004+00:00",
+        "elapsed_seconds": 164.39413482300006,
+        "exit_code": 1,
+        "environment": {
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "37e32a4f600a8ddd5f204849a97e6fc9cafa67308f1bdc48edcd801aebeac3f6"
+      },
+      "explanation": "The unchanged Agent-interrupt provider observation hit its10s watchdog under concurrent heavy native build/I/O. A quiet isolated case and unchanged full1200-test rerun both passed; no timeout/production change."
+    },
+    {
+      "id": "review2-browser",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:21:44.581700+00:00",
+        "finished_at": "2026-10-24T06:38:14.052717+00:00",
+        "elapsed_seconds": 989.4710162760457,
+        "exit_code": 130,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "f65eff68dfc41eff2236a05588ff61eb28c56edac703eeebf8901bbfd693242b"
+      },
+      "explanation": "The negative fixture correctly refused authority but its unscoped alert locator matched two existing error surfaces. Stopped gracefully with SIGINT after diagnosing; scoped Chat assertion and both concrete MCP cases passed. Fresh complete browser invocation pending."
+    },
+    {
+      "id": "review2-clippy",
+      "receipt": {
+        "command": "cargo clippy --all-targets --all-features -- -D warnings",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T06:15:38.752577+00:00",
+        "finished_at": "2026-10-24T06:17:07.490441+00:00",
+        "elapsed_seconds": 88.73786744498648,
+        "exit_code": 101,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+        },
+        "log_sha256": "df826b40d93213ef4f6adf5fdb36515c8dabc16d879194b2d50e80715f046424"
+      },
+      "explanation": "One new test helper default constructor required explicit type; repaired and final all-target Clippy passed."
+    },
+    {
+      "id": "review2-emulator",
+      "receipt": {
+        "command": "uv run --frozen pytest -o addopts= -q",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider",
+        "started_at": "2026-10-24T06:15:30.612584+00:00",
+        "finished_at": "2026-10-24T06:15:30.995053+00:00",
+        "elapsed_seconds": 0.38247175997821614,
+        "exit_code": 1,
+        "environment": {},
+        "log_sha256": "78f113919a07679a05feaa96b5cc711101d0cb877a1fc882f09cca692435fe0c"
+      },
+      "explanation": "New zero-request scenario needed its explicit empty-scenario inventory assertion; repaired and55 emulator tests passed."
+    }
+  ],
+  "pending": [
+    "Exact complete cargo test --all-targets --all-features invocation rerun",
+    "Exact complete pinned-container405-case browser acceptance rerun",
+    "FULL CI and current Merge verification for the resulting final head/base/merge commit"
+  ],
+  "live_verification_record": "https://github.com/Caismis/rustX/pull/503",
+  "rule": "Pending checks are not passing evidence. Final receipts, exact Git identities and CI verdict are maintained in the linked PR validation record to avoid a self-invalidating evidence-only commit loop.",
+  "recorded_at": "2026-10-24T06:58:18.410745+00:00"
+}

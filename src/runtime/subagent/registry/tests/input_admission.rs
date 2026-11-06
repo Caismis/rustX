@@ -1,5 +1,8 @@
 use super::*;
-use crate::message::content::{MAX_INPUT_ATTACHMENTS, UploadedFileRef};
+use crate::message::content::UploadedFileRef;
+use crate::runtime::subagent::MAX_TASK_BYTES;
+
+const FILE_COUNT: usize = 32;
 
 fn attachments(count: usize) -> Vec<UploadedFileRef> {
     (0..count)
@@ -23,13 +26,13 @@ async fn reject_without_effects(plane: &TestPlane, agent: &AgentId) {
         )
     };
     let before_admission = admission();
-    let too_many = attachments(MAX_INPUT_ATTACHMENTS + 1);
+    let oversized = "x".repeat(MAX_TASK_BYTES + 1);
     // This must return before reserving an activation, preparing a child or
     // scheduling a guidance write. There is no executor yield to hide a task.
     let mut rejected = Box::pin(plane.registry.send_message_with_attachments(
         agent,
-        "",
-        &too_many,
+        &oversized,
+        &[],
         AgentActivationOrigin::ClientControl,
         CancellationSignal::new(),
     ));
@@ -49,13 +52,13 @@ async fn reject_without_effects(plane: &TestPlane, agent: &AgentId) {
 }
 
 #[tokio::test]
-async fn active_attachment_limit_precedes_guidance_delivery_and_accepts_attachment_only() {
+async fn active_guidance_preserves_text_budget_and_accepts_many_files() {
     let plane = plane(4);
     let mut child = stage_exit0(&plane);
     let accepted = start(&plane, &start_spec("initial")).await;
     assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
     reject_without_effects(&plane, &accepted.child_agent_id).await;
-    let files = attachments(MAX_INPUT_ATTACHMENTS);
+    let files = attachments(FILE_COUNT);
     let mut send = Box::pin(plane.registry.send_message_with_attachments(
         &accepted.child_agent_id,
         "",
@@ -93,7 +96,7 @@ async fn active_attachment_limit_precedes_guidance_delivery_and_accepts_attachme
 }
 
 #[tokio::test]
-async fn inactive_attachment_limit_precedes_activation_and_accepts_attachment_only() {
+async fn inactive_activation_preserves_text_budget_and_accepts_many_files() {
     let plane = plane(4);
     let child = stage_exit0(&plane);
     let accepted = start(&plane, &start_spec("initial")).await;
@@ -115,7 +118,7 @@ async fn inactive_attachment_limit_precedes_activation_and_accepts_attachment_on
             .state,
         AgentState::Inactive
     );
-    let files = attachments(MAX_INPUT_ATTACHMENTS);
+    let files = attachments(FILE_COUNT);
     let mut send = Box::pin(plane.registry.send_message_with_attachments(
         &accepted.child_agent_id,
         "",
@@ -153,11 +156,8 @@ async fn direct_preparation_validates_content_before_any_admission_effect() {
             state.staged_overrides.len(),
         )
     };
-    for (text, count) in [
-        ("", 0),
-        ("", MAX_INPUT_ATTACHMENTS + 1),
-        ("task", MAX_INPUT_ATTACHMENTS + 1),
-    ] {
+    let oversized = "x".repeat(MAX_TASK_BYTES + 1);
+    for (text, count) in [("", 0), (oversized.as_str(), FILE_COUNT)] {
         let mut spec = start_spec(text);
         spec.admission.attachments = attachments(count);
         let before = counters();
@@ -174,7 +174,7 @@ async fn direct_preparation_validates_content_before_any_admission_effect() {
         assert_eq!(serde_json::to_value(events(&plane)).unwrap(), journal);
     }
     let mut cancelled_spec = start_spec("");
-    cancelled_spec.admission.attachments = attachments(MAX_INPUT_ATTACHMENTS + 1);
+    cancelled_spec.admission.attachments = attachments(FILE_COUNT);
     let cancellation = CancellationSignal::new();
     cancellation.cancel();
     let before = counters();
@@ -183,7 +183,7 @@ async fn direct_preparation_validates_content_before_any_admission_effect() {
         Err(SubagentStartError::Cancelled)
     ));
     assert_eq!(counters(), before);
-    for (text, count) in [("task", 0), ("", MAX_INPUT_ATTACHMENTS)] {
+    for (text, count) in [("task", 0), ("", FILE_COUNT), ("task", FILE_COUNT)] {
         let mut child = stage_exit0(&plane);
         let mut spec = start_spec(text);
         spec.admission.attachments = attachments(count);

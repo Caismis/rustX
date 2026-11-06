@@ -92,9 +92,9 @@ it('T1-12 epoch zero, missing instant, parallel domains and canonical acceptance
   records.push(traceRecord(4, { kind: 'assistant', request: null }), traceRecord(5, { kind: 'attempt', request: null }), traceRecord(6, { kind: 'step', request: null }));
   records.push(traceRecord(7, { timing: { started_at: 'unavailable' } }));
   const spans = trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), records), 'duration')!.spans;
-  expect(spans.map(span => span.id)).toEqual(['trace:0', 'trace:1', 'trace:2', 'trace:3']);
-  expect(spans.map(span => [span.lane, span.start, span.end])).toEqual(Array.from({ length: 4 }, () => [2, 0, 1000]));
-  expect(trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), records), 'sequence')!.spans.map(span => span.id)).toEqual(['trace:0', 'trace:1', 'trace:2', 'trace:3', 'trace:7']);
+  expect(spans.map(span => span.id)).toEqual(['trace:0', 'trace:1', 'trace:3']);
+  expect(spans.map(span => [span.lane, span.start, span.end])).toEqual(Array.from({ length: 3 }, () => [2, 0, 1000]));
+  expect(trajectoryTimeline(translator('en'), projectTrajectory(translator('en'), records), 'sequence')!.spans.map(span => span.id)).toEqual(['trace:0', 'trace:1', 'trace:3', 'trace:7']);
 });
 
 it('T1-12 the two Harness modes keep native time distinct from a shared idle-compression transform', () => {

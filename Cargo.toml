@@ -37,6 +37,10 @@ path = "src/bin/bash_supervisor.rs"
 name = "interactive-supervisor"
 path = "src/bin/interactive_supervisor.rs"
 
+[[bin]]
+name = "workflow-renderer"
+path = "src/bin/workflow_renderer.rs"
+
 [dependencies]
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 uuid = { version = "1.24", features = ["v7"] }
@@ -58,8 +62,11 @@ uv-normalize = "0.0.40"
 toml_edit = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.10", features = ["serde"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "process", "signal"] }
+# Parser/search only; the native Scheduler retains timer and admission ownership.
+croner = "=4.0.2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "io-std", "process", "signal", "fs"] }
 tokio-util = { version = "0.7", features = ["rt", "codec"] }
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 futures-util = "0.3"
 tracing = "0.1"
 async-openai = { version = "0.41", default-features = true, features = ["chat-completion", "responses", "middleware", "byot"] }
@@ -78,13 +85,16 @@ ignore = "0.4.33"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
-nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket"] }
+nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket", "resource"] }
+rustix = { version = "1.1.4", features = ["fs"] }
 libc = "0.2"
 serde_yaml = "0.9"
 serde_path_to_error = "0.1"
 toml = "0.8"
 url = "2"
 sha2 = "0.10"
+# Bounded line comparisons for captured per-turn workspace changes.
+similar = "3.2"
 imbl = { version = "7.0.0", features = ["serde"] }
 base64 = "0.22"
 # Bounded validation of native managed PNG image outputs.
@@ -92,6 +102,7 @@ png = "0.18.1"
 getrandom = "0.3.4"
 unicode-normalization = "0.1.24"
 http = "1"
+httpdate = "1"
 # The Server-Sent Events types of rmcp's Streamable HTTP client surface.
 # rustX supplies its own `StreamableHttpClient` (`tools::mcp::http`) so a
 # cancelled tool call can terminate — and prove the release of — its own
@@ -131,6 +142,9 @@ xberg = { version = "1.0.14", default-features = false, features = [
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }
 
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
+biodivine-lib-bdd = "0.6.3"
+minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }
+minijinja-contrib = { version = "2", features = ["pycompat"] }
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash
@@ -150,3 +164,9 @@ pedantic = "warn"
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir"] }
+
+[profile.test]
+# Bound non-incremental harness compilation on standard runners while
+# preserving file/line backtraces. Match incremental builds' CGU partitioning.
+debug = "line-tables-only"
+codegen-units = 256

@@ -41,9 +41,6 @@ request_params = '{{"temperature":0.11}}'
 [models."fixture/subagent-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."fixture/subagent-model".compat]
 chat_reasoning_replay = "omit"
 "#
@@ -556,7 +553,7 @@ async fn original_child_request_messages(
         assert!(page.items.len() <= 32);
         assert!(
             serde_json::to_vec(&page).unwrap().len()
-                <= rustx::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES
+                <= rustx::observation::bounded::CHECKPOINT_TARGET_BYTES
         );
         let end = offset + u64::try_from(page.items.len()).unwrap();
         for item in &page.items {
@@ -635,6 +632,8 @@ async fn subagent_process_stack(alias_root: bool) {
     // the tool call committed, the child settled, its answer arrived as an
     // Agent-authored message, and the parent consumed it.
     let mut final_snapshot = None;
+    let mut last_snapshot = None;
+    let mut predicates = (false, false, false);
     for _ in 0..4_000 {
         let snapshot = process.snapshot().await;
         let child_answer = snapshot.messages.iter().any(|message| match message {
@@ -663,10 +662,12 @@ async fn subagent_process_stack(alias_root: bool) {
         let settled = snapshot.agents.iter().any(|subagent| {
             subagent.activation_state == rustx::runtime::subagent::SubagentState::Succeeded
         });
+        predicates = (child_answer, parent_consumed, settled);
         if child_answer && parent_consumed && settled {
             final_snapshot = Some(snapshot);
             break;
         }
+        last_snapshot = Some(snapshot);
         tokio::task::yield_now().await;
     }
     let Some(snapshot) = final_snapshot else {
@@ -675,7 +676,9 @@ async fn subagent_process_stack(alias_root: bool) {
             .collect::<Vec<_>>();
         let (status, stderr) = process.shutdown().await;
         panic!(
-            "the delegation chain must settle (exit: {status:?})\nstderr:\n{stderr}\n\
+            "the delegation chain must settle (exit: {status:?})\n\
+             predicates (child_answer, parent_consumed, succeeded): {predicates:?}\n\
+             last authoritative snapshot: {last_snapshot:#?}\nstderr:\n{stderr}\n\
              requests: {}\n{}",
             bodies.len(),
             bodies.join("\n---\n")
@@ -746,7 +749,7 @@ async fn subagent_process_stack(alias_root: bool) {
         panic!("agent/status must succeed: {response:?}");
     };
     let status: rustx::runtime_client::RuntimeClientAgent =
-        rustx::runtime_client::checkpoint::decode_domain_value(
+        rustx::observation::bounded::decode_domain_value(
             page.items[0]
                 .value
                 .clone()
@@ -859,7 +862,15 @@ async fn subagent_process_stack(alias_root: bool) {
                         return None;
                     };
                     Some(rustx::runtime_client::trace::TraceToolLocator {
-                        occurrence: rustx::runtime_client::snapshot::RuntimeClientToolOccurrence {locator:rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {message_id:assistant.id.clone()},block_index:rustx::message::types::ContentBlockIndex::new(u32::try_from(index).unwrap())},
+                        occurrence: rustx::observation::tool::RuntimeClientToolOccurrence {
+                            locator:
+                                rustx::observation::content::CanonicalContentLocator::ByMessageId {
+                                    message_id: assistant.id.clone(),
+                                },
+                            block_index: rustx::message::types::ContentBlockIndex::new(
+                                u32::try_from(index).unwrap(),
+                            ),
+                        },
                         call_id: Some(call.id.clone()),
                         tool_id: Some(call.tool_id.clone()),
                     })
@@ -910,7 +921,7 @@ async fn subagent_process_stack(alias_root: bool) {
         trace
             .records
             .iter()
-            .any(|record| record.kind == rustx::runtime_client::trace::TraceKind::Request)
+            .any(|record| record.kind == rustx::observation::trace::TraceKind::Request)
     );
     let request = trace
         .records
@@ -919,15 +930,70 @@ async fn subagent_process_stack(alias_root: bool) {
         .unwrap();
     assert_eq!(
         request.state,
-        rustx::runtime_client::trace::TraceState::Completed
+        rustx::observation::trace::TraceState::Completed
+    );
+    let cut = trace.read_cut.as_ref().expect("retained child Trace cut");
+    let headers = reopened
+        .call(Method::ConversationCheckpointPage {
+            target: reopened.target(),
+            agent_id: Some(agent_id.clone()),
+            cut: cut.clone(),
+            domain: "trace.records".into(),
+            offset: 0,
+            limit: 32,
+        })
+        .await;
+    let Ok(MethodResult::CheckpointPage { page: headers }) = headers else {
+        panic!("retained child root Trace headers: {headers:?}");
+    };
+    assert_eq!(&headers.read_cut, cut);
+    let header = headers
+        .items
+        .iter()
+        .find(|item| item.identity == request.id)
+        .unwrap();
+    let read = reopened
+        .call(Method::ConversationCheckpointValueRead {
+            target: reopened.target(),
+            agent_id: Some(agent_id.clone()),
+            cut: cut.clone(),
+            domain: "trace.records".into(),
+            item_offset: header.offset,
+            path: Vec::new(),
+            offset: 0,
+            max_bytes: 65_536,
+        })
+        .await;
+    let Ok(MethodResult::CheckpointValueChunk { chunk }) = read else {
+        panic!("retained child Trace header read: {read:?}");
+    };
+    assert_eq!(&chunk.cut, cut);
+    assert_eq!(chunk.item_offset, header.offset);
+    let mut old_activation = cut.clone();
+    old_activation.activation_id = Some(rustx::runtime::identity::SubagentId::new(
+        "obsolete-activation",
+    ));
+    assert!(
+        reopened
+            .call(Method::ConversationCheckpointPage {
+                target: reopened.target(),
+                agent_id: Some(agent_id.clone()),
+                cut: old_activation,
+                domain: "trace.records".into(),
+                offset: 0,
+                limit: 32,
+            })
+            .await
+            .is_err(),
+        "a retained root page cannot select another activation"
     );
     let no_child_call = reopened
         .call(Method::AgentTraceLocateTool {
             target: reopened.target(),
             agent_id: agent_id.clone(),
             locator: rustx::runtime_client::trace::TraceToolLocator {
-                occurrence: rustx::runtime_client::snapshot::RuntimeClientToolOccurrence {
-                    locator: rustx::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                occurrence: rustx::observation::tool::RuntimeClientToolOccurrence {
+                    locator: rustx::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: request
                             .request
                             .as_ref()
@@ -984,30 +1050,30 @@ async fn subagent_process_stack(alias_root: bool) {
     assert!(!messages.is_empty());
     let mut task_in_original_messages = false;
     for message in &messages {
-        let role: rustx::runtime_client::trace::TraceMessageRole =
+        let role: rustx::observation::trace::TraceMessageRole =
             serde_json::from_value(message["role"].clone()).expect("exact native message role");
         let identity: Option<rustx::runtime::identity::MessageId> =
             serde_json::from_value(message["message_id"].clone())
                 .expect("exact native message identity");
         let _: Option<String> = serde_json::from_value(message["source"].clone())
             .expect("exact native user provenance");
-        let blocks: Vec<rustx::runtime_client::trace::TraceContentBlock> =
-            rustx::runtime_client::checkpoint::decode_domain_value(message["blocks"].clone())
+        let blocks: Vec<rustx::observation::trace::TraceContentBlock> =
+            rustx::observation::bounded::decode_domain_value(message["blocks"].clone())
                 .expect("typed native message previews");
         task_in_original_messages |= blocks.iter().any(|block| {
-            matches!(block, rustx::runtime_client::trace::TraceContentBlock::Text { text }
+            matches!(block, rustx::observation::trace::TraceContentBlock::Text { text }
                 if text.text.contains("count the workspace files") && !text.truncated)
         });
-        if role == rustx::runtime_client::trace::TraceMessageRole::RequestOnly {
+        if role == rustx::observation::trace::TraceMessageRole::RequestOnly {
             assert!(identity.is_none());
             continue;
         }
         assert!(identity.is_some(), "this fixture has finite canonical IDs");
-        let content: Vec<rustx::runtime_client::checkpoint::ContentBinding> =
-            rustx::runtime_client::checkpoint::decode_domain_value(message["content"].clone())
+        let content: Vec<rustx::observation::cut::ContentBinding> =
+            rustx::observation::bounded::decode_domain_value(message["content"].clone())
                 .expect("original canonical content sources");
-        let collections: Vec<rustx::runtime_client::checkpoint::CollectionFrontier> =
-            rustx::runtime_client::checkpoint::decode_domain_value(message["collections"].clone())
+        let collections: Vec<rustx::observation::cut::CollectionFrontier> =
+            rustx::observation::bounded::decode_domain_value(message["collections"].clone())
                 .expect("original canonical collection frontiers");
         // Small original text is complete inline. Content bindings identify
         // deferred fields; an empty binding list does not erase provenance.
@@ -1148,14 +1214,28 @@ fn request_kind(body: &str) -> &'static str {
 }
 
 /// Serializes the parent's captured provider context while normalizing the
-/// runtime-generated clock reminder. The reminder is expected to vary between
-/// sequential matrix runs; every other provider-visible message must stay
-/// byte-identical when a child inspector is attached or detached.
-fn normalized_parent_context(body: &str) -> String {
+/// runtime-generated clock reminder and exact fixture working directory. These
+/// vary between sequential matrix runs; every other provider-visible byte must
+/// stay identical when a child inspector is attached or detached.
+fn normalized_parent_context(body: &str, workspace: &std::path::Path) -> String {
     let mut body: serde_json::Value = serde_json::from_str(body).expect("provider request is JSON");
     let messages = body["messages"]
         .as_array_mut()
         .expect("parent request has messages");
+    let system = messages
+        .iter_mut()
+        .find(|message| message["role"] == "system")
+        .expect("parent request has its default system prompt");
+    let text = system["content"].as_str().expect("system prompt is text");
+    // The runtime admits a canonical workspace before composing its prompt.
+    let workspace = workspace
+        .canonicalize()
+        .expect("canonical fixture workspace");
+    let cwd = format!("Current working directory: {}", workspace.display());
+    assert_eq!(text.matches(&cwd).count(), 1);
+    system["content"] = serde_json::Value::String(
+        text.replace(&cwd, "Current working directory: <fixture-workspace>"),
+    );
     for message in messages {
         let Some(content) = message["content"].as_array_mut() else {
             continue;
@@ -1201,10 +1281,16 @@ async fn running_child_inspection_is_execution_independent() {
         })
         .await;
         let root = tempfile::tempdir().expect("temp root");
+        // Exercise a workspace alias on Linux too, so macOS's /var versus
+        // /private/var normalization does not remain platform-only coverage.
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("physical workspace");
+        let workspace_alias = root.path().join("workspace-alias");
+        std::os::unix::fs::symlink(&workspace, &workspace_alias).expect("workspace alias");
         let models = models_json(&server.url("/v1"));
         let mut parent = launch_parent(
             root.path(),
-            &root.path().join("workspace"),
+            &workspace_alias,
             &models,
             SESSION_TOML,
             "subagent-secret",
@@ -1290,12 +1376,12 @@ async fn running_child_inspection_is_execution_independent() {
             let requests: Vec<_> = trace
                 .records
                 .iter()
-                .filter(|record| record.kind == rustx::runtime_client::trace::TraceKind::Request)
+                .filter(|record| record.kind == rustx::observation::trace::TraceKind::Request)
                 .collect();
             assert!(!requests.is_empty());
             assert_eq!(
                 requests.last().unwrap().state,
-                rustx::runtime_client::trace::TraceState::Running
+                rustx::observation::trace::TraceState::Running
             );
             assert_eq!(
                 requests.last().unwrap().location.attempt_id,
@@ -1518,7 +1604,7 @@ async fn running_child_inspection_is_execution_independent() {
             .into_iter()
             .find(|body| request_kind(body) == "parent-final")
             .map(|body| {
-                normalized_parent_context(&body)
+                normalized_parent_context(&body, &workspace_alias)
                     .replace(
                         final_snapshot.conversation_id.as_str(),
                         "parent-conversation",

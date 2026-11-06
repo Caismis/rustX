@@ -1,0 +1,443 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { createActor } from 'xstate';
+import { statusSource } from './workflow-fixtures';
+import type { WorkflowFileDocument } from '../../protocol/app-server/v73';
+import type { WorkflowEdit, WorkflowSource } from '../../protocol/app-server/workflow-documents.ts';
+import type { WorkflowCommit } from '../src/workspaces/host';
+import { blockAt } from '../src/app/workflows/document/model';
+import { renameNode } from '../src/app/workflows/document/commands';
+import { describeField, encodeField, nodeField } from '../src/app/workflows/document/fields';
+import { isDirty, workflowEditorMachine } from '../src/app/workflows/machines/editor';
+import { workflowSurfaceMachine } from '../src/app/workflows/machines/surface';
+import type { WorkflowScopePort } from '../src/app/workflows/port';
+import WorkflowEditor from '../src/app/workflows/ui/editor/WorkflowEditor';
+import { collidingFields } from './workflow-colliding-document';
+
+/** The real editor, its inspector forms, its Ctrl/Cmd+S handler and its
+ * machine, over a port whose writes the test captures. */
+const writes: { expected: string; edit: WorkflowEdit }[] = [];
+function portFor(source: WorkflowSource): WorkflowScopePort {
+  return {
+    endpoint: 'ws://127.0.0.1:1/', scope: { kind: 'user' }, enable: () => new Promise(() => {}),
+    analyze: () => new Promise(() => {}), toolCatalog: async () => ({ sources: [] }), modelChoices: () => new Promise(() => {}), list: () => new Promise(() => {}),
+    read: async id => ({ ...source, id, revision: 'sha256:base' }),
+    check: () => new Promise(() => {}),
+    write: (_id, expected, edit) => { writes.push({ expected, edit }); return new Promise<WorkflowCommit>(() => {}); },
+  };
+}
+
+beforeEach(() => {
+  writes.length = 0;
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  vi.stubGlobal('DOMMatrixReadOnly', class { m22 = 1; constructor() {} });
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
+
+async function open(source: WorkflowSource) {
+  const port = portFor(source);
+  const surface = createActor(workflowSurfaceMachine, { input: { ports: () => port } }).start();
+  const editor = createActor(workflowEditorMachine, { input: { port, target: { endpoint: port.endpoint, scope: port.scope, id: 'flow' } } }).start();
+  await act(async () => { await Promise.resolve(); });
+  render(<WorkflowEditor surface={surface} editor={editor} scopeLabel="Global" />);
+  return editor;
+}
+/** Select a canvas node the way a keyboard user does: focus it, press Enter. */
+function select(label: string) {
+  const node = document.querySelector<HTMLElement>(`.react-flow__node[aria-label="${label}"]`);
+  if (!node) throw new Error(`no canvas node ${label}: ${[...document.querySelectorAll('.react-flow__node')].map(item => item.getAttribute('aria-label')).join(', ')}`);
+  act(() => { node.focus(); });
+  fireEvent.keyDown(node, { key: 'Enter' });
+}
+/** Delete a canvas node from the keyboard. */
+const remove = (label: string) => fireEvent.keyDown(document.querySelector<HTMLElement>(`.react-flow__node[aria-label="${label}"]`)!, { key: 'Delete' });
+const inspector = () => within(screen.getByRole('complementary', { name: 'Inspector' }));
+const literals = () => inspector().getAllByLabelText('Literal JSON') as HTMLTextAreaElement[];
+/** A Tool no catalog describes: its arguments are edited as a raw value. */
+const TOOL = { type: 'tool', selector: { origin: 'builtin', name: 'unlisted' }, result: { type: 'text' } } as const;
+const save = () => fireEvent.keyDown(document.activeElement ?? document.body, { key: 's', ctrlKey: true });
+const written = () => (writes[0].edit as { document: WorkflowFileDocument }).document;
+
+/** Exercise the document's rename boundary independently of the inspector UI. */
+function rename(editor: Awaited<ReturnType<typeof open>>, from: string, to: string) {
+  const address = nodeField([], from, [], 'key'), field = encodeField(address);
+  act(() => {
+    editor.send({ type: 'DRAFT', address, text: to });
+    editor.send({ type: 'APPLY_DRAFT', field, version: editor.getSnapshot().context.drafts[field].version,
+      command: document => ({ status: 'applied', document: renameNode(document, [], from, to) }) });
+  });
+}
+
+describe('field identity (F1)', () => {
+  it('edits and saves a direct key spelled like a nested path without touching the nested field', async () => {
+    const editor = await open(collidingFields());
+    select('Tool node done');
+    const [direct, nested] = literals();
+    // Both fields show their own values.
+    expect([direct.value, nested.value]).toEqual(['1', '2']);
+    fireEvent.change(direct, { target: { value: '3' } });
+    expect(literals().map(field => field.value)).toEqual(['3', '2']);
+    // Each field registered its own commit and holds its own text.
+    expect(Object.values(editor.getSnapshot().context.drafts).map(draft => draft.text)).toEqual(['3']);
+    act(() => { direct.focus(); });
+    save();
+    expect(writes).toHaveLength(1);
+    const output = blockAt(written(), [])!.nodes.done;
+    expect(output).toMatchObject({ type: 'tool', arguments: { type: 'object', fields: {
+      'a.fields.b': { type: 'literal', value: 3 },
+      a: { type: 'object', fields: { b: { type: 'literal', value: 2 } } },
+    } } });
+    expect(editor.getSnapshot().context.drafts).toEqual({});
+  });
+
+  it('edits the nested field alone', async () => {
+    await open(collidingFields());
+    select('Tool node done');
+    fireEvent.change(literals()[1], { target: { value: '5' } });
+    expect(literals().map(field => field.value)).toEqual(['1', '5']);
+    save();
+    const fields = (blockAt(written(), [])!.nodes.done as { arguments: { fields: Record<string, unknown> } }).arguments.fields;
+    expect(fields['a.fields.b']).toEqual({ type: 'literal', value: 1 });
+    expect(fields.a).toEqual({ type: 'object', fields: { b: { type: 'literal', value: 5 } } });
+  });
+});
+
+describe('drafts across selection (F3)', () => {
+  it('keeps invalid text of one node across selecting another node with a different value, and back', async () => {
+    const editor = await open(statusSource());
+    select('Tool node ready');
+    const status = literals()[0];
+    expect(status.value).toBe('"ready"');
+    fireEvent.change(status, { target: { value: '"unfinished' } });
+    fireEvent.blur(status);
+    expect(isDirty(editor.getSnapshot().context)).toBe(true);
+    select('Tool node revise');
+    expect(literals()[0].value).toBe('"needs_revision"');
+    select('Tool node ready');
+    const retained = literals()[0];
+    expect(retained.value).toBe('"unfinished');
+    expect(retained.getAttribute('aria-invalid')).toBe('true');
+    expect(inspector().getByText(/Not valid JSON/)).toBeTruthy();
+    expect(isDirty(editor.getSnapshot().context)).toBe(true);
+    // Save refuses while the text is pending, and says where it is.
+    select('Tool node revise');
+    save();
+    expect(writes).toHaveLength(0);
+    const pending = screen.getByRole('list', { name: 'Fields with unapplied text' });
+    expect(pending.textContent).toContain('ready · arguments.fields["status"].value');
+    fireEvent.click(within(pending).getByRole('button', { name: 'Show' }));
+    expect(literals()[0].value).toBe('"unfinished');
+    // Fixing it applies on Save.
+    fireEvent.change(literals()[0], { target: { value: '"needs_revision"' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(blockAt(written(), [])!.nodes.ready).toMatchObject({ arguments: { fields: { status: { type: 'literal', value: 'needs_revision' } } } });
+  });
+});
+
+describe('field application (F4)', () => {
+
+  it('edits the display title while keeping node IDs out of the inspector', async () => {
+    const editor = await open(statusSource());
+    select('Tool node ready');
+    expect(inspector().queryByLabelText('Node ID')).toBeNull();
+    expect(inspector().queryByText('Native identity and rename')).toBeNull();
+    const title = inspector().getByRole('textbox', { name: 'Node title' });
+    fireEvent.change(title, { target: { value: 'Accepted result' } });
+    fireEvent.keyDown(title, { key: 'Enter' });
+    expect(Object.keys(blockAt(editor.getSnapshot().context.document!, [])!.nodes)).toContain('ready');
+    expect((inspector().getByRole('textbox', { name: 'Node title' }) as HTMLInputElement).value).toBe('Accepted result');
+    expect(editor.getSnapshot().context.document!.editor?.nodes?.find(node => node.address.node === 'ready')?.title).toBe('Accepted result');
+    expect(editor.getSnapshot().context.drafts).toEqual({});
+  });
+});
+
+const status = (node: string) => nodeField([], node, ['arguments', 'fields', { key: 'status' }, 'value']);
+/** Every retained draft as [text, owner, detached]. */
+const retained = (editor: Awaited<ReturnType<typeof open>>) => Object.entries(editor.getSnapshot().context.drafts)
+  .map(([key, draft]) => [draft.text, describeField(draft.address), key !== encodeField(draft.address)] as const)
+  .sort(([a], [b]) => a.localeCompare(b));
+function type(field: HTMLTextAreaElement | HTMLInputElement, text: string) {
+  fireEvent.change(field, { target: { value: text } });
+  fireEvent.blur(field);
+}
+
+describe('rename with retained drafts (repair B)', () => {
+  it.each([['the deleted node\'s draft first', false], ['the live node\'s draft first', true]])('keeps a deleted node\'s text apart when another node takes its name, %s', async (_order, liveFirst) => {
+    const editor = await open(statusSource());
+    const leave = (node: string, text: string) => { select(`Tool node ${node}`); type(literals()[0], text); };
+    if (liveFirst) leave('revise', '"live_revise');
+    leave('ready', '"orphan_ready');
+    if (!liveFirst) leave('revise', '"live_revise');
+    select('Tool node ready');
+    remove('Tool node ready');
+    select('Tool node revise');
+    rename(editor, 'revise', 'ready');
+    // The rename is accepted; the inspector follows the node, which shows
+    // its own kept text and never the deleted node's.
+    const nodes = blockAt(editor.getSnapshot().context.document!, [])!.nodes;
+    expect(Object.keys(nodes).sort()).toEqual(['decision', 'ready', 'reviews_quality_refine', 'reviews_quality_review', 'reviews_security_review', 'start']);
+    expect(nodes.ready).toMatchObject({ arguments: { fields: { status: { type: 'literal', value: 'needs_revision' } } } });
+    expect(inspector().queryByLabelText('Node ID')).toBeNull();
+    expect(literals()[0].value).toBe('"live_revise');
+    expect(retained(editor)).toEqual([
+      ['"live_revise', 'ready · arguments.fields["status"].value', false],
+      ['"orphan_ready', 'ready · arguments.fields["status"].value', true],
+    ]);
+    expect(editor.getSnapshot().context.drafts[encodeField(status('ready'))].text).toBe('"live_revise');
+    save();
+    expect(writes).toHaveLength(0);
+    const pending = within(screen.getByRole('list', { name: 'Fields with unapplied text' }));
+    expect(pending.getAllByRole('listitem')).toHaveLength(2);
+    expect(pending.getByText('This field no longer exists.')).toBeTruthy();
+  });
+
+  it('moves the drafts of a renamed node to its new name when nothing collides', async () => {
+    const editor = await open(statusSource());
+    select('Tool node revise');
+    type(literals()[0], '"still typing');
+    rename(editor, 'revise', 'rework');
+    expect(Object.keys(blockAt(editor.getSnapshot().context.document!, [])!.nodes)).toContain('rework');
+    expect(retained(editor)).toEqual([['"still typing', 'rework · arguments.fields["status"].value', false]]);
+    expect(literals()[0].value).toBe('"still typing');
+    fireEvent.change(literals()[0], { target: { value: '"reworked"' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(blockAt(written(), [])!.nodes.rework).toMatchObject({ arguments: { fields: { status: { type: 'literal', value: 'reworked' } } } });
+  });
+});
+
+describe('array edits with retained drafts (repair C)', () => {
+  const items = (first: unknown, second: unknown) => {
+    const source = collidingFields();
+    (source.document!.block.nodes as Record<string, unknown>).done = { ...TOOL, arguments: { type: 'object', fields: { items: { type: 'array', items: [{ type: 'literal', value: first }, { type: 'literal', value: second }] } } } };
+    return source;
+  };
+  const item = (index: number) => within(inspector().getByRole('group', { name: `[${index}]` })).getByLabelText('Literal JSON') as HTMLTextAreaElement;
+  const saved = () => (blockAt(written(), [])!.nodes.done as unknown as { arguments: { fields: { items: { items: unknown[] } } } }).arguments.fields.items.items;
+
+  it('keeps item 0\'s draft through an append and saves its corrected text there', async () => {
+    await open(items({ n: 1 }, { n: 2 }));
+    select('Tool node done');
+    type(item(0), '{"n":');
+    fireEvent.click(inspector().getByRole('button', { name: 'Add item' }));
+    expect(item(0).value).toBe('{"n":');
+    fireEvent.change(item(0), { target: { value: '{"n":3}' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 3 } }, { type: 'literal', value: { n: 2 } }, { type: 'reference', path: ['args'] }]);
+  });
+
+  it('keeps item 0\'s draft when a later item is removed, and through undo and redo of it', async () => {
+    const editor = await open(items({ n: 1 }, { n: 2 }));
+    select('Tool node done');
+    type(item(0), '{"n":');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [1]' }));
+    expect(item(0).value).toBe('{"n":');
+    act(() => { editor.send({ type: 'UNDO' }); });
+    expect(item(0).value).toBe('{"n":');
+    expect(item(1).value).toBe(JSON.stringify({ n: 2 }, null, 2));
+    act(() => { editor.send({ type: 'REDO' }); });
+    expect(item(0).value).toBe('{"n":');
+    fireEvent.change(item(0), { target: { value: '{"n":3}' } });
+    save();
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 3 } }]);
+  });
+
+  it('moves a later item\'s draft with its item when an earlier identical item is removed', async () => {
+    const editor = await open(items({ n: 1 }, { n: 1 }));
+    select('Tool node done');
+    type(item(1), '{"n":');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    // The surviving item is now [0], and its text went with it.
+    expect(item(0).value).toBe('{"n":');
+    expect(retained(editor)).toEqual([['{"n":', 'done · arguments.fields["items"].items[0].value', false]]);
+    fireEvent.change(item(0), { target: { value: '{"n":4}' } });
+    save();
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 4 } }]);
+  });
+
+  it('detaches the text of a removed item instead of giving it to the identical item now at its index', async () => {
+    const editor = await open(items({ n: 1 }, { n: 1 }));
+    select('Tool node done');
+    type(item(0), '{"n":');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    expect(item(0).value).toBe(JSON.stringify({ n: 1 }, null, 2));
+    expect(retained(editor)).toEqual([['{"n":', 'done · arguments.fields["items"].items[0].value', true]]);
+    save();
+    expect(writes).toHaveLength(0);
+    expect(within(screen.getByRole('list', { name: 'Fields with unapplied text' })).getByText('This field no longer exists.')).toBeTruthy();
+  });
+
+  const undo = () => fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+  const redo = () => fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true, shiftKey: true });
+  const itemGroup = (index: number) => within(inspector().getByRole('group', { name: `[${index}]` }));
+  const pretty = (value: unknown) => JSON.stringify(value, null, 2);
+  /** Item 0 changed to {n:10} and applied, then its incomplete text left;
+   * Undo of the applied change marks that text `changed`. */
+  const changedOnFirst = (survivorFirst: boolean) => {
+    if (survivorFirst) type(item(1), '{"n":202');
+    type(item(0), '{"n":10}');
+    type(item(0), '{"n":101');
+    if (!survivorFirst) type(item(1), '{"n":202');
+    undo();
+    expect(item(0).value).toBe('{"n":101');
+    expect(itemGroup(0).getByRole('button', { name: 'Keep my text' })).toBeTruthy();
+  };
+
+  it.each([['the deleted item\'s draft first', false], ['the surviving item\'s draft first', true]])('detaches a changed draft with its removed item and moves the survivor\'s draft with it, %s', async (_order, survivorFirst) => {
+    const editor = await open(items({ n: 1 }, { n: 2 }));
+    select('Tool node done');
+    changedOnFirst(survivorFirst);
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    // The survivor is [0] and shows its own text; the removed item's text
+    // is kept apart, still marked by its content conflict as detached.
+    expect(item(0).value).toBe('{"n":202');
+    expect(itemGroup(0).queryByRole('button', { name: 'Keep my text' })).toBeNull();
+    expect(retained(editor)).toEqual([
+      ['{"n":101', 'done · arguments.fields["items"].items[0].value', true],
+      ['{"n":202', 'done · arguments.fields["items"].items[0].value', false],
+    ]);
+    // Undo restores the removed item; its text stays detached, and the
+    // survivor's text follows the survivor back to [1].
+    undo();
+    expect(item(0).value).toBe(pretty({ n: 1 }));
+    expect(item(1).value).toBe('{"n":202');
+    expect(retained(editor)).toEqual([
+      ['{"n":101', 'done · arguments.fields["items"].items[0].value', true],
+      ['{"n":202', 'done · arguments.fields["items"].items[1].value', false],
+    ]);
+    redo();
+    expect(item(0).value).toBe('{"n":202');
+    fireEvent.change(item(0), { target: { value: '{"n":22}' } });
+    save();
+    expect(writes).toHaveLength(0);
+    const pending = within(screen.getByRole('list', { name: 'Fields with unapplied text' }));
+    fireEvent.click(within(pending.getAllByRole('listitem').find(entry => entry.textContent!.includes('no longer exists'))!).getByRole('button', { name: 'Discard' }));
+    save();
+    expect(writes).toHaveLength(1);
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 22 } }]);
+  });
+
+  it('never gives a removed item\'s changed draft to the item now at its index', async () => {
+    const editor = await open(items({ n: 1 }, { n: 2 }));
+    select('Tool node done');
+    type(item(0), '{"n":10}');
+    type(item(0), '{"n":101');
+    undo();
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    expect(item(0).value).toBe(pretty({ n: 2 }));
+    expect(inspector().queryByRole('button', { name: 'Keep my text' })).toBeNull();
+    expect(retained(editor)).toEqual([['{"n":101', 'done · arguments.fields["items"].items[0].value', true]]);
+    save();
+    expect(writes).toHaveLength(0);
+    fireEvent.click(within(screen.getByRole('list', { name: 'Fields with unapplied text' })).getByRole('button', { name: 'Discard' }));
+    save();
+    expect(writes).toHaveLength(1);
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 2 } }]);
+  });
+
+  it('moves a later item\'s changed draft back to it when Undo restores an earlier item, and with Redo', async () => {
+    const editor = await open(items({ n: 1 }, { n: 2 }));
+    select('Tool node done');
+    fireEvent.click(inspector().getByRole('button', { name: 'Remove [0]' }));
+    type(item(0), '{"n":20}');
+    type(item(0), '{"n":203');
+    undo();
+    expect(itemGroup(0).getByRole('button', { name: 'Keep my text' })).toBeTruthy();
+    undo();
+    // A is back at [0]; B and its text are at [1].
+    expect(item(0).value).toBe(pretty({ n: 1 }));
+    expect(item(1).value).toBe('{"n":203');
+    expect(itemGroup(0).queryByRole('button', { name: 'Keep my text' })).toBeNull();
+    expect(retained(editor)).toEqual([['{"n":203', 'done · arguments.fields["items"].items[1].value', false]]);
+    redo();
+    expect(item(0).value).toBe('{"n":203');
+    expect(retained(editor)).toEqual([['{"n":203', 'done · arguments.fields["items"].items[0].value', false]]);
+    undo();
+    expect(item(1).value).toBe('{"n":203');
+    fireEvent.click(itemGroup(1).getByRole('button', { name: 'Keep my text' }));
+    fireEvent.change(item(1), { target: { value: '{"n":203}' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(saved()).toEqual([{ type: 'literal', value: { n: 1 } }, { type: 'literal', value: { n: 203 } }]);
+  });
+});
+
+describe('recovering detached text (F4)', () => {
+  /** Incomplete JSON with inner whitespace and newlines, exactly as typed. */
+  const kept = '"half typed\n  {  \n\tstill';
+  const location = 'ready · arguments.fields["status"].value';
+  const undo = () => fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+  const pending = () => within(screen.getByRole('list', { name: 'Fields with unapplied text' }));
+  const detachedEntry = () => within(pending().getAllByRole('listitem').find(entry => entry.textContent!.includes('no longer exists'))!);
+  let clipboard: string[];
+  let refuse: boolean;
+  beforeEach(() => {
+    clipboard = []; refuse = false;
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { if (refuse) throw new Error('denied'); clipboard.push(text); } } });
+  });
+  afterEach(() => { Reflect.deleteProperty(navigator, 'clipboard'); });
+  const reveal = () => {
+    save();
+    fireEvent.click(detachedEntry().getByRole('button', { name: 'Show kept text' }));
+    return screen.getByRole('textbox', { name: `Kept text of ${location}` }) as HTMLTextAreaElement;
+  };
+
+  it('shows and copies the exact text kept from a deleted node after Undo, beside the live field\'s own text, and discards only it', async () => {
+    const editor = await open(statusSource());
+    select('Tool node ready');
+    type(literals()[0], kept);
+    remove('Tool node ready');
+    undo();
+    // The node is back; its field shows its value, not the kept text, and
+    // takes its own new draft.
+    select('Tool node ready');
+    expect(literals()[0].value).toBe('"ready"');
+    type(literals()[0], '"live');
+    const text = reveal();
+    expect(writes).toHaveLength(0);
+    expect(text.value).toBe(kept);
+    expect(text.readOnly).toBe(true);
+    const before = editor.getSnapshot().context.drafts;
+    await act(async () => { fireEvent.click(detachedEntry().getByRole('button', { name: 'Copy' })); });
+    expect(clipboard).toEqual([kept]);
+    expect(detachedEntry().getByRole('status').textContent).toMatch(/Copied/);
+    // A refused clipboard leaves the text shown for manual selection.
+    refuse = true;
+    await act(async () => { fireEvent.click(detachedEntry().getByRole('button', { name: 'Copy' })); });
+    expect(detachedEntry().getByRole('status').textContent).toMatch(/Could not copy/);
+    expect((screen.getByRole('textbox', { name: `Kept text of ${location}` }) as HTMLTextAreaElement).value).toBe(kept);
+    // Showing and copying changed nothing and sent nothing.
+    expect(editor.getSnapshot().context.drafts).toBe(before);
+    expect(writes).toHaveLength(0);
+    expect(literals()[0].value).toBe('"live');
+    fireEvent.click(detachedEntry().getByRole('button', { name: 'Discard' }));
+    expect(retained(editor)).toEqual([['"live', location, false]]);
+    expect(screen.queryByRole('textbox', { name: `Kept text of ${location}` })).toBeNull();
+    fireEvent.change(literals()[0], { target: { value: '"live"' } });
+    save();
+    expect(writes).toHaveLength(1);
+    expect(blockAt(written(), [])!.nodes.ready).toMatchObject({ arguments: { fields: { status: { type: 'literal', value: 'live' } } } });
+  });
+
+  it('carries exact unapplied text through rename Undo and Redo without detaching the live field', async () => {
+    const editor = await open(statusSource());
+    select('Tool node ready');
+    type(literals()[0], kept);
+    rename(editor, 'ready', 'accepted');
+    undo();
+    select('Tool node ready');
+    expect(literals()[0].value).toBe(kept);
+    expect(retained(editor)).toEqual([[kept, location, false]]);
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true, shiftKey: true });
+    select('Tool node accepted');
+    expect(literals()[0].value).toBe(kept);
+    expect(retained(editor)).toEqual([[kept, 'accepted · arguments.fields["status"].value', false]]);
+    save();
+    expect(isDirty(editor.getSnapshot().context)).toBe(true);
+    expect(writes).toHaveLength(0);
+    fireEvent.click(pending().getByRole('button', { name: 'Discard' }));
+    expect(editor.getSnapshot().context.drafts).toEqual({});
+  });
+});

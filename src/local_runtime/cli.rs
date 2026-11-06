@@ -78,7 +78,7 @@ enum PublicCommand {
     Doctor(DoctorArgs),
     /// Publish minimal user configuration without overwriting existing files
     #[command(
-        after_help = "Native template policy: custom uses a complete --model-document. Other templates require model-id, context-window, max-output, tool-calls and reasoning declarations. OpenAI templates additionally require explicit compatibility TOML; no capabilities or compatibility are inferred. Credential-env names an environment variable, never a literal secret. Publication creates ~/rustx/rustx.toml and ~/rustx/.agents without overwriting existing files."
+        after_help = "Native template policy: custom uses a complete --model-document. Other templates require model-id, context-window and max-output declarations. Tool calls are supported by default. Optional compatibility TOML overrides protocol defaults. Credential-env names an environment variable, never a literal secret. Publication creates ~/rustx/rustx.toml and ~/rustx/.agents without overwriting existing files."
     )]
     Init(InitArgs),
     /// Serve the App Server protocol on an explicitly selected transport
@@ -196,11 +196,7 @@ struct InitArgs {
     context_window: Option<u64>,
     #[arg(long)]
     max_output: Option<u32>,
-    #[arg(long, action = clap::ArgAction::Set)]
-    tool_calls: Option<bool>,
-    #[arg(long, action = clap::ArgAction::Set)]
-    reasoning: Option<bool>,
-    /// Explicit TOML compatibility document; no compatibility is inferred
+    /// Optional TOML overrides for built-in protocol compatibility defaults
     #[arg(long)]
     compat: Option<String>,
     #[arg(long)]
@@ -224,8 +220,6 @@ impl InitArgs {
             model_id: self.model_id,
             context_window: self.context_window,
             max_output: self.max_output,
-            tool_calls: self.tool_calls,
-            reasoning: self.reasoning,
             compat: self.compat,
             model_document: self.model_document,
         }

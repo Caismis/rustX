@@ -40,7 +40,7 @@ inherit = true
 | --- | --- |
 | `model` | Root default or independent named selection. Omitted named selection inherits the invoking Attempt's complete frozen model. |
 | `tools.builtin` | Exact native whitelist; omission selects none. |
-| `tools.sources` | MCP identity or `python:<package>` to `"all"`, exact Tool names, or `[]`. Definition alone grants nothing. |
+| `tools.sources` | MCP identity or `python:<package>` to `"all"` (ordinary Tools and advertised MCP Resources), exact Tool names (Tools only), or `[]`. Definition or connection alone grants nothing. |
 | `skills` | `"all"`, exact names, or `[]`, for both Root and named Agents; default none. Prompt visibility only. |
 | `plugins` | Closed Rust-owned Agent Status, Todo and Goal vocabulary, default off. Each Root Plugin object overlays atomically. |
 | `agents`, `workflows` | Explicit delegation/invocation allowlists. Child scope limits remain enforced for every activation. A nonempty `agents` list composes the five Root-only Agent controls automatically; they are never authored in `tools.builtin`. |

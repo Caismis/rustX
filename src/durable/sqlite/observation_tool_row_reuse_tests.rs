@@ -44,7 +44,7 @@ fn checkpoint_tool_and_result_rows_reuse_current_native_proofs_across_cuts() {
     assert_eq!(first.transcript_rows.len(), 3);
     assert!(!first.transcript.entries[0].tool_calls.is_empty());
     assert!(matches!(&first.transcript.entries[1].item,
-        crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message { message: MessageBlock::Tool(_) }));
+        crate::observation::transcript::RuntimeClientTranscriptItem::Message { message: MessageBlock::Tool(_) }));
     assert_eq!(super::super::observation_response::row_work(), (3, 0));
     assert_eq!(super::super::observation_tools::page_work(), 1);
     response_start(&store, "tool-row-unrelated");

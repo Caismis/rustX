@@ -16,3 +16,9 @@ vi.mock('@floating-ui/react-dom', async importOriginal => ({
 // `SettingsPanel`'s navigation handoff), and jsdom has no `checkVisibility`;
 // node-environment suites have no DOM at all.
 if (typeof Element !== 'undefined') Element.prototype.checkVisibility = () => true;
+// CodeMirror measures text ranges; jsdom has no layout. Geometry is verified
+// through the connected browser, while unit tests exercise real editor state.
+if (typeof Range !== 'undefined') {
+  Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
+}

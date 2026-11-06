@@ -23,6 +23,7 @@
 //! committed list through `ConversationToolRuntime::todo_snapshot`.
 
 use super::super::support::todo::TodoPlane;
+use rustx::durable::CanonicalStore;
 
 use rustx::tools::todo::{TodoSnapshot, TodoStatus};
 use rustx::tools::types::{
@@ -441,7 +442,7 @@ async fn metadata_keys_and_values_obey_the_same_text_rule() {
 /// restart, a resume, and a compaction without any storage of its own.
 #[tokio::test]
 async fn a_new_tool_runtime_rebuilds_the_list_from_conversation_history() {
-    use rustx::durable::{ConversationStore, ConversationStoreBinding, SqliteConversationStore};
+    use rustx::durable::{ConversationStoreBinding, SqliteConversationStore};
     use rustx::message::types::{MessageBlock, ToolMessageBlock};
     use rustx::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
     use rustx::tools::runtime::{ConversationRuntimeConfig, ConversationToolRuntime};

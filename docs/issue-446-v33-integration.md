@@ -100,7 +100,6 @@ Bounds below are half-open candidate-vs-main changed-pixel bounds.
 | `desktop-collapsed-rail-linux.png` | (1185, 23, 1307, 35) |
 | `desktop-expanded-dark-linux.png` | (1185, 23, 1307, 35) |
 | `desktop-expanded-light-linux.png` | (1185, 23, 1307, 35) |
-| `desktop-right-panel-linux.png` | (537, 23, 659, 35) |
 | `mobile-expanded-dark-linux.png` | (280, 10, 390, 621) |
 | `mobile-rail-dark-linux.png` | (92, 22, 257, 35) |
 | `mobile-settings-dark-linux.png` | (324, 5, 390, 305) |
@@ -117,7 +116,6 @@ Bounds below are half-open candidate-vs-main changed-pixel bounds.
 | `sidebar-named-light-linux.png` | (1185, 23, 1307, 35) |
 | `sidebar-other-uncertain-light-linux.png` | (1185, 23, 1307, 35) |
 | `sidebar-preview-light-linux.png` | (1185, 23, 1307, 35) |
-| `sidebar-scoped-inspector-linux.png` | (537, 23, 659, 35) |
 | `workspace-session-browser-linux.png` | (1185, 23, 1307, 35) |
 
 The eight other header-bearing candidates are RGBA-identical to the existing

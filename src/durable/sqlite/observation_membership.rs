@@ -47,7 +47,7 @@ pub(super) fn canonical(
             "UPDATE message_ledger SET observation_identity_digest=?2 WHERE position=?1",
             params![position, identity(id).as_slice()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 pub(super) fn member(
@@ -60,7 +60,7 @@ pub(super) fn member(
 ) -> Result<(), ConversationStoreError> {
     let digest = identity(id);
     let value = witness(position, &digest, turn, response, original);
-    connection.execute("UPDATE inherited_message_membership SET observation_identity_digest=?2,observation_membership_witness=?3 WHERE assistant_ledger_position=?1",params![position,digest.as_slice(),value.as_slice()]).map_err(|error|storage(error.to_string()))?;
+    connection.execute("UPDATE inherited_message_membership SET observation_identity_digest=?2,observation_membership_witness=?3 WHERE assistant_ledger_position=?1",params![position,digest.as_slice(),value.as_slice()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 pub(super) fn validate(
@@ -88,7 +88,12 @@ pub(super) fn validate(
                 row.get(5)?,
             ))
         })
-        .map_err(|_| storage("native inherited membership evidence unavailable"))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                "native inherited membership evidence unavailable",
+            )
+        })?;
     #[cfg(test)]
     READ_WORK.with(|work| {
         work.set((

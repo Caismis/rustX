@@ -149,6 +149,26 @@ test("empty/nonmatching Ctrl+D is inert; confirmation is bounded and sanitizes e
   assert.ok(lines.length <= 3); assert.ok(lines.every((line) => !/[\x1b\n\u202e]/.test(line)));
 });
 
+test("deletion captions use fresh manual names before saved generated titles, preview and identity", async () => {
+  const generated = { text: "Generated title", provenance: { type: "inherited" as const, source_session: "source" } };
+  for (const [name, generated_title, opening, expected] of [
+    ["Native manual", generated, "Opening preview", "Native manual · b"],
+    [null, generated, "Opening preview", "Generated title · b"],
+    [null, undefined, "Opening preview", "Opening preview · b"],
+    [null, undefined, undefined, "b"],
+  ] as const) {
+    const h = harness({ rows: [{ ...row("b"), name: "Stale manual", generated_title, preview: opening }] });
+    h.view.handleInput(del);
+    const result = preview();
+    assert.equal(result.status, "preview");
+    if (result.status === "preview") result.preview.name = name;
+    h.previewResponse.resolve(result); await turn();
+    assert.ok(h.text().split("\n").some(line => line.trim() === expected));
+    assert.doesNotMatch(h.text(), /Stale manual|Unnamed Session/);
+    assert.deepEqual(h.executes, []);
+  }
+});
+
 test("22: presentation deletion path has no filesystem/process/provider authority", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = (await Promise.all(["../src/ui/components/resume-selector.ts", "../src/ui/session-deletion-workflow.ts"].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");

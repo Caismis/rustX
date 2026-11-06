@@ -3,7 +3,7 @@ use super::session::{
     DisplayPreviewSubject, SessionCatalog, SessionError, SessionId, SessionListPage, SessionNode,
     SessionNodeId, SessionPersistentState, SessionSnapshot, SessionSummary,
 };
-use crate::durable::ConversationStore;
+use crate::durable::{CanonicalStore, ObservationStore, ProjectionStore};
 use crate::message::types::{MessageBlock, UserContentBlock};
 use crate::runtime::local_storage::{ConversationAccess, ProductController};
 use std::sync::Arc;
@@ -21,9 +21,9 @@ pub struct SessionTransitionResult {
 #[derive(Debug)]
 pub(crate) struct SessionStatisticsReading {
     pub(crate) conversation_id: crate::runtime::identity::ConversationId,
-    pub(crate) statistics: crate::runtime_client::response::ConversationStatistics,
-    pub(crate) occupancy: Option<crate::runtime_client::occupancy::RuntimeClientContextOccupancy>,
-    pub(crate) read_cut: crate::runtime_client::checkpoint::CheckpointReadCut,
+    pub(crate) statistics: crate::observation::statistics::ConversationStatistics,
+    pub(crate) occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
+    pub(crate) read_cut: crate::observation::cut::CheckpointReadCut,
 }
 
 /// Retained allocation admission. Different Conversations may be held together.
@@ -40,6 +40,38 @@ pub struct SessionAccess {
     pub allocation: Arc<ConversationAccess>,
 }
 
+#[derive(Debug)]
+pub(crate) struct ScheduleReadPlan {
+    pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
+    pub(crate) session: SessionId,
+    pub(crate) node: SessionNodeId,
+    pub(crate) conversation_id: crate::runtime::identity::ConversationId,
+    pub(crate) database_path: std::path::PathBuf,
+    pub(crate) controller: Arc<ProductController>,
+}
+impl ScheduleReadPlan {
+    pub(crate) fn open(self) -> Result<SessionReadAccess, SessionError> {
+        let allocation = ConversationAccess::existing_for_catalog_read(
+            self.controller,
+            self.database_path.parent().expect("allocation"),
+            || {
+                self.catalog
+                    .blocking_lock()
+                    .validate_schedule_read(&self.session, &self.node, &self.conversation_id)
+                    .map_err(std::io::Error::other)
+            },
+        )
+        .map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
+        Ok(SessionReadAccess {
+            conversation_id: self.conversation_id,
+            database_path: self.database_path,
+            allocation: Arc::new(allocation),
+        })
+    }
+}
+
 /// Allocation retention for display reads. It never clones native Node origin
 /// strings or authored Session model/settings bodies.
 #[derive(Debug)]
@@ -53,7 +85,7 @@ pub(crate) struct SessionReadOrigin {
     pub(crate) source_session: SessionId,
     pub(crate) source_node: SessionNodeId,
     pub(crate) source_surface_revision: crate::conversation::SurfaceRevision,
-    pub(crate) source_locator: crate::runtime_client::content::CanonicalContentLocator,
+    pub(crate) source_locator: crate::observation::content::CanonicalContentLocator,
     pub(crate) side: super::session::LineageSide,
 }
 
@@ -224,7 +256,7 @@ impl SessionController {
                 .iter()
                 .map(|f| UploadMetadata {
                     name: f.name.clone(),
-                    size: f.bytes.len(),
+                    size: f.data.size(),
                 })
                 .collect::<Vec<_>>(),
         )
@@ -432,7 +464,7 @@ impl SessionController {
             let read = store
                 .read_window_headers(&at, limit.min(32))
                 .map_err(SessionError::Store)?;
-            let mut page = crate::runtime_client::snapshot::transcript_header_view(read.page);
+            let mut page = crate::observation::transcript::transcript_header_view(read.page);
             crate::runtime_client::response::decorate_window(
                 &store,
                 &mut page,
@@ -484,7 +516,7 @@ impl SessionController {
                 use crate::runtime_client::RuntimeClientError;
                 let read_cut = crate::runtime_client::trace_observation::history_cut(&store)?;
                 let through = read_cut.through;
-                let occupancy = crate::runtime_client::occupancy::read(&store, through)
+                let occupancy = crate::observation::occupancy::read(&store, through)
                     .map_err(RuntimeClientError::observation_store_error)?;
                 let statistics = crate::runtime_client::response::statistics(&store, through)
                     .map_err(RuntimeClientError::observation_store_error)?;
@@ -724,7 +756,8 @@ impl SessionController {
         &self,
         settings: SessionPersistentState,
     ) -> Result<SessionTransitionResult, SessionError> {
-        self.create_session_with_binding(settings, None).await
+        self.create_session_with_binding(settings, None, |_| {})
+            .await
     }
 
     /// Install the captured process authority before publishing listable identity.
@@ -733,6 +766,7 @@ impl SessionController {
         &self,
         settings: SessionPersistentState,
         binding: Option<super::configuration::AdmittedSessionConfig>,
+        published: impl FnOnce(&SessionTransitionResult),
     ) -> Result<SessionTransitionResult, SessionError> {
         if !settings.cwd.is_absolute() {
             return Err(SessionError::Catalog {
@@ -802,11 +836,15 @@ impl SessionController {
                     return Err(error);
                 }
             };
-        Ok(SessionTransitionResult {
+        let result = SessionTransitionResult {
             session,
             editor_content: None,
             durability_diagnostic,
-        })
+        };
+        // Synchronous ownership registration shares the catalog visibility cut.
+        // Observers cannot resolve the new identity until this lock is released.
+        published(&result);
+        Ok(result)
     }
     /// Acquire the preparation owner. In test builds, notify the wait observer
     /// exactly when this task's lock future is polled and returns `Pending`,
@@ -968,7 +1006,7 @@ impl SessionController {
         id: &SessionId,
         node: Option<&SessionNodeId>,
         revision: crate::conversation::SurfaceRevision,
-        locator: &crate::runtime_client::content::CanonicalContentLocator,
+        locator: &crate::observation::content::CanonicalContentLocator,
         side: super::session::LineageSide,
     ) -> Result<crate::runtime::identity::MessageId, SessionError> {
         let access = self.acquire_session(id, node).await?;
@@ -1212,9 +1250,7 @@ impl SessionController {
                     detail: "Exact canonical lineage boundary is unavailable".into(),
                 })?;
             let source_locator =
-                crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
-                    position,
-                };
+                crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position };
             let (prepared, editor) = if tree {
                 snapshot.prepare_tree_node(id, settings, source, message, side)?
             } else {
@@ -1244,6 +1280,7 @@ impl SessionController {
             )
         };
         if !tree {
+            snapshot.copy_saved_label(id, &mut prepared)?;
             let claim = self
                 .catalog
                 .lock()
@@ -1488,6 +1525,8 @@ impl SessionController {
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::CanonicalStore;
+    use crate::durable::JournalStore;
     include!("session_controller/cold_statistics_tests.rs");
     use super::super::configuration::SessionConfigInput;
     use super::super::session::deletion::SessionDeleteResult;
@@ -1551,9 +1590,6 @@ mod tests {
                 None,
                 crate::context::ContextAssembly::new(),
                 coordinator.current_snapshot(),
-            )),
-            resource_loader: Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
-                coordinator.current_snapshot().workspace_root(),
             )),
             capability: coordinator,
             clock: None,

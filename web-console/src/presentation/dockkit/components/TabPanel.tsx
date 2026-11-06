@@ -314,7 +314,7 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
               >
                 <TabTitle>{callbacks.renderTabTitle?.(tab) ?? tab.title}</TabTitle>
                 {closable && (
-                  <Tooltip disabled={menu !== undefined} label={callbacks.labels.closeTab} side="bottom" delayMs={500}>
+                  <Tooltip disabled={menu !== undefined} label={callbacks.labels.closeTab} shortcutKeys={callbacks.labels.closeTabKeys} side="bottom" delayMs={500}>
                     <button
                       type="button"
                       className={css.tabClose}
@@ -366,7 +366,7 @@ export function TabStrip({ state, pane, callbacks }: TabPanelProps): ReactNode {
       )}
       <div className={css.stripFill} data-dockkit-strip-fill />
       {!(callbacks.hideSplitWhenBlocked && block !== undefined) && (
-        <Tooltip label={block === undefined ? callbacks.labels.splitPane : splitBlockedTitle(callbacks.labels, block)} side="bottom" delayMs={500}>
+        <Tooltip label={block === undefined ? callbacks.labels.splitPane : splitBlockedTitle(callbacks.labels, block)} shortcutKeys={callbacks.labels.splitPaneKeys} side="bottom" delayMs={500}>
           <span
             tabIndex={block === undefined ? undefined : 0}
             aria-label={block === undefined ? undefined : splitBlockedTitle(callbacks.labels, block)}

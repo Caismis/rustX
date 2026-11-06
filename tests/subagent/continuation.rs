@@ -1,6 +1,7 @@
 //! A real process/store continuation proof. Provider gates are explicit
 //! activation frontiers; no elapsed delay establishes lifecycle order.
 use super::*;
+use rustx::durable::JournalStore;
 use rustx::runtime::subagent::{AgentState, SubagentState};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -77,6 +78,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     assert_eq!(settled.agents.len(), 1);
     assert_eq!(settled.agents[0].state, AgentState::Inactive);
     assert_eq!(settled.agents[0].activation_state, SubagentState::Succeeded);
+    assert_agent_page_matches_snapshot(&mut process, &settled.agents[0]).await;
     assert_eq!(report_count(&settled, "CHILD-ANSWER"), 1);
     let first_trace = cold_trace_evidence(&mut process, &first).await;
 
@@ -209,6 +211,7 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     assert_eq!(final_snapshot.agents.len(), 1);
     assert_eq!(final_snapshot.agents[0].state, AgentState::Inactive);
     assert_eq!(final_snapshot.agents[0].activation_id, accepted_activation);
+    assert_agent_page_matches_snapshot(&mut process, &final_snapshot.agents[0]).await;
     assert_eq!(report_count(&final_snapshot, "CHILD-ANSWER"), 1);
     assert_eq!(report_count(&final_snapshot, "SECOND-ANSWER"), 1);
     let transcript = process
@@ -449,6 +452,76 @@ async fn real_child_resumes_same_identity_history_and_frozen_authority() {
     assert!(status.success(), "{status}: {stderr}");
 }
 
+/// Public per-Agent pages and original-value reads must agree with the
+/// authoritative lifecycle already published in the parent snapshot.
+async fn assert_agent_page_matches_snapshot(
+    process: &mut Parent,
+    expected: &rustx::runtime_client::snapshot::RuntimeClientAgent,
+) {
+    let result = process
+        .call(Method::AgentStatus {
+            target: process.target(),
+            agent_id: expected.agent_id.clone(),
+        })
+        .await;
+    let Ok(MethodResult::DomainPage { page }) = result else {
+        panic!("native Agent status page: {result:?}");
+    };
+    assert_eq!(page.domain, format!("agents.{}", expected.agent_id));
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items.len(), 1);
+    let selected = process
+        .call(Method::ConversationCheckpointPage {
+            target: process.target(),
+            agent_id: None,
+            cut: page.read_cut.clone(),
+            domain: page.domain.clone(),
+            offset: 0,
+            limit: 1,
+        })
+        .await;
+    let Ok(MethodResult::CheckpointPage { page: selected }) = selected else {
+        panic!("per-Agent page at its native cut: {selected:?}");
+    };
+    assert_eq!(selected, page);
+    let collection = process
+        .call(Method::ConversationCheckpointPage {
+            target: process.target(),
+            agent_id: None,
+            cut: page.read_cut.clone(),
+            domain: "agents".into(),
+            offset: 0,
+            limit: 32,
+        })
+        .await;
+    let Ok(MethodResult::CheckpointPage { page: collection }) = collection else {
+        panic!("native Agent collection page: {collection:?}");
+    };
+    assert_eq!(
+        collection.total, 1,
+        "this continuation owns exactly one stable Agent"
+    );
+    assert_eq!(collection.items.len(), 1);
+    let collection_original = process
+        .selected_value(None, &collection.read_cut, "agents", 0, &[])
+        .await;
+    let collection_original: rustx::runtime_client::snapshot::RuntimeClientAgent =
+        rustx::observation::bounded::decode_domain_value(collection_original).unwrap();
+    assert_eq!(
+        &collection_original, expected,
+        "public collection values use the native Agent owner"
+    );
+    let original = process
+        .selected_value(None, &page.read_cut, &page.domain, 0, &[])
+        .await;
+    let original: rustx::runtime_client::snapshot::RuntimeClientAgent =
+        rustx::observation::bounded::decode_domain_value(original).unwrap();
+    assert_eq!(
+        &original, expected,
+        "domain reads cannot resurrect stale lifecycle or activity"
+    );
+}
+
 async fn snapshot(process: &mut Parent) -> rustx::runtime_client::RuntimeClientSnapshot {
     process.snapshot().await
 }
@@ -493,7 +566,6 @@ async fn recovered_resume_diagnostic(
     root: &std::path::Path,
     agent_id: &rustx::runtime::identity::AgentId,
 ) -> String {
-    use rustx::durable::ConversationStore;
     let target = process.target();
     let session = process.session_id.clone();
     let result = process
@@ -616,7 +688,7 @@ async fn child_turn_window(
 }
 
 struct ColdTraceEvidence {
-    cut: rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: rustx::observation::cut::CheckpointReadCut,
     domain: String,
     item_offset: u64,
     path: Vec<String>,
@@ -627,7 +699,7 @@ async fn cold_trace_evidence(
     process: &mut Parent,
     agent: &rustx::runtime_client::snapshot::RuntimeClientAgent,
 ) -> ColdTraceEvidence {
-    use rustx::runtime_client::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
+    use rustx::observation::trace::{TraceFieldKind, TraceFieldSource, TraceKind, TraceState};
     let trace = process
         .call(Method::AgentTrace {
             target: process.target(),
@@ -727,7 +799,7 @@ async fn assert_trace_cut_rejected(
     process: &mut Parent,
     agent: &rustx::runtime_client::snapshot::RuntimeClientAgent,
     evidence: &ColdTraceEvidence,
-    cut: &rustx::runtime_client::checkpoint::CheckpointReadCut,
+    cut: &rustx::observation::cut::CheckpointReadCut,
 ) {
     let result = process
         .call(Method::ConversationCheckpointValueRead {

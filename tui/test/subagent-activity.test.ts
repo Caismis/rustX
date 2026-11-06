@@ -206,8 +206,7 @@ describe("subagent activity section", () => {
         execution_profile: {
           model: "alpha/model-a",
           profile: "reasoning:high",
-          reasoning_enabled: true,
-        },
+          },
       }),
     ]);
     assert.match(rendered, /alpha\/model-a · reasoning:high/);
@@ -218,8 +217,7 @@ describe("subagent activity section", () => {
       child({ type: "awaiting_activity" }, {
         execution_profile: {
           model: "alpha/model-a",
-          reasoning_enabled: false,
-        },
+          },
       }),
     ]);
     assert.match(rendered, /alpha\/model-a/);

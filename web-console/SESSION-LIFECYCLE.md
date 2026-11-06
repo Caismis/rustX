@@ -135,6 +135,22 @@ it does not interpret machine state names. Published targets and proofs are froz
 No background recovery actor, polling, automatic mutation retry or durable browser
 queue is introduced.
 
+Initialized transport readiness is independent from Session restoration. On
+same-authority reconnect, the registry enqueues eligible retained Opens for each
+bounded actor without waiting for another actor's attachment. An empty or
+completed-history cold runtime may wait for MCP before any submission deadline is
+armed; it cannot hold global transport readiness. The selected Session can send
+its freshly authorized submission intent while its own attachment is pending.
+Existing generation, intent, exact-target and observation checks still gate every
+result. A caller needing a live target waits for that actor's attachment rather
+than treating `connect()` as a restoration barrier.
+
+Attachment RPC waits have their own 32-position lane, matching Native's existing
+external attachment bound. They retain correlation until response disposition and
+have no generic RPC response timer. The 33rd pending attachment is refused before
+dispatch, leaving ordinary, metadata and control positions independent. Transport
+loss still makes a transmitted unacknowledged Attach uncertain exactly once.
+
 ## Required evidence
 
 Machine tests drive the real graph with deferred port results and exact SENT/ACK

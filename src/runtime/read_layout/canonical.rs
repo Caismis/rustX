@@ -11,7 +11,7 @@ pub(crate) fn to_writer<T: serde::Serialize + ?Sized>(
 ) -> Result<(), std::io::Error> {
     #[cfg(test)]
     WORK.with(|work| work.set((0, 0, 0, 0)));
-    if let Some(bytes) = crate::runtime_client::checkpoint::bounded_bytes(value, 4096) {
+    if let Some(bytes) = crate::observation::bounded::bounded_bytes(value, 4096) {
         let value: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
         return small(writer, &value);

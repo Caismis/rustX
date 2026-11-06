@@ -6,6 +6,7 @@
 //! from the frozen Request Snapshot without consulting live pending state.
 
 use super::super::{common, support};
+use rustx::durable::{PublicationStore, RequestStore};
 
 use chrono::TimeZone;
 use std::sync::Arc;
@@ -217,7 +218,12 @@ fn carryover_from(request: &rustx::model::ModelRequest) -> &RenderedUnresolvedOu
             ModelInputMessage::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
                 carryover,
             )) => Some(carryover),
-            ModelInputMessage::Canonical(_) | ModelInputMessage::Derived(_) => None,
+            ModelInputMessage::Canonical(_)
+            | ModelInputMessage::Derived(_)
+            | ModelInputMessage::RequestOnly(
+                RequestOnlyModelContext::AuxiliaryQuestion { .. }
+                | RequestOnlyModelContext::AuxiliaryAnswer { .. },
+            ) => None,
         })
         .expect("request contains carryover")
 }

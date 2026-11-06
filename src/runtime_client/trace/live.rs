@@ -16,9 +16,10 @@
 //! by the same code rather than by two copies that could drift.
 
 use super::anchor::AnchorFacts;
-use super::types::{TraceKind, TraceRecord, TraceState};
+use crate::observation::tool::ForegroundToolState;
+use crate::observation::trace::types::{TraceKind, TraceRecord, TraceState};
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolId};
-use crate::runtime_client::snapshot::{ForegroundToolState, RuntimeClientAttemptPhase};
+use crate::runtime_client::snapshot::RuntimeClientAttemptPhase;
 
 /// The exact facts current lifecycle repair reads, and the one it writes.
 ///
@@ -32,7 +33,7 @@ pub(super) struct LiveTarget<'a> {
     attempt_id: Option<&'a AttemptId>,
     /// The provisional Assistant identity this request itself froze.
     assistant_message_id: Option<&'a MessageId>,
-    tool_occurrence: Option<&'a crate::runtime_client::snapshot::RuntimeClientToolOccurrence>,
+    tool_occurrence: Option<&'a crate::observation::tool::RuntimeClientToolOccurrence>,
     tool_call: Option<(&'a ToolCallId, &'a ToolId)>,
 }
 
@@ -92,7 +93,7 @@ pub(crate) struct LiveSnapshot<'a> {
     jobs: &'a [crate::runtime_client::snapshot::RuntimeClientJob],
     agents: &'a [crate::runtime_client::snapshot::RuntimeClientAgent],
     workflows: &'a crate::runtime::workflow::read_model::WorkflowSnapshot,
-    pending_interactions: &'a [crate::runtime_client::snapshot::RuntimeClientInteractionHeader],
+    pending_interactions: &'a [crate::observation::interaction::RuntimeClientInteractionHeader],
     attempt: Option<LiveAttempt<'a>>,
 }
 #[derive(Clone, Copy)]
@@ -100,7 +101,7 @@ struct LiveAttempt<'a> {
     attempt_id: &'a Option<crate::runtime::identity::AttemptId>,
     in_flight: Option<&'a crate::runtime::identity::MessageId>,
     phase: &'a RuntimeClientAttemptPhase,
-    foreground: &'a [crate::runtime_client::snapshot::ForegroundToolExecution],
+    foreground: &'a [crate::observation::tool::ForegroundToolExecution],
 }
 macro_rules! live_snapshot {
     ($snapshot:ty) => {

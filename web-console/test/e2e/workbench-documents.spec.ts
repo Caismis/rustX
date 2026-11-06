@@ -28,19 +28,23 @@ test('document registry defaults to rendered Markdown and retains explicit sourc
 test('HTML, image, PDF and spreadsheets use specialized viewers',async({page},info)=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(`${origin}/test/fixtures/workbench.html`);
+  const navigations:string[]=[];page.on('framenavigated',frame=>{if(frame===page.mainFrame())navigations.push(frame.url());});
   await page.locator('[data-preview-toggle]').click();const panel=page.locator('[data-workbench]');
   await panel.getByRole('button',{name:/Workspace files/}).click();await panel.getByRole('button',{name:'docs',exact:true}).click();
   const open=async(name:string)=>{await panel.getByRole('tab',{name:/Files/}).click();await panel.getByRole('button',{name,exact:true}).click();};
   await open('page.html');await expect(panel.frameLocator('iframe').getByRole('heading',{name:'HTML document'})).toBeVisible();
   expect(await panel.frameLocator('iframe').getByRole('heading').evaluate(el=>getComputedStyle(el).color)).toBe('rgb(200, 0, 0)');
-  await open('diagram.svg');await expect(panel.locator('[data-document-zoom-frame] img')).toBeVisible();
+  await open('diagram.svg');await expect(panel.locator('[data-workbench-file] code')).toContainText('<svg');
+  await open('diagram.png');await expect(panel.locator('[data-document-zoom-frame] img')).toBeVisible();
   await page.screenshot({path:info.outputPath('image-preview.png')});
-  await open('sample.pdf');await expect(panel.locator('canvas')).toBeVisible();
-  await expect(panel.getByRole('button',{name:'Next',exact:true})).toBeVisible();
+  await open('sample.pdf');await expect(panel.locator('canvas').first()).toBeVisible();
+  await expect(panel.locator('[data-pdf-page]')).toHaveCount(3);
+  await expect(panel.getByRole('button',{name:'Next',exact:true})).toHaveCount(0);
   await open('table.csv');await expect(panel.locator('[data-excel-preview]')).toBeVisible();
   await expect(panel.locator('.fortune-sheet-container')).toBeVisible();
   await open('sample.xlsx');await expect(panel.locator('.fortune-sheet-container')).toBeVisible();
   await page.screenshot({path:info.outputPath('spreadsheet-preview.png')});
+  expect(navigations).toEqual([]);
   expect(errors).toEqual([]);
 });
 test('source dockkit floats, docks, restores and collapses the last content tab',async({page},info)=>{
@@ -53,24 +57,28 @@ test('source dockkit floats, docks, restores and collapses the last content tab'
   await page.mouse.move(box.x+15,box.y+14);await page.mouse.down();await page.mouse.move(600,220,{steps:12});await page.mouse.up();
   const floating=panel.locator('[data-dockkit-float]');await expect(floating).toBeVisible();
   await expect(floating.getByRole('heading',{name:'Rendered document'})).toBeVisible();
-  await page.locator('[data-preview-toggle]').click();
+  await panel.getByRole('button',{name:'Collapse right sidebar',exact:true}).click();
   await expect(floating.getByRole('heading',{name:'Rendered document'})).toBeVisible();
   await page.screenshot({path:info.outputPath('floating-markdown.png')});
-  await floating.getByRole('button',{name:'Dock panel',exact:true}).click();
+  await floating.getByRole('button',{name:'Send back to the sidebar',exact:true}).click();
   await expect(floating).toHaveCount(0);
   await page.locator('[data-preview-toggle]').click();
   await expect(panel.getByRole('heading',{name:'Rendered document'})).toBeVisible();
   await page.reload();await page.locator('[data-preview-toggle]').click();
   await expect(panel.getByRole('heading',{name:'Rendered document'})).toBeVisible();
-  await panel.getByRole('tab',{name:/guide.md/}).getByRole('button',{name:'Close tab'}).click();
-  await panel.getByRole('tab',{name:/Files/}).getByRole('button',{name:'Close tab'}).click();
-  await expect(panel).toBeHidden();
+  await panel.getByRole('tab',{name:/guide.md/}).getByRole('button',{name:'Close',exact:true}).click();
+  await panel.getByRole('tab',{name:/Files/}).getByRole('button',{name:'Close',exact:true}).click();
+  await expect(page.locator('[data-sidebar-right-open]')).toHaveCount(0);
+  await expect(panel.locator('[data-dockkit-host="dock"]:visible')).toHaveCount(0);
   await page.locator('[data-preview-toggle]').click();await expect(panel.getByRole('button',{name:/Workspace files/})).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test('interactive HTML packs local assets and executes inside an opaque sandbox',async({page})=>{
-  await page.addInitScript(()=>{ if(localStorage.getItem('rustx-html-interactive-v1')===null)localStorage.setItem('rustx-html-interactive-v1','true'); });
+test('interactive HTML packs local assets and executes inside an opaque sandbox',async({page},info)=>{
+  await page.addInitScript(()=>{
+    if(window!==window.top)return;
+    if(localStorage.getItem('rustx-html-interactive-v1')===null)localStorage.setItem('rustx-html-interactive-v1','true');
+  });
   await page.goto(`${origin}/test/fixtures/workbench.html`);
   await page.locator('[data-preview-toggle]').click();
   const panel=page.locator('[data-workbench]');
@@ -79,17 +87,23 @@ test('interactive HTML packs local assets and executes inside an opaque sandbox'
   await panel.getByRole('button',{name:'interactive.html',exact:true}).click();
   const frame=panel.frameLocator('iframe');
   await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
+  await expect(panel.locator('iframe')).toBeInViewport({ratio:1});
   await frame.getByRole('button',{name:'Count 0'}).click();
   await expect(frame.getByRole('button',{name:'Count 1'})).toBeVisible();
   await expect(frame.locator('#boundary')).toHaveText('isolated');
   expect(await frame.getByRole('button').evaluate(el=>getComputedStyle(el).color)).toBe('rgb(12, 34, 56)');
   await expect(panel.locator('iframe')).toHaveAttribute('sandbox','allow-scripts');
+  await page.screenshot({path:info.outputPath('html-interactive.png')});
   await page.evaluate(()=>localStorage.setItem('rustx-html-interactive-v1','false'));
   await page.reload();await page.locator('[data-preview-toggle]').click();
   await expect(panel.locator('iframe')).toHaveAttribute('sandbox','');
+  // The iframe's dock can still be sliding even when its contents are stable.
+  await expect(panel.locator('iframe')).toBeInViewport({ratio:1});
+  await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
   await frame.getByRole('button',{name:'Count 0'}).click();
   await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
   await expect(frame.locator('#boundary')).toHaveText('');
+  await page.screenshot({path:info.outputPath('html-static.png')});
 });
 
 test('workspace HTML stays static until the user explicitly opts into scripts',async({page})=>{

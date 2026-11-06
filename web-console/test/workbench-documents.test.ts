@@ -1,6 +1,8 @@
 import {describe,it,expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {convertXlsx} from '../src/app/components/workbench-documents/excel/xlsx';
+import {convertExcel} from '../src/app/components/workbench-documents/excel/convert';
+import {excelFormat} from '../src/app/components/workbench-documents/excel/format';
 import {viewersForPath} from '../src/app/components/workbench-documents/definitions';
 import {relativeDocumentPath} from '../src/app/components/workbench-documents/resources';
 import {createBasicHtmlDocument} from '../src/app/components/workbench-documents/basic-document';
@@ -8,7 +10,18 @@ import {splitFrontmatter} from '../src/app/components/workbench-documents/frontm
 import {readSidebarLayout,writeSidebarLayout} from '../src/app/components/workbench-persistence';
 import {DockController} from '../src/presentation/dockkit/engine/controller';
 describe('Harness document defaults',()=>{
- it.each([['note.MD','markdown'],['note.markdown','markdown'],['page.htm','html'],['photo.png','image'],['photo.svg','image'],['slides.pdf','pdf'],['report.docx','office'],['book.xls','excel'],['data.csv','excel'],['main.py','code'],['README','text']])('%s selects %s',(path,viewer)=>expect(viewersForPath(path)[0]).toBe(viewer));
+ it.each([['note.MD','markdown'],['note.markdown','markdown'],['page.htm','html'],['photo.png','image'],['photo.svg','code'],['slides.pdf','pdf'],['report.docx','office'],['book.xlsx','excel'],['data.csv','excel'],['main.py','code'],['README','text']])('%s selects %s',(path,viewer)=>expect(viewersForPath(path)[0]).toBe(viewer));
+ it.each(['book.xls','old.doc','old.ppt','video.mp4','archive.zip','icon.ico'])('%s is unsupported before acquiring content', path => expect(viewersForPath(path)).toEqual([]));
+ it.each([['book.XLSX','xlsx'],['data.CSV','csv'],['data.TSV','tsv']])('%s selects its supported spreadsheet parser',(path,format)=>expect(excelFormat(path)).toBe(format));
+ it.each(['book.xls','book.XLS','book.xlsm'])('%s has no spreadsheet parser',path=>expect(()=>excelFormat(path)).toThrow());
+ it.each(['csv','tsv'] as const)('%s conversion retains literal text and formula-looking cells',async format=>{
+   const separator=format==='csv'?',':'\t';
+   const preview=await convertExcel(new TextEncoder().encode(`id${separator}value\n01${separator}=1+1`),format,{maxBytes:1024,maxCells:20,timeoutMs:15000});
+   const cells=preview.sheets[0].celldata!;
+   expect(cells.find(cell=>cell.r===1&&cell.c===0)?.v?.v).toBe('01');
+   const formula=cells.find(cell=>cell.r===1&&cell.c===1)?.v;
+   expect(formula?.v).toBe('=1+1');expect(formula?.f).toBeUndefined();
+ });
  it('offers source only for text documents',()=>{
    expect(viewersForPath('image.svg')).toContain('text');
    expect(viewersForPath('note.md')).toEqual(['markdown','code','text']);
@@ -50,5 +63,28 @@ describe('Harness document defaults',()=>{
    expect(readSidebarLayout('test')?.layout).toEqual(layout);
    localStorage.setItem('rustx.workbench-layout.v1.test',JSON.stringify({bySession:{test:{layout:{...layout,rootId:'pane999'},minted:100}}}));
    expect(readSidebarLayout('test')).toBeUndefined();expect(localStorage.getItem('rustx.workbench-layout.v1.test')).toBeNull();
+ });
+ it('persists ordinary tabs while omitting runtime-bound changed-file reviews and their floating seats',()=>{
+   const controller=new DockController();
+   controller.openContent({kind:'file',title:'docs/readme.md',contentId:'file:docs/readme.md'});
+   controller.openContent({kind:'changes',title:'Edited files',contentId:'changes:runtime:attempt'});
+   const review=Object.values(controller.getSnapshot().state.tabs).find(tab=>tab.kind==='changes')!;
+   controller.floatTab(review.id);
+   const layout=controller.getSnapshot().state;
+   writeSidebarLayout('review',{layout,minted:100,history:{entries:[],cursor:0}});
+   const restored=readSidebarLayout('review')!.layout;
+   expect(Object.values(restored.tabs).map(tab=>tab.kind)).toContain('file');
+   expect(Object.values(restored.tabs).some(tab=>tab.kind==='changes')).toBe(false);
+   expect(restored.floats).toHaveLength(0);
+   expect(layout.tabs[review.id]).toBe(review);
+ });
+ it('restores task tabs using exact native identities without persisting task instructions',()=>{
+   const controller=new DockController();
+   const identity=JSON.stringify(['original-session','original-node','original-conversation','9007199254740993']);
+   controller.openContent({kind:'schedule',title:'Review repository changes',contentId:identity});
+   writeSidebarLayout('task',{layout:controller.getSnapshot().state,minted:100,history:{entries:[],cursor:0}});
+   const restored=Object.values(readSidebarLayout('task')!.layout.tabs);
+   expect(restored).toHaveLength(1); expect(restored[0]).toMatchObject({kind:'schedule',contentId:identity,title:'Review repository changes'});
+   expect(Object.keys(restored[0]).sort()).toEqual(['contentId','id','kind','title']);
  });
 });

@@ -17,14 +17,19 @@ pub mod goal;
 pub mod local_runtime;
 pub mod message;
 pub mod model;
+pub mod observation;
+mod package_io;
 pub mod protocol;
 pub mod publication;
 pub mod runtime;
 pub mod runtime_client;
+pub mod scheduler;
 pub mod session_archive;
 pub mod skills;
 pub mod toml_authoring;
 pub mod tools;
+pub mod workflow_file;
+pub mod workspace_changes;
 
 /// The crate's own published name, available to its test build.
 ///

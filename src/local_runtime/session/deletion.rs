@@ -1,6 +1,7 @@
 //! Two-phase Session deletion. Catalog rename is visibility; successful parent
 //! fsync is durable authority. Only `CleanupWork` minted after that barrier can
 //! remove private resources. Recovery republishes the SAME record before retry.
+use super::catalog_commit::sync_directory;
 use super::{
     CatalogCommitError, CatalogDocument, SessionCatalog, SessionError, SessionId, SessionNodeId,
     validate_id,
@@ -31,7 +32,7 @@ pub(crate) enum DeletionScope {
     },
 }
 impl DeletionScope {
-    fn conversation(&self) -> &ConversationId {
+    pub(super) fn conversation(&self) -> &ConversationId {
         match self {
             Self::Node {
                 conversation_id, ..
@@ -176,6 +177,11 @@ impl CleanupWork {
                 }
                 File::open(self.root.root())?.sync_all()?;
             }
+            crate::tools::managed_output::storage::cleanup(
+                self.root.root(),
+                &path,
+                scope.conversation(),
+            )?;
             match fs::remove_dir_all(&path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -202,7 +208,7 @@ impl CleanupWork {
 impl SessionCatalog {
     pub(crate) fn confirm_catalog_durability(&self) -> std::io::Result<()> {
         File::open(&self.path)?.sync_all()?;
-        super::sync_directory(&self.root)
+        sync_directory(&self.root)
     }
     fn existing_deletion(&self, id: &SessionId) -> Option<SessionDeleteResult> {
         self.document.deletions.get(id).map(|record| {

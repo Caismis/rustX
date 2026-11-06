@@ -1,3 +1,147 @@
+# Workflow nodes in Trajectory (2026-11-03)
+
+Workflow calls now keep their original Tool execution position and use the
+Workflow tag. A disclosure nests all admitted node visits in the existing
+Trajectory ledger, including repeated loop visits, with the same input/result
+columns and Inspector tabs. Tool-owned Workflow lifecycle roots no longer add
+blank duplicate rows. Scheduled runs retain their own named entry.
+
+The parent join requires the native Tool ID, exact call identity and native
+Attempt/Step. Native source headers resolve the parent from the original
+journal; displayed names and neighboring rows never establish ownership.
+Nodes come from original admissions, not the compiled graph or the bounded
+live Workflow snapshot. The collection is read in pages of at most 32 at its
+original cut and reuses the ledger's virtualization and keyboard navigation.
+Expansion retires with the Trace epoch and does not follow the list to its tail.
+
+New executions record the actual input scope (`args` and committed `variables`)
+and actual completion (`value`, `returned`, `port`) or execution failure. Each
+body is capped at 65,536 bytes; oversized capture is explicitly omitted.
+Assigner completion is recorded after the graph accepts its writes. These
+are diagnostic journal events and cannot change execution admission or outcome.
+Historical node admissions remain inspectable; missing original IO is shown as
+not recorded. Details read original advertised fields on demand and preserve
+large JSON integers. The UI never manufactures missing IO or inactive branches.
+
+# Current Harness interaction details (2026-11-03)
+
+The prior change aligned only the compact transcript card. The current sibling
+Harness also offers a separate Answer/View answers pill and a composer-owned
+read-only question panel. Native ask_user and Workflow Human Input now use that
+pattern: the leading disclosure opens the compact record; View answers opens
+the original choices, selected states, descriptions and Markdown preview in the
+questionnaire surface. Recorded panels have paging and Close, with no response
+channel or Submit/Skip actions. Answer reveals the exact existing pending form
+without replacing its draft. Closing a record restores the retained composer.
+
+The header carries the eyebrow/status and the scrollable body carries the
+question, matching the current QuestionFlow. Native index-based answers and
+partial submissions remain authoritative. The presentation panel is scoped by
+endpoint, authority and Conversation; a different Conversation retires the old
+read-only panel. Existing pending forms remain mounted while reading a record,
+so closing it or using Answer restores their original draft.
+
+Approval separates tool, reason and native arguments. Shell requests show the
+command directly; other requests retain their native argument content. A
+historical approval keeps its verdict in the compact row and its known reason
+in a structured detail section. It does not invent missing command arguments.
+
+# Workflow review question records (2026-11-03)
+
+Workflow Human Input history shares ask_user's verdict row and read-only question
+card. Pending rows show waiting; the existing Questionnaire owns answering.
+Settled records start folded, show answered counts or cancellation/interruption/
+timeout, and expand to the original Markdown questions and selected option labels
+once. Omitted answers remain unanswered. Rich questions own their Markdown
+whitespace instead of inheriting the plain-text question's pre-wrap.
+
+Receipts still pair by exact native Attempt and Interaction identity. Repeated
+visits of the same node stay separate. A settlement without its original request
+shows only the known answer count, without inventing questions or option labels.
+
+# Expanded Workflow process spacing (2026-11-03)
+
+The 16px nested completed-header boundary applies while that header is
+collapsed. Once its process is expanded, its last visible process row and the
+following Workflow use the standard 4px gap in both shared-entry and cross-entry
+layouts. A row's trailing-header role is independent of its leading User/body
+role, so a collapsed native header seated above Agent Status also owns 16px
+clearance. Status visibility and its trailing role use the same presentation
+facts; native placement and disclosure ownership stay unchanged.
+
+# Cross-entry completed-header spacing (2026-11-03)
+
+A collapsed entry that renders only its completed header carries the same
+presentation role as a standalone process header. The next visible native row
+receives 16px clearance even when its Workflow call is in a later entry.
+Retained hidden intermediate replies and invisible continuation markers do not
+consume that boundary. Native keys, anchors and mounted disclosure bodies stay
+in place. Ordinary process rows retain 4px and replies after visible process
+content retain 12px; a reply directly after the completed divider uses 16px.
+
+# Chat spacing audit (2026-11-03)
+
+Canonical entries and deferred original-content sections now use the existing
+flow layout. This gives an ordinary Tool followed by a native Workflow its 4px
+process spacing, and puts 16px below a deferred Turn header rather than letting
+the answer touch its divider. Deferred final responses use the native completion
+identity for their 12px response spacing. The settled boundary after a nested
+MessageSeat applies to following content generally, replacing the Workflow-only
+selector. Native order, source reads, disclosure visibility and scroll ownership
+remain unchanged.
+
+# Composer and Workflow display refresh (2026-11-03)
+
+Read-only reference: sibling DeepSeek Harness at
+`ce7073d51254c26cd63b22a60835b8f948deb447`, specifically `ui-conversation`'s
+`InputBar.tsx` / `.module.css`, `ui-primitives`'s `DisclosureRow.tsx` and
+`ui-workflow-run`'s `WorkflowRunPanel.tsx` / `.module.css`.
+
+The input card's empty padding focuses the existing textarea without resetting
+its selection or scrolling the reader. Coarse-pointer editors have a 16px font
+floor; pointer hover feedback only applies on devices with hover. The primary
+button shows a full-opacity progress ring and localized sending label while
+native message acceptance is pending. Duplicate sends remain blocked by the
+existing submission owner. Unsent and uncertain drafts stop showing progress
+and retain their existing recovery controls. Queue, Steer, Stop, attachment
+receipts, IME handling and per-Conversation draft ownership remain native.
+
+Workflow summaries use the current Harness disclosure content-layout props:
+title, dot, count and trailing status share explicit flex sizing and 6px gaps.
+Long names truncate beside the count and status, adjacent runs have a 4px gap,
+and budget labels wrap at readable word boundaries. Admitted member rows reuse
+the existing offline Iconify node-kind glyphs, with status dots beside the
+status text. Successful runs collapse on settlement; abnormal runs stay open,
+and focused one-shot Agent links retain their inspection/navigation owner.
+These changes concern Workflow execution inside Chat, not the graph editor.
+
+The settled divider also retains its 16px clearance when a Workflow panel is
+the sibling of an anchored MessageSeat. These native cards stay visible when
+the process is folded, so the spacing rule covers their actual sibling layout
+as well as direct process content; consecutive Workflow cards still use 4px.
+
+# Conversation flow refresh (2026-11-03)
+
+Read-only reference: sibling DeepSeek Harness checkout at
+`ce7073d51254c26cd63b22a60835b8f948deb447`, `ui-chat`'s
+`ChatView.module.css`, `ChatGroupSeat.module.css`, `TurnProcessNodeView.tsx` /
+`.module.css`, `ReasoningRow.tsx`, and `ui-primitives`'s `DisclosureRow`.
+Process rows now keep a 4px rhythm, with 12px reply and 16px Turn separation.
+Provisional and canonical reply seats share the same response role. Hidden
+process seats keep their mounted state without contributing a gap; the first
+reply inside a seat uses its outer spacing rather than adding it twice.
+The running status uses a fixed 28px row plus 4px internal clearance; its
+divider is painted outside layout, matching the completed action-row footprint.
+Only a settled native Turn has a duration header. Missing end timestamps do
+not start a browser clock; completed duration digits use tabular code type.
+
+Disclosure summaries shrink beside their icons without clipping the row.
+Keyboard focus reveals the disclosure affordance and Tool inspection action;
+touch inspection is visible without hover. Unchanged reasoning rows are
+memoized while native streaming updates the rest of the transcript. Native
+message identity, process membership, history and the single scroll owner are
+preserved. All presentation remains derived from native observations.
+
 # Incremental Session projection and Chat ownership (#420)
 
 `protocol/app-server/projection.ts` folds native events below React. The connection
@@ -340,8 +484,8 @@ no-overwrite rules, mutable file semantics, fork copies and deletion recovery.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v52 (`rustx.app-server.v52` and generated
-`protocol/app-server/v52.ts` / `v52.schema.json`). v12 and earlier initialization and
+The mandatory App Server vocabulary is v73 (`rustx.app-server.v73` and generated
+`protocol/app-server/v73.ts` / `v73.schema.json`). v62 and earlier initialization and
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -438,7 +582,7 @@ exact aggregate generation. Failed requests with evidence remain included.
 Immutable bootstrap provenance preserves response timing and usage through
 Branch/Fork/reopen/deeper lineage without copying source execution records.
 Destination execution totals remain destination-local. Mandatory versions are
-App Server v52, Runtime Client v73, SQLite v61, and Session catalog v16, with no
+App Server v73, Runtime Client v81, SQLite v82, and Session catalog v18, with no
 old protocol artifacts or compatibility readers.
 
 Projection cost is currently O(J + R): indexed 128-event batches over the captured
@@ -499,7 +643,7 @@ the existing transaction coordinator. A confirmation gates elevation. The source
 controls future admission; an already-admitted Attempt remains frozen. Composer
 model intent is different: it never authors the Workspace default model.
 
-App Server v52 / Runtime Client v73 project one `turn_process` owner on exact
+App Server v73 / Runtime Client v81 project one `turn_process` owner on exact
 canonical Assistant and Tool members. Native Journal identities, whole-process
 counts and an immutable control cursor survive unsuccessful settlement and
 bounded paging. Failed/stopped processes stay open; successful final-answer,

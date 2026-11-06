@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v52';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v73';
 import { SessionLifecycles } from '../src/client/session-lifecycle/system';
 import { controlCurrent, type LifecycleContext } from '../src/client/session-lifecycle/machine';
 import type { Admission, Attached, FailureKind, SessionLifecyclePort } from '../src/client/session-lifecycle/port';
@@ -143,6 +143,7 @@ it.each(['normal', 'release', 'closed', 'release-and-closed'])('Switch native co
   const work = h.command('switch', 'B'), call = await h.next('switch');
   const release = phase.includes('release') ? h.command('release') : undefined;
   if (phase.includes('closed')) h.system.event('S', { type: 'ROUTE_CLOSED', target: old.target });
+  expect(h.facts.error).toBeUndefined();
   const before = h.facts;
   await expect(h.command('delete')).rejects.toThrow('Node switch');
   await expect(h.command('open', 'A')).rejects.toThrow('Node switch');
@@ -151,6 +152,14 @@ it.each(['normal', 'release', 'closed', 'release-and-closed'])('Switch native co
   expect(h.facts).toMatchObject({ nodeId: 'B', nodeConversationId: 'conversation-B', attachment: 'detached', attachmentIntent: release ? 'released' : 'wanted' });
   expect(h.context.selection).toEqual({ node: 'B', conversation: 'conversation-B' });
   expect(h.resident).toBe('conversation-B'); expect(h.claims.size).toBe(0); expect(controlCurrent(h.context, old)).toBe(false);
+});
+
+it('an unsolicited claim closure still exposes recovery and revokes control', async () => {
+  const h = new Harness(), old = await h.attached();
+  h.system.event('S', { type: 'ROUTE_CLOSED', target: old.target });
+  expect(h.facts.error).toContain('Session connection closed');
+  expect(h.facts.target).toBeUndefined();
+  expect(controlCurrent(h.context, old)).toBe(false);
 });
 
 it('Switch pre-send revocation cannot enter native dispatch and cannot lose its Delete exclusion', async () => {
@@ -360,4 +369,23 @@ it('Switch Host admission retirement retains the original claim without dispatch
   const refusal = expect(work).rejects.toThrow('Switch admission retired before dispatch');
   await h.hostEntered.promise; current = false; h.host.resolve(); await refusal;
   expect(controlCurrent(h.context, original)).toBe(true); expect(h.facts.target).toBe(original.target); expect(h.calls.map(call => call.kind)).toEqual(['attach']);
+});
+
+for (const reconnectFirst of [false, true]) it(`an acknowledged Attach survives an obsolete observation failure (${reconnectFirst ? 'reconnect queued' : 'reconnect later'})`, async () => {
+  const h = new Harness(), entered = deferred<void>(), observation = deferred<void>();
+  h.port.observeAttached = async () => { entered.resolve(); await observation.promise; };
+  const open = h.command('open', 'A'), rejected = expect(open).rejects.toThrow('uncertain');
+  h.ack(await h.next('attach')); await entered.promise;
+  h.loss(); h.restored();
+  if (reconnectFirst) h.system.reconnect();
+  observation.reject(new Failure('uncertain')); await rejected;
+  expect(h.facts.attachmentIntent).toBe('wanted');
+  expect(h.context.unresolved).toBeUndefined();
+  if (!reconnectFirst) h.system.reconnect();
+  h.port.observeAttached = async () => {};
+  const next = await h.next('attach', 2), recovered = h.system.waitForOpen('S');
+  h.ack(next); await recovered;
+  expect(h.facts).toMatchObject({ attachment: 'attached', attachmentIntent: 'wanted' });
+  expect(controlCurrent(h.context, h.facts.attachmentObservation)).toBe(true);
+  expect(h.system.diagnostics().operations).toBe(0);
 });

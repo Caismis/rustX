@@ -105,7 +105,15 @@ An occurrence and its active lease must both be current before bytes or derived
 content can publish. Closing, hiding or replacing their scope retires the lease;
 reopening the same exact source cannot adopt the old occurrence's completion.
 At most two selected visible preview bodies own resources, and hidden tabs own
-no workers, URLs or bytes. Office derivation remains one active Host operation.
+no workers or URLs. Versioned payloads may remain in the shared eight-entry /
+64 MiB inactive cache; reactivation reauthorizes and checks freshness before
+exposure. Close, scope/permission retirement, version change and eviction purge
+incompatible bytes. Refresh remains enabled during reading and records the latest
+intent immediately; its successor cannot start until the old physical read ends.
+Automatic refresh uses exact target observations and authorized version probes,
+never periodic polling or next-page-only detection. Host/native observation
+admission remains bounded at 32 targets with physical teardown before reuse.
+Office derivation remains one active Host operation shared by both preview entry points.
 Cancellation removes waiting demand immediately but releases an admitted permit
 only on proven physical settlement. In particular, the private native file-read
 socket joins its canceled read before acknowledging clean close; unknown transport
@@ -149,11 +157,12 @@ One that overlaps the step waits for the acceptance and is ordered after it. Nei
 lock spans a suspension or an I/O wait. The request still answers exactly once, with a
 typed failure for the same id, after its native work physically settled. A response
 published before cancellation or revocation stands and is never reported as
-unpublished. The Product Host lane publishes through the same owner and order. The TUI client reserves one of a connection's
-16 in-flight request slots for `delivery/cancel` and sends cancellations through it
-in abort order, so ordinary requests can neither block a cancellation nor make it a
-seventeenth request. A refused cancellation ends the connection rather than
-disappearing. In the TUI each `/files` interaction owns its
+unpublished. The Product Host lane publishes through the same owner and order.
+The connection has 50 finite request associations: 32 attachment lifecycle waits,
+eight observation, six ordinary RPC, two Session metadata and two reserved controls. The TUI sends
+`delivery/cancel` through the shared control lane in abort order; other lanes
+cannot consume its positions. A refused cancellation ends the connection rather
+than disappearing. In the TUI each `/files` interaction owns its
 Save/Open: retiring it (Escape, overlay close or replacement, Session focus change,
 snapshot replacement, disconnect, shutdown) cancels the native request and every
 uncommitted local effect. A Save, the same on Linux and macOS, creates one staged
@@ -303,6 +312,183 @@ Pre-1.0 development does not preserve compatibility with previous runtimes, lega
 
 ## Core ownership
 
+Native auxiliary capacity is acquired without waiting, process before
+Conversation, and all partial reservations unwind on refusal. A short
+process-wide critical section covers the complete composite reservation and
+rollback, so competing Conversations cannot observe temporary exhaustion from
+a reservation that will be refused locally. It contains no I/O or capacity
+wait. Failed reservations emit no capacity change; native permit release
+notifies only after every retained slot is available, avoiding self-waking
+admission loops. Each process
+has 32 total and 24 general Call slots; each Conversation has four total and
+three general slots. Only native Compaction admission can use total capacity
+without a general slot. Attribution strings grant no protected authority.
+Every admitted Call also reserves its serialized required-write responsibility.
+Native owners retain these resources through physical work and confirmation;
+reply receivers and observers never own their release.
+
+Each Call has at most three physical request starts. Technical retries retain
+the same frozen semantic input, invocation, selected occurrences and captured
+media; they never renew the original five-minute authority. Retry-After is never
+shortened: a required delay over 60 seconds or beyond the original deadline
+declines retry. Failure observation precedes local stream teardown, and both
+teardown and confirmed settlement consume the same absolute backoff. A fresh
+RequestId, fold, guard, Timing and Usage accumulator belong to every request.
+Unresolved local persistence forbids another dispatch. Observed Usage aggregates
+once per RequestId while retaining missing metrics and remote uncertainty; a
+successful last request cannot turn that subtotal into a complete remote bill.
+
+An auxiliary required-write scope shares the existing ConnectionOwner and its
+native manifest/append-certificate ownership. Cancellation wakes its connection
+waiter and interrupts SQL only while that exact lease generation remains
+active. A delayed signal cannot interrupt a successor Agent lease. Existing
+settlement and confirmation use uncancelled Store authority. The Call's writer
+owner retains the exact submitted intent, completion evidence and real thread
+join; a lost reply cannot release its permits or establish noncommit.
+
+One Compaction budget spans all input shrink, technical retry and carryover
+re-entry, including repeated entry in one logical Agent step: twelve
+confirmed or unresolved starts, three shrinks and one five-minute monotonic
+deadline. Its learned Summary input limit is retained across re-entry and
+reduced atomically with its shrink count; carryover degradation cannot restore
+the configured limit or charge again for the same reduction. A matching Store receipt confirms a start; only Store-proven
+noncommit refunds it. Dropping a reservation preserves logical uncertainty
+without retaining an execution permit. Capacity, deadline, supervision and
+required-durability failures retain typed distinctions from rejected Summary
+content.
+
+The Summary operation owns that budget; every input replan obtains the same
+accounting object. Its monotonic clock domain must match the native executor.
+Checkpoint authorization checks the parent cancellation/close fence and
+absolute deadline together, after native children have exited. A late
+cancellation cannot rewrite an already-sealed model outcome, but can still
+refuse the dependent checkpoint.
+
+Automatic Title uses the exact first local ordinary Human and its retained
+usable-text outcome; a preview, maximum timestamp, inherited message or later
+Human cannot substitute for that identity. Source/capacity watches precede
+authoritative reads. Only one current Call can bind a source. A confirmed
+zero-request terminal releases only its own association; the first confirmed
+request permanently consumes automatic eligibility and only that live Call may
+use its remaining technical attempts. Restart never replays inference or output.
+Title preserves the resolved invocation's generation budget and provider
+parameters, with whole-generation safety bounds separate from the final label
+limit of 120 characters / 480 UTF-8 bytes. Lifecycle Busy reserves no capacity
+and waits for an actual boundary unlock; coalesced external capacity releases
+cannot cause repeated source reads while that boundary remains occupied.
+Title retains native business ownership through the separate Catalog commit.
+Manual names and deletion win; an already-visible generated title survives a
+committed-error response and publishes summary invalidation. Catalog publication
+changes neither model revision nor latest-Human activity. Clone/Fork copy saved
+labels independently of the historical cut and never copy execution or quota.
+
+Native auxiliary acquisition and waits follow this graph:
+
+- Admission: short durability state, nonblocking lifecycle admission, then
+  nonblocking process/Conversation/write reservations, cancellation grant,
+  parent Scope and registry publication. No SQL or provider wait occurs here.
+- Ownership start: await the owned durability permission outside coordinator
+  and registry locks; enqueue the retained exact intent under the cancellation
+  grant; the dedicated writer acquires ConnectionOwner and runs SQLite.
+  Request start allowance precedes that submission. Cancellation first wins
+  without submitting; a confirmed start remains charged even without dispatch.
+- Dispatch/success seal: the native owner thread enters lifecycle, short
+  durability state, cancellation grant, parent Scope and Call state. No await
+  or SQL splits the winning decision from its one-shot consumption.
+- Settlement/confirmation: retained write responsibility enters ConnectionOwner
+  directly, including after DurabilityFailed. Neither cancellation nor healthy
+  admission can remove an existing obligation.
+- Retirement: join the write/confirmation thread, join the owner thread,
+  confirm obligations or retain the exact intent under proven-exited native
+  failure, release permits/admission, retire the child, then deliver its result.
+  The process provisions 32 retirement workers before any owner starts;
+  together with at most 32 owners and 32 writers, auxiliary threads are bounded
+  at 96. Receiver ownership ends before joining. One unexited owner retains
+  its actual join and allocation without blocking another Conversation's
+  retirement. Neither handoff nor a completion flag proves physical exit.
+  After the actual joins and exact settlement, release every Call-owned Store
+  reference before releasing admission or exposing retirement/completion. A
+  parked retirement worker cannot keep a completed allocation locked.
+
+Failure registration under the coordinator takes only DurabilityGate's short
+state mutex. Coordinator idle probes treat a held lifecycle commit boundary as
+busy instead of waiting for its writer. A pending winner refuses later work
+while an earlier writer finishes. Permission exit commits/publishes that first winner exactly once,
+without holding the gate mutex or a SQL lease during the native callback.
+Inbound durable acceptance and model-selection persistence retain their own
+nonblocking gate permission throughout the coordinator's decision, write and
+publication. A failure requested by auxiliary cleanup waits for every earlier
+ownership/coordinator permission to exit before publication, without blocking
+the process reaper on coordinator SQL. The durable commit, not a preliminary
+health read or the later response delivery, determines the order.
+KnownNotCommitted describes transaction certainty, not Store health. A genuine
+required storage failure reaches the native durability authority even when
+RequestStarted rolls back, its budget allowance is refunded and Call-only
+Failed settlement succeeds. The first required failure survives that cleanup.
+Typed cancellation and benign start validation refusals do not poison health.
+SQLite interruption identity survives every required-start SQL adapter,
+including Historical resource-cut and projection-activation boundary checks,
+shared Request Snapshot orphan/start-event probes and the Journal frontier
+lookup; cancellation never masks an independent Storage error, even when
+cancellation is observed before that failure is delivered to the owner.
+An interrupted pre-COMMIT transaction with native SQLite auto-rollback is
+known noncommit only when no subsequent SQL escaped that original transaction;
+an uncertain COMMIT or rollback remains an obligation. Optional observation
+writes may degrade only after successful savepoint rollback/release with the
+original outer transaction still intact. Typed cancellation, an aborted outer
+transaction or failed savepoint cleanup propagates immediately through every
+nested optional writer and prevents further authoritative SQL. Savepoints
+must never create a replacement outer transaction. Journal head, event/audit
+rows, Canonical Ledger, Surface and transcript coordinates commit atomically;
+rolled-back frontiers cannot be published as committed. SQLite interruption
+retains its typed cause even through observation serialization writers.
+
+General work cannot select protected capacity by supplying a purpose string.
+
+A failed native drain may prove physical exit while retaining logical
+durability uncertainty. The manager must still join projection owners and
+release the old composition in that case, return the failure, and remove its
+writer-absent registry entry so a later load can attempt exclusive recovery.
+An unproven physical exit must retain isolation. Neither failure is promoted
+to successful quiescence, and recovery never redispatches an old RequestId.
+
+Cancellation winning Summary operation admission settles the Agent Attempt as
+cancelled with its native reason. It emits neither CompactionFailed nor
+AttemptFailed, including when compaction was recovering a provider overflow.
+Capacity and lifecycle-boundary refusals both arbitrate under the cancellation
+grant: completed cancellation cannot become Busy when Call slots are occupied
+or another native commit holds the lifecycle boundary. Active, uncancelled
+admission still returns Busy without waiting for capacity or the commit lock.
+
+One auxiliary generation folds the same canonical ordering as Agent output.
+It refuses tools and more than 4096 content blocks, discards validated native
+continuation/reasoning state, and never modifies primary continuation or usage.
+UsageUpdate replaces the prior cumulative snapshot. Missing final usage
+retains the latest partial value; absence never becomes zero. Illegal tail
+events cannot change trusted evidence. A local timeout, transport error or
+cancellation does not assert provider termination or remote execution certainty.
+
+A structured Auxiliary Call freezes exactly one caller-owned bounded schema,
+output byte budget and effective capability before start. The sole capability
+`json_schema_output` means API-enforced JSON Schema for the declared model,
+protocol and endpoint. It never opts an ordinary text consumer into structured
+output. Native capability selects native constraints; its absence selects a
+trusted schema-specific prompt. Both share full-value parsing and local
+`jsonschema` validation after physical settlement. Invalid JSON, extra text,
+refusal, missing required properties, unexpected properties, incomplete output
+and exceeded budgets cannot become a typed accepted result or business commit.
+Native rejection never causes a prompt-mode retry. Technical retries retain
+the exact prepared request, fingerprint, invocation and resource revision.
+
+Manual maintenance keeps an actual native task join. Reply waiter loss does
+not release its native lifetime or lose the checked-out conversation. The
+native-tail manager path releases its OperationLease immediately after native
+admission/transfer and waits for the exact receipt outside that lease. The same
+path owns Job and Agent terminal observations: Host request capacity remains
+counted, while read-state-only waiters retain no Runtime, Store or allocation.
+Short managed mutations keep their lease until completion, so unload joins them
+before native shutdown without joining observers that need shutdown to finish.
+
 The agent kernel owns agent execution semantics. Provider SDKs, MCP SDKs, storage clients, HTTP frameworks, and control-plane schemas must not define kernel types.
 
 ## Native durable authority (M8 / Issue #11)
@@ -375,6 +561,18 @@ cannot prove a complete handoff. Version 21 and every older development
 schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
+
+SQLite schema 85 binds request fingerprints to the native JSON Schema capability
+and the per-Call prepared response schema and strategy. These semantics also
+change fingerprints for text requests. Schema 84 also admits bounded native
+`WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities, plus
+`WorkflowNodeInputRecorded` / `WorkflowNodeOutputRecorded` and their data-node kinds.
+Exact run/type/sequence and full-instance/type/sequence indexes bound Workflow
+trace lookups to the selected run and visit, including absent I/O and terminals.
+Stores from schema 83 or earlier fail with
+`SchemaVersionMismatch` at open, before historical reconstruction; no legacy
+fingerprint comparison, migration or compatibility reader is available.
+The Event envelope remains version 1; its framing did not change.
 
 The durable request-start invariant is strict: the provider adapter cannot be
 called until the Request Snapshot and exact `ModelRequestStarted` Event
@@ -1283,7 +1481,8 @@ must still be refused.
   every value the domain can hold, so an answer or a bound can always be read
   back from the Event Journal or by a reconnecting client;
   `FiniteNumber::from_wire` is the one authoritative parse, and
-  `tui/src/protocol/number.ts` is the client's one conversion seam. `-0.0` is
+  `protocol/app-server/number.ts` is the clients' one shared conversion seam
+  (Web and TUI). `-0.0` is
   **canonicalized to `+0.0`** at construction, so one semantic value has one
   bit pattern and one spelling, and `"8000000000000000"` is refused as
   non-canonical the way `ExactInteger` refuses `"-0"`. The client's own
@@ -1373,11 +1572,12 @@ never interaction facts.
 
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
-and Attempt capture. Explicit context adoption requires an idle Session and the
-inspected candidate/binding revision. Existing Attempts and every derived request,
+and Attempt capture. Prepared context, capability and model candidates commit
+automatically at the Session's safe boundary under the admission lock, fenced by
+the scope's desired application epoch. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
-[configuration application](configuration.md#save-automatic-application-and-session-adoption).
+[configuration application](configuration.md#save-and-automatic-application).
 
 The one control-capable Runtime Client attachment is the 0.1 interaction
 provider; read-only inspection attachments never provide interaction
@@ -2305,6 +2505,13 @@ second authority:
   keyed by tool call (a settlement push evicts the queued progress of
   that call). At the Runtime Client boundary the projection surfaces
   through `AgentUpdated` events and `snapshot.agents`.
+- **Agent details have one read owner.** Public status, collection pages,
+  identity pages and selected values use the native registry at their captured
+  collection cut. Projection owns its working snapshot, published snapshot and
+  replay, but retains no redundant Agent detail source. Activity acceptance
+  uses the current working activation/lifecycle/revision even when a native
+  source-prefix gap delays publication. Another Agent's valid activity is
+  never rejected solely because the collection generation advanced.
 - **Only superseded observations are coalescible.** Lifecycle,
   cancellation, and terminal publication stay reliable and exactly-once;
   activity delivery is latest-value: a watch overwrite or a replay-ring
@@ -2333,7 +2540,7 @@ second authority:
 - **The execution profile is safe by construction.**
   `SubagentExecutionProfile` is derived exactly once from the frozen
   `ResolvedSubagentSpec` model the child actually started with and carries
-  only the effective model identity and the reasoning selection — never
+  only the effective model identity and the selected Model Profile — never
   credentials, endpoints, or provider internals. Every status and
   observation surface is diagnostics-only: the successful terminal answer
   has exactly one delivery channel, the canonical durable terminal inbound
@@ -2469,6 +2676,13 @@ ownership commits. Global invocation policies remain global, not profile prose.
   degradation, and it happens before the child answers `Ready` — therefore
   before any durable ownership commit. The child starts with exactly the
   authority it was authorized with or it does not start.
+- **Resource authority is frozen independently of ordinary Tools.** A selected
+  resource-only source contributes its typed identity and exact binding even
+  when it contributes zero ordinary Tools. Child preparation verifies negotiated
+  Resources support on its own required runtime before composing the native
+  helpers. Missing bindings or removed support fail admission and settle all
+  prepared siblings; an `Exact` Tool selection cannot inherit resource access
+  from a parent or another selected source.
 
 ### MCP cross-process identity
 
@@ -2548,20 +2762,21 @@ ownership commits. Global invocation policies remain global, not profile prose.
   state: the invoking attempt's cancellation and parent control-channel EOF.
   Parent EOF is observable *while* composition is in progress, so a child
   never finishes a long MCP preparation for a parent that is already gone.
-- **There is exactly one cancellation authority of a pre-commit
-  preparation.** The invoking attempt's `ToolExecutionContext` cancellation
+- **Child invocation cancellation and coordinator build cancellation have
+  distinct scopes.** The invoking attempt's `ToolExecutionContext` cancellation
   derives the one preparation `CancellationSignal` (parent side), the
   `ParentFrame::Cancel` consumed during composition cancels the child's one
   preparation signal, and parent control-channel EOF is itself a physical
   cancellation authority that fires the same signal. That authority reaches
-  every supervised process unit of preparation — the MCP connect owners,
-  including a synthesized `python:<folder>` server's supervised stdio launch
-  — so cancellation is never inferred from a dropped
-  future: the unit is physically cancelled and settled, and only then does
-  the preparation outcome arrive. (The parent runtime's candidate preparation
-  applies the same discipline to its Python runtime-identity probes and uv
-  lock/sync builds, whose owner task captures the establishing preparation's
-  authority, so #153 waiters never cancel shared builds.)
+  each candidate-private MCP connect owner, including a synthesized
+  `python:<folder>` server's supervised stdio launch, so connection cancellation
+  is never inferred from a dropped future: the unit is physically cancelled and
+  settled, and only then does the preparation outcome arrive.
+  Python runtime-identity probes and fingerprint-coalesced uv lock/sync builds
+  belong to their coordinator's conversation lifecycle. Cancelling one candidate
+  prevents its private MCP continuation without cancelling a shared build needed
+  by another candidate. Coordinator drain cancels those shared supervised units
+  and retains their ownership until physical settlement.
 - **Once pre-commit cancellation has won, `Ready` is impossible.** A Cancel
   event sets the child's preparation signal before any settlement decision;
   the guarded preparation path then refuses to publish a candidate from a
@@ -2761,9 +2976,9 @@ ordinary inbound task content, never a way to change that admitted profile.
   unrecoverable publication keeps the Agent unavailable. In-process resume is
   arbitrated by the registry reservation (one winner); cross-process exclusion
   is the parent physical lease.
-- **Retired formats are refused.** The current SQLite 69, child IPC 33,
-  Runtime Client 71 and App Server 50 gates include the subsequent bounded
-  observation changes (#467) and refuse earlier stores and peers. Authoring a `worktree`
+- **Retired formats are refused.** SQLite, child IPC, Runtime Client and
+  App Server each refuse earlier stores or peers at their own version gate.
+  Authoring a `worktree`
   table on an Agent profile or a `workspace` key on a Workflow is rejected.
 
 ## Subagent recovery-semantics conformance (Issue #138)
@@ -2882,8 +3097,8 @@ the launch-boundary policy inheritance.
 ## Issue #83: native YAML WorkflowRuntime
 
 - **YAML is serialization only.** A discovered
-  `.agents/workflows/<id>.yaml` deserializes into `WorkflowDefinition`, is
-  compiled and validated once into an immutable `WorkflowProgram`, and is
+  `.agents/workflows/<id>.yaml` deserializes into `WorkflowFileDocument`; only
+  its executable `WorkflowDefinition` is compiled and validated once into an immutable `WorkflowProgram`, and is
   never interpreted by the execution path. The canonical filename is the only
   identity. Discovery and a YAML `name` field cannot grant admission.
 - **Agent resources have two fixed ownership roots.** User resources live at
@@ -2953,8 +3168,8 @@ the launch-boundary policy inheritance.
   JSON-compatible values and explicit artifact/reference identities cross
   nodes. An Agent's transcript, reasoning, diagnostics, provider/model
   identity, usage, timing, and parent canonical history never propagate
-  implicitly. Agent tasks are fixed strings and references do not contain an
-  interpolation or expression language.
+  implicitly. Agent tasks and Model messages are fixed text and explicit
+  references; there is no interpolation or expression language.
 - **Agent reasoning and control flow are separate.** Agent invokes one
   Workflow-admitted named Subagent profile with its frozen native resources;
   Branch consumes typed boolean/equality/composition predicates and chooses
@@ -3007,6 +3222,13 @@ the launch-boundary policy inheritance.
   phase. A crash does not replay a nonterminal WorkflowRun; durable Workflow
   resume is intentionally absent. A future Canvas can edit the same canonical
   Definition without adding layout metadata.
+- **Historical node activity requires a live owner.** A Workflow node admission
+  without a durable terminal is `incomplete`, including recorded waits. Only
+  the exact resident runtime, current published read cut and complete node
+  instance identity may overlay running/waiting. Retained settled projections
+  cannot create activity or overwrite a persisted terminal or an older cut.
+  The overlay queries the complete immutable Workflow source retained by that
+  publication; finite display headers cannot establish absence of activity.
 
 ## CFG3 configuration, resource and Session authority
 
@@ -3026,26 +3248,48 @@ enters existing lifecycle owners. Named omitted model inherits the invoking
 Attempt's frozen model. Root delegation is its explicit Agent allowlist, never a
 Root Tool/Plugin ceiling.
 
+Independent admitted MCP and managed Python preparation shares a fixed bound of
+four per coordinator across candidates and package/connection phases. Completion
+order never determines registrations, availability, diagnostics or publication.
+Candidate cancellation races each pending semaphore acquisition. Unstarted
+sources leave the queue without waiting for unrelated candidates to make
+progress; they start no probe, build or MCP connection and release no occupied
+sibling permit. A wholly queued candidate settles and releases its counted
+admission independently of occupied sources. Started source futures keep
+their slots and counted ownership until physical settlement or candidate
+transfer. An in-flight catalog reconnect is never stopped by dropping its
+connection future.
+
+The existing fingerprint-keyed Python store has one coordinator-lifetime build
+domain. Its runtime probes and physical builds observe the coordinator's
+conversation cancellation root. Dropping candidate A leaves a shared build
+available to candidate B; A waits for its admitted build work to settle and then
+refuses its own private MCP continuation. B may complete with a Ready, usable
+source from that one physical build. Conversation-wide drain cancels the shared
+build owner, starts no queued work, and retains source permits and lifecycle
+admissions until every supervised unit physically settles. Required child
+failure settles every successful sibling without publishing a partial registry.
+The epoch-before/list/epoch-after check and atomic commit epoch validation remain
+the authority for rejecting stale MCP candidates.
+
 Native configuration application publishes independently valid, complete units.
 The source/application fence and runtime gate order publication against new input
-and Attempt capture. Explicit context adoption requires an idle Session and the
-inspected candidate/binding revision. Existing Attempts and every derived request,
+and Attempt capture. Prepared context, capability and model candidates commit
+automatically at the Session's safe boundary under the admission lock, fenced by
+the scope's desired application epoch. Existing Attempts and every derived request,
 Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
-[configuration application](configuration.md#save-automatic-application-and-session-adoption).
-
-Configuration application and adoption eligibility are separate domains:
+[configuration application](configuration.md#save-and-automatic-application).
 
 ```text
 ConfigurationApplication publication is configuration-domain state.
-Configuration adoption eligibility is runtime-domain advisory state, published
-by the live runtime on its Runtime Client snapshot only when it changes.
+A superseded candidate never commits after a newer desired application.
+Every committed binding change records exactly one configuration_applied fact.
 Runtime Client snapshot identity is never a configuration invalidation signal.
-Native adoption revalidates eligibility at the actual commit boundary.
 Ordinary streaming Runtime Client deltas cause no Session-configuration RPC.
 ```
 
-See [Session configuration adoption eligibility](app-server-protocol.md#session-configuration-adoption-eligibility-v35).
+See [Automatic Session configuration commit](app-server-protocol.md#automatic-session-configuration-commit-v63).
 
 Session/Node/Conversation/ToolExecution identities are typed UUIDv7, allocated with
 collision/no-overwrite checks. Semantic order uses explicit metadata. The fixed
@@ -3175,6 +3419,25 @@ A package rewrite is observed only at the next quiescent re-discovery.
   scheduling remain `ToolExecutionPolicy` and `ToolConcurrencyPolicy`, and
   all origins use the canonical Agent Loop, progress, cancellation, and
   background paths.
+- **MCP Resources have a negotiated zero-or-three Tool contract.** Only a ready
+  source with negotiated Resources support and the profile's `All` selection
+  enters that profile's resource authority. `Exact` selection, configured or
+  pending source hints, and Workflow-only demand grant none. One or more eligible
+  sources compose exactly one group of `list_mcp_resources`,
+  `list_mcp_resource_templates`, and `read_mcp_resource`; zero compose none.
+  A resource-only peer is valid without an ordinary Tools catalog. Helper names
+  are reserved native identities and cannot be supplied by a remote catalog.
+- **Resource facts and authority publish atomically with the capability
+  snapshot.** Negotiated support and exact runtime bindings follow the existing
+  catalog epoch, candidate validation, last-good and adoption boundaries. A
+  changed authorized source set is a real capability change even when helper
+  names and schemas remain identical. Resource-only authorized sources retain
+  manifest provenance; attempts keep their captured authority and runtimes.
+- **Resource discovery never injects content into Context.** Capability
+  preparation does not fetch resource lists or bodies. Only an explicit helper
+  call reads resource data, through the ordinary Tool execution, cancellation,
+  result normalization and canonical Tool message path. It starts no separate
+  model turn and creates no alternate Context channel.
 - **MCP configuration ownership.** `mcpServers` is an ecosystem-compatible
   named map keyed by `McpServerId`; the key is the one authoritative
   identity. Configuration parsing owns validation and normalization, and the
@@ -3221,7 +3484,7 @@ A package rewrite is observed only at the next quiescent re-discovery.
   selecting a revision: protocol compatibility is not session product
   configuration.
 - **rustX's committed capability snapshot is the only semantic cache of MCP
-  tool availability.** The layering is `remote peer -> fresh protocol
+  tool availability.** Ordinary discovery follows `remote peer -> fresh protocol
   response -> adapter translation -> prepared candidate -> invalidation-epoch
   validation -> capability commit -> canonical tool snapshot`. The MCP SDK is
   transport and protocol machinery inside that chain, never a second
@@ -3235,11 +3498,150 @@ A package rewrite is observed only at the next quiescent re-discovery.
   crosses it. Every connection generation inherits the policy by
   construction, replacement generations from bounded reconnection included;
   there is no rustX configuration switch, feature flag, or compatibility mode
-  that re-enables it, and no `tools/list` call site clears or reconfigures a
-  cache of its own. A positive `ttlMs` therefore never suppresses the next
+  that re-enables it, and no `tools/list` call site clears or reconfigures an
+  SDK response cache. A positive `ttlMs` therefore never suppresses the next
   refresh's request, and a failed refresh is always observed as the failure
   it is — which is precisely the fact the capability plane needs to retain
-  the exact old configuration generation, including source bindings and policies.
+  the exact old configuration generation, including source bindings, policies
+  and successfully validated empty catalogs.
+- **Initial MCP declarations require live readiness.** Only the finite selected
+  Root/enabled-Workflow source-demand closure starts preparation, with the shared
+  four-source concurrency bound. Every successful source has negotiated the
+  protocol, discovered every tool page, passed canonical registration validation
+  and retained a stable invalidation epoch. A fresh Conversation owns its own
+  connections. There is no process-wide catalog-hint cache, speculative tool
+  advertisement, or cached Connecting state. A valid empty catalog is successful.
+  Pending discovery is never evidence that an exact selected name is absent;
+  live-confirmed absence and duplicate identities retain ordinary validation.
+  Optional Root terminal failures preserve healthy siblings and native tools;
+  affected Workflows are disabled with diagnostics; frozen child contracts remain strict.
+- **One initial batch has one submission-triggered budget.** Mere preparation,
+  Session creation and client attachment do not start an owner-level elapsed-time timer.
+  Native captures the first submission intent's monotonic receipt before any
+  MCP-dependent load, attach, claim or readiness wait, then uses checked addition
+  with the resolved positive `mcp_startup_policy.wait_timeout_ms` (default 15,000).
+  The absolute deadline covers remaining queueing, negotiation, complete listing
+  and validation. Joining, handoff, UI reconnect and revalidation cannot reset it;
+  subsequent ordinary messages within that initialization do not start another
+  budget. A cold Conversation load after unload creates a new physical
+  initialization with its own first accepted submission needing preparation;
+  it is not a per-message delay. Already-ready and no-MCP cases incur no
+  artificial delay. This policy is separate from model
+  response timeouts, Tool execution deadlines and protocol fallback timeouts.
+- **Durable executable recovery is already accepted intent.** A load/headless
+  entry captures a prospective monotonic receipt before metadata resolution or
+  allocation claim. Before any source preparation, including selected managed
+  Python, read-only existing RecoveryEvidence/RecoveryPlan recognition checks
+  Pending Inbox or a safe ContinueAdoptedTurn. Only that accepted executable work
+  arms the prospective receipt; empty/completed history alone remains unarmed.
+  Recognition cannot reconcile history or move bootstrap/replay ownership. An
+  earlier captured receipt learned after a later Send tightens the same absolute
+  deadline and wakes the existing waiter; no observation can extend it. Persisted
+  wall-clock age never substitutes for the native monotonic receipt.
+- **Register inert catalog observation before activation.** Manager observer
+  admission and conversion to counted resident ownership complete while the
+  runtime is inactive, outside registry/control locks. Loaded publication then
+  permits the future to consume revisions; an initialization that loses its
+  retirement fence drops that inert owner. Observer bookkeeping must not newly
+  acquire active preparation admission after Loaded, where it could refuse a
+  concurrent compaction. Resident ownership remains counted until observer
+  settlement and does not keep an otherwise idle runtime Busy.
+- **Cold navigation cannot hide submission intent behind Attach.** Ordinary
+  Session selection and History Return select the exact target's local draft
+  before readiness. Changing targets replaces the visible editor binding; returning
+  to the same History destination preserves it. Neither action sends input or
+  arms a deadline. Explicit Send independently proves Host authority and records
+  that target's node before waiting for Attach. Pending draft files remain local
+  until executable route publication, preserving the previous route's registered
+  intake and in-flight owners. Failure/cancellation cannot transfer them to another
+  Session; ordinary explicit single-editor replacement does not restore discarded
+  text on a later return.
+- **Viewport dismissal is not selected-target retirement.** A cold Session's
+  selected local route retains its exact preparation/publication owner across
+  drawer dismissal and Settings. The dismissed Pending identity revokes only
+  that gesture's right to close a later drawer. Attach can then promote the still
+  selected target without input or model work. New selection, explicit Cancel
+  and authority replacement retain their retirement fences; unselected
+  History/Fork preparation retains its separate cancellation boundary.
+- **Submission receipt precedes asynchronous target resolution.** The intent RPC
+  requires an exact Session node, shared with the subsequent attachment. Missing
+  node metadata is resolved through MCP-independent reads. Synchronous host
+  Control admission captures `(Session, node, monotonic receipt)` and immediately
+  registers it against compatible Loading work. A new flight consumes compatible
+  receipts under the manager registry cut before entry publication or source
+  work. Finite intent registration is FIFO; readiness is not serialized behind
+  it. The admitted request owns the receipt until registration settles; its RAII
+  release removes a weak index bounded by existing request owners. There is no
+  independent draft/Session lease or physical resource in that bridge. An
+  unpolled or dropped RPC waiter cannot postpone the accepted clock or abandon
+  its native registration job.
+- **Timeout is terminal initialization intent, not physical settlement.** An
+  expired or cancelled initializer cannot publish Ready later. It drives owned
+  stdio processes and HTTP requests through existing retirement/settlement, keeps
+  occupied preparation permits and resource counts until settlement is proved,
+  and retains honest diagnostics when that proof fails. Dropping a waiter never
+  proves cancellation or process exit. Drain fences activation and settles every
+  retained initializer, candidate and generation. Retained MCP resources permit
+  idle publication but remain part of physical quiescence.
+- **Loading retirement fences actual native admission and receipt reuse.** The
+  flight, resident and accepted receipts share one generic Initialization. Its
+  short control mutex orders retirement_requested with prepared-native-control
+  installation before activation, never SQL or native retirement. If no native
+  control exists, cancellation publishes before a publisher can install it. If
+  native control exists, retirement closes the ordinary native
+  PreparationRollback/drain lifecycle and admission boundary before publishing
+  the token, outside host, registry and initialization-control locks. The actual
+  Inactive-to-Running CAS uses the signal's short grant under the runtime
+  coordinator, released before recovery SQL/admission. Both cancellation before
+  CAS and native drain after CAS but before first admission prevent dispatch;
+  a request already dispatched remains owned through ordinary shutdown. Inactive
+  preparation settles before LoadingCancelled. Receipts bind only their exact
+  non-retiring initialization: failed A cannot carry its receipt onto retry B
+  and resurrect C after B unloads. Every Host begin_drain recollects existing
+  owners and fences native admission; new manager initialization is permanently
+  closed before the first inventory. Physical settlement stays counted after
+  fencing.
+- **Runtime MCP publication cannot park native admission.** The coordinator
+  captures finite pending facts before next-Attempt admission, then uses a
+  nonblocking native lifecycle commit grant. Busy retains the fact and defers
+  that existing admission; the worker awaits actual commit_available outside
+  the coordinator lock. Background ownership cannot park controls, and no
+  advisory eligibility poll, new input or automatic user-request retry replaces
+  that frontier. A later successful observation cannot be consumed by an older
+  capture. Admission that wins before an eligible fact freezes the entire
+  previous Attempt snapshot through every model step. Idle publication creates
+  no provider/auxiliary request or history edit. Unpublished physical owners
+  remain part of drain. Real request-shape/cache cost is reported.
+- **Runtime source authority is continuous and source-local.** Exact adopted
+  binding, selection and physical owner are checked together with a per-source
+  continuity token. X-to-Y-to-X cannot revive an old completion, even without a
+  live X connection. Unrelated Todo/context/model, sibling-source changes and
+  genuine no-op commits preserve another continuously authorized source. A pure
+  coordinator rebase retains eligible fresh retry R, the complete current adopted
+  non-MCP base and newer sibling S facts without I/O; it cannot overwrite a source
+  that advanced after capture or restore captured old context/model intent. All
+  five profile-composed Agent controls remain in that base, outside the ordinary
+  selectable catalog and independent of Workflow admission.
+- **Runtime publication does not adopt pending user intent.** Unadopted
+  instructions, source definitions/selection, environment, model/context and
+  other authored intent retain ordinary adoption rules and captured newer
+  intent. Their candidates revalidate against the new baseline. Superseded
+  source success and failure have no publication authority. Managed Python
+  admission retains its separate strict policy.
+- **Explicit refresh failure has source scope and chronology.** Failed refresh
+  retains the complete last-good snapshot and truthful execution failure. An
+  older queued success, unrelated sibling success or context-only adoption
+  cannot clear a newer explicit failure diagnostic. A genuinely newer successful
+  explicit whole-batch refresh clears it. Public Reconcile must admit that retry
+  for a retained failure under still-current runtime source authority, including
+  when an older success already made the source Ready with a current epoch;
+  stale-source diagnostics are not
+  transplanted onto new authority. No automatic endless retry scheduler exists.
+- **One Tool invocation validates one discovered transport.** Frozen-tool
+  validation retains the exact transport, epoch and full tools returned by live
+  discovery. It may establish one transport, but loss after discovery cannot
+  initiate another connection establishment within that invocation. It fails
+  before tools/call; only a later independently owned invocation may reconnect.
 - **Streamable HTTP protocol semantics stay rmcp's.** rustX supplies its own
   `StreamableHttpClient` for exactly one reason — a cancelled tool call must
   terminate, and prove the release of, its own in-flight HTTP request — and
@@ -3909,12 +4311,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   overlap — so runtime-private output files are not included in the default
   cwd-based Glob/Grep traversal. An explicit absolute host path remains
   subject to the ordinary native file-tool contract. The conversation's
-  managed tool-output root retains its own disjointness and composition
-  invariants: construction rejects a pre-existing symlink at the
-  `tool-output/` root and requires the canonical managed root to be a strict
-  dedicated descendant of the canonical artifact root, disjoint from the
-  canonical workspace root, so no authorized runtime root can ever alias
-  another.
+  managed tool-output namespaces are disjoint from artifact and workspace
+  roots. Namespace bindings, filesystem identities and ownership markers
+  authorize only those private temporary directories, never the temporary
+  parent. Symlinks cannot redirect allocation or transfer read authority.
 - All progress entering runtime state and events passes through one shared
   UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
   background registry produce the same normalized value, and an oversized
@@ -4274,6 +4674,20 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
 
 ### Protocol corruption
 
+- Every catalog health rejection of confirmed protocol corruption invokes the
+  existing poison/shutdown owner before returning. This includes the checks
+  before discovery, after listing and before invocation validation completes.
+  No `tools/call` effect is needed to request shutdown. Generation retirement
+  retains physical settlement ownership; a diagnostic, business-stream EOF or
+  execution-lease release alone cannot discharge it.
+- Source credentials are removed before protocol evidence is truncated. The
+  recorder owns this transport generation's captured `SourceCredentials`; it
+  redacts the original reason and offending line before retaining the bounded
+  previews. Classification and bytes delivered to rmcp stay unchanged. Runtime
+  health, poison and listing diagnostics are also redacted at their credential
+  owner before catalog rejection or a pre-dispatch failure can reach a generic
+  Tool result, canonical history or a model-facing projection. This boundary
+  applies even when `tools/call` was never created.
 - Confirmed protocol corruption stays fail-closed and unchanged: the
   generation is poisoned, the in-flight operation never synthesizes a
   successful result and never guesses correlation ownership, and the
@@ -4412,7 +4826,7 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   Foreground output at or below the threshold remains a direct result and
   creates no file. Once the complete deterministic representation crosses
   it, normalization lazily allocates exactly one result spill
-  (`tool-output/results/result_N.txt`, monotonic per-conversation sequence,
+  (`<temp>/rx-<16 hex>/r-<16 hex>.txt`, independent random names,
   `create_new`), writes the complete representation once, and publishes a
   bounded deterministic preview plus typed continuation metadata
   (`ToolExecutionResult::managed_output`, never a magic tool-JSON key,
@@ -4432,12 +4846,12 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   budgeted collectively, so UTF-8/JSON framing is never delegated to bounded
   subprocess stdout capture.
   A **background** execution instead owns one live-output channel from the
-  dispatch commit point on (`tool-output/tasks/exec_N.output`): the file is
+  dispatch commit point on (`<temp>/rx-<16 hex>/e-<16 hex>.output`): the file is
   allocated before the accepted result advertises its absolute path
   (`output_path`) with Read/Grep continuation guidance. Bash appends from the
   first byte; MCP writes its final complete deterministic result
   there when it becomes available. Accepted and terminal messages reuse the
-  exact same path, no secondary `results/result_N.txt` is created, and the
+  exact same path, no secondary `r-<16 hex>.txt` is created, and the
   terminal canonical projection remains bounded while structurally retaining
   the typed locator/guidance. An output-storage failure of an
   already-advertised background path settles as explicit `Partial`, never a
@@ -5097,13 +5511,30 @@ message role, history shape, or timestamps:
   the current generated protocol version is supported.
 - `ModelRequest.effective_system_prompt` is the sole System authority. It is
   rustX-rendered from ordered native/extension sections; canonical history
-  has no System role. Frozen project instructions occupy the
+  has no System role. Every primary Root and child Agent request starts with
+  the built-in rustX coding-assistant guidance in `CoreRuntimeIdentity`.
+  Agent and project instructions extend that baseline in their own lanes;
+  omitting either cannot remove it. Execution, manual compaction budgeting
+  and configuration comparison use the same static System input. Auxiliary
+  summary requests remain isolated from primary System guidance.
+  Frozen project instructions occupy the
   `WorkspaceInstructions` lane and the active Skill catalog is one
   request-time `NativeCapabilityGuidance` section rendered from the attempt's
   immutable `CapabilitySnapshot`; it is absent when no model-visible Skills
   exist. The rendered string is frozen by value in RequestSnapshot; native
   sections cannot be shadowed and an extension cannot replace the entire
   prompt.
+- Chat and Trajectory project System changes from native request summaries,
+  including the independent prompt and complete Tool-catalog states. They do
+  not compare current settings or infer a predecessor from adjacent loaded rows.
+  Chat disclosures belong to the exact native Attempt/publication; the first
+  request's prompt precedes its native first input when that input is retained. Tool changes name
+  additions, removals and definition edits. Expanded prompts and catalog diffs
+  read complete immutable fields at the selected source's read cut, preserving
+  Root, child activation and historical Conversation ownership. A predecessor
+  outside the reading window is resolved by its native recorded identity through
+  bounded Trace pages. Missing or partial evidence never produces a fabricated
+  initial prompt, empty catalog or complete diff.
 - The Skill catalog is never a canonical User message, `UserSource::Runtime`,
   `ContextKind`, Ledger fact, or Surface identity. It contains routing
   metadata only; full `SKILL.md` content enters the conversation only as the
@@ -5893,7 +6324,7 @@ semantic normalization boundary. The frozen invariants:
   projection carrying the source repository root, repository-relative
   workspace, physical worktree root, base commit, branch, and parent dirty
   fact, and a retained handoff carries `logical_workspace` and
-  `physical_worktree_root` alongside its branch/base/head/dirty facts. v67
+  `physical_worktree_root` alongside its branch/base/head/dirty facts. v68
   retired this representation.
 - **Runtime Client protocol v12 adds the routed interaction projection.** The
   root-facing pending-interaction set carries Approval and Questionnaire
@@ -6722,9 +7153,8 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **Profile names carry no semantics.** The runtime assigns no meaning to a
   profile name, synthesizes no `off`/`low`/`medium`/`high` profile, and
   injects no reasoning field of its own. A profile's wire behaviour is exactly
-  its configured `requestParams`. Its reasoning state is explicit rustX
-  semantics: required on every profile of a reasoning-capable Model, `false`
-  when omitted on a non-reasoning Model, and never `true` there. A profile's
+  its configured `requestParams`. No reasoning capability or enabled state
+  is declared; returned reasoning blocks are parsed regardless of the preset. A profile's
   optional output budget is a default within the Model's hard maximum; an
   explicit selection limit replaces it and is bounded by the same maximum. An
   unknown or inapplicable explicit profile fails; nothing falls back.
@@ -6785,6 +7215,16 @@ contracts and provider protocols. These invariants are frozen by M2:
   typed uncertain outcome, never a successful acknowledgement. Clients recover
   through an authoritative read and never replay the selection automatically.
 
+- **Client confirmation follows the current native binding.** Model-selection
+  acknowledgement alone does not confirm the configured Model/Profile. Inline
+  and deferred model bodies use the same confirmation path, including choices
+  made during attachment. If the native binding advances while a deferred read
+  is pending, the client discards that read (or its expired-cut failure) and
+  reads the new revision; it neither reports an unconfirmed selection merely
+  because the binding advanced nor replays the model mutation. Actual selection
+  mismatches and failures at the current revision remain explicit failures.
+  Replacement attachments and connection generations retire confirmation.
+
 - **No-op detection includes durable intent.** An already-explicit identical
   selection still validates lifecycle, revisions and resources, then the durable
   owner confirms the stored selection and retained revision before skipping its
@@ -6793,10 +7233,10 @@ contracts and provider protocols. These invariants are frozen by M2:
   binding revision and never bypasses runtime retirement.
 
 - **Profile choices preserve whole-state intent.** A same-Model Profile change
-  preserves explicit request/output overrides and the Summary Model policy;
+  preserves explicit request/output overrides and the Summary and Title policies;
   invalid combinations fail without fallback. A different-Model choice resets
   primary request/output overrides, uses its default Profile unless explicitly
-  chosen, and retains the independent Summary Model policy. Every accepted
+  chosen, and retains the independent Summary and Title policies. Every accepted
   mutation remains one complete `SessionModelConfig`.
 
 - **Derived work keeps its parent's authority.** Child execution created after a
@@ -6865,6 +7305,12 @@ contracts and provider protocols. These invariants are frozen by M2:
   non-zero, and leaves zero bytes on stdout. Stdio EOF is a detach, never a
   shutdown or an Agent Loop cancellation; the owning process ends the server
   with an explicit signal, whose drain proves or refuses runtime settlement.
+
+- App Server host admission precedes request-scoped source-repair observation
+  and its Session catalog lookup. A draining host refuses a new attachment
+  without awaiting catalog publication or runtime settlement and without
+  adding source observation interest. An admitted request retains its host
+  operation while establishing that interest, before executing the request.
 
 ## TypeScript reference terminal client (Issue #39)
 
@@ -7035,7 +7481,7 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 - **Reasoning visibility is not reasoning configuration.** Whether reasoning
   content is drawn is a client display preference. What rustX asks a provider
-  for is `SessionModelConfig.profile` / `reasoningEnabled`, and it is
+  for is the effective provider `requestParams` selected by `SessionModelConfig.profile`, and it is
   changeable only through `model_set`. Hidden reasoning collapses to a marker;
   it never becomes assistant text and never disappears silently.
 
@@ -7062,8 +7508,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   reads `rustx.toml`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Model Profiles are shown exactly as published, with their
-  declared reasoning state and output default: a reasoning-capable model with
-  no profiles means provider-default reasoning with no selectable profile, and
+  output default: a model with no profiles has no selectable profile, and
   no universal off/low/medium/high scale is invented. `requestParams` stays opaque provider-owned JSON — displayed and
   passed, never interpreted.
 
@@ -7081,7 +7526,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   describes what a model *offers*, including `defaultProfile`, which
   is the catalog's fallback. What the session asked for
   (`SessionModelConfig.profile`) and what the runtime resolved
-  (`ModelInvocationView.profile` / `reasoningEnabled`) are separate
+  (`ModelInvocationView.profile` / `requestParams`) are separate
   facts, presented separately. A catalog default is never labelled as the
   current configuration, and an absent configured profile is reported as
   absent rather than borrowing the catalog's.
@@ -7289,9 +7734,8 @@ query.
 
 A Workflow owns no workspace resource and has no Candidate. Agent and Tool
 nodes run in the shared Session binding under their existing native owners; a
-successful run returns exactly its declared output. Review is a typed
-`{accepted, feedback}` value over an immutable Plan subject, gates later work
-only through an explicit Branch on `accepted`, acquires no filesystem lease,
+successful run returns exactly the object its Return outputs build. A Human Input
+continues through the exit of the action chosen, acquires no filesystem lease,
 and never rolls back an earlier write. Stale responses, wrong node visits,
 wrong subject digests and responses after terminal cancellation remain
 rejected. Workflow children are finite: ordinary durable Agent controls cannot
@@ -7302,8 +7746,11 @@ resume them, and their results stay owned by the exact node/visit.
 Discovery, identity, selection, finite demand, credential resolution,
 materialization and exact model exposure are distinct stages. Unselected sources
 perform no connection or preparation. Invalid unused resources yield bounded
-ordered diagnostics. A selected invalid winner fails its typed admission; lower
-resources never restore it. See [configuration](configuration.md).
+ordered diagnostics. A selected invalid resource definition fails its typed
+admission; lower resources never restore it. Initial credential or connection
+failure of an optional Root MCP source reports Unavailable while the core runtime
+starts. Required Workflow and child source contracts remain strict.
+See [configuration](configuration.md).
 
 
 ### Session deletion durability
@@ -7450,6 +7897,13 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
 
 ## Web authority retirement and Workspace display demand
 
+- A selected cold Session draft may recover its executable route after explicit
+  observation refresh on the same connection generation. Shell publication only
+  observes the Lifecycle's existing recovery/control proof; it cannot issue an
+  Open or replay a failed or uncertain Attach. A pending preparation, cancelled
+  selection, newer target or changed authority cannot inherit that publication.
+  Draft text and local files stay with the selected logical draft; observation
+  recovery alone sends no submission intent or user input.
 - `WorkspaceAuthority` owns Product Host authority scope — the Host process
   `authorityId` bound to the catalog's normalized endpoint — and its invalidation
   epoch; a change of either retires every observation and proof. Fresh Workspace
@@ -7461,13 +7915,31 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   (`denied`) under an unchanged Host process sends nothing. Send then requires that
   Host epoch, native generation and endpoint, navigation and injected admission
   callback all remain current. A late old-Host success or failed final validation
-  cannot dispatch attach/fork. The callback and Product Host identities are
+  cannot dispatch attach/fork/submission intent. The callback and Product Host identities are
   distinct. Native Session cwd is fixed at creation on every App Server path, so the
   captured cwd is the operation's cwd.
 - Product Host validation is bounded and cannot starve native control: at most two
-  validations hold ordinary RPC slots at once, waiting ones hold nothing, and each
+  validations hold their bounded dispatch-lane reservations at once, waiting ones
+  hold nothing, and each
   retirement releases its reservation exactly once. Cancellation never waits for a
   Host read or its deadline.
+- Session metadata has a separate two-position lane for session/read,
+  session/settings and session/create. Reads are inert catalog operations;
+  creation authors durable identity without initializing MCP. Attachment lifecycle
+  waits have their own 32-position lane, using the existing external attachment
+  bound; a thirty-third local request is refused before ID allocation or send.
+  Neither six nor 32 cold attachments can starve fresh node/cwd reads, first
+  Session creation, ordinary RPCs or control submission intent. Web metadata
+  shares the existing bounded 64-request queue and starts its 30-second response
+  clock at actual send. TUI retains its existing response-clock policy.
+  session/attach has no generic Web response clock: pre-submission preparation
+  remains unarmed, and the native absolute submission-readiness deadline governs
+  its MCP wait. Actual response loss preserves correlation and mutation uncertainty.
+  No cwd authorization cache is added: Host scope and exact-root classification
+  remain fresh at final dispatch. The total connection bound is 50; native process
+  admission uses max_connections times 50, with noncontrol limited to times 48.
+  Outbound fairness bounds ready-input delay to 50 response completions plus 51
+  observations.
 - `WorkspaceAssociations` owns display projection only and consumes authority
   retirement. It never invalidates operation navigation. Selection changes bounded
   demand without catalog invalidation; only newly unsatisfied cwd identities need
@@ -7572,7 +8044,7 @@ invented wire ID. Nullable `wire_id` distinguishes absence from explicit correla
 transmitted stored results use actual accepted native IDs. Stateless/full replay IDs
 match the adapter's relevant wire segment, independent of covered historical occurrences.
 Ambiguous duplicate unresolved wire IDs are rejected before detached wire mutation.
-This required observation change is carried by App Server v52 and Runtime Client v71.
+This required observation change is carried by App Server v50 and Runtime Client v72.
 
 ## PR #477 bounded activation header integrity
 
@@ -7609,3 +8081,316 @@ when required by lineage/dependency closure; no stronger global audit is implied
   provenance and receipt readers. Other adjacent digest fields retain fixed-length
   preallocation gates and content-integrity comparison. These checks detect independent
   corruption, not coordinated forgery of authoritative facts and checksums.
+
+## Model request ownership
+
+- Every physical request has one authoritative owner in its Started fact.
+  Completed/Failed repeat that owner and must agree with the original fact and
+  mandatory transactional indexes.
+- Agent starts retain their exact Snapshot/native selected-input/Context
+  transaction and P/U/C rules. Auxiliary starts require an active Call and
+  sequential request ordinal; they cannot fabricate Agent execution or primary
+  publication authority.
+- Final physical request and Call outcomes commit atomically. Zero-request
+  cancellation settles only the Call. Generic Journal append cannot bypass
+  these specialized transitions.
+- Exact confirmation compares committed facts and required indexes. Missing
+  optional observation material is independent. Ordinary absence remains
+  Unknown; definite rollback evidence must come from an actually closed write.
+- Owner filtering precedes recovery mutation, native query limits, aggregation,
+  occupancy, predecessors and subagent activity. Auxiliary facts never consume
+  an adopted Agent answer obligation.
+- Purpose, activation cause and opaque consumer business references are bounded
+  attribution, not a closed list of products or execution permissions. Native
+  Compaction/Human references retain independent integrity checks at admission.
+  A business source may postdate frozen input; selected input references may not.
+- Full native input cuts remain distinct from Journal-only audit cuts.
+  Fingerprints do not reconstruct missing prompts or generated output.
+- Complete archive validation selects dependencies at its captured native cut and
+  releases each bounded local audit closure before reading the next. A live
+  materialization budget is not a limit on retained lifetime history.
+- Local audit survives for the Conversation lifetime. Inherited source audit is
+  separate from local execution, admission, quota and correlation. History
+  overlap alone does not create a Summary generation dependency.
+- A new local checkpoint's Summary generation dependency requires successful
+  physical generation and a completed local Call at its declared Journal cut.
+  Historical inspection and inherited source audit retain their captured open
+  or failed outcomes without authorizing a new checkpoint commit.
+- See [Auxiliary request facts and inspection](auxiliary-execution.md) for bounds,
+  uncertainty, source ownership and validation.
+
+## Scheduler temporal ownership
+
+- An occurrence fires only when its trigger receipt, revision advancement and
+  ordinary durable inbound or pinned Workflow Accepted request commit together.
+  A timer observation is not admission.
+- Scheduler never calls ModelAdapter or appends canonical history. Runtime-origin
+  scheduled messages confer no Human mutation grant.
+- Cold StorageOnly and runtime writers share one registry slot per conversation.
+  Runtime residency remains a separate per-Session constraint. Writer absence
+  requires explicit connection closure and allocation release; an uncertain
+  retirement cannot be replaced or treated as absent during deletion.
+- Native pending correlation owns outstanding-target capacity across schedule
+  updates, deletion and display pruning. One outstanding target per schedule and
+  at most 256 per conversation are checked inside the admission transaction.
+- Stable command receipts preserve the first successful relative-time decision.
+  IDs are never reused and no-op mutations do not consume a revision. Human
+  request scopes share at most eight committed mutations; retries, deletion and
+  retention cannot reset or transfer the persisted budget. A backend authority
+  value is not proof of a live root Human request.
+- Discovery reads are bounded, cancellable and physically counted through actual
+  release. Unavailable sources retain last-success facts; live catalog authority
+  alone removes membership. Per-conversation hints and periodic finite passes
+  preserve progress even when notifications are lost. Cron uses pinned calendar
+  policy and preserves committed UTC candidates across timezone-data changes.
+- Workflow Claim is a unique native execution capability. Required node receipts
+  precede effects. Reopen/reconcile never replays a Claimed graph; missing native
+  physical proof retains its capacity, resource ownership and deletion blocker.
+  A recovered result is OutcomeUnknown, never a fabricated successful Return.
+- Tool effects consume explicit invocation-owner physical certainty. Ordinary
+  OutcomeUnknown completions and settlement-control guard failures remain
+  unproven. Semantic cancellation/timeout/unknown status survives Tool, Model,
+  Agent and Parallel wrappers and remains independent from physical proof.
+- Name/timing-only Workflow mutations preserve the full pinned target and inputs
+  through the native metadata command, including cold control without composing
+  execution. Target replacement requires explicit native Workflow preparation.
+- An uncertain client command keeps its original ID/payload across discarded
+  drafts and view remounts. Explicit recovery remains available independently of
+  the editor; an unchanged read cannot release an admitted unknown operation.
+- Scheduled Workflow/interaction origins name the durable start directly and
+  contain no synthetic Attempt, ToolCall or turn. Human model mutation authority
+  is borrowed only from fresh native root request scope; Runtime input preserves
+  that scope without replenishing its lifetime eight-mutation budget.
+- Enabled schedules and nonterminal Workflow starts block Session deletion, and
+  schedule generation participates in delete-preview authority. Fork/clone do
+  not copy definitions, starts, receipts or temporal control authority.
+- Drain closes the final Scheduler commit gate and joins driver/read/storage/load
+  ownership before reporting quiescence. See [Scheduler](scheduler.md).
+
+## Classification and BTW delivery invariants
+
+Original admission scope, current controller and result reservation precede native transfer. Closure and registration share a fence. Exact local correlation never authorizes replay; negative confirmation requires closed original admission, joined physical writes and authoritative absence. Read/discard/expiry cannot release an executing Call permit or a response copy before physical disposition. Observation loss is independent of native cancellation. Domain acceptance, durable settlement and displayed completion are separate facts. [All enforced component limits and ownership points](auxiliary-consumers.md) are part of this contract.
+
+## Workflow Model invariants (Issue #496)
+
+- Each concrete Model visit owns one logical, tool-free Auxiliary Call through
+  the ConversationRuntime's existing Executor. Technical retries remain inside
+  that identity and reuse the frozen model, prompt, bindings and output contract.
+- The invoking Attempt supplies model/registry/Profile authority. Later source,
+  Session or capability updates cannot change pending node selection. Offline
+  checks do not resolve credentials or fabricate Session-follow readiness.
+- Text commits the exact final string; JSON Schema commits only a locally
+  validated object. There is one declared output union and derived reference
+  schema. Refusal, no text, tool proposal, truncation, schema mismatch and byte
+  overflow produce no local node value or successor execution.
+- Cancellation before Call admission prevents model dispatch. After admission,
+  cancellation requests the existing owner's physical settlement; dropping a
+  graph waiter cannot release its descendant lease or Call permit early. The
+  final local commit is fenced against cancellation. Unknown settlement remains
+  OutcomeUnknown and cannot become a successful or proven-cancelled node.
+- Capacity waits subscribe before reservation, are bounded by the Workflow
+  deadline and propagate cancellation. Model nodes use ordinary general
+  Auxiliary permits, never Agent slots or Compaction-protected capacity.
+- Worst-case expanded Model demand is at most 256 independently of Agent and
+  step limits. The 64 KiB value and 4 MiB aggregate retained-byte limits remain
+  authoritative. Parallel joins every keyed settlement before its parent settles.
+- Prompts and generated outputs never enter incidental diagnostics or a second
+  transcript. Node observation exposes only a bounded Auxiliary CallId link.
+  The outer Workflow Tool publishes its ordinary single canonical ToolResult.
+
+
+## Selected-Workspace draft MCP ownership (Issue #504)
+
+- Before the first Send, one native connection owns at most one transferable
+  unsent draft. Selection starts only its effective configured Root/enabled-Workflow
+  MCP demand. No Session/catalog row, canonical input, upload receipt, provider
+  request, Agent execution, Skill environment or Python build is created.
+- A scope supervisor coalesces replacement intent. Superseded pending and ready
+  resources are cancelled and physically settled before unsent replacement work
+  starts. Global source reservations include live ready and retiring generations;
+  unknown settlement retains capacity and truthful failure evidence.
+- Preparation has no owner elapsed-time deadline while the draft remains owned.
+  Synchronous native receipt of actual `session/create.submission` captures the
+  original monotonic Send timestamp, before any configuration, capacity or
+  MCP-dependent wait. One effective positive `mcp_startup_policy.wait_timeout_ms`
+  (default 15000, CFG3 whole-object precedence) covers the complete initial batch.
+  Handoff, fallback, waiters and reconnection cannot restart or extend it.
+- Sealing a submission reservation, committing durable creation, validating and
+  transferring resources, attaching, committing a capability candidate and
+  accepting input are distinct boundaries. Unknown creation or first-message
+  outcomes are never replayed. Creation acknowledgements survive later failures.
+- Submitted loading ownership and creation capacity conversion register under the
+  catalog publication lock before list/attach visibility. Creation never overwrites
+  another runtime owner or deletion fence. Terminal initialization failure remains
+  a retained result until explicit recovery; automatic attach cannot retry it with
+  an unarmed or renewed clock. Proven WriterAbsent failure receipts consume no
+  physical residency slot or per-Session node claim. They are held separately from
+  the Loading/Loaded/Unloading registry, keyed by exact Conversation. A cold branch
+  may load its selected node; default retry resolves the current catalog node
+  rather than a previous failed node's claim. An explicit selector recovers that
+  exact node without publishing catalog focus. Every failed-to-Loading recovery reserves capacity under
+  the same registry lock; loading, loaded and unproven retirement owners stay counted.
+  A WriterAbsent failure receipt permits cold committed history and trace-detail
+  reads without clearing its error, loading a runtime or replaying input. Loading,
+  unloading and invalid live read cuts retain their existing fences.
+- Actual admitted Workspace identity and selected effective bindings, including
+  captured credentials, are compared after capacity queueing and after readiness
+  waiting, immediately before transfer. Model-only changes that
+  preserve those inputs reuse the physical work. Mismatches settle and use normal
+  initialization under the original clock without importing pending authoring.
+- Cancellation, scope close and one-shot validated transfer serialize under the
+  same scope mutex. Cancel wins: resources cannot be consumed. Transfer wins:
+  stale draft cancellation or disposal cannot reach Conversation-owned resources.
+  A still-pending discovery keeps its already-armed deadline after transfer.
+- Transfer carries physical connection/discovery ownership, invalidation epochs,
+  lifecycle counts and retirement obligations. It grants no execution authority.
+  Existing complete candidate validation and commit retain their exact meaning;
+  optional Root outcomes are isolated, affected Workflows are disabled with diagnostics,
+  and frozen child contracts remain strict.
+- Dropping an RPC waiter is not settlement. Native creation/loading jobs and
+  physical preparation tasks retain their owners. Source reservation release
+  requires either a validated ownership transfer or proven physical settlement.
+  App Server drain joins ephemeral preparation and resident runtime settlement.
+  Repeated close or Drop after settlement cannot restart supervision or invalidate
+  the server's proven drain completion.
+- Web application-lifetime intent follows XState draft navigation and fresh
+  Product Host authorization. Component remounts do not supervise resources.
+  The exact first-submission Session/binding remains owned through creation ACK,
+  Settings and same-Session selection while validated transfer is pending.
+  Workspace changes retain text, ordered File objects and valid model intent;
+  unresolved first-submission ownership cannot silently retarget them. Definite
+  rejection or explicit discard without a known Session releases the seal for a
+  new native generation. Discard for a known Session only retires its preparation.
+  If Settings retired route publication before creation ACK, admitted input permits
+  a later New Conversation. The next draft after admission or known-Session discard
+  always gets a fresh binding through both draft and Workspace-picker entry points.
+  Background
+  preparation introduces no visible label, banner, spinner, notice or timer.
+
+
+## Workflow file and authoring invariants (Issue #510)
+
+- Complete source revision/CAS includes editor metadata. Lost-response recognition
+  compares the exact complete canonical candidate, never an executable digest.
+- Program identity includes model-visible schema descriptions and excludes editor
+  titles, notes, layout and order. Admitted programs never change with later files.
+- Optional bounded presentation does not consume executable budgets or enter model
+  context, history or journals. Malformed metadata and retained orphan warnings
+  have presentation-specific diagnostics; no authored content is silently erased.
+- Candidate analysis exposes declarations independently of successful compilation.
+  Compiler-owned scope intersections, required-field resolution and type proof
+  remain authoritative; unknown/pending facts are never execution admission.
+- Compiler and analysis joins intersect unique Block-local producer identities.
+  Every predecessor must contain a producer; schema self-assignability is not a
+  presence requirement. Consumer checks separately prove destination compatibility.
+- Consumer identity includes Block and authored field. Parent projections, child
+  `args`, Loop `result` and downstream aggregates retain their native scopes.
+- Result adoption requires the exact target, authority, document, edit generation,
+  consumer and query. Controlled deferred completions prove stale-result refusal.
+- One file owns authored positions; completed drags are atomic document history
+  edits. Browser coordinates are removed. Viewports remain personal preferences.
+
+
+## Workflow visual authoring invariants (Issue #511)
+
+- XState owns one complete native editing document and history. The renderer,
+  inspector and ELK are projections or commands, never competing authorities.
+- A structured Block path, view kind and local identity uniquely address each
+  view. Synthetic Starts, lanes and notes never consume executable node capacity.
+- Connection and insertion commands enforce owning Block and native ports.
+  Moving a frame preserves children-relative coordinates and lexical ownership.
+- Schema field rename changes only provably corresponding structured paths,
+  required fields, constructed keys and owned display order; task/literal text
+  and whole-value references retain their meaning.
+- Copy/paste admits bounded closed transport shapes; owned subtrees, notes,
+  metadata and internal references are remapped atomically. Unapplied fields
+  refuse export; cross-scope external references refuse paste.
+- Completed geometry/layout is one metadata transaction. Layout never changes
+  executable values/edges, moves manual notes or overwrites a newer generation.
+- Every deferred field retains exact text through selection, disclosure,
+  container navigation, rename and history; deletion detaches rather than loses
+  it. Save/Check cannot submit while unapplied input remains.
+- Editing and analysis start no Tools, provider calls or child execution. Native
+  execution of the shared authored fixture proves keyed joins, both Loop exits,
+  private arguments and absence of author-only note text from runtime snapshots.
+
+## Disposable managed output ownership (Issue #520)
+
+- The actual returned filesystem locator is a short absolute path beneath the
+  OS temporary root. Foreground spills and background streams use the same
+  storage owner, with distinct allocation/acceptance lifecycles. No provider or
+  client synthesizes paths.
+- Exclusive directory/file creation, bounded collision retries, private POSIX
+  modes and descriptor-relative operations prevent overwrite and symlink
+  redirection. Issued names stay consumed within an allocator; restart or
+  external namespace removal or lost ownership proof lazily starts a fresh namespace,
+  never repairs or aliases old output. A temp root inside the workspace is an
+  explicit configuration conflict.
+- Trusted Conversation-local bindings, rather than canonical history strings,
+  establish cleanup authority. They retain original roots across restart and
+  participate in the deletion ownership revision. Active stores and writers
+  retain ConversationAccess even if the OS unlinks their paths.
+- Published output survives turn completion, Session switching, runtime drop and
+  normal exit. Later OS removal is honest unavailability, not corruption of
+  canonical history. Complete records capture-time retention; later cleanup does
+  not change that record. Current allocation/write failures still fail explicitly.
+- Session cleanup runs under committed deletion and Conversation exclusion,
+  before private metadata is removed. Missing namespaces are idempotent; other
+  errors remain cleanup-pending. Cleanup durably records and confirms a no-replace
+  move into a product-owned private retirement arena before deleting content.
+  Unconfirmed entries share live/restart validation and no-replace restoration
+  for every validation error; a later public occupant keeps both entries pending.
+  The arena retains its marker; confirmed private slots can finish after marker
+  unlink and process death. Final removal never re-resolves the public locator.
+  Shared arena bindings contain no output index and remain outside the Session
+  cascade. Fork/clone history grants no source deletion authority and archives
+  omit auxiliary files. No global sweep, spill registry,
+  reference counting, compatibility path, or full-output reconstruction exists.
+
+See [the storage and lifecycle contract](issue-520/README.md).
+
+
+## Large local resources (Issue #527)
+
+- Skill package, supporting-file and `SKILL.md` admission has no fixed byte
+  ceiling. Discovery retains frontmatter/catalog metadata, never the Markdown
+  body. Complete accepted bytes, binary assets and raw relative filenames affect
+  identity. Existing source precedence, invalid-Workspace shadowing and exact
+  traversal/count policies remain authoritative.
+- A package read validates the opened regular descriptor, actual consumed length
+  and its anchored name. Truncation, growth, replacement or detectable in-place
+  mutation fails the read. No atomic snapshot of mutable external paths is
+  claimed. A materialized child copy must reproduce the frozen full digest.
+- Managed Python authorization freezes disk-backed bytes, declarations and
+  identity together. Later path edits cannot alter that source object. Capture
+  and installation use fixed byte buffers, with no eager whole-package vector.
+- Source capture uses complete content revisions. A length/mtime marker is never
+  proof that accepted large resources are unchanged. Incomplete inspection is
+  explicit and cannot certify equality or publish a silently unverified capture.
+- Workflow serialized source and normalized expanded document must each fit
+  16,777,216 bytes, inclusive. Either dimension can independently reject a
+  document. Graph/node/depth, editor, value, context and decoder safeguards
+  remain independent; source admission does not promise arbitrary execution
+  payload or model-context capacity.
+- Workflow file data crosses v72 control records through native-owned document
+  scratch and 65,536-byte chunks. A ready scratch document is neither a partial
+  source file nor a source commit. Only the existing revision-fenced source
+  transaction publishes the complete canonical file with one atomic replacement.
+- Full Workflow check reports use read-only native content references and bounded
+  chunks, preserving complete schemas and Explain without a source/candidate byte
+  cap. Report and candidate capabilities are distinct; they share connection
+  capacity/expiry and close ownership, never source-write authority.
+- Queued analysis rechecks generation/query ownership before encoding and scratch
+  admission, including before Workspace Host dispatch. Superseded waiters perform
+  no upload; started work settles before admission returns. Tool catalog cache
+  verification retains request ownership and listing capacity until physical exit.
+- Missing required Python package members reject before backing-file capture or
+  asset reads, while preserving invalid winning-candidate identity and shadowing.
+- Package hashing/copying observes cancellation between bounded chunks. Async
+  owners await blocking I/O and subprocess settlement. A cancelled preparation
+  cannot become a usable Ready candidate. Pre-publication failures clean private
+  staging; cleanup failure is reported with the existing storage owner retaining
+  responsibility. No dropped waiter is a physical completion proof.
+- File-byte admission is independent of model projection, preview, complete-read,
+  archive expansion and transport budgets. The retained policies are enumerated
+  in [the resource-limit inventory](resource-limits.md).

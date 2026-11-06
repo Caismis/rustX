@@ -365,7 +365,7 @@ async fn run_child_inner(
         // those before publishing proof for the parent's settlement.
         return Ok(());
     };
-    let workflow_output = core.workflow_output();
+    let workflow_output = core.workflow_terminal();
     // The child is a real live Runtime Client owner. Its host receives the
     // primary projection queue, while the bounded parent activity projector
     // receives a separate fan-out queue; both are installed before the
@@ -479,7 +479,7 @@ pub(crate) async fn serve_child_delegation(
     handle: &ChildControlHandle,
     parent_agent_id: crate::runtime::identity::AgentId,
     runtime: crate::runtime::conversation_runtime::ConversationRuntime,
-    workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
+    workflow_output: Option<crate::runtime::workflow::WorkflowChildTerminal>,
 ) -> Result<(), ChildExit> {
     // The start gate: no semantic work before the delegation arrives.
     // Provider updates may already be queued because the root attachment can
@@ -703,15 +703,16 @@ pub(crate) async fn serve_child_delegation(
     };
     let frame = match terminal {
         AttemptTerminal::Completed(attempt_id) => {
-            let answer = workflow_output.as_ref().and_then(|latch| {
-                latch
+            // A Workflow child with a schema settles on its committed
+            // value; every other child on its final reply.
+            let latch = workflow_output
+                .as_ref()
+                .and_then(crate::runtime::workflow::WorkflowChildTerminal::latch);
+            let answer = match latch {
+                Some(latch) => latch
                     .committed_value()
-                    .and_then(|value| serde_json::to_string(&value).ok())
-            });
-            let answer = if workflow_output.is_none() {
-                final_answer(&runtime, &attempt_id)
-            } else {
-                answer
+                    .and_then(|value| serde_json::to_string(&value).ok()),
+                None => final_answer(&runtime, &attempt_id),
             };
             match answer {
                 Some(answer) => ResultFrame {
@@ -722,7 +723,7 @@ pub(crate) async fn serve_child_delegation(
                 None => ResultFrame {
                     status: ChildResultStatus::Failed,
                     content: None,
-                    diagnostic: Some(if workflow_output.is_some() {
+                    diagnostic: Some(if latch.is_some() {
                         "the Workflow Agent completed without a valid workflow_output commit"
                             .to_owned()
                     } else {
@@ -1391,6 +1392,7 @@ impl NativeTerminalGate {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::durable::{CanonicalStore, InboxStore, JournalStore};
     use std::sync::Arc;
 
     use super::*;
@@ -1555,9 +1557,6 @@ pub(crate) mod tests {
                     crate::context::ContextAssembly::new(),
                     capability.current_snapshot(),
                 )),
-                resource_loader: Arc::new(crate::runtime::FilesystemRuntimeResourceLoader::new(
-                    &workspace,
-                )),
                 capability,
                 clock: None,
                 initial_messages: Vec::new(),
@@ -1684,7 +1683,13 @@ pub(crate) mod tests {
                 .expect("events")
                 .events
                 .iter()
-                .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
+                .any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::ModelRequestStarted {
+                        owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                        ..
+                    }
+                ))
         );
         let events = runtime
             .tool_runtime()
@@ -1806,7 +1811,13 @@ pub(crate) mod tests {
                 .expect("events")
                 .events
                 .iter()
-                .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
+                .any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::ModelRequestStarted {
+                        owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
+                        ..
+                    }
+                ))
         );
         let events = runtime
             .tool_runtime()
@@ -1949,6 +1960,34 @@ pub(crate) mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn version_33_hello_is_rejected_before_runtime_composition() {
+        use crate::runtime::subagent::ipc::{read_child_frame, write_frame};
+        let directory = tempfile::tempdir().unwrap();
+        let (spec, _) = preparation_fixture(&directory);
+        let mut hello = serde_json::to_value(spec).unwrap();
+        hello["protocolVersion"] = serde_json::json!(33);
+        for field in ["capabilities", "declaredCapabilities"] {
+            assert!(
+                hello["resolved"]["model"]["primary"][field]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("jsonSchemaOutput")
+                    .is_some()
+            );
+        }
+        let (mut parent, mut child) = tokio::net::UnixStream::pair().unwrap();
+        write_frame(&mut parent, 1, &serde_json::to_vec(&hello).unwrap())
+            .await
+            .unwrap();
+        assert!(matches!(read_child_hello(&mut child).await, Err(2)));
+        assert!(matches!(
+            read_child_frame(&mut parent).await.unwrap(),
+            Some(ChildFrame::StartupError(error))
+                if error.message.contains("unsupported control protocol version 33")
+        ));
+    }
+
     fn preparation_fixture(
         dir: &tempfile::TempDir,
     ) -> (
@@ -1971,6 +2010,7 @@ pub(crate) mod tests {
             child_agent_id: AgentId::new("agent-child"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: crate::runtime::subagent::ResolvedSubagentSpec {
+                resource_sources: std::collections::BTreeSet::new(),
                 environment: Vec::new(),
                 generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
                 skill_roots: Vec::new(),
@@ -2076,7 +2116,7 @@ pub(crate) mod tests {
         // constructing a ConversationRuntime. The retained preparation owner
         // must drain even though no runtime exists to perform shutdown.
         spec.terminal = crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
-            output_schema: serde_json::json!({"type": "invalid-schema-type"}),
+            output_schema: Some(serde_json::json!({"type": "invalid-schema-type"})),
         };
         let activation = spec.subagent_id.clone();
         let conversation = spec.child_conversation_id.clone();
@@ -2388,7 +2428,7 @@ pub(crate) mod tests {
                 &handle,
                 AgentId::new("agent-parent"),
                 child_runtime,
-                workflow_output,
+                workflow_output.map(crate::runtime::workflow::WorkflowChildTerminal::Output),
             )
             .await;
             dispatcher.shutdown().await;
@@ -2448,7 +2488,6 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn delegation_durable_acceptance_failure_never_acknowledges_input() {
-        use crate::durable::ConversationStore;
         let dir = tempfile::tempdir().unwrap();
         let id = ConversationId::generate();
         let store =
@@ -2533,7 +2572,6 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // One failed activation and its durable continuation proof.
     async fn failed_activation_preserves_admitted_guidance_for_the_next_activation() {
-        use crate::durable::ConversationStore;
         use crate::model::event::ModelEvent;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
 
@@ -2720,7 +2758,6 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // One end-to-end cancellation/observation interleaving.
     async fn cancel_before_native_terminal_consumption_never_reopens_activation() {
-        use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
         let dir = tempfile::tempdir().unwrap();
         let id = ConversationId::generate();
@@ -2860,7 +2897,6 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // complete FIFO cancellation and transport-drain fixture
     async fn cancel_during_close_admission_is_absorbing_and_preserves_guidance() {
-        use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{GuidanceFrame, read_child_frame, write_parent_frame};
 
         let dir = tempfile::tempdir().unwrap();
@@ -3432,7 +3468,6 @@ pub(crate) mod tests {
         id: ConversationId,
         mode: &str,
     ) -> ResultFrame {
-        use crate::durable::ConversationStore;
         use crate::message::types::ContentBlockIndex;
         use crate::model::event::ModelEvent;
         use crate::model::finish::ModelFinishReason;
@@ -3637,7 +3672,6 @@ pub(crate) mod tests {
     /// this actual result through its native driver and publication path.
     #[allow(clippy::too_many_lines)]
     pub(crate) async fn workflow_cancellation_ordering(late: bool) -> ResultFrame {
-        use crate::durable::ConversationStore;
         use crate::runtime::subagent::ipc::{read_child_frame, write_parent_frame};
         let stage = |name: &str| eprintln!("workflow-cancellation late={late}: {name}");
         stage("construct native child runtime");
@@ -3702,7 +3736,9 @@ pub(crate) mod tests {
                         &handle,
                         AgentId::new("agent-parent"),
                         runtime,
-                        Some(latch),
+                        Some(crate::runtime::workflow::WorkflowChildTerminal::Output(
+                            latch,
+                        )),
                     )
                     .await;
                     dispatcher.shutdown().await;

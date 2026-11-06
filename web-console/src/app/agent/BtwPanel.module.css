@@ -1,0 +1,5 @@
+.panel { display: grid; gap: 12px; min-width: 0; }
+.panel label { display: grid; gap: 8px; }
+.panel textarea { width: 100%; box-sizing: border-box; resize: vertical; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 8px; padding: 10px; font: inherit; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.answer { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 45vh; overflow-y: auto; }

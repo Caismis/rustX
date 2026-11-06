@@ -2,7 +2,7 @@
 #[test]
 fn statistics_full_records_match_every_cut_with_one_direct_read() {
     use self::observation_response_tests::{response_complete, response_message, response_start};
-    use crate::runtime_client::agent_statistics::StatisticsFold;
+    use crate::observation::statistics::StatisticsFold;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("statistics.sqlite");
     let id = ConversationId::generate();

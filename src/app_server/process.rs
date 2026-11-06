@@ -294,6 +294,7 @@ fn inherited_writer(
     }
 }
 
+#[allow(clippy::too_many_lines)] // One process supervision and bounded shutdown sequence.
 async fn run(options: Request) -> Result<(), String> {
     // Transport selection is native process policy, checked before composition.
     if options.listen == "stdio" {
@@ -335,6 +336,21 @@ async fn run(options: Request) -> Result<(), String> {
     let reaper_stop = CancellationToken::new();
     let stop = reaper_stop.clone();
     let reaper = tokio::spawn(async move { reaper_host.manager().run_idle_reaper(stop).await });
+    // External edits of supported sources enter native application without a
+    // client; the watcher stops with the reaper at drain.
+    let watch_manager = host.manager().clone();
+    let watch_stop = reaper_stop.clone();
+    let source_watch = tokio::spawn(async move {
+        if let Err(error) = watch_manager.run_source_watch(watch_stop).await {
+            eprintln!(
+                "rustx app-server: configuration source watch unavailable ({error}); \
+                 external edits apply after configuration/reconcile"
+            );
+        }
+    });
+    let schedule_manager = host.manager().clone();
+    let mut scheduler = tokio::spawn(async move { schedule_manager.run_schedule_driver().await });
+    let mut scheduler_early_result = None;
     let mut transport_finished = false;
     let mut transport_failure = None;
     loop {
@@ -351,6 +367,11 @@ async fn run(options: Request) -> Result<(), String> {
                 // (or SIGINT) from its owner to request semantic drain.
                 eprintln!("rustx app-server: stdio detached; awaiting explicit owner shutdown");
             },
+            result = &mut scheduler => {
+                scheduler_early_result=Some(result);
+                transport_failure=Some("Scheduler driver stopped before process drain".into());
+                break;
+            },
             _ = interrupt.recv() => break,
             _ = terminate.recv() => break,
         }
@@ -361,7 +382,14 @@ async fn run(options: Request) -> Result<(), String> {
     reaper_stop.cancel();
     eprintln!("rustx app-server: Draining; new semantic admission closed");
     let graceful = async {
-        let (failures, reaper_result) = tokio::join!(host.drain(), reaper);
+        let scheduler_completion = async {
+            match scheduler_early_result.take() {
+                Some(result) => result,
+                None => (&mut scheduler).await,
+            }
+        };
+        let (failures, reaper_result, scheduler_result, _) =
+            tokio::join!(host.drain(), reaper, scheduler_completion, source_watch);
         shutdown.cancel();
         if !transport_finished {
             match (&mut serving).await {
@@ -380,6 +408,9 @@ async fn run(options: Request) -> Result<(), String> {
             return Err(format!("transport failed: {error}"));
         }
         reaper_result.map_err(|error| format!("idle reaper failed: {error}"))?;
+        scheduler_result
+            .map_err(|error| format!("Scheduler driver failed: {error}"))?
+            .map_err(|error| error.to_string())?;
         host.finish_drain()
     };
     tokio::pin!(graceful);

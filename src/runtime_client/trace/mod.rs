@@ -52,19 +52,12 @@
 //! make that record's lifecycle repair unavailable.
 
 mod anchor;
-mod bounds;
-pub(crate) use bounds::identity_fits;
-mod content;
 #[cfg(test)]
 mod detail;
-pub(crate) mod frozen;
-#[cfg(test)]
-mod oracle_summary;
-#[cfg(test)]
-pub(crate) use frozen::request_detail as frozen_request_detail;
-pub(crate) use frozen::request_outcome as frozen_request_outcome;
 mod inspection;
 mod lifecycle;
+#[cfg(test)]
+mod oracle_summary;
 pub use inspection::{
     TraceInspectionContent, TraceInspectionHead, TraceInspectionMessage, TraceInspectionMessages,
     TraceToolDefinitionSelection,
@@ -74,31 +67,22 @@ mod locate;
 #[cfg(test)]
 mod provenance_tests;
 mod record;
-pub(crate) mod request;
+#[cfg(test)]
+mod request;
 mod summary;
 #[cfg(test)]
 mod tool;
-mod types;
 
-pub use bounds::{
-    TRACE_DETAIL_BYTES, TRACE_PAGE_BYTES, TRACE_RECORD_BYTES, TRACE_SUMMARY_CONTEXT,
-    TRACE_SUMMARY_CONTEXT_BYTES, TraceJson, TracePreview, TraceText,
-};
 pub use locate::{TraceToolLocation, TraceToolLocator};
-pub use types::{
-    TraceArtifact, TraceContentBlock, TraceContextKind, TraceContextPresentation,
-    TraceContextSource, TraceCursor, TraceDetail, TraceFieldKind, TraceFieldSource,
-    TraceGeneration, TraceGenerationTimeline, TraceInputProvenance, TraceKind, TraceLifecycle,
-    TraceLocation, TraceManagedOutput, TraceMessageDetail, TraceMessageRole, TracePage,
-    TraceRecord, TraceRequestDetail, TraceRequestFailure, TraceRequestMessage, TraceRequestOption,
-    TraceRequestOutcome, TraceRequestPredecessor, TraceRequestSummary, TraceState,
-    TraceSystemPromptPresentation, TraceSystemPromptState, TraceTiming, TraceToolCall,
-    TraceToolCatalogState, TraceToolDefinition, TraceToolDetail, TraceToolLifecycle,
-    TraceToolOutcome, TraceToolOutcomeUpdate, TraceToolResult, TraceToolSource, TraceToolSummary,
-    TraceToolTruncation,
-};
 
 use record::bound_record;
+
+use crate::observation::trace::bounds;
+#[cfg(test)]
+use crate::observation::trace::*;
+use crate::observation::trace::{
+    TRACE_PAGE_BYTES, TraceCursor, TraceLifecycle, TracePage, TraceRecord,
+};
 
 use crate::durable::observation::{TraceFactHeader, TraceFactKind, TraceFactQuery, TraceFactScope};
 #[cfg(test)]
@@ -136,6 +120,7 @@ pub(crate) const ANCHORS: &[&str] = &[
     "subagent_ownership_committed",
     "workflow_started",
     "interaction_requested",
+    "configuration_applied",
 ];
 
 /// Most canonical messages projected for one adopted inbound turn.
@@ -185,9 +170,9 @@ impl<'a> TraceProjection<'a> {
 
     pub(crate) fn history_cut(
         &self,
-    ) -> Result<super::checkpoint::CheckpointReadCut, ConversationStoreError> {
+    ) -> Result<crate::observation::cut::CheckpointReadCut, ConversationStoreError> {
         let native = self.cut()?.clone();
-        Ok(super::checkpoint::CheckpointReadCut {
+        Ok(crate::observation::cut::CheckpointReadCut {
             conversation_id: native.read.conversation_id.clone(),
             activation_id: None,
             revision: 0,
@@ -195,8 +180,8 @@ impl<'a> TraceProjection<'a> {
             source_cut: Some(native),
             canonical_foreground: None,
             live_publication: None,
-            domain_revisions: crate::runtime_client::checkpoint::MetadataFragment::default(),
-            collection_cuts: crate::runtime_client::checkpoint::MetadataFragment::default(),
+            domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+            collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         })
     }
 
@@ -553,23 +538,23 @@ impl<'a> TraceProjection<'a> {
 }
 
 pub(crate) fn ensure_page_bound(page: &TracePage) -> Result<(), ConversationStoreError> {
-    let limit = crate::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES
-        - crate::runtime_client::checkpoint::CHECKPOINT_ITEM_BYTES;
+    let limit = crate::observation::bounded::CHECKPOINT_TARGET_BYTES
+        - crate::observation::bounded::CHECKPOINT_ITEM_BYTES;
     // A positive native structural proof includes the decimal-u64 headroom.
     // Values requiring the schema codec retain its existing admission path.
-    if crate::runtime_client::preflight::bounded_safe_integer_fit(page, limit) == Some(true) {
+    if crate::observation::preflight::bounded_safe_integer_fit(page, limit) == Some(true) {
         return Ok(());
     }
-    let schema = crate::runtime_client::structural_json::root::<TracePage>();
-    let encoded = crate::runtime_client::structural_json::Encoded {
+    let schema = crate::observation::structural_json::root::<TracePage>();
+    let encoded = crate::observation::structural_json::Encoded {
         value: page,
         schema: &schema,
         root: &schema,
     };
-    if crate::runtime_client::preflight::bounded_fit(&encoded, limit) == Some(true) {
+    if crate::observation::preflight::bounded_fit(&encoded, limit) == Some(true) {
         return Ok(());
     }
-    if crate::runtime_client::checkpoint::bounded_bytes(&encoded, limit).is_none() {
+    if crate::observation::bounded::bounded_bytes(&encoded, limit).is_none() {
         return Err(ConversationStoreError::ObservationCapacityExceeded);
     }
     Ok(())
@@ -581,8 +566,8 @@ pub(crate) fn checkpoint_frontier(
     total: u64,
     loaded: u64,
     next: Option<&TraceCursor>,
-) -> super::checkpoint::CollectionFrontier {
-    super::checkpoint::CollectionFrontier {
+) -> crate::observation::cut::CollectionFrontier {
+    crate::observation::cut::CollectionFrontier {
         domain: "trace.records".into(),
         revision: 0,
         total,
@@ -593,10 +578,15 @@ pub(crate) fn checkpoint_frontier(
 
 pub(crate) fn checkpoint_page(
     store: &dyn ConversationStore,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     offset: u64,
     limit: usize,
 ) -> Result<super::checkpoint::CheckpointPage, super::types::RuntimeClientError> {
+    if limit == 0 || limit > crate::observation::bounded::CHECKPOINT_PAGE_ITEMS {
+        return Err(super::types::RuntimeClientError::InvalidRequest {
+            message: "invalid Trace header page bounds".into(),
+        });
+    }
     let unavailable = super::types::RuntimeClientError::observation_store_error;
     let before = (offset != 0).then(|| TraceCursor::at(offset));
     let source_cut = cut
@@ -616,8 +606,8 @@ pub(crate) fn checkpoint_page(
         .records
         .iter()
         .map(|record| {
-            let value = super::checkpoint::structural_value(record);
-            Ok(super::checkpoint::CheckpointPageItem {
+            let value = crate::observation::bounded::structural_value(record);
+            Ok(crate::observation::cut::CheckpointPageItem {
                 offset: record.position.sequence().map_err(unavailable)?,
                 identity: record.id.clone(),
                 deferred: value.is_none(),
@@ -639,6 +629,68 @@ pub(crate) fn checkpoint_page(
     })
 }
 
+/// Read one finite Trace header by its Journal sequence, including headers
+/// deferred by the smaller checkpoint-item budget. Original bodies stay behind
+/// their own advertised readers; this reconstructs only the same bounded header.
+pub(crate) fn header_read(
+    store: &dyn ConversationStore,
+    cut: &crate::observation::cut::CheckpointReadCut,
+    sequence: u64,
+    path: &[String],
+    (offset, max_bytes): (u64, u32),
+) -> Result<super::checkpoint::CheckpointValueChunk, super::types::RuntimeClientError> {
+    use super::types::RuntimeClientError;
+    use base64::Engine as _;
+    if !path.is_empty() || max_bytes == 0 || max_bytes > 65_536 {
+        return Err(RuntimeClientError::InvalidRequest {
+            message: "Trace header read requires an empty path and a bounded byte range".into(),
+        });
+    }
+    let source = cut
+        .source_cut
+        .as_ref()
+        .filter(|source| {
+            source.read.conversation_id == cut.conversation_id && source.read.journal == cut.through
+        })
+        .ok_or(RuntimeClientError::ReadCutExpired)?;
+    let unavailable = RuntimeClientError::observation_store_error;
+    let projection = TraceProjection::at_cut(store, source).map_err(unavailable)?;
+    let anchor = projection
+        .inspection_anchor(sequence)
+        .map_err(unavailable)?;
+    let mut record = projection.record(&anchor).map_err(unavailable)?;
+    bound_record(&mut record);
+    if bounds::encoded_len(&record) > bounds::TRACE_RECORD_BYTES {
+        return Err(unavailable(
+            ConversationStoreError::ObservationCapacityExceeded,
+        ));
+    }
+    // The finite header is capped before encoding. Native u64 fields add only
+    // their decimal-text quotes, just like inline checkpoint headers.
+    let mut bytes = Vec::new();
+    crate::observation::structural_json::to_writer(&mut bytes, &record).map_err(|error| {
+        RuntimeClientError::RuntimeFailure {
+            message: error.to_string(),
+        }
+    })?;
+    let start = usize::try_from(offset)
+        .ok()
+        .filter(|start| *start <= bytes.len())
+        .ok_or(RuntimeClientError::InvalidRange)?;
+    let end = start.saturating_add(max_bytes as usize).min(bytes.len());
+    Ok(super::checkpoint::CheckpointValueChunk {
+        representation: super::checkpoint::CheckpointValueRepresentation::CanonicalJsonV1,
+        cut: cut.clone(),
+        domain: "trace.records".into(),
+        item_offset: sequence,
+        path: Vec::new(),
+        offset,
+        bytes_base64: base64::engine::general_purpose::STANDARD.encode(&bytes[start..end]),
+        readable_end: bytes.len() as u64,
+        next_offset: (end < bytes.len()).then_some(end as u64),
+    })
+}
+
 #[cfg(test)]
 pub(crate) use live::repair_live;
 pub(crate) use live::{repair_agent_records, repair_records};
@@ -647,18 +699,5 @@ pub(crate) use live::{repair_agent_records, repair_records};
 mod tests;
 
 fn anchor_kinds() -> Vec<TraceFactKind> {
-    use TraceFactKind as K;
-    vec![
-        K::AttemptStarted,
-        K::TurnStarted,
-        K::InboundTurnAdopted,
-        K::ModelRequestStarted,
-        K::AssistantMessageCommitted,
-        K::ToolExecutionStarted,
-        K::CompactionStarted,
-        K::BackgroundExecutionCommitted,
-        K::SubagentOwnershipCommitted,
-        K::WorkflowStarted,
-        K::InteractionRequested,
-    ]
+    TraceFactKind::anchors()
 }

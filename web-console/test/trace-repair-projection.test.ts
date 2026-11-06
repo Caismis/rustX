@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import type {CheckpointReadCut,TraceLifecycle,TraceRecord} from '../../protocol/app-server/v52';
+import type {CheckpointReadCut,TraceLifecycle,TraceRecord} from '../../protocol/app-server/v73';
 import {traceAttemptKey,traceStepKey} from '../../protocol/app-server/trace-identity';
 import {beginTraceDetail,refreshTrace,replaceTrace,selectTrace} from '../src/client/trace';
 import {modelRetryPlacements} from '../src/bindings/model-retry';
@@ -16,7 +16,8 @@ it('unchanged repairs retain projection inputs while advancing cuts and preservi
  const incoming=structuredClone(record),next=refreshTrace(before,{read_cut:cut('2'),records:[incoming],next_cursor:null},[lifecycle(incoming)]);
  expect(next.page.records).toBe(before.page.records);
  expect(next.page.records[0]).toBe(record);
- expect(next.readCuts?.[record.id]).toEqual(cut('2'));
+ // Unchanged native content keeps its original reader cut, including issued details.
+ expect(next.readCuts?.[record.id]).toEqual(cut('1'));
  expect(next.selection).toBe(before.selection);
  expect(next.details[record.id]).toBe(before.details[record.id]);
  expect(next.details[record.id].loading).toBe(true);

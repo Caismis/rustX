@@ -51,7 +51,6 @@ Checked-in references under `test/e2e/shell.spec.ts-snapshots/`:
 | --- | --- |
 | [desktop-expanded-light](test/e2e/shell.spec.ts-snapshots/desktop-expanded-light-linux.png) | 1440×1000, grouped Workspace, Ungrouped Sessions, selected running A and waiting B |
 | [desktop-collapsed-rail](test/e2e/shell.spec.ts-snapshots/desktop-collapsed-rail-linux.png) | 56px rail and expanded main column |
-| [desktop-right-panel](test/e2e/shell.spec.ts-snapshots/desktop-right-panel-linux.png) | Harness three-column geometry with rustX Inspector |
 | [workspace-session-browser](test/e2e/shell.spec.ts-snapshots/workspace-session-browser-linux.png) | Native metadata search in upstream contextual result rows |
 | [settings-shell-light](test/e2e/shell.spec.ts-snapshots/settings-shell-light-linux.png) | Settings frame/nav and Appearance seat |
 | [settings-shell-dark](test/e2e/shell.spec.ts-snapshots/settings-shell-dark-linux.png) | Same Settings chrome using upstream dark tokens |

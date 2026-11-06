@@ -2,10 +2,12 @@
 //! They grant no execution authority and publish neither events nor cursors.
 use super::observation_codec as codec;
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+#[cfg(test)]
+use crate::durable::CanonicalStore;
 use crate::durable::reading::TurnExecution;
 use crate::durable::response::{add_usage, timing::ActivityFold};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::runtime_client::response::{ConversationStatistics, ConversationTurnClock};
+use crate::observation::statistics::{ConversationStatistics, ConversationTurnClock};
 mod contribution;
 mod owner;
 mod record;
@@ -18,7 +20,7 @@ struct StatisticsLayout {
 }
 #[derive(Default)]
 struct LocalStatisticsLayout {
-    view: crate::runtime_client::agent_statistics::AgentStatistics,
+    view: crate::observation::statistics::AgentStatistics,
     activity: TurnExecution,
     active_start: Option<u64>,
 }
@@ -39,7 +41,7 @@ type StoredTotals = (
 type StoredStatistics = (
     StoredTotals,
     StoredActivity,
-    crate::runtime_client::agent_statistics::AgentDuration,
+    crate::observation::statistics::AgentDuration,
     Option<u64>,
     Option<(StoredTotals, StoredActivity)>,
 );
@@ -199,7 +201,7 @@ fn decode(bytes: &[u8]) -> Result<StatisticsLayout, ConversationStoreError> {
         statistics,
         activity,
         local: LocalStatisticsLayout {
-            view: crate::runtime_client::agent_statistics::AgentStatistics {
+            view: crate::observation::statistics::AgentStatistics {
                 statistics: local_statistics,
                 occupancy: None,
                 duration,
@@ -228,7 +230,7 @@ fn at_cut(
     let actual: u64 = connection
         .prepare_cached("SELECT next_event_sequence FROM rustx_store WHERE id=1")
         .and_then(|mut statement| statement.query_row([], |row| row.get(0)))
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if through > actual {
         return Err(ConversationStoreError::InvalidReference(
             "future native statistics cut".into(),
@@ -252,31 +254,36 @@ pub(super) fn read_validated(
 pub(super) fn agent_read(
     connection: &Connection,
     through: u64,
-) -> Result<crate::runtime_client::agent_statistics::AgentStatistics, ConversationStoreError> {
+) -> Result<crate::observation::statistics::AgentStatistics, ConversationStoreError> {
     Ok(at_cut(connection, through)?.local.view)
 }
 
 pub(super) fn requires_statistics(event: &RuntimeEventEnvelope) -> bool {
-    event.attempt_id.is_some()
-        && matches!(
-            event.event,
-            RuntimeEvent::AttemptStarted { .. }
-                | RuntimeEvent::TurnStarted
-                | RuntimeEvent::ModelRequestStarted { .. }
-                | RuntimeEvent::ModelRequestCompleted { .. }
-                | RuntimeEvent::ModelRequestFailed { .. }
-                | RuntimeEvent::AssistantMessageCommitted { .. }
-                | RuntimeEvent::AttemptCompleted { .. }
-                | RuntimeEvent::AttemptCancelled { .. }
-                | RuntimeEvent::AttemptFailed { .. }
-                | RuntimeEvent::AttemptTimedOut { .. }
-                | RuntimeEvent::AttemptLimitExceeded { .. }
-                | RuntimeEvent::ToolExecutionStarted { .. }
-                | RuntimeEvent::ToolExecutionCompleted { .. }
-                | RuntimeEvent::ToolExecutionFailed { .. }
-                | RuntimeEvent::CompactionStarted { .. }
-                | RuntimeEvent::CompactionCompleted { .. }
-        )
+    if event.attempt_id.is_none() {
+        return false;
+    }
+    match &event.event {
+        RuntimeEvent::ModelRequestStarted { owner, .. }
+        | RuntimeEvent::ModelRequestCompleted { owner, .. }
+        | RuntimeEvent::ModelRequestFailed { owner, .. } => matches!(
+            owner,
+            crate::model::snapshot::ModelRequestOwner::Agent { .. }
+        ),
+        RuntimeEvent::AttemptStarted { .. }
+        | RuntimeEvent::TurnStarted
+        | RuntimeEvent::AssistantMessageCommitted { .. }
+        | RuntimeEvent::AttemptCompleted { .. }
+        | RuntimeEvent::AttemptCancelled { .. }
+        | RuntimeEvent::AttemptFailed { .. }
+        | RuntimeEvent::AttemptTimedOut { .. }
+        | RuntimeEvent::AttemptLimitExceeded { .. }
+        | RuntimeEvent::ToolExecutionStarted { .. }
+        | RuntimeEvent::ToolExecutionCompleted { .. }
+        | RuntimeEvent::ToolExecutionFailed { .. }
+        | RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionCompleted { .. } => true,
+        _ => false,
+    }
 }
 
 pub(super) fn seed(
@@ -315,24 +322,22 @@ pub(super) fn seed(
     connection
         .prepare_cached("UPDATE rustx_store SET observation_statistics=?1 WHERE id=1")
         .and_then(|mut statement| statement.execute([bytes]))
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
-    matches!(
-        event,
-        RuntimeEvent::AttemptStarted { .. }
-            | RuntimeEvent::TurnStarted
-            | RuntimeEvent::InboundTurnAdopted { .. }
-            | RuntimeEvent::ModelRequestStarted { .. }
-            | RuntimeEvent::AssistantMessageCommitted { .. }
-            | RuntimeEvent::ToolExecutionStarted { .. }
-            | RuntimeEvent::CompactionStarted { .. }
-            | RuntimeEvent::BackgroundExecutionCommitted { .. }
-            | RuntimeEvent::SubagentOwnershipCommitted { .. }
-            | RuntimeEvent::WorkflowStarted { .. }
-            | RuntimeEvent::InteractionRequested { .. }
-    )
+    if let RuntimeEvent::ModelRequestStarted { owner, .. } = event
+        && !matches!(
+            owner,
+            crate::model::snapshot::ModelRequestOwner::Agent { .. }
+        )
+    {
+        return false;
+    }
+    super::observation_event::native_kind(event)
+        .ok()
+        .and_then(|kind| crate::durable::trace::TraceFactKind::parse(&kind))
+        .is_some_and(crate::durable::trace::TraceFactKind::is_anchor)
 }
 pub(super) struct Prepared {
     pub(super) trace_total: Option<u64>,
@@ -434,7 +439,7 @@ impl NativeFacts {
                 facts.completed_response = connection
                     .prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<?2)")
                     .and_then(|mut statement| statement.query_row(params![attempt.as_str(),event.sequence],|row|row.get(0)))
-                    .map_err(|error|storage(error.to_string()))?;
+                    .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             }
             RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
             | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => {
@@ -470,7 +475,7 @@ fn tool_settlement(
         "tool_execution_completed",
         "tool_execution_failed",
     ] {
-        let fact:Option<(u64,String)>=connection.prepare_cached("SELECT sequence,event_timestamp FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![tool_call_id.as_str(),attempt.as_str(),kind,event.sequence],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|storage(error.to_string()))?;
+        let fact:Option<(u64,String)>=connection.prepare_cached("SELECT sequence,event_timestamp FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![tool_call_id.as_str(),attempt.as_str(),kind,event.sequence],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if let Some((sequence, timestamp)) = fact
             && predecessor
                 .as_ref()
@@ -504,7 +509,7 @@ pub(super) fn trace_total(
         .and_then(|mut statement| {
             statement.query_row([through], |row| Ok((row.get(0)?, row.get(1)?)))
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if missing {
         return Err(storage("native trace count source unavailable"));
     }
@@ -547,9 +552,9 @@ mod compact_tests {
                 output_tokens_per_second: Some(rate),
             }),
             reported_usage: Some(crate::model::ModelUsage {
-                input_tokens: u64::MAX,
-                output_tokens: 17,
-                total_tokens: u64::MAX,
+                input_tokens: Some(u64::MAX),
+                output_tokens: Some(17),
+                total_tokens: Some(u64::MAX),
                 details: None,
             }),
             ..ConversationStatistics::default()
@@ -575,11 +580,9 @@ mod compact_tests {
             f64::NEG_INFINITY,
         ] {
             let state = timed(rate);
-            let json = crate::runtime_client::checkpoint::bounded_bytes(
-                &fields(&state, shared(&state)),
-                16_384,
-            )
-            .unwrap();
+            let json =
+                crate::observation::bounded::bounded_bytes(&fields(&state, shared(&state)), 16_384)
+                    .unwrap();
             let binary = encode(&state).unwrap();
             let original: StoredStatistics = serde_json::from_slice(&json).unwrap();
             let restored: StoredStatistics = codec::decode_json_tuple(&binary, 16_384).unwrap();
@@ -611,11 +614,8 @@ mod compact_tests {
                 started_at: chrono::DateTime::from_timestamp(1_700_000_000, 123).unwrap(),
                 ended_at: None,
             });
-            if crate::runtime_client::checkpoint::bounded_bytes(
-                &fields(&state, shared(&state)),
-                16_384,
-            )
-            .is_some()
+            if crate::observation::bounded::bounded_bytes(&fields(&state, shared(&state)), 16_384)
+                .is_some()
             {
                 lower = size;
             } else {
@@ -627,18 +627,15 @@ mod compact_tests {
                 Some(crate::runtime::identity::AttemptId::new("x".repeat(size)));
             assert_eq!(
                 encode(&state).is_ok(),
-                crate::runtime_client::checkpoint::bounded_bytes(
-                    &fields(&state, shared(&state)),
-                    16_384
-                )
-                .is_some()
+                crate::observation::bounded::bounded_bytes(&fields(&state, shared(&state)), 16_384)
+                    .is_some()
             );
         }
     }
 
     #[test]
     fn binary_statistics_read_keeps_tuple_byte_boundary_and_seed_capacity() {
-        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::durable::SqliteConversationStore;
         let state = timed(1.0);
         let mut value = serde_json::to_value(fields(&state, shared(&state))).unwrap();
         value[0][7]["ignored"] = serde_json::json!("");
@@ -703,9 +700,9 @@ mod compact_tests {
             state.statistics.turns = 3;
             state.statistics.model_requests = 11;
             state.statistics.reported_usage = Some(crate::model::ModelUsage {
-                input_tokens: u64::MAX,
-                output_tokens: 17,
-                total_tokens: u64::MAX,
+                input_tokens: Some(u64::MAX),
+                output_tokens: Some(17),
+                total_tokens: Some(u64::MAX),
                 details: None,
             });
             state.activity.model_ms = Some(101);

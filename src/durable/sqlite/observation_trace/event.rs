@@ -7,8 +7,8 @@ use super::{
 };
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
+use crate::observation::trace::{TraceLocation, TracePreview, TraceToolOutcome};
 use crate::runtime::types::CancellationReason as R;
-use crate::runtime_client::trace::{TraceLocation, TracePreview, TraceToolOutcome};
 use crate::tools::types::ToolExecutionStatus as Status;
 
 fn find(
@@ -18,10 +18,10 @@ fn find(
 ) -> Result<Option<u64>, ConversationStoreError> {
     connection
         .prepare_cached(sql)
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .query_row(args, |row| row.get(0))
         .optional()
-        .map_err(|error| storage(error.to_string()))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))
 }
 fn attempt_start(
     connection: &Connection,
@@ -266,7 +266,13 @@ fn terminal_owner(
         E::CompactionCompleted{..}|E::CompactionFailed{..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='compaction_started' AND sequence<?1 ORDER BY sequence DESC LIMIT 1",[before]),
         E::BackgroundTerminalPublished{execution_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE json_extract(event_json,'$.event.execution_id')=?1 AND json_extract(event_json,'$.event.type')='background_execution_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![execution_id.as_str(),before]),
         E::SubagentTerminalPublished{subagent_id,..}|E::SubagentTerminalSettled{subagent_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_subagent_id_kind_idx WHERE json_extract(event_json,'$.event.subagent_id')=?1 AND json_extract(event_json,'$.event.type')='subagent_ownership_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![subagent_id.as_str(),before]),
-        E::WorkflowCompleted{run_id,..}|E::WorkflowFailed{run_id,..}|E::WorkflowCancelled{run_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_workflow_coordinates_idx WHERE json_extract(event_json,'$.event.run_id.conversation_id')=?1 AND json_extract(event_json,'$.event.run_id.attempt_id')=?2 AND json_extract(event_json,'$.event.run_id.invocation')=?3 AND json_extract(event_json,'$.event.type')='workflow_started' AND sequence<?4 ORDER BY sequence DESC LIMIT 1",params![run_id.conversation_id.as_str(),run_id.attempt_id.as_str(),run_id.invocation,before]),
+        E::WorkflowCompleted{run_id,..}|E::WorkflowFailed{run_id,..}|E::WorkflowCancelled{run_id,..}=>{
+            let (kind,identity)=match &run_id.origin {
+                crate::runtime::workflow::WorkflowRunOrigin::Tool{attempt_id}=>("tool",attempt_id.as_str()),
+                crate::runtime::workflow::WorkflowRunOrigin::Scheduled{start_id}=>("scheduled",start_id.as_str()),
+            };
+            find(connection,"SELECT sequence FROM events INDEXED BY events_workflow_coordinates_idx WHERE json_extract(event_json,'$.event.run_id.conversation_id')=?1 AND json_extract(event_json,'$.event.run_id.origin.type')=?2 AND coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id'))=?3 AND json_extract(event_json,'$.event.run_id.invocation')=?4 AND json_extract(event_json,'$.event.type')='workflow_started' AND sequence<?5 ORDER BY sequence DESC LIMIT 1",params![run_id.conversation_id.as_str(),kind,identity,run_id.invocation,before])
+        },
         E::InteractionSettled{interaction_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_interaction_id_kind_idx WHERE json_extract(event_json,'$.event.interaction_id')=?1 AND json_extract(event_json,'$.event.type')='interaction_requested' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![interaction_id.as_str(),before]),
         _=>Ok(Some(before)),
     }
@@ -293,7 +299,7 @@ fn adoption(
             let digest: Option<Vec<u8>> = connection.query_row_cached(
                 "SELECT observation_identity_digest FROM message_ledger WHERE position=?1 AND typeof(observation_identity_digest)='blob' AND length(observation_identity_digest)=32",
                 [position], |row| row.get(0),
-            ).optional().map_err(|error| storage(error.to_string()))?;
+            ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             members.push(AdoptionMember {
                 ordinal: ordinal as u64,
                 ledger_position: position,
@@ -304,7 +310,7 @@ fn adoption(
             let inserted = connection.execute_cached(
                 "INSERT INTO trace_adoption_members(source_sequence,ordinal,ledger_position,identity_digest) SELECT ?1,?2,position,observation_identity_digest FROM message_ledger WHERE position=?3 AND typeof(observation_identity_digest)='blob' AND length(observation_identity_digest)=32",
                 params![sequence,ordinal as u64,position],
-            ).map_err(|error|storage(error.to_string()))?;
+            ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             if inserted != 1 {
                 return Err(storage("original adopted C identity evidence unavailable"));
             }
@@ -315,7 +321,7 @@ fn adoption(
                 [position],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let summary: TraceCanonicalSummary = super::decode(
             &bytes.ok_or_else(|| storage("native adopted classification unavailable"))?,
         )?;
@@ -469,7 +475,7 @@ fn actor_data(
             Ok(TraceFactData::SubagentStart {
                 activation_id: (subagent_id.as_str().len() <= 512).then(|| subagent_id.clone()),
                 agent_id: child_agent_id.clone(),
-                origin: crate::runtime_client::checkpoint::bounded_clone(origin, 1024),
+                origin: crate::observation::bounded::bounded_clone(origin, 1024),
                 agent_preview: TracePreview::of(agent),
             })
         }
@@ -478,14 +484,16 @@ fn actor_data(
             tool_call_id,
             ..
         } => {
-            alias(
-                fields,
-                event,
-                TraceFieldKind::CallId,
-                "tool_call_id",
-                tool_call_id.as_str(),
-            )?;
-            let native_id = crate::runtime_client::checkpoint::bounded_bytes(run_id, 512)
+            if let Some(tool_call_id) = tool_call_id {
+                alias(
+                    fields,
+                    event,
+                    TraceFieldKind::CallId,
+                    "tool_call_id",
+                    tool_call_id.as_str(),
+                )?;
+            }
+            let native_id = crate::observation::bounded::bounded_bytes(run_id, 512)
                 .map(|bytes| String::from_utf8(bytes).expect("native JSON UTF8"));
             if native_id.is_none() {
                 fields.push(value_source(
@@ -497,8 +505,10 @@ fn actor_data(
             }
             Ok(TraceFactData::WorkflowStart {
                 native_id,
-                originating_tool_call_id: (tool_call_id.as_str().len() <= 512)
-                    .then(|| tool_call_id.clone()),
+                originating_tool_call_id: tool_call_id
+                    .as_ref()
+                    .filter(|id| id.as_str().len() <= 512)
+                    .cloned(),
             })
         }
         E::InteractionRequested { interaction_id, .. } => {
@@ -724,6 +734,9 @@ fn data(
         | E::SubagentTerminalPublished { .. }
         | E::SubagentTerminalSettled { .. }
         | E::InteractionSettled { .. } => foreign_terminal_data(event),
+        E::ConfigurationApplied { change } => Ok(TraceFactData::Configuration {
+            change: change.clone(),
+        }),
         _ => terminal_data(connection, event, fields, execution, pending),
     }
 }
@@ -747,7 +760,7 @@ impl Prepared {
             connection.execute_cached(
                 "INSERT INTO trace_adoption_members(source_sequence,ordinal,ledger_position,identity_digest) VALUES(?1,?2,?3,?4)",
                 params![event.sequence,member.ordinal,member.ledger_position,member.digest],
-            ).map_err(|error|storage(error.to_string()))?;
+            ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         }
         if let E::AssistantMessageCommitted { message_id } = &event.event {
             capture_assistant_relations(connection, event, message_id);
@@ -781,7 +794,7 @@ pub(in crate::durable::sqlite) fn index_event(
     if let Some(prepared) = prepare_event(connection, event, execution, false)? {
         connection.prepare_cached("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1")
             .and_then(|mut statement| statement.execute(params![event.sequence, prepared.bytes, prepared.owner]))
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
     Ok(())
 }
@@ -791,6 +804,14 @@ pub(in crate::durable::sqlite) fn prepare_event(
     execution: Option<&super::super::observation_execution::Captured>,
     pending: bool,
 ) -> Result<Option<Prepared>, ConversationStoreError> {
+    if event.event.is_auxiliary_model_request()
+        || matches!(
+            event.event,
+            E::AuxiliaryCallStarted { .. } | E::AuxiliaryCallSettled { .. }
+        )
+    {
+        return Ok(None);
+    }
     let Some(kind) =
         TraceFactKind::parse(&super::super::observation_event::native_kind(&event.event)?)
     else {
@@ -803,7 +824,7 @@ pub(in crate::durable::sqlite) fn prepare_event(
                 [request_id.as_str()],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if retained {
             return Ok(None);
         } // The native caller captures core after actual J binding.
@@ -815,7 +836,7 @@ pub(in crate::durable::sqlite) fn prepare_event(
         let staged: bool = connection.query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM publication_streams INDEXED BY publication_streams_message_settlement_idx WHERE message_id=?1 AND settlement IS NULL)",
             [message_id.as_str()], |row| row.get(0),
-        ).map_err(|error| storage(error.to_string()))?;
+        ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         canonical_fields_ready = Some(
             !staged
                 && super::super::optional_display_layout(connection, || {
@@ -825,7 +846,7 @@ pub(in crate::durable::sqlite) fn prepare_event(
                         position(connection, message_id)?
                             .ok_or_else(|| storage("original Assistant C absent"))?,
                     )
-                })
+                })?
                 .is_some(),
         );
         if !pending {
@@ -838,6 +859,10 @@ pub(in crate::durable::sqlite) fn prepare_event(
         sequence: event.sequence,
         timestamp: event.timestamp,
         kind,
+        owner: event
+            .event
+            .model_request_owner()
+            .map(crate::durable::observation::RequestOwnerKind::from),
         owner_anchor: terminal_owner(connection, event)?,
         location: location(connection, event, pending)?,
         fact: data(
@@ -859,7 +884,7 @@ pub(in crate::durable::sqlite) fn prepare_event(
     }))
 }
 fn save(connection: &Connection, header: &TraceFactHeader) -> Result<(), ConversationStoreError> {
-    connection.prepare_cached("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1").map_err(|error| storage(error.to_string()))?.execute(params![header.sequence,encode_fact(header)?,header.owner_anchor]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.execute(params![header.sequence,encode_fact(header)?,header.owner_anchor]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 pub(in crate::durable::sqlite) fn request_core(
@@ -868,7 +893,7 @@ pub(in crate::durable::sqlite) fn request_core(
     snapshot: &crate::model::RequestSnapshot,
 ) -> Result<(), ConversationStoreError> {
     let prepared = prepare_request_core(connection, event, snapshot, false)?;
-    connection.execute_cached("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1",params![event.sequence,prepared.bytes,prepared.owner]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("UPDATE events SET observation_trace_fact=?2,observation_trace_owner=?3 WHERE sequence=?1",params![event.sequence,prepared.bytes,prepared.owner]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 
@@ -904,6 +929,10 @@ pub(in crate::durable::sqlite) fn prepare_request_core(
         sequence: event.sequence,
         timestamp: event.timestamp,
         kind: TraceFactKind::ModelRequestStarted,
+        owner: event
+            .event
+            .model_request_owner()
+            .map(crate::durable::observation::RequestOwnerKind::from),
         owner_anchor: Some(event.sequence),
         location: location(connection, event, pending)?,
         bootstrap: None,
@@ -920,9 +949,9 @@ pub(in crate::durable::sqlite) fn prepare_request_core(
     };
     let step = step_start(connection, event, pending)?;
     if pending {
-        connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE request_id=?1",params![snapshot.request_id.as_str(),step,snapshot.identity.retry_number]).map_err(|error|storage(error.to_string()))?;
+        connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE request_id=?1",params![snapshot.request_id.as_str(),step,snapshot.identity.retry_number]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     } else {
-        connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE started_sequence=?1",params![event.sequence,step,snapshot.identity.retry_number]).map_err(|error|storage(error.to_string()))?;
+        connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE started_sequence=?1",params![event.sequence,step,snapshot.identity.retry_number]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
     Ok(Prepared {
         bytes: encode_fact(&header)?,
@@ -951,7 +980,7 @@ fn bootstrap(
             detail: TracePreview::of(error),
         }),
         E::CompactionCompleted { .. } => {
-            super::super::observation_occupancy::witness_with_pending(connection, event, pending)
+            super::super::observation_occupancy::witness_with_pending(connection, event, pending)?
                 .map(|reading| TraceBootstrapFact::CompactionCompleted {
                     reading: Box::new(reading),
                 })
@@ -1020,7 +1049,7 @@ pub(in crate::durable::sqlite) fn accepted_identity_equal(
                     Ok(chunk) => {
                         #[cfg(test)]
                         {
-                            let (rows, bytes) = super::super::content::last_read_work();
+                            let (rows, bytes) = crate::durable::sqlite::content::last_read_work();
                             COMPARE_WORK.with(|work| {
                                 let (calls, max_rows, max_bytes, total) = work.get();
                                 work.set((
@@ -1084,7 +1113,7 @@ fn refresh_raw_bindings(
             [position],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut summary: TraceCanonicalSummary =
         decode(&bytes.ok_or_else(|| storage("native canonical Trace summary unavailable"))?)?;
     let mut changed = false;
@@ -1099,16 +1128,16 @@ fn refresh_raw_bindings(
                 "UPDATE message_ledger SET observation_trace_summary=?2 WHERE position=?1",
                 params![position, encode(&summary)?],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     } else {
         validate_unchanged_header(&summary)?;
     }
-    let mut statement=connection.prepare_cached("SELECT block_index,observation_trace_proposal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 ORDER BY block_index").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT block_index,observation_trace_proposal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 ORDER BY block_index").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map([position], |row| {
             Ok((row.get::<_, u32>(0)?, row.get::<_, Option<Vec<u8>>>(1)?))
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     for row in rows {
         let (block, bytes) = row.map_err(|error| storage(error.to_string()))?;
         let mut proposal: TraceToolProposalSummary =
@@ -1118,7 +1147,7 @@ fn refresh_raw_bindings(
             changed |= prefer_original_raw(connection, conversation, field)?;
         }
         if changed {
-            connection.execute_cached("UPDATE canonical_tool_calls SET observation_trace_proposal=?3 WHERE observation_ledger=?1 AND block_index=?2",params![position,block,encode(&proposal)?]).map_err(|error|storage(error.to_string()))?;
+            connection.execute_cached("UPDATE canonical_tool_calls SET observation_trace_proposal=?3 WHERE observation_ledger=?1 AND block_index=?2",params![position,block,encode(&proposal)?]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         } else {
             validate_unchanged_header(&proposal)?;
         }
@@ -1128,7 +1157,7 @@ fn refresh_raw_bindings(
 // Deserialization can supply omitted Option fields. Retain the existing typed
 // encoding admission even when an unchanged binding needs no physical rewrite.
 fn validate_unchanged_header(value: &impl serde::Serialize) -> Result<(), ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_len(value, super::HEADER_ENCODED_MAX)
+    crate::observation::bounded::bounded_len(value, super::HEADER_ENCODED_MAX)
         .map(|_| ())
         .ok_or_else(|| storage("native Trace header exceeds bound"))
 }
@@ -1160,11 +1189,11 @@ pub(in crate::durable::sqlite) fn prefer_original_raw(
         binding,
     } = field
     {
-        let raw = super::super::content::descriptor(
+        let raw = crate::durable::sqlite::content::descriptor(
             connection,
             conversation,
             &binding.content_ref.source,
-            crate::runtime_client::content::ContentRepresentation::RawJsonUtf8,
+            crate::observation::content::ContentRepresentation::RawJsonUtf8,
         )?;
         if let Some(raw) = raw {
             if binding.content_ref != raw {
@@ -1172,7 +1201,7 @@ pub(in crate::durable::sqlite) fn prefer_original_raw(
                 return Ok(true);
             }
         } else if binding.content_ref.representation
-            == crate::runtime_client::content::ContentRepresentation::RawJsonUtf8
+            == crate::observation::content::ContentRepresentation::RawJsonUtf8
         {
             return Err(storage("required original raw Tool arguments unavailable"));
         }
@@ -1199,7 +1228,7 @@ fn capture_accepted_relation(
             let equal =
                 accepted_identity_equal(connection, start, event.sequence, message_id.as_str())?;
             if equal {
-                connection.execute_cached("UPDATE request_snapshots SET observation_accepted_ledger=?2 WHERE started_sequence=?1",params![start,position(connection,message_id)?]).map_err(|error|storage(error.to_string()))?;
+                connection.execute_cached("UPDATE request_snapshots SET observation_accepted_ledger=?2 WHERE started_sequence=?1",params![start,position(connection,message_id)?]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             }
         }
     }

@@ -1,0 +1,217 @@
+import clsx from 'clsx';
+import { useEffect, useState } from 'react';
+import type { WorkflowToolChoice } from '../../../../../../../protocol/app-server/v73';
+import { useTranslation } from '../../../../../locale/react';
+import { IconChevronDownOutline14 } from '../../../../../presentation/primitives/icons';
+import { Switch } from '../../../../../presentation/primitives/Switch';
+import { encodeField, fieldValue, setField, type FieldAddress } from '../../../document/fields';
+import { useFieldDraft } from '../forms/drafts';
+import { readJson } from '../../../../../../shared/json-numbers';
+import { blockAt, nodeAt, type Value } from '../../../document/model';
+import { schemaObject } from '../../../document/schema';
+import { ReferencePicker } from '../forms/ReferencePicker';
+import { JsonCodeEditor } from '../../../../../presentation/primitives/JsonCodeEditor';
+import { TemplateInput, templateParts, templateValue } from '../forms/TemplateInput';
+import { ValueEditor } from '../forms/ValueEditor';
+import { ConflictActions, JsonField, Section, SelectField, TextField, useFieldError } from '../forms/fields';
+import { CommandRejected, replaceNodeExits } from '../../../document/commands';
+import { ErrorStrategy, RetrySettings, type Retry } from './InferencePanels';
+import { useNode, type PanelProps } from './shared';
+import { useToolCatalog } from '../toolCatalog';
+import { IconPencil } from '../../icons';
+import css from '../Editor.module.css';
+
+type ToolNode = ReturnType<typeof useNode<'tool'>>;
+type ArgumentKind = 'string' | 'enum' | 'integer' | 'number' | 'boolean' | 'json';
+
+/** Arguments as one field per parameter: constructed fields, or the fields
+ * of a literal object. Any other value is edited as a whole. */
+function argumentFields(value: Value): Record<string, Value> | undefined {
+  if (value.type === 'object') return value.fields;
+  if (value.type === 'literal' && value.value && typeof value.value === 'object' && !Array.isArray(value.value))
+    return Object.fromEntries(Object.entries(value.value).map(([key, item]) => [key, { type: 'literal', value: item }]));
+  return undefined;
+}
+
+/** The form control a parameter schema asks for, as Dify's tool form. */
+function argumentKind(schema: Record<string, unknown>): ArgumentKind {
+  const types = (Array.isArray(schema.type) ? schema.type : [schema.type]).filter(type => type !== 'null');
+  if (types.length !== 1) return 'json';
+  if (types[0] === 'string') return Array.isArray(schema.enum) && schema.enum.every(item => typeof item === 'string') ? 'enum' : 'string';
+  return types[0] === 'integer' || types[0] === 'number' || types[0] === 'boolean' ? types[0] : 'json';
+}
+
+/** As Dify's tool node: the selected Tool's parameters as an input form,
+ * then its output variables. A source Tool is described by the scope's
+ * catalog; a Tool nothing describes is configured by name with a raw value. */
+export function ToolPanel(props: PanelProps) {
+  const tx = useTranslation(), tool = useNode(props, 'tool'), { node } = tool, catalog = useToolCatalog();
+  const { selector } = node, source = selector.origin === 'source' ? selector.source_id : undefined;
+  useEffect(() => { if (source !== undefined && catalog.state.status === 'idle') catalog.load(); }, [source, catalog]);
+  const choice = source === undefined ? props.vocabulary?.builtin_tools.find(item => item.name === selector.name)
+    : catalog.state.status === 'ready' ? catalog.state.sources.find(item => item.source_id === source)?.tools.find(item => item.name === selector.name) : undefined;
+  const fields = argumentFields(node.arguments);
+  return <>
+    {selector.origin==='builtin' && selector.name==='bash' && <p className={css.note}>{tx('workflows:data.code-cwd')}</p>}
+    {source !== undefined && catalog.state.status === 'loading' && <p className={css.note} role="status">{tx('workflows:tool.loading')}</p>}
+    {!choice && <ToolSelection {...props} tool={tool} />}
+    {choice && fields ? <ToolInputs {...props} tool={tool} choice={choice} fields={fields} />
+      : <Section title={tx('workflows:tool.inputs')}><ValueEditor label={tx('workflows:inspector.tool-arguments')} address={tool.at('arguments')} value={node.arguments} edit={props.edit} /></Section>}
+    <ToolOutputs {...props} tool={tool} />
+    <ToolFailure {...props} tool={tool} />
+  </>;
+}
+
+/** As Dify's tool node: retry on failure, then error handling. Each retry
+ * is a new invocation, approved and recorded on its own. */
+function ToolFailure(props: PanelProps & { tool: ToolNode }) {
+  const tx = useTranslation(), { node, at, update } = props.tool, strategy = node.on_error ?? { type: 'stop' as const };
+  const setRetry = (next?: Retry) => update(current => {
+    const { retry: _previous, ...rest } = current;
+    return next ? { ...rest, retry: next } : rest;
+  }, at('retry'));
+  const choose = (type: typeof strategy.type) => {
+    if (type === strategy.type) return;
+    props.edit(document => {
+      const owner = blockAt(document, props.block), current = owner && nodeAt(owner, props.id);
+      if (current?.type !== 'tool') throw new CommandRejected('missing_node');
+      const { on_error: _previous, ...rest } = current;
+      // A starting default of the result's own type, to be filled in.
+      const next = type === 'stop' ? undefined : type === 'fail_branch' ? { type } : { type, value: current.result.type === 'text' ? '' : {} };
+      // Without a fail branch the node has no fail port, so its connections go.
+      return replaceNodeExits(document, props.block, props.id, next ? { ...rest, on_error: next } : rest);
+    });
+  };
+  return <>
+    <RetrySettings retry={node.retry} setRetry={setRetry} />
+    <ErrorStrategy strategy={strategy.type} choose={choose} note={tx('workflows:failure.tool-retry')}>
+      {strategy.type === 'default_value' && <div className={css.failureDefaults}>
+        <JsonField label={tx('workflows:failure.default-value')} value={strategy.value} rows={4} address={at('on_error', 'value')} />
+      </div>}
+    </ErrorStrategy>
+  </>;
+}
+
+function ToolSelection(props: PanelProps & { tool: ToolNode }) {
+  const tx = useTranslation(), { node, at, update } = props.tool;
+  return <Section title={tx('workflows:panel.tool-config')}>
+    <SelectField label={tx('workflows:inspector.tool-origin')} value={node.selector.origin} options={[{ value: 'builtin', label: tx('workflows:inspector.tool-origin-builtin') }, { value: 'source', label: tx('workflows:inspector.tool-origin-source') }]}
+      onChange={origin => { if (origin !== node.selector.origin) update(current => ({ ...current, selector: origin === 'builtin' ? { origin, name: current.selector.name } : { origin, source_id: '', name: current.selector.name } }), at('selector')); }} />
+    {node.selector.origin === 'source' && <TextField label={tx('workflows:inspector.tool-source')} value={node.selector.source_id} invalid={!node.selector.source_id} field={encodeField(at('selector', 'source_id'))}
+      onChange={(source_id, session) => update(current => ({ ...current, selector: { origin: 'source', source_id, name: current.selector.name } }), at('selector', 'source_id'), undefined, session)} />}
+    {node.selector.origin === 'builtin'
+      ? <SelectField label={tx('workflows:inspector.tool-name')} value={node.selector.name} options={[{ value: '', label: tx('workflows:tool.choose') }, ...(props.vocabulary?.builtin_tools ?? []).map(item => ({ value: item.name, label: item.name }))]}
+        onChange={name => update(current => ({ ...current, selector: { origin: 'builtin', name } }), at('selector', 'name'))} />
+      : <TextField label={tx('workflows:inspector.tool-name')} value={node.selector.name} invalid={!node.selector.name} field={encodeField(at('selector', 'name'))}
+        onChange={(name, session) => update(current => ({ ...current, selector: { ...current.selector, name } }), at('selector', 'name'), undefined, session)} />}
+  </Section>;
+}
+
+/** Dify's "Input variables": each parameter's name, requirement and
+ * description over its control. An unset optional parameter is absent. */
+function ToolInputs(props: PanelProps & { tool: ToolNode; choice: WorkflowToolChoice; fields: Record<string, Value> }) {
+  const tx = useTranslation(), { at, update } = props.tool;
+  const schema = schemaObject(props.choice.input_schema), properties = schemaObject(schema?.properties) ?? {};
+  const required = Array.isArray(schema?.required) ? schema.required : [];
+  const set = (name: string, value: Value | undefined, session?: string) => update(current => {
+    const fields = { ...argumentFields(current.arguments) };
+    if (value) fields[name] = value; else delete fields[name];
+    return { ...current, arguments: { type: 'object', fields } };
+  }, at('arguments', 'fields', { key: name }), undefined, session);
+  return <section className={css.group} aria-label={tx('workflows:tool.inputs')}>
+    <h3 className={css.groupHeading}>{tx('workflows:tool.inputs')}</h3>
+    <div className={css.toolForm}>
+      {Object.entries(properties).map(([name, value]) => <ToolArgument key={name} {...props} name={name} schema={schemaObject(value) ?? {}} required={required.includes(name)} value={props.fields[name]} set={set} />)}
+      {!Object.keys(properties).length && <p className={css.note}>{tx('workflows:tool.no-inputs')}</p>}
+    </div>
+  </section>;
+}
+
+function ToolArgument({ name, schema, required, value, set, tool, edit }: PanelProps & {
+  tool: ToolNode; name: string; schema: Record<string, unknown>; required: boolean; value?: Value; set: (name: string, value: Value | undefined, session?: string) => void;
+}) {
+  const tx = useTranslation(), address = tool.at('arguments', 'fields', { key: name }), kind = argumentKind(schema);
+  const description = typeof schema.description === 'string' ? schema.description : undefined;
+  const constant = value?.type === 'literal' ? value.value : undefined;
+  const variable = value?.type === 'reference';
+  const options = kind === 'enum' ? schema.enum as string[] : [];
+  const selected = typeof constant === 'string' ? options.indexOf(constant) : -1;
+  return <div className={css.toolArgument}>
+    <div className={css.toolArgumentHead}><b>{name}</b>{required && <span className={css.required} aria-label={tx('workflows:tool.required')}>*</span>}</div>
+    {description && <p className={css.toolArgumentAbout}>{description}</p>}
+    {value && value.type !== 'literal' && value.type !== 'reference' && !(kind === 'string' && value.type === 'template')
+      ? <ValueEditor label={name} address={address} value={value} edit={edit} />
+      : kind === 'string' ? <TemplateInput parts={templateParts(value)} address={address} edit={edit} label={name} badge={tx('workflows:tool.type-string')} invalid={required && !value}
+      multiline={name==='command' && tool.node.selector.origin==='builtin' && tool.node.selector.name==='bash'}
+      onChange={(parts, session) => set(name, templateValue(parts), `${encodeField(address)}:${session}`)} />
+      // As Dify's FormInputItem: a JSON constant's editor sits under the switch.
+      : <div className={kind === 'json' && !variable ? css.toolArgumentStack : css.toolArgumentRow}>
+        {/* As Dify's FormInputTypeSwitch: a variable, or a constant. */}
+        <div className={css.typeSwitch} role="radiogroup" aria-label={tx('workflows:value.kind')}>
+          <button type="button" role="radio" aria-checked={variable} title={tx('workflows:tool.variable')} aria-label={tx('workflows:tool.variable')} className={clsx(variable && css.typeSwitchActive)}
+            onClick={() => { if (!variable) set(name, { type: 'reference', path: [] }); }}>{/* i18n-raw: Dify's variable glyph */ '{x}'}</button>
+          <button type="button" role="radio" aria-checked={!variable} title={tx('workflows:tool.constant')} aria-label={tx('workflows:tool.constant')} className={clsx(!variable && css.typeSwitchActive)}
+            onClick={() => { if (variable) set(name, undefined); }}><IconPencil size={14} /></button>
+        </div>
+        {variable ? <ReferencePicker address={address} path={value.path} edit={edit} placeholder={tx('workflows:branch.select-variable')} onChoose={choice => set(name, { type: 'reference', path: choice.path })} />
+          : kind === 'boolean' ? <span className={css.toolBoolean}><Switch checked={constant === true} label={name} onChange={on => set(name, { type: 'literal', value: on })} /></span>
+            : kind === 'enum' ? <select className={css.input} aria-label={name} value={selected < 0 ? '' : String(selected)} aria-invalid={required && !value || undefined} onChange={event => set(name, event.target.value === '' ? undefined : { type: 'literal', value: options[Number(event.target.value)] })}>
+              <option value="">{tx('workflows:tool.unset')}</option>
+              {options.map((item, index) => <option key={item} value={index}>{item || '""'}</option>)}
+            </select>
+              : <ConstantInput kind={kind} name={name} value={constant} invalid={required && !value}
+                wrapped={tool.node.arguments.type !== 'literal'} address={tool.node.arguments.type === 'literal' ? tool.at('arguments', 'value', { key: name }) : address} />}
+      </div>}
+  </div>;
+}
+
+/** Constants share the editor's versioned draft and numeric contract. */
+function ConstantInput({ kind, name, value, invalid, address, wrapped }: {
+  kind: 'integer' | 'number' | 'json'; name: string; value: unknown; invalid: boolean; address: FieldAddress; wrapped: boolean;
+}) {
+  const tx = useTranslation(), describe = useFieldError();
+  const location = { ...address, role: wrapped ? 'literal' as const : 'optional' as const };
+  const field = useFieldDraft({ address: location, canonical: value === undefined ? '' : JSON.stringify(value, null, 2), command: (document, text) => {
+    if (!fieldValue(document, location)) return { status: 'rejected', error: { kind: 'missing' } };
+    if (!text.trim()) {
+      const parent = { ...location, role: 'value' as const, path: location.path.slice(0, -1) };
+      const { [name]: _removed, ...fields } = schemaObject(fieldValue(document, parent)?.value)!;
+      return { status: 'applied', document: setField(document, parent, fields) };
+    }
+    const reading = readJson(text);
+    if (!reading.ok) return { status: 'rejected', error: { kind: reading.reason } };
+    if (kind !== 'json' && (typeof reading.value !== 'number' || kind === 'integer' && !Number.isInteger(reading.value)))
+      return { status: 'rejected', error: { kind: 'syntax' } };
+    return { status: 'applied', document: setField(document, location, reading.value) };
+  } });
+  const error = describe(field.error);
+  return <div onBlur={kind === 'json' ? field.apply : undefined} onKeyDown={event => {
+    if (kind === 'json' && event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) field.apply();
+  }}>
+    {kind === 'json'
+      ? <JsonCodeEditor label={tx('workflows:tool.json')} value={field.text} minHeight={96} onChange={field.change} error={error} />
+      : <input className={css.input} data-workflow-field={encodeField(location)} inputMode={kind === 'integer' ? 'numeric' : 'decimal'} aria-label={name} aria-invalid={!!field.error || invalid || undefined} value={field.text}
+        onChange={event => field.change(event.target.value)} onBlur={field.apply} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) field.apply(); }} />}
+    {error && <small className={css.hintError} role="alert">{error}</small>}
+    <ConflictActions field={field} />
+  </div>;
+}
+
+/** Dify's collapsible "Output variables": fixed by the Tool, its declared
+ * structured fields or its `text`. */
+function ToolOutputs(props: PanelProps & { tool: ToolNode }) {
+  const tx = useTranslation(), { node } = props.tool, [open, setOpen] = useState(false);
+  const schema = node.result.type === 'json' ? schemaObject(node.result.schema) : undefined, fields = Object.entries(schemaObject(schema?.properties) ?? {});
+  return <section className={css.group} aria-label={tx('workflows:prompt.output-variables')}>
+    <h3 className={css.groupHeading}>
+      <button type="button" className={css.outputToggle} aria-expanded={open} onClick={() => setOpen(value => !value)}>{tx('workflows:prompt.output-variables')}<IconChevronDownOutline14 /></button>
+    </h3>
+    {open && <dl className={css.outputVars}>
+      {node.result.type === 'text'
+        ? <div><dt><b>{/* i18n-raw: native output field name */ 'text'}</b><code>{/* i18n-raw: JSON Schema type name */ 'string'}</code></dt><dd>{tx('workflows:tool.output-text')}</dd></div>
+        : fields.map(([name, value]) => { const field = schemaObject(value); return <div key={name}>
+          <dt><b>{name}</b><code>{String(field?.type ?? '?')}</code></dt>{typeof field?.description === 'string' && <dd>{field.description}</dd>}
+        </div>; })}
+    </dl>}
+  </section>;
+}

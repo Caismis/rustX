@@ -129,12 +129,6 @@
 .root[hidden] { display:none; }
 .body { height:100%; display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; overflow:auto; }
 .guide { height:100%; flex:1; }
-.iconButton:hover { background:var(--dsw-alias-interactive-bg-hover); }
-.chrome { display:flex; gap:8px; margin-left:4px; flex:none; }
-.iconButton { display:flex; align-items:center; justify-content:center; flex:none; width:28px; height:28px; padding:6px; border:0; border-radius:28px; background:transparent; color:var(--dsw-alias-label-secondary); }
-.iconButton svg { width:15px; height:15px; }
-.iconButton:disabled { opacity:.35; }
-.mirrored { transform:scaleX(-1); }
 .shortcut { display:inline-flex; align-items:center; gap:3px; flex:none; color:var(--dsw-alias-label-tertiary); font-size:12px; line-height:16px; white-space:nowrap; }
 .shortcut kbd { display:inline-flex; align-items:center; justify-content:center; font:inherit; }
 .entry:disabled,.launch:disabled { opacity:.45; cursor:default; }
@@ -149,5 +143,4 @@
 .terminalBody :global(.xterm) { height:100%; }
 
 .root { flex-direction: column; }
-.tabTitle { display:flex; align-items:center; gap:5px; min-width:0; }
-.tabTitle > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tabTitle { display:contents; }

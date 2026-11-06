@@ -1,7 +1,11 @@
 //! The checkpoint transaction is the sole historical projection mutation boundary.
+#[path = "auxiliary_lineage.rs"]
+mod auxiliary_lineage;
+
+mod store;
 use super::{
     Connection, ConversationStoreError, OptionalExtension, Transaction, decode, encode,
-    nonnegative, params, seq_to_i64, storage,
+    nonnegative, params, seq_to_i64, sqlite_error, storage,
 };
 use crate::context::checkpoint::{
     CheckpointCandidate, CheckpointMessage, OriginActivation, ProjectionActivation,
@@ -169,7 +173,7 @@ fn eligibility_header(
     let row: Option<Row> = connection.query_row(
         "SELECT CASE WHEN octet_length(checkpoint_id)<=1024 THEN checkpoint_id END,ledger_frontier,visible_journal,CASE WHEN octet_length(installation_id)<=1024 THEN installation_id END,installation_id IS NOT NULL,CASE WHEN octet_length(header_digest)=64 THEN header_digest END FROM projection_activations WHERE activation=?1",
         [seq_to_i64(id)?], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)),
-    ).optional().map_err(|e|storage(e.to_string()))?;
+    ).optional().map_err(|e| sqlite_error(&e, e.to_string()))?;
     let (checkpoint, ledger, journal, installation, installed, integrity) =
         row.ok_or_else(|| invalid("missing historical projection predecessor"))?;
     let header = EligibilityHeader {
@@ -233,7 +237,7 @@ fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreErro
     let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row_cached(
         "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END,projection_count,CASE WHEN octet_length(projection_digest)=64 THEN projection_digest END FROM bootstrap_identity WHERE id=1", [],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
-    ).optional().map_err(|e|storage(e.to_string()))?;
+    ).optional().map_err(|e| sqlite_error(&e, e.to_string()))?;
     let Some((history, count, integrity)) = row else {
         return Ok(0);
     };
@@ -292,7 +296,7 @@ fn completion_at(
             ))
         })
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     row.map(
         |(sequence, schema_version, scope, activation, checkpoint, generation)| {
             let scope = scope.ok_or_else(|| invalid("invalid projection completion scope"))?;
@@ -309,7 +313,7 @@ fn completion_at(
                     [scope.as_str()],
                     |row| row.get(0),
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| sqlite_error(&error, error.to_string()))?;
             if !local
                 || schema_version != EVENT_SCHEMA_VERSION
                 || activation != generation
@@ -360,7 +364,7 @@ pub(super) fn pending_completion_head_id(
             [event.conversation_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if !local
         || event.conversation_id.as_str().len() > 128
         || checkpoint_id.as_str().len() > 1024
@@ -426,7 +430,7 @@ fn journal_frontier_from_completion(
             [],
             |r| r.get(0),
         )
-        .map_err(|e| storage(e.to_string()))?;
+        .map_err(|e| sqlite_error(&e, e.to_string()))?;
     if last > id {
         let next = eligibility_header(connection, id + 1)?;
         if next.journal <= through || next.installation.is_some() {
@@ -460,7 +464,7 @@ fn selected_frontier(
     let id: Option<u64> = connection.query_row(
         "SELECT activation FROM projection_activations INDEXED BY projection_ledger_idx WHERE ledger_frontier<=?1 ORDER BY ledger_frontier DESC,activation DESC LIMIT 1",
         [seq_to_i64(ledger.0)?],|r|r.get(0),
-    ).optional().map_err(|e|storage(e.to_string()))?;
+    ).optional().map_err(|e| sqlite_error(&e, e.to_string()))?;
     let id = id.unwrap_or(0);
     if id >= through {
         return Err(invalid("nonmonotone projection Ledger eligibility"));
@@ -960,17 +964,18 @@ fn activation_coordinates(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let ledger = transaction
         .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok((nonnegative(sequence, "completion sequence")? + 1, ledger))
 }
 
+#[allow(clippy::too_many_lines)] // Validate and commit one atomic projection transaction.
 pub(super) fn commit(
     guard: &super::event_insert::Guard,
     transaction: &Transaction<'_>,
@@ -994,6 +999,12 @@ pub(super) fn commit(
     if owner(transaction, input.owner.attempt_id.as_ref())? != input.owner {
         return Err(invalid("lost execution fencing"));
     }
+    auxiliary_lineage::validate_local_reference(
+        transaction,
+        scope,
+        &input.candidate,
+        &input.operation_id,
+    )?;
     validate_dependencies(transaction, scope, &input.candidate)?;
     stage(super::CompactionFaultOperation::BeforeContentInsert)?;
     let candidate_json = encode(&input.candidate, "checkpoint")?;
@@ -1049,8 +1060,8 @@ pub(super) fn commit(
         &input.candidate,
         &fingerprint,
         &activation,
-    );
-    let completed = super::persist_event_tx(guard, transaction, scope, event)?.event;
+    )?;
+    let completed = super::journal::persist_event_tx(guard, transaction, scope, event)?.event;
     if completed.sequence != activation.origin.completed_journal.0 {
         return Err(invalid("completion Journal coordinate mismatch"));
     }
@@ -1070,13 +1081,13 @@ pub(super) fn commit(
     let json = encode(&result, "compaction receipt")?;
     transaction.execute("INSERT INTO compaction_operations(operation_id,candidate_fingerprint,receipt_json,receipt_digest) VALUES(?1,?2,?3,?4)",params![result.operation_id.as_str(),result.candidate_fingerprint,json,digest(&json)]).map_err(|e|storage(e.to_string()))?;
     stage(super::CompactionFaultOperation::AfterReceiptInsert)?;
-    super::observation_projection::index_provenance(transaction, &result.checkpoint);
+    super::observation_projection::index_provenance(transaction, &result.checkpoint)?;
     super::projection_publication::index(
         transaction,
         &result.operation_id,
         &digest(&json),
         result.completed.observation.as_deref(),
-    );
+    )?;
     Ok(result)
 }
 
@@ -1087,8 +1098,48 @@ pub(super) fn selected_history(
     scope: &ConversationId,
     owner: &super::manifest::Owner,
 ) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
-    let epoch = owner.capture(connection)?;
     let cut = super::compaction_resources::cut(connection, scope)?;
+    selected_history_cut(connection, scope, owner, &cut)
+}
+
+/// Auxiliary reads may run while a primary Tool batch is still executing.
+/// Select the prefix before the earliest unresolved Tail call, using the native
+/// occurrence index in the same snapshot. Primary compilation remains strict.
+pub(super) fn auxiliary_history(
+    connection: &Connection,
+    scope: &ConversationId,
+    owner: &super::manifest::Owner,
+) -> Result<
+    (
+        crate::durable::projection::HistoricalModelInput,
+        crate::context::resources::ResourceReadCut,
+    ),
+    ConversationStoreError,
+> {
+    let mut cut = super::compaction_resources::cut(connection, scope)?;
+    let base = head(connection)?.map_or(LedgerFrontier(0), |p| p.candidate.base_frontier);
+    let pending: Option<u64> = connection.query_row(
+        "SELECT MIN(m.position) FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_pending JOIN message_ledger m ON m.message_id=c.assistant_message_id WHERE c.result_message_id IS NULL AND m.position>?1 AND m.position<=?2",
+        params![seq_to_i64(base.0)?, seq_to_i64(cut.ledger.0)?], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if let Some(pending) = pending {
+        cut.ledger = LedgerFrontier(
+            pending
+                .checked_sub(1)
+                .ok_or_else(|| invalid("invalid pending Tool ledger"))?,
+        );
+    }
+    let history = selected_history_cut(connection, scope, owner, &cut)?;
+    Ok((history, cut))
+}
+
+fn selected_history_cut(
+    connection: &Connection,
+    scope: &ConversationId,
+    owner: &super::manifest::Owner,
+    cut: &crate::context::resources::ResourceReadCut,
+) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
+    let epoch = owner.capture(connection)?;
     let published = journal_frontier(connection, i64::MAX as u64)?;
     let selected: Option<u64> = connection
         .query_row_cached(
@@ -1117,10 +1168,10 @@ pub(super) fn selected_history(
         })
         .map(|(_, h)| h.clone());
     let mut result = if let Some(mut history) = cached {
-        append_history_delta(connection, scope, &cut, &mut history)?;
+        append_history_delta(connection, scope, cut, &mut history)?;
         history
     } else {
-        history(connection, scope)?
+        compile_history(connection, scope, cut, head(connection)?.as_ref())?
     };
     result
         .input_manifest
@@ -1269,13 +1320,6 @@ fn append_history_delta(
     history.cut.ledger = cut.ledger;
     history.messages = history.input_manifest.messages();
     Ok(())
-}
-
-pub(super) fn history(
-    connection: &Connection,
-    scope: &ConversationId,
-) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
-    history_at(connection, scope, None)
 }
 
 pub(super) fn history_at(
@@ -1506,6 +1550,7 @@ pub(super) fn install_lineage(
     scope: &ConversationId,
     checkpoints: &[ProjectionCheckpoint],
 ) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::validate_installed_closure(transaction, checkpoints)?;
     let history: Option<String> = transaction
         .query_row(
             "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END FROM bootstrap_identity WHERE id=1",
@@ -1560,8 +1605,8 @@ pub(super) fn install_lineage(
                 ],
             )
             .map_err(|e| storage(e.to_string()))?;
-        super::observation_projection::index(transaction, checkpoint);
-        super::observation_projection::index_provenance(transaction, checkpoint);
+        super::observation_projection::index(transaction, checkpoint)?;
+        super::observation_projection::index_provenance(transaction, checkpoint)?;
         last = Some(activation.activation);
         previous_checkpoint = Some(candidate.checkpoint_id.clone());
         previous_ledger = activation.ledger;
@@ -1606,6 +1651,7 @@ pub(super) fn validate_current_dependencies(
     scope: &ConversationId,
     value: &CheckpointCandidate,
 ) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::validate_installed_reference(connection, scope, value)?;
     for item in &value.items {
         if let CheckpointMessage::Derived(derived) = &item.message {
             for source in &derived.checkpoint_sources {
@@ -1630,6 +1676,86 @@ pub(super) fn validate_current_dependencies(
         }
     }
     Ok(())
+}
+
+#[allow(dead_code)] // Invoked by the Store schema integration hook.
+pub(super) fn create_auxiliary_lineage_schema(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::create_schema(connection)
+}
+
+#[allow(dead_code)] // Invoked by the Store schema integration hook.
+pub(super) fn verify_auxiliary_lineage_schema(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::verify_schema(connection)
+}
+
+#[allow(dead_code)] // Invoked by the Store bootstrap integration hook.
+pub(super) fn auxiliary_lineage_bootstrap(
+    connection: &Connection,
+) -> Result<(u64, String), ConversationStoreError> {
+    auxiliary_lineage::bootstrap_coordinates(connection)
+}
+
+#[allow(dead_code)] // Invoked by the Store bootstrap integration hook.
+pub(super) fn verify_auxiliary_lineage_bootstrap(
+    connection: &Connection,
+    count: u64,
+    digest: &str,
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::verify_bootstrap(connection, count, digest)
+}
+
+pub(super) fn read_auxiliary_lineage_dependencies(
+    connection: &Connection,
+    conversation_id: &ConversationId,
+    checkpoints: &[ProjectionCheckpoint],
+    authority_through: u64,
+) -> Result<Vec<crate::durable::reading::AuxiliaryAuditSnapshot>, ConversationStoreError> {
+    auxiliary_lineage::read_required_snapshots(
+        connection,
+        conversation_id,
+        checkpoints,
+        authority_through,
+    )
+}
+
+#[allow(dead_code)] // Invoked by the Store lineage installation hook.
+pub(super) fn install_inherited_auxiliary_audits(
+    transaction: &Transaction<'_>,
+    snapshots: &[crate::durable::reading::AuxiliaryAuditSnapshot],
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::install(transaction, snapshots)
+}
+
+#[allow(dead_code)] // Invoked by the Store reopen/bootstrap hook.
+pub(super) fn load_inherited_auxiliary_audits(
+    connection: &Connection,
+) -> Result<Vec<crate::durable::reading::AuxiliaryAuditSnapshot>, ConversationStoreError> {
+    auxiliary_lineage::load_all(connection)
+}
+
+#[allow(dead_code)] // Invoked by the Store reopen/bootstrap hook.
+pub(super) fn verify_inherited_auxiliary_audits(
+    connection: &Connection,
+    expected: &[crate::durable::reading::AuxiliaryAuditSnapshot],
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::verify_installed_snapshots(connection, expected)
+}
+
+pub(super) fn validate_auxiliary_lineage_store(
+    connection: &Connection,
+    cut: &crate::context::resources::ResourceReadCut,
+) -> Result<(), ConversationStoreError> {
+    auxiliary_lineage::validate_store_closure(connection, cut)
+}
+
+pub(super) fn inherited_auxiliary_archive_rows(
+    connection: &Connection,
+) -> Result<Vec<serde_json::Value>, ConversationStoreError> {
+    auxiliary_lineage::archive_rows(connection)
 }
 
 #[cfg(test)]
@@ -1727,7 +1853,7 @@ pub(super) fn validate_warm_selection(
         if !seen.insert(reference.message_id.clone()) {
             return Err(invalid("duplicate native selected Context"));
         }
-        let message = super::load_message(connection, &reference.message_id)?;
+        let message = super::canonical::ledger::load_message(connection, &reference.message_id)?;
         if reference.conversation_id != *scope
             || !reference.matches(&message)
             || !matches!(message,crate::message::types::MessageBlock::User(user) if matches!(user.kind,crate::message::types::InboundKind::Context(_)))
@@ -1777,7 +1903,7 @@ pub(super) fn validate_request_selection(
         if expected.iter().any(|m| m.canonical_id() == Some(&id)) {
             continue;
         }
-        let message = super::load_message(connection, &id)?;
+        let message = super::canonical::ledger::load_message(connection, &id)?;
         if !matches!(&message,crate::message::types::MessageBlock::User(user) if matches!(user.kind,crate::message::types::InboundKind::Context(_)))
         {
             return Err(invalid(
@@ -1862,7 +1988,7 @@ pub(super) fn observation_head_id(
 pub(super) fn verify_completion_index(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
-    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name='events_projection_completion_idx'",[],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name='events_projection_completion_idx'",[],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if sql.flatten().as_deref() != Some(completion_index_sql().as_str()) {
         return Err(ConversationStoreError::IncompatibleSchema(
             "invalid original projection completion index".into(),

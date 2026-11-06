@@ -1,0 +1,58 @@
+{
+  "schema": "issue-499-owner-review-repair-v1",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "previous_head": "f7cae82a07e3c1fa8263aad596da157b5669ee4a",
+  "reviewed_source": {
+    "native_source_sha256": "52692c18a189f515b3c86f22f614834fd46d92d576d0f36c898a3a32932d6aef",
+    "native_files": 1011,
+    "previous_head": "f7cae82a07e3c1fa8263aad596da157b5669ee4a",
+    "review_fix": {
+      "sha256": "55236d274ba140260c701b56f63cc3302b8733c740a27f8852ee25bd30708b1f",
+      "files": {
+        "src/capabilities/coordinator/readiness.rs": "3c395b0992fba1d1c4265883ab6adaf77ccdb58332fb87f5a2b1f8137b104b65",
+        "src/tools/mcp/connection/catalog.rs": "d2fe92866e9d99a877269aa49341cdb832f358c6e9d6b4b7fc2f6ddd7315a28a",
+        "src/tools/mcp/connection/catalog_tests.rs": "96464e298072b3381436c2242bed50543561af992684e3cfc6bd039179d5a087",
+        "test-support/fake-provider/src/fake_provider/scenarios/tui.py": "277967d9fa4997812ecd2ee42aaa6120f5169f849c9b182da7417ad350379182",
+        "tests/scripted/app_server/configuration/mcp_readiness.rs": "af98156a76c97b2ad666e64196a8dce9326dfc3dbbde5dc1bba035370cfc6b55",
+        "tests/scripted/app_server/configuration/mcp_readiness/profile_controls.rs": "925c63681cf06fe976f43e18c0fc08da6cfefd5b79264eabcec4c61c8e6dcdf3",
+        "web-console/src/app/new-conversation/port.ts": "82a4f7879a0099c397a710df8584f809648cc88282a5222c25d5d0c132283878",
+        "web-console/test/e2e/mcp-startup.spec.ts": "1a421eb61331c98af89adafc445ba12585b33ac04dd20f14dc492fca4252966c",
+        "web-console/test/workspace-host-admission.test.ts": "94fe9da13816c3d7ee0b8c07e645fce952e3b7a832298d8af9f710747c4c6757",
+        "test-support/fake-provider/tests/test_scenario.py": "e0aee81ddd65759ec0abeb01efa66544c45d204cc9989a28b4bc628927f30d9f",
+        "tui/test/integration.test.ts": "2c255786e69d57c7d89215010806a15ee62e35d0ca70553914419c818dca2a2a"
+      }
+    },
+    "recipe": "sorted path + NUL + ASCII sha256(file) + LF; SHA-256 concatenation"
+  },
+  "independent_review": "submission-live-review2-independent-review.md",
+  "independent_review_sha256": "e71ea3aa67e35470fb26cc70d976b52059289505283feda3fd2a9e2e2d40e2fc",
+  "measurement": {
+    "native_source_sha256": "52692c18a189f515b3c86f22f614834fd46d92d576d0f36c898a3a32932d6aef",
+    "receipt": {
+      "command": "cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-24T06:49:30.575532+00:00",
+      "finished_at": "2026-10-24T06:50:22.330233+00:00",
+      "elapsed_seconds": 51.75470651697833,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp"
+      },
+      "log_sha256": "82128e5add13c5e4ebc68d182d0d6899cac93c32799d604357085001f807183b"
+    },
+    "current": "submission-live-review2-current.json",
+    "current_sha256": "e502c37e9f7493e882fd7bbd8a8b9abd15c3d0a436de8254aa22da3618348029",
+    "baseline": "submission-live-baseline.json",
+    "baseline_sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "fixture_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029",
+    "rows": 24,
+    "environment": {
+      "RUSTX_STARTUP_TIMING_JSON": "/tmp/issue499/submission-live-review2-final-current.json"
+    }
+  },
+  "verification": "Completed check receipts are recorded in validation-review2.json; complete local Rust/browser reruns and FULL final-head CI remain pending in the live PR validation record.",
+  "validation_record": "validation-review2.json"
+}

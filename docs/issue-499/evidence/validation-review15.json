@@ -1,0 +1,3257 @@
+{
+  "schema": "issue-499-target-draft-credential-diagnostics-v1",
+  "recorded_at": "2026-10-25T01:52:29.977791+00:00",
+  "previous_head": "31d2394fe935e545466f18f9ae8fac18083422cb",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "git": {
+    "worktree": "/home/capi/.codex/worktrees/issue-499/rustX",
+    "branch": "codex/issue-499-cache-aware-mcp",
+    "publication": "Normal follow-up commit on same PR503. This immutable pre-commit recording cut identifies source by content; final commit/base/merge/FULL verdict live in PR503. No force push, replacement PR, merge or auto-merge."
+  },
+  "scope": "TUI selects a target-owned complete logical draft before awaiting Session metadata; bound Conversation drafts never alias pending never-bound input. MCP credential owner sanitizes all generation health/list errors and raw framing evidence before truncation. No startup policy/config/protocol/Attempt/admission/504 prewarm change.",
+  "source": {
+    "current_delta": {
+      "base": "31d2394fe935e545466f18f9ae8fac18083422cb",
+      "count": 8,
+      "sha256": "3e4002cbc330829ba404e481cb078558ab30e05b17356b319bc0a527de267690",
+      "inputs": [
+        {
+          "path": "src/tools/mcp/connect.rs",
+          "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+        },
+        {
+          "path": "src/tools/mcp/framing.rs",
+          "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+        },
+        {
+          "path": "tui/src/ui/app.ts",
+          "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+        },
+        {
+          "path": "tui/test/startup.test.ts",
+          "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+        }
+      ],
+      "by_owner_path_scope": {
+        "native": {
+          "count": 6,
+          "sha256": "36d1ae0103d77758cb46847f60614b2f14b4a57b5640dfeea32078c0279f0f8d",
+          "inputs": [
+            {
+              "path": "src/tools/mcp/connect.rs",
+              "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog_tests.rs",
+              "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+              "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+            },
+            {
+              "path": "src/tools/mcp/fixture/raw.rs",
+              "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+            },
+            {
+              "path": "src/tools/mcp/framing.rs",
+              "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+            },
+            {
+              "path": "src/tools/mcp/runtime.rs",
+              "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+            }
+          ]
+        },
+        "tui": {
+          "count": 2,
+          "sha256": "4ab05c011a95b3207bab8d055b1c23fa3a2237df0dca8de7cd4e6ace92782a38",
+          "inputs": [
+            {
+              "path": "tui/src/ui/app.ts",
+              "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+            },
+            {
+              "path": "tui/test/startup.test.ts",
+              "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+            }
+          ]
+        },
+        "web": {
+          "count": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "inputs": []
+        },
+        "protocol": {
+          "count": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "inputs": []
+        },
+        "other": {
+          "count": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "inputs": []
+        }
+      }
+    },
+    "cumulative_since_0b": {
+      "base": "0b7196c846932ddf28fb7d2fee14267562904464",
+      "count": 17,
+      "sha256": "ca229039ea2920c2c80c3e7e46b9043762d955d9be126f990f2ac7837f0bbbe3",
+      "inputs": [
+        {
+          "path": "src/tools/mcp/connect.rs",
+          "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+        },
+        {
+          "path": "src/tools/mcp/framing.rs",
+          "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+        },
+        {
+          "path": "tui/src/ui/app.ts",
+          "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+        },
+        {
+          "path": "tui/src/ui/composer-draft.ts",
+          "sha256": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7"
+        },
+        {
+          "path": "tui/src/ui/composer.ts",
+          "sha256": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c"
+        },
+        {
+          "path": "tui/test/convergence.test.ts",
+          "sha256": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+        },
+        {
+          "path": "tui/test/startup.test.ts",
+          "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+        },
+        {
+          "path": "web-console/src/app/navigation/machine.ts",
+          "sha256": "6722834a9b296f3c31dffbbc0ebc48f14bd9fba6736b1952849fee5529d7fd44"
+        },
+        {
+          "path": "web-console/src/client/app-server.ts",
+          "sha256": "67c001ed3f24003c48e27ed37326b6530f9f148a3a3c5069dc0c5d47fdd6eeb9"
+        },
+        {
+          "path": "web-console/src/client/session-lifecycle/system.ts",
+          "sha256": "728157ef0acc17b3d2fcb2a6b0b666147441d86c2411cd89b1ae8e332dfca9a3"
+        },
+        {
+          "path": "web-console/test/cold-session-navigation.test.tsx",
+          "sha256": "4e82c2c69887890120ccef5791348c8fef8e22a8b6ae1a34b3f8a5cedef6aa90"
+        },
+        {
+          "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+          "sha256": "1eb19bcc7978a3495d97eaac1cea3ab3eeafd8e31a18cb2fc01abaad2edef71d"
+        },
+        {
+          "path": "web-console/test/navigation-ownership.test.ts",
+          "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+        }
+      ],
+      "by_owner_path_scope": {
+        "native": {
+          "count": 6,
+          "sha256": "36d1ae0103d77758cb46847f60614b2f14b4a57b5640dfeea32078c0279f0f8d",
+          "inputs": [
+            {
+              "path": "src/tools/mcp/connect.rs",
+              "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog_tests.rs",
+              "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+              "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+            },
+            {
+              "path": "src/tools/mcp/fixture/raw.rs",
+              "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+            },
+            {
+              "path": "src/tools/mcp/framing.rs",
+              "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+            },
+            {
+              "path": "src/tools/mcp/runtime.rs",
+              "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+            }
+          ]
+        },
+        "tui": {
+          "count": 5,
+          "sha256": "a049b18799b043bb230e2b2ffb8fb269edb6f55e9a58f6c5de36acf8c4b45ce8",
+          "inputs": [
+            {
+              "path": "tui/src/ui/app.ts",
+              "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+            },
+            {
+              "path": "tui/src/ui/composer-draft.ts",
+              "sha256": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7"
+            },
+            {
+              "path": "tui/src/ui/composer.ts",
+              "sha256": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c"
+            },
+            {
+              "path": "tui/test/convergence.test.ts",
+              "sha256": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+            },
+            {
+              "path": "tui/test/startup.test.ts",
+              "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+            }
+          ]
+        },
+        "web": {
+          "count": 6,
+          "sha256": "0aea726f1dbd1739d38563cf594add8d4817fc5d5be61a8a53e73d5b8a10e16e",
+          "inputs": [
+            {
+              "path": "web-console/src/app/navigation/machine.ts",
+              "sha256": "6722834a9b296f3c31dffbbc0ebc48f14bd9fba6736b1952849fee5529d7fd44"
+            },
+            {
+              "path": "web-console/src/client/app-server.ts",
+              "sha256": "67c001ed3f24003c48e27ed37326b6530f9f148a3a3c5069dc0c5d47fdd6eeb9"
+            },
+            {
+              "path": "web-console/src/client/session-lifecycle/system.ts",
+              "sha256": "728157ef0acc17b3d2fcb2a6b0b666147441d86c2411cd89b1ae8e332dfca9a3"
+            },
+            {
+              "path": "web-console/test/cold-session-navigation.test.tsx",
+              "sha256": "4e82c2c69887890120ccef5791348c8fef8e22a8b6ae1a34b3f8a5cedef6aa90"
+            },
+            {
+              "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+              "sha256": "1eb19bcc7978a3495d97eaac1cea3ab3eeafd8e31a18cb2fc01abaad2edef71d"
+            },
+            {
+              "path": "web-console/test/navigation-ownership.test.ts",
+              "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+            }
+          ]
+        },
+        "protocol": {
+          "count": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "inputs": []
+        },
+        "other": {
+          "count": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "inputs": []
+        }
+      }
+    },
+    "repair_since_5a86": {
+      "base": "5a86a5631019ea0c7c16e12ed07bd92aa3869198",
+      "count": 71,
+      "sha256": "792983cd0027bee99cc45b644937016ec67d1a280df59b1128f6b2ca7b9c8c6c",
+      "inputs": [
+        {
+          "path": "protocol/app-server/fixtures.json",
+          "sha256": "8d45e375abf4312c7e924b9bca697710e870c6a9939c630fa8684c0988ead17b"
+        },
+        {
+          "path": "protocol/app-server/fixtures.ts",
+          "sha256": "28eb991cdc0d6cc01051effee5e84b5b5ced6a79f26b2e3621866fcbdac2410b"
+        },
+        {
+          "path": "protocol/app-server/method-policy.ts",
+          "sha256": "242ad261a742698bed8f56b976dc7f7390721a91491ffa173904b5ef797681ae"
+        },
+        {
+          "path": "src/app_server/admission.rs",
+          "sha256": "b6b165e7a78be6470e80f7d87b1baf34c6d365faa4918f978f3557c7800324cf"
+        },
+        {
+          "path": "src/app_server/connection.rs",
+          "sha256": "d2526fad55bb2928b3eb20a3656041e81714839609f4e1e75ea774c76f096ad7"
+        },
+        {
+          "path": "src/app_server/transport/mod.rs",
+          "sha256": "f180b87f632cf5b31aaeb0a12e321e14e857b6db306448fd52abf4b1358336a5"
+        },
+        {
+          "path": "src/capabilities/coordinator.rs",
+          "sha256": "9348311880f9f90907734cd14c487d997a38cd3f61741e07df0d18ef19242196"
+        },
+        {
+          "path": "src/capabilities/coordinator/tests/parallel.rs",
+          "sha256": "2b28f24193e1798bafbf5488ea853b08619b6cf784b5ca730cf1f61c1c8e6932"
+        },
+        {
+          "path": "src/capabilities/coordinator/tests/parallel/acquired_catalog.rs",
+          "sha256": "b409617b15dc94ae8f00af655694d7fd8e1dd7bc5fd2ba6cb8607c2b9082ca34"
+        },
+        {
+          "path": "src/local_runtime/session_runtime_manager/configuration.rs",
+          "sha256": "c63de7dd72d256b8d89e8ec5c269e6a6b0b6126bc5974d06eb97d8b62a2a9d69"
+        },
+        {
+          "path": "src/local_runtime/session_runtime_manager/lifecycle.rs",
+          "sha256": "7f8d22a64207f371813c3690e88c0513bec97a1589fe9386d995a9ff6a4d4f33"
+        },
+        {
+          "path": "src/tools/mcp/connect.rs",
+          "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog.rs",
+          "sha256": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+        },
+        {
+          "path": "src/tools/mcp/framing.rs",
+          "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+        },
+        {
+          "path": "tests/boundary/app_server_file_read.rs",
+          "sha256": "b52487c0268ed1da2310b49ab7314603ce95c24279c4502c3ed2bf2698cf7e85"
+        },
+        {
+          "path": "tests/scripted/app_server/compaction_ownership.rs",
+          "sha256": "d33ab7566032ecf435549d9646ab2e6fdcfdc299d6f265c737108abd5a67d2b0"
+        },
+        {
+          "path": "tests/scripted/app_server/configuration/catalog_recovery.rs",
+          "sha256": "1a64e54007bcbbdb7e61bce5ed5b2e9680854d747608d404a6e88c9d9aaaf677"
+        },
+        {
+          "path": "tests/scripted/app_server/control_reconnect.rs",
+          "sha256": "3de9fb60878f1cb5390eff4604d7fe16a2e65d11077858f996210dbfce9d7cc7"
+        },
+        {
+          "path": "tests/scripted/app_server/mod.rs",
+          "sha256": "7f410d44e6d24289a962d30ceec3d7140cb7e57f81557358ee283793e89d0583"
+        },
+        {
+          "path": "tests/scripted/app_server/protocol/admission.rs",
+          "sha256": "4482c96ee6f3beddb056a33b7443c22494757a705c7fa1921ff55f4dcceb42a3"
+        },
+        {
+          "path": "tests/scripted/app_server/protocol/delivery.rs",
+          "sha256": "6d2330c75b6a8dfdd62ee670d42848d5f73e24f29ca8659fcac958c7e1817b63"
+        },
+        {
+          "path": "tests/scripted/app_server/transports.rs",
+          "sha256": "502701da9400e7bb9a5068c307594feaee3647535db493ba51ebce0be7dea3ed"
+        },
+        {
+          "path": "tui/src/app-server/client.ts",
+          "sha256": "6ac21329ee3dfafd024d207750c330a88ce2c79a6e2b4b35365b9dc0874639af"
+        },
+        {
+          "path": "tui/src/ui/app.ts",
+          "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+        },
+        {
+          "path": "tui/src/ui/composer-draft.ts",
+          "sha256": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7"
+        },
+        {
+          "path": "tui/src/ui/composer.ts",
+          "sha256": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c"
+        },
+        {
+          "path": "tui/test/app-server-client.test.ts",
+          "sha256": "9fa8bf443f345da955f267c04c6ec9256004a48b057778798c59e8895cd718e1"
+        },
+        {
+          "path": "tui/test/app.test.ts",
+          "sha256": "e4704a57bbf0370c602b641e2acb378c03b269c71369c33b7f82989704b9bcf4"
+        },
+        {
+          "path": "tui/test/convergence.test.ts",
+          "sha256": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+        },
+        {
+          "path": "tui/test/startup.test.ts",
+          "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+        },
+        {
+          "path": "tui/test/support/app-server-harness.ts",
+          "sha256": "4ecaf0026743388e89a40c568b3f03e179e0b4795201fdc1b1e00c26d0092b33"
+        },
+        {
+          "path": "web-console/source-inventory.json",
+          "sha256": "0df891c3cd219f20c63eab60db1aaf598440bd92ff53ab518ea7c526a8df97c4"
+        },
+        {
+          "path": "web-console/src/app/App.tsx",
+          "sha256": "70d6f1fe976b59448d81a4f0cb1c7ff2299032b5e0a1e52a9536278b06fa5f4d"
+        },
+        {
+          "path": "web-console/src/app/agent/ConversationSeat.tsx",
+          "sha256": "510a8b47511d883ee70acb9b43dac40559ea3ea11577eb39d5140310af42d464"
+        },
+        {
+          "path": "web-console/src/app/composer/use-attachment-intake.ts",
+          "sha256": "5a469cb1b446977eebc97454e50ebdfece1bbadbea8fea7392733e6b741d5b03"
+        },
+        {
+          "path": "web-console/src/app/navigation/machine.ts",
+          "sha256": "6722834a9b296f3c31dffbbc0ebc48f14bd9fba6736b1952849fee5529d7fd44"
+        },
+        {
+          "path": "web-console/src/app/new-conversation/ConversationComposer.tsx",
+          "sha256": "e136facec8b0a86b71b7e32e47c71e88b81781aa257bb950b1bb6ca9ded37a22"
+        },
+        {
+          "path": "web-console/src/client/app-server.ts",
+          "sha256": "67c001ed3f24003c48e27ed37326b6530f9f148a3a3c5069dc0c5d47fdd6eeb9"
+        },
+        {
+          "path": "web-console/src/client/request-pipeline.ts",
+          "sha256": "888d59952012ac651b0dec852b95ca3f5301f47d87af21b5dcabb071403431d3"
+        },
+        {
+          "path": "web-console/src/client/session-lifecycle/system.ts",
+          "sha256": "728157ef0acc17b3d2fcb2a6b0b666147441d86c2411cd89b1ae8e332dfca9a3"
+        },
+        {
+          "path": "web-console/test/agent.test.tsx",
+          "sha256": "11d2458901bf9c796cae7de59bd0818a06116995742280ade8dc34b1ef8e8913"
+        },
+        {
+          "path": "web-console/test/artifacts.test.tsx",
+          "sha256": "656ccb97470e72479f9fb29cac5c888c0f3951e0c26257c2d6598232b3e9932d"
+        },
+        {
+          "path": "web-console/test/authority.test.tsx",
+          "sha256": "0a61f8b361ccfa386d0bc76d53457d981a58ec5e909b3e0adde66d17b17df2da"
+        },
+        {
+          "path": "web-console/test/auxiliary.test.ts",
+          "sha256": "019eb9c61ba0ad3bbe236e7ee61b943c62f558558f868be836788a2a6f2cc60b"
+        },
+        {
+          "path": "web-console/test/client.test.ts",
+          "sha256": "577a774dbac40c6cb891627d6269f83dc00fe9c7e37b54a065a636cd9d805676"
+        },
+        {
+          "path": "web-console/test/cold-session-navigation.test.tsx",
+          "sha256": "4e82c2c69887890120ccef5791348c8fef8e22a8b6ae1a34b3f8a5cedef6aa90"
+        },
+        {
+          "path": "web-console/test/commands.test.tsx",
+          "sha256": "01a1b05433fbe3d50fc43a66c2a3f957ca7f6013ec8a50f6e34c29c17e6aaf42"
+        },
+        {
+          "path": "web-console/test/context-seat.test.tsx",
+          "sha256": "d0ebe574064614541c949094669bf89f324dda19d47a53976ca522e9aaa962a4"
+        },
+        {
+          "path": "web-console/test/e2e/chat.spec.ts",
+          "sha256": "39278b3f1fe189f8f87582cf829faada83d71deec1170eab815c4da7a370fc45"
+        },
+        {
+          "path": "web-console/test/e2e/composer.spec.ts",
+          "sha256": "bd4a333233ea96fd00aa84a80cedc193c607e3a821588a1a74c652546822b3d5"
+        },
+        {
+          "path": "web-console/test/e2e/live-model.spec.ts",
+          "sha256": "ad0e1d7fb0ae5c88a7451b62ac63cd6a4a208f98626b3c54efeabb728103cc99"
+        },
+        {
+          "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+          "sha256": "1eb19bcc7978a3495d97eaac1cea3ab3eeafd8e31a18cb2fc01abaad2edef71d"
+        },
+        {
+          "path": "web-console/test/e2e/mcp-startup.spec.ts",
+          "sha256": "801ad96c45a62786aff61dc16700b0d1caa209dbdef3e01e1db1c53bdcca552a"
+        },
+        {
+          "path": "web-console/test/e2e/response-retry.spec.ts",
+          "sha256": "1d04e91aff410f58aaaabb78a580ff7efc3599759c167e4f81041defb439d07f"
+        },
+        {
+          "path": "web-console/test/e2e/shell-actions.ts",
+          "sha256": "823926c851e519127b74c22df9b2814170df875ba14893a3ea945ffe6fdc81e1"
+        },
+        {
+          "path": "web-console/test/e2e/shell.spec.ts",
+          "sha256": "f9b6b2b168b5eff767eae893a8d82e9ecc6bf6350c2370f63cc775c578a28517"
+        },
+        {
+          "path": "web-console/test/e2e/sidebar-actions.spec.ts",
+          "sha256": "1c5239f9981df03abf6f7e84d2c35bb581f7449f4d692749aacca612d5ed3481"
+        },
+        {
+          "path": "web-console/test/e2e/wire-probe.ts",
+          "sha256": "1996207162e2965657202fed9219ff64dbc7be79f4b9c373cca29bd17cdabfc9"
+        },
+        {
+          "path": "web-console/test/history-draft.test.tsx",
+          "sha256": "0f3c60be906af000f77a340deb3d8b7fa2aaf997ca3d216aa9f52d6de7cf9b48"
+        },
+        {
+          "path": "web-console/test/history-navigation.test.ts",
+          "sha256": "3c158ca864578b66632e912d17deab2b9ba94769ef089cc30e699b594b014cff"
+        },
+        {
+          "path": "web-console/test/navigation-ownership.test.ts",
+          "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+        },
+        {
+          "path": "web-console/test/reconnect-startup.test.ts",
+          "sha256": "0060d27d1e84e5d979bf482d218500b6a7f327d10898c3a66eb71eec73747bbb"
+        },
+        {
+          "path": "web-console/test/request-lifetime.test.ts",
+          "sha256": "955e6b65ad82a1c21687395587b3236e67dd928b01545be4ecd3b561514310c8"
+        },
+        {
+          "path": "web-console/test/upload-dispatch.test.ts",
+          "sha256": "b688f154ba3d24896c8d45edcfe2dc58982ab83570325bacda6a4203a164d930"
+        },
+        {
+          "path": "web-console/test/wire-probe.test.ts",
+          "sha256": "9483f6f77ccf3f9eb8abb0465b0b671d76e77c977573afa160b5dbb8311703ce"
+        },
+        {
+          "path": "web-console/test/workspace-admission.test.ts",
+          "sha256": "10176791d0bbbcb2296571b3fde59570324c104b9680c17f339fface12923dcb"
+        },
+        {
+          "path": "web-console/test/workspace-host-admission.test.ts",
+          "sha256": "04b1e281340a5190e778294823bfcc79ad57da43fc545818ea131efa3458743e"
+        }
+      ],
+      "by_owner_path_scope": {
+        "native": {
+          "count": 23,
+          "sha256": "3d7a06ca96a7441634861b96091d10b731d9364241f9856423525c069e1b0278",
+          "inputs": [
+            {
+              "path": "src/app_server/admission.rs",
+              "sha256": "b6b165e7a78be6470e80f7d87b1baf34c6d365faa4918f978f3557c7800324cf"
+            },
+            {
+              "path": "src/app_server/connection.rs",
+              "sha256": "d2526fad55bb2928b3eb20a3656041e81714839609f4e1e75ea774c76f096ad7"
+            },
+            {
+              "path": "src/app_server/transport/mod.rs",
+              "sha256": "f180b87f632cf5b31aaeb0a12e321e14e857b6db306448fd52abf4b1358336a5"
+            },
+            {
+              "path": "src/capabilities/coordinator.rs",
+              "sha256": "9348311880f9f90907734cd14c487d997a38cd3f61741e07df0d18ef19242196"
+            },
+            {
+              "path": "src/capabilities/coordinator/tests/parallel.rs",
+              "sha256": "2b28f24193e1798bafbf5488ea853b08619b6cf784b5ca730cf1f61c1c8e6932"
+            },
+            {
+              "path": "src/capabilities/coordinator/tests/parallel/acquired_catalog.rs",
+              "sha256": "b409617b15dc94ae8f00af655694d7fd8e1dd7bc5fd2ba6cb8607c2b9082ca34"
+            },
+            {
+              "path": "src/local_runtime/session_runtime_manager/configuration.rs",
+              "sha256": "c63de7dd72d256b8d89e8ec5c269e6a6b0b6126bc5974d06eb97d8b62a2a9d69"
+            },
+            {
+              "path": "src/local_runtime/session_runtime_manager/lifecycle.rs",
+              "sha256": "7f8d22a64207f371813c3690e88c0513bec97a1589fe9386d995a9ff6a4d4f33"
+            },
+            {
+              "path": "src/tools/mcp/connect.rs",
+              "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog.rs",
+              "sha256": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog_tests.rs",
+              "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+              "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+            },
+            {
+              "path": "src/tools/mcp/fixture/raw.rs",
+              "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+            },
+            {
+              "path": "src/tools/mcp/framing.rs",
+              "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+            },
+            {
+              "path": "src/tools/mcp/runtime.rs",
+              "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+            },
+            {
+              "path": "tests/boundary/app_server_file_read.rs",
+              "sha256": "b52487c0268ed1da2310b49ab7314603ce95c24279c4502c3ed2bf2698cf7e85"
+            },
+            {
+              "path": "tests/scripted/app_server/compaction_ownership.rs",
+              "sha256": "d33ab7566032ecf435549d9646ab2e6fdcfdc299d6f265c737108abd5a67d2b0"
+            },
+            {
+              "path": "tests/scripted/app_server/configuration/catalog_recovery.rs",
+              "sha256": "1a64e54007bcbbdb7e61bce5ed5b2e9680854d747608d404a6e88c9d9aaaf677"
+            },
+            {
+              "path": "tests/scripted/app_server/control_reconnect.rs",
+              "sha256": "3de9fb60878f1cb5390eff4604d7fe16a2e65d11077858f996210dbfce9d7cc7"
+            },
+            {
+              "path": "tests/scripted/app_server/mod.rs",
+              "sha256": "7f410d44e6d24289a962d30ceec3d7140cb7e57f81557358ee283793e89d0583"
+            },
+            {
+              "path": "tests/scripted/app_server/protocol/admission.rs",
+              "sha256": "4482c96ee6f3beddb056a33b7443c22494757a705c7fa1921ff55f4dcceb42a3"
+            },
+            {
+              "path": "tests/scripted/app_server/protocol/delivery.rs",
+              "sha256": "6d2330c75b6a8dfdd62ee670d42848d5f73e24f29ca8659fcac958c7e1817b63"
+            },
+            {
+              "path": "tests/scripted/app_server/transports.rs",
+              "sha256": "502701da9400e7bb9a5068c307594feaee3647535db493ba51ebce0be7dea3ed"
+            }
+          ]
+        },
+        "tui": {
+          "count": 9,
+          "sha256": "197210303fb704ba0a15978f6c113b644e36a88ea3e81f589693841417568ae6",
+          "inputs": [
+            {
+              "path": "tui/src/app-server/client.ts",
+              "sha256": "6ac21329ee3dfafd024d207750c330a88ce2c79a6e2b4b35365b9dc0874639af"
+            },
+            {
+              "path": "tui/src/ui/app.ts",
+              "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+            },
+            {
+              "path": "tui/src/ui/composer-draft.ts",
+              "sha256": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7"
+            },
+            {
+              "path": "tui/src/ui/composer.ts",
+              "sha256": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c"
+            },
+            {
+              "path": "tui/test/app-server-client.test.ts",
+              "sha256": "9fa8bf443f345da955f267c04c6ec9256004a48b057778798c59e8895cd718e1"
+            },
+            {
+              "path": "tui/test/app.test.ts",
+              "sha256": "e4704a57bbf0370c602b641e2acb378c03b269c71369c33b7f82989704b9bcf4"
+            },
+            {
+              "path": "tui/test/convergence.test.ts",
+              "sha256": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+            },
+            {
+              "path": "tui/test/startup.test.ts",
+              "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+            },
+            {
+              "path": "tui/test/support/app-server-harness.ts",
+              "sha256": "4ecaf0026743388e89a40c568b3f03e179e0b4795201fdc1b1e00c26d0092b33"
+            }
+          ]
+        },
+        "web": {
+          "count": 36,
+          "sha256": "f21a42488c90b9cb2cb91b6326db42bf339476c766af0fcfe5c6a901a8e9326c",
+          "inputs": [
+            {
+              "path": "web-console/source-inventory.json",
+              "sha256": "0df891c3cd219f20c63eab60db1aaf598440bd92ff53ab518ea7c526a8df97c4"
+            },
+            {
+              "path": "web-console/src/app/App.tsx",
+              "sha256": "70d6f1fe976b59448d81a4f0cb1c7ff2299032b5e0a1e52a9536278b06fa5f4d"
+            },
+            {
+              "path": "web-console/src/app/agent/ConversationSeat.tsx",
+              "sha256": "510a8b47511d883ee70acb9b43dac40559ea3ea11577eb39d5140310af42d464"
+            },
+            {
+              "path": "web-console/src/app/composer/use-attachment-intake.ts",
+              "sha256": "5a469cb1b446977eebc97454e50ebdfece1bbadbea8fea7392733e6b741d5b03"
+            },
+            {
+              "path": "web-console/src/app/navigation/machine.ts",
+              "sha256": "6722834a9b296f3c31dffbbc0ebc48f14bd9fba6736b1952849fee5529d7fd44"
+            },
+            {
+              "path": "web-console/src/app/new-conversation/ConversationComposer.tsx",
+              "sha256": "e136facec8b0a86b71b7e32e47c71e88b81781aa257bb950b1bb6ca9ded37a22"
+            },
+            {
+              "path": "web-console/src/client/app-server.ts",
+              "sha256": "67c001ed3f24003c48e27ed37326b6530f9f148a3a3c5069dc0c5d47fdd6eeb9"
+            },
+            {
+              "path": "web-console/src/client/request-pipeline.ts",
+              "sha256": "888d59952012ac651b0dec852b95ca3f5301f47d87af21b5dcabb071403431d3"
+            },
+            {
+              "path": "web-console/src/client/session-lifecycle/system.ts",
+              "sha256": "728157ef0acc17b3d2fcb2a6b0b666147441d86c2411cd89b1ae8e332dfca9a3"
+            },
+            {
+              "path": "web-console/test/agent.test.tsx",
+              "sha256": "11d2458901bf9c796cae7de59bd0818a06116995742280ade8dc34b1ef8e8913"
+            },
+            {
+              "path": "web-console/test/artifacts.test.tsx",
+              "sha256": "656ccb97470e72479f9fb29cac5c888c0f3951e0c26257c2d6598232b3e9932d"
+            },
+            {
+              "path": "web-console/test/authority.test.tsx",
+              "sha256": "0a61f8b361ccfa386d0bc76d53457d981a58ec5e909b3e0adde66d17b17df2da"
+            },
+            {
+              "path": "web-console/test/auxiliary.test.ts",
+              "sha256": "019eb9c61ba0ad3bbe236e7ee61b943c62f558558f868be836788a2a6f2cc60b"
+            },
+            {
+              "path": "web-console/test/client.test.ts",
+              "sha256": "577a774dbac40c6cb891627d6269f83dc00fe9c7e37b54a065a636cd9d805676"
+            },
+            {
+              "path": "web-console/test/cold-session-navigation.test.tsx",
+              "sha256": "4e82c2c69887890120ccef5791348c8fef8e22a8b6ae1a34b3f8a5cedef6aa90"
+            },
+            {
+              "path": "web-console/test/commands.test.tsx",
+              "sha256": "01a1b05433fbe3d50fc43a66c2a3f957ca7f6013ec8a50f6e34c29c17e6aaf42"
+            },
+            {
+              "path": "web-console/test/context-seat.test.tsx",
+              "sha256": "d0ebe574064614541c949094669bf89f324dda19d47a53976ca522e9aaa962a4"
+            },
+            {
+              "path": "web-console/test/e2e/chat.spec.ts",
+              "sha256": "39278b3f1fe189f8f87582cf829faada83d71deec1170eab815c4da7a370fc45"
+            },
+            {
+              "path": "web-console/test/e2e/composer.spec.ts",
+              "sha256": "bd4a333233ea96fd00aa84a80cedc193c607e3a821588a1a74c652546822b3d5"
+            },
+            {
+              "path": "web-console/test/e2e/live-model.spec.ts",
+              "sha256": "ad0e1d7fb0ae5c88a7451b62ac63cd6a4a208f98626b3c54efeabb728103cc99"
+            },
+            {
+              "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+              "sha256": "1eb19bcc7978a3495d97eaac1cea3ab3eeafd8e31a18cb2fc01abaad2edef71d"
+            },
+            {
+              "path": "web-console/test/e2e/mcp-startup.spec.ts",
+              "sha256": "801ad96c45a62786aff61dc16700b0d1caa209dbdef3e01e1db1c53bdcca552a"
+            },
+            {
+              "path": "web-console/test/e2e/response-retry.spec.ts",
+              "sha256": "1d04e91aff410f58aaaabb78a580ff7efc3599759c167e4f81041defb439d07f"
+            },
+            {
+              "path": "web-console/test/e2e/shell-actions.ts",
+              "sha256": "823926c851e519127b74c22df9b2814170df875ba14893a3ea945ffe6fdc81e1"
+            },
+            {
+              "path": "web-console/test/e2e/shell.spec.ts",
+              "sha256": "f9b6b2b168b5eff767eae893a8d82e9ecc6bf6350c2370f63cc775c578a28517"
+            },
+            {
+              "path": "web-console/test/e2e/sidebar-actions.spec.ts",
+              "sha256": "1c5239f9981df03abf6f7e84d2c35bb581f7449f4d692749aacca612d5ed3481"
+            },
+            {
+              "path": "web-console/test/e2e/wire-probe.ts",
+              "sha256": "1996207162e2965657202fed9219ff64dbc7be79f4b9c373cca29bd17cdabfc9"
+            },
+            {
+              "path": "web-console/test/history-draft.test.tsx",
+              "sha256": "0f3c60be906af000f77a340deb3d8b7fa2aaf997ca3d216aa9f52d6de7cf9b48"
+            },
+            {
+              "path": "web-console/test/history-navigation.test.ts",
+              "sha256": "3c158ca864578b66632e912d17deab2b9ba94769ef089cc30e699b594b014cff"
+            },
+            {
+              "path": "web-console/test/navigation-ownership.test.ts",
+              "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+            },
+            {
+              "path": "web-console/test/reconnect-startup.test.ts",
+              "sha256": "0060d27d1e84e5d979bf482d218500b6a7f327d10898c3a66eb71eec73747bbb"
+            },
+            {
+              "path": "web-console/test/request-lifetime.test.ts",
+              "sha256": "955e6b65ad82a1c21687395587b3236e67dd928b01545be4ecd3b561514310c8"
+            },
+            {
+              "path": "web-console/test/upload-dispatch.test.ts",
+              "sha256": "b688f154ba3d24896c8d45edcfe2dc58982ab83570325bacda6a4203a164d930"
+            },
+            {
+              "path": "web-console/test/wire-probe.test.ts",
+              "sha256": "9483f6f77ccf3f9eb8abb0465b0b671d76e77c977573afa160b5dbb8311703ce"
+            },
+            {
+              "path": "web-console/test/workspace-admission.test.ts",
+              "sha256": "10176791d0bbbcb2296571b3fde59570324c104b9680c17f339fface12923dcb"
+            },
+            {
+              "path": "web-console/test/workspace-host-admission.test.ts",
+              "sha256": "04b1e281340a5190e778294823bfcc79ad57da43fc545818ea131efa3458743e"
+            }
+          ]
+        },
+        "protocol": {
+          "count": 3,
+          "sha256": "49e715ff275a8e5ef66d120f459167aca0e59818fdf13dc85a98c4892f20283c",
+          "inputs": [
+            {
+              "path": "protocol/app-server/fixtures.json",
+              "sha256": "8d45e375abf4312c7e924b9bca697710e870c6a9939c630fa8684c0988ead17b"
+            },
+            {
+              "path": "protocol/app-server/fixtures.ts",
+              "sha256": "28eb991cdc0d6cc01051effee5e84b5b5ced6a79f26b2e3621866fcbdac2410b"
+            },
+            {
+              "path": "protocol/app-server/method-policy.ts",
+              "sha256": "242ad261a742698bed8f56b976dc7f7390721a91491ffa173904b5ef797681ae"
+            }
+          ]
+        },
+        "other": {
+          "count": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "inputs": []
+        }
+      }
+    },
+    "followup_since_d2a": {
+      "base": "d2a5aff54e9e82df1680ad4887f6824cdb556976",
+      "count": 42,
+      "sha256": "00ca94fb3e346d260c0f8bcd53a54068c5cfbb0b1679e883918bf0f12f0efb0a",
+      "inputs": [
+        {
+          "path": "src/local_runtime/session_runtime_manager/configuration.rs",
+          "sha256": "c63de7dd72d256b8d89e8ec5c269e6a6b0b6126bc5974d06eb97d8b62a2a9d69"
+        },
+        {
+          "path": "src/local_runtime/session_runtime_manager/lifecycle.rs",
+          "sha256": "7f8d22a64207f371813c3690e88c0513bec97a1589fe9386d995a9ff6a4d4f33"
+        },
+        {
+          "path": "src/tools/mcp/connect.rs",
+          "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+        },
+        {
+          "path": "src/tools/mcp/framing.rs",
+          "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+        },
+        {
+          "path": "tests/boundary/app_server_file_read.rs",
+          "sha256": "b52487c0268ed1da2310b49ab7314603ce95c24279c4502c3ed2bf2698cf7e85"
+        },
+        {
+          "path": "tests/scripted/app_server/compaction_ownership.rs",
+          "sha256": "d33ab7566032ecf435549d9646ab2e6fdcfdc299d6f265c737108abd5a67d2b0"
+        },
+        {
+          "path": "tests/scripted/app_server/configuration/catalog_recovery.rs",
+          "sha256": "1a64e54007bcbbdb7e61bce5ed5b2e9680854d747608d404a6e88c9d9aaaf677"
+        },
+        {
+          "path": "tests/scripted/app_server/mod.rs",
+          "sha256": "7f410d44e6d24289a962d30ceec3d7140cb7e57f81557358ee283793e89d0583"
+        },
+        {
+          "path": "tests/scripted/app_server/protocol/delivery.rs",
+          "sha256": "6d2330c75b6a8dfdd62ee670d42848d5f73e24f29ca8659fcac958c7e1817b63"
+        },
+        {
+          "path": "tui/src/ui/app.ts",
+          "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+        },
+        {
+          "path": "tui/src/ui/composer-draft.ts",
+          "sha256": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7"
+        },
+        {
+          "path": "tui/src/ui/composer.ts",
+          "sha256": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c"
+        },
+        {
+          "path": "tui/test/app.test.ts",
+          "sha256": "e4704a57bbf0370c602b641e2acb378c03b269c71369c33b7f82989704b9bcf4"
+        },
+        {
+          "path": "tui/test/convergence.test.ts",
+          "sha256": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+        },
+        {
+          "path": "tui/test/startup.test.ts",
+          "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+        },
+        {
+          "path": "tui/test/support/app-server-harness.ts",
+          "sha256": "4ecaf0026743388e89a40c568b3f03e179e0b4795201fdc1b1e00c26d0092b33"
+        },
+        {
+          "path": "web-console/source-inventory.json",
+          "sha256": "0df891c3cd219f20c63eab60db1aaf598440bd92ff53ab518ea7c526a8df97c4"
+        },
+        {
+          "path": "web-console/src/app/App.tsx",
+          "sha256": "70d6f1fe976b59448d81a4f0cb1c7ff2299032b5e0a1e52a9536278b06fa5f4d"
+        },
+        {
+          "path": "web-console/src/app/agent/ConversationSeat.tsx",
+          "sha256": "510a8b47511d883ee70acb9b43dac40559ea3ea11577eb39d5140310af42d464"
+        },
+        {
+          "path": "web-console/src/app/composer/use-attachment-intake.ts",
+          "sha256": "5a469cb1b446977eebc97454e50ebdfece1bbadbea8fea7392733e6b741d5b03"
+        },
+        {
+          "path": "web-console/src/app/navigation/machine.ts",
+          "sha256": "6722834a9b296f3c31dffbbc0ebc48f14bd9fba6736b1952849fee5529d7fd44"
+        },
+        {
+          "path": "web-console/src/app/new-conversation/ConversationComposer.tsx",
+          "sha256": "e136facec8b0a86b71b7e32e47c71e88b81781aa257bb950b1bb6ca9ded37a22"
+        },
+        {
+          "path": "web-console/src/client/app-server.ts",
+          "sha256": "67c001ed3f24003c48e27ed37326b6530f9f148a3a3c5069dc0c5d47fdd6eeb9"
+        },
+        {
+          "path": "web-console/src/client/session-lifecycle/system.ts",
+          "sha256": "728157ef0acc17b3d2fcb2a6b0b666147441d86c2411cd89b1ae8e332dfca9a3"
+        },
+        {
+          "path": "web-console/test/cold-session-navigation.test.tsx",
+          "sha256": "4e82c2c69887890120ccef5791348c8fef8e22a8b6ae1a34b3f8a5cedef6aa90"
+        },
+        {
+          "path": "web-console/test/e2e/chat.spec.ts",
+          "sha256": "39278b3f1fe189f8f87582cf829faada83d71deec1170eab815c4da7a370fc45"
+        },
+        {
+          "path": "web-console/test/e2e/composer.spec.ts",
+          "sha256": "bd4a333233ea96fd00aa84a80cedc193c607e3a821588a1a74c652546822b3d5"
+        },
+        {
+          "path": "web-console/test/e2e/live-model.spec.ts",
+          "sha256": "ad0e1d7fb0ae5c88a7451b62ac63cd6a4a208f98626b3c54efeabb728103cc99"
+        },
+        {
+          "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+          "sha256": "1eb19bcc7978a3495d97eaac1cea3ab3eeafd8e31a18cb2fc01abaad2edef71d"
+        },
+        {
+          "path": "web-console/test/e2e/response-retry.spec.ts",
+          "sha256": "1d04e91aff410f58aaaabb78a580ff7efc3599759c167e4f81041defb439d07f"
+        },
+        {
+          "path": "web-console/test/e2e/shell-actions.ts",
+          "sha256": "823926c851e519127b74c22df9b2814170df875ba14893a3ea945ffe6fdc81e1"
+        },
+        {
+          "path": "web-console/test/e2e/shell.spec.ts",
+          "sha256": "f9b6b2b168b5eff767eae893a8d82e9ecc6bf6350c2370f63cc775c578a28517"
+        },
+        {
+          "path": "web-console/test/e2e/sidebar-actions.spec.ts",
+          "sha256": "1c5239f9981df03abf6f7e84d2c35bb581f7449f4d692749aacca612d5ed3481"
+        },
+        {
+          "path": "web-console/test/e2e/wire-probe.ts",
+          "sha256": "1996207162e2965657202fed9219ff64dbc7be79f4b9c373cca29bd17cdabfc9"
+        },
+        {
+          "path": "web-console/test/history-draft.test.tsx",
+          "sha256": "0f3c60be906af000f77a340deb3d8b7fa2aaf997ca3d216aa9f52d6de7cf9b48"
+        },
+        {
+          "path": "web-console/test/history-navigation.test.ts",
+          "sha256": "3c158ca864578b66632e912d17deab2b9ba94769ef089cc30e699b594b014cff"
+        },
+        {
+          "path": "web-console/test/navigation-ownership.test.ts",
+          "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+        },
+        {
+          "path": "web-console/test/wire-probe.test.ts",
+          "sha256": "9483f6f77ccf3f9eb8abb0465b0b671d76e77c977573afa160b5dbb8311703ce"
+        }
+      ],
+      "by_owner_path_scope": {
+        "native": {
+          "count": 13,
+          "sha256": "6010d4db20bb798d365ac60af34d69df340e3eb1682d69571d04ba79c253ba73",
+          "inputs": [
+            {
+              "path": "src/local_runtime/session_runtime_manager/configuration.rs",
+              "sha256": "c63de7dd72d256b8d89e8ec5c269e6a6b0b6126bc5974d06eb97d8b62a2a9d69"
+            },
+            {
+              "path": "src/local_runtime/session_runtime_manager/lifecycle.rs",
+              "sha256": "7f8d22a64207f371813c3690e88c0513bec97a1589fe9386d995a9ff6a4d4f33"
+            },
+            {
+              "path": "src/tools/mcp/connect.rs",
+              "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog_tests.rs",
+              "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+            },
+            {
+              "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+              "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+            },
+            {
+              "path": "src/tools/mcp/fixture/raw.rs",
+              "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+            },
+            {
+              "path": "src/tools/mcp/framing.rs",
+              "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+            },
+            {
+              "path": "src/tools/mcp/runtime.rs",
+              "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+            },
+            {
+              "path": "tests/boundary/app_server_file_read.rs",
+              "sha256": "b52487c0268ed1da2310b49ab7314603ce95c24279c4502c3ed2bf2698cf7e85"
+            },
+            {
+              "path": "tests/scripted/app_server/compaction_ownership.rs",
+              "sha256": "d33ab7566032ecf435549d9646ab2e6fdcfdc299d6f265c737108abd5a67d2b0"
+            },
+            {
+              "path": "tests/scripted/app_server/configuration/catalog_recovery.rs",
+              "sha256": "1a64e54007bcbbdb7e61bce5ed5b2e9680854d747608d404a6e88c9d9aaaf677"
+            },
+            {
+              "path": "tests/scripted/app_server/mod.rs",
+              "sha256": "7f410d44e6d24289a962d30ceec3d7140cb7e57f81557358ee283793e89d0583"
+            },
+            {
+              "path": "tests/scripted/app_server/protocol/delivery.rs",
+              "sha256": "6d2330c75b6a8dfdd62ee670d42848d5f73e24f29ca8659fcac958c7e1817b63"
+            }
+          ]
+        },
+        "tui": {
+          "count": 7,
+          "sha256": "6e49e7a11bda7abb75d1300e25e9dc6fe8e29d7c4f90746ebbc8c649d7042175",
+          "inputs": [
+            {
+              "path": "tui/src/ui/app.ts",
+              "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+            },
+            {
+              "path": "tui/src/ui/composer-draft.ts",
+              "sha256": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7"
+            },
+            {
+              "path": "tui/src/ui/composer.ts",
+              "sha256": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c"
+            },
+            {
+              "path": "tui/test/app.test.ts",
+              "sha256": "e4704a57bbf0370c602b641e2acb378c03b269c71369c33b7f82989704b9bcf4"
+            },
+            {
+              "path": "tui/test/convergence.test.ts",
+              "sha256": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+            },
+            {
+              "path": "tui/test/startup.test.ts",
+              "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+            },
+            {
+              "path": "tui/test/support/app-server-harness.ts",
+              "sha256": "4ecaf0026743388e89a40c568b3f03e179e0b4795201fdc1b1e00c26d0092b33"
+            }
+          ]
+        },
+        "web": {
+          "count": 22,
+          "sha256": "4f841dbf00f47b0bf4b35e5276f792feeefaf8b3cf2024d54a5eaab7309d36db",
+          "inputs": [
+            {
+              "path": "web-console/source-inventory.json",
+              "sha256": "0df891c3cd219f20c63eab60db1aaf598440bd92ff53ab518ea7c526a8df97c4"
+            },
+            {
+              "path": "web-console/src/app/App.tsx",
+              "sha256": "70d6f1fe976b59448d81a4f0cb1c7ff2299032b5e0a1e52a9536278b06fa5f4d"
+            },
+            {
+              "path": "web-console/src/app/agent/ConversationSeat.tsx",
+              "sha256": "510a8b47511d883ee70acb9b43dac40559ea3ea11577eb39d5140310af42d464"
+            },
+            {
+              "path": "web-console/src/app/composer/use-attachment-intake.ts",
+              "sha256": "5a469cb1b446977eebc97454e50ebdfece1bbadbea8fea7392733e6b741d5b03"
+            },
+            {
+              "path": "web-console/src/app/navigation/machine.ts",
+              "sha256": "6722834a9b296f3c31dffbbc0ebc48f14bd9fba6736b1952849fee5529d7fd44"
+            },
+            {
+              "path": "web-console/src/app/new-conversation/ConversationComposer.tsx",
+              "sha256": "e136facec8b0a86b71b7e32e47c71e88b81781aa257bb950b1bb6ca9ded37a22"
+            },
+            {
+              "path": "web-console/src/client/app-server.ts",
+              "sha256": "67c001ed3f24003c48e27ed37326b6530f9f148a3a3c5069dc0c5d47fdd6eeb9"
+            },
+            {
+              "path": "web-console/src/client/session-lifecycle/system.ts",
+              "sha256": "728157ef0acc17b3d2fcb2a6b0b666147441d86c2411cd89b1ae8e332dfca9a3"
+            },
+            {
+              "path": "web-console/test/cold-session-navigation.test.tsx",
+              "sha256": "4e82c2c69887890120ccef5791348c8fef8e22a8b6ae1a34b3f8a5cedef6aa90"
+            },
+            {
+              "path": "web-console/test/e2e/chat.spec.ts",
+              "sha256": "39278b3f1fe189f8f87582cf829faada83d71deec1170eab815c4da7a370fc45"
+            },
+            {
+              "path": "web-console/test/e2e/composer.spec.ts",
+              "sha256": "bd4a333233ea96fd00aa84a80cedc193c607e3a821588a1a74c652546822b3d5"
+            },
+            {
+              "path": "web-console/test/e2e/live-model.spec.ts",
+              "sha256": "ad0e1d7fb0ae5c88a7451b62ac63cd6a4a208f98626b3c54efeabb728103cc99"
+            },
+            {
+              "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+              "sha256": "1eb19bcc7978a3495d97eaac1cea3ab3eeafd8e31a18cb2fc01abaad2edef71d"
+            },
+            {
+              "path": "web-console/test/e2e/response-retry.spec.ts",
+              "sha256": "1d04e91aff410f58aaaabb78a580ff7efc3599759c167e4f81041defb439d07f"
+            },
+            {
+              "path": "web-console/test/e2e/shell-actions.ts",
+              "sha256": "823926c851e519127b74c22df9b2814170df875ba14893a3ea945ffe6fdc81e1"
+            },
+            {
+              "path": "web-console/test/e2e/shell.spec.ts",
+              "sha256": "f9b6b2b168b5eff767eae893a8d82e9ecc6bf6350c2370f63cc775c578a28517"
+            },
+            {
+              "path": "web-console/test/e2e/sidebar-actions.spec.ts",
+              "sha256": "1c5239f9981df03abf6f7e84d2c35bb581f7449f4d692749aacca612d5ed3481"
+            },
+            {
+              "path": "web-console/test/e2e/wire-probe.ts",
+              "sha256": "1996207162e2965657202fed9219ff64dbc7be79f4b9c373cca29bd17cdabfc9"
+            },
+            {
+              "path": "web-console/test/history-draft.test.tsx",
+              "sha256": "0f3c60be906af000f77a340deb3d8b7fa2aaf997ca3d216aa9f52d6de7cf9b48"
+            },
+            {
+              "path": "web-console/test/history-navigation.test.ts",
+              "sha256": "3c158ca864578b66632e912d17deab2b9ba94769ef089cc30e699b594b014cff"
+            },
+            {
+              "path": "web-console/test/navigation-ownership.test.ts",
+              "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+            },
+            {
+              "path": "web-console/test/wire-probe.test.ts",
+              "sha256": "9483f6f77ccf3f9eb8abb0465b0b671d76e77c977573afa160b5dbb8311703ce"
+            }
+          ]
+        },
+        "protocol": {
+          "count": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "inputs": []
+        },
+        "other": {
+          "count": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "inputs": []
+        }
+      }
+    },
+    "native": {
+      "count": 1013,
+      "sha256": "1ea25f55fe1012ad6f26e2bd1e718c427ef82c193659e279d29c6daedbc797ff",
+      "previous_count": 1012,
+      "previous_sha256": "ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177",
+      "matches_previous": false,
+      "new_paths": [
+        "src/tools/mcp/connection/catalog_tests/redaction.rs"
+      ],
+      "changed_inputs": [
+        {
+          "path": "src/tools/mcp/connect.rs",
+          "previous_sha256": "d4241d5c72c87b8b45c4199a3f6cb070154135ae04a21c1b204c7d323218e33d",
+          "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72",
+          "new": false
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "previous_sha256": "c62530a5b17f056de386a9d9cea2954d321b926360f29b34f9f4ceaa2008a7c4",
+          "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37",
+          "new": false
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "previous_sha256": null,
+          "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459",
+          "new": true
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "previous_sha256": "2fe59ec3ca968ff9741b6bd82cbc534ae9c3d25c6af3e365bd9688669ab2de1d",
+          "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a",
+          "new": false
+        },
+        {
+          "path": "src/tools/mcp/framing.rs",
+          "previous_sha256": "9469f342330bdd40e3ce99577bf32cafd6a9e2d89ab4956bf2e795db1e88a390",
+          "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7",
+          "new": false
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "previous_sha256": "a76867a8f9dc9fe39fea4f0a89beb504cefda12a2d75520d165a7cb9b2242c19",
+          "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6",
+          "new": false
+        }
+      ],
+      "changed_since_first_review15_freeze": [
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "before_sha256": "34f548f10491b7ed7fb0852f8b5fcc9db2a55c6add4515f1c78858f0d9235c89",
+          "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+        }
+      ],
+      "previous_review15_sha256": "01046fcae9efdaf1fc0ebe6890fd6b76e767321994053936e51e1d01095b97d2",
+      "matches_previous_review15_freeze": false,
+      "reconstruction": "The complete1012 paths in validation-review14.json native inventory, with current six Native replacements/addition; all1013 independently rehashed in scratch audit. No prior manifest changed."
+    },
+    "current_native_delta": {
+      "count": 6,
+      "sha256": "36d1ae0103d77758cb46847f60614b2f14b4a57b5640dfeea32078c0279f0f8d",
+      "inputs": [
+        {
+          "path": "src/tools/mcp/connect.rs",
+          "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+        },
+        {
+          "path": "src/tools/mcp/framing.rs",
+          "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+        }
+      ]
+    },
+    "current_tui_delta": {
+      "count": 2,
+      "sha256": "4ab05c011a95b3207bab8d055b1c23fa3a2237df0dca8de7cd4e6ace92782a38",
+      "inputs": [
+        {
+          "path": "tui/src/ui/app.ts",
+          "sha256": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3"
+        },
+        {
+          "path": "tui/test/startup.test.ts",
+          "sha256": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+        }
+      ]
+    }
+  },
+  "source_audit": {
+    "path": "/tmp/issue499/review15-source-audit-final.json",
+    "sha256": "f737da9205eba61ab844242394bb463973ccb7a37b1c28e28d07df125abde056"
+  },
+  "old_committed_evidence_integrity": {
+    "anchor": "31d2394fe935e545466f18f9ae8fac18083422cb",
+    "count": 59,
+    "all_byte_identical": true,
+    "files": [
+      {
+        "path": "docs/issue-499/evidence/baseline-manifest.json",
+        "anchor_sha256": "ecaa33019a6a50fd02a7a2b98beaeb517b5e64e1daafc3eafab30b71df18c681",
+        "sha256": "ecaa33019a6a50fd02a7a2b98beaeb517b5e64e1daafc3eafab30b71df18c681",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/baseline-model-startup.json",
+        "anchor_sha256": "c1f78e3982caa7916bbd5a1c9597ff18a1b010016b53e33cc9ebbbeaff5edea6",
+        "sha256": "c1f78e3982caa7916bbd5a1c9597ff18a1b010016b53e33cc9ebbbeaff5edea6",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/baseline-source-preparation.json",
+        "anchor_sha256": "6fed4c601f0597b3881a996eb34e6373eff626d6695e0357ddbf3b56d8aacc96",
+        "sha256": "6fed4c601f0597b3881a996eb34e6373eff626d6695e0357ddbf3b56d8aacc96",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/baseline-startup.json",
+        "anchor_sha256": "ae4a818719e3f00d676ab2b9941059b97f87b0382a82375d11f21e1321f7cbda",
+        "sha256": "ae4a818719e3f00d676ab2b9941059b97f87b0382a82375d11f21e1321f7cbda",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/head-manifest.json",
+        "anchor_sha256": "48d9900e8c864f7d4aed13ae411e55479a7556d28de61bfa00e41db96ce5a82b",
+        "sha256": "48d9900e8c864f7d4aed13ae411e55479a7556d28de61bfa00e41db96ce5a82b",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/head-model-startup.json",
+        "anchor_sha256": "928364ab52b1780a08c5783ffa5199732b6ed696e02b199df6076a02862be075",
+        "sha256": "928364ab52b1780a08c5783ffa5199732b6ed696e02b199df6076a02862be075",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/head-source-preparation.json",
+        "anchor_sha256": "3e7e58b4aa15f10257b86babec52c6ee966718d7d1137fa6f11c51be71d2e715",
+        "sha256": "3e7e58b4aa15f10257b86babec52c6ee966718d7d1137fa6f11c51be71d2e715",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/head-startup.json",
+        "anchor_sha256": "1023426f9feaf277da61e0981a1a954184b19f3ad8801f4084978ef7c49cf26d",
+        "sha256": "1023426f9feaf277da61e0981a1a954184b19f3ad8801f4084978ef7c49cf26d",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview10.md",
+        "anchor_sha256": "d2c497563b3170ba58f91625fc737f93e3b6ddd3b7a4c8d12ee1486025c4adf9",
+        "sha256": "d2c497563b3170ba58f91625fc737f93e3b6ddd3b7a4c8d12ee1486025c4adf9",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview11.md",
+        "anchor_sha256": "ccf6d1efe183f55629c62e4307531b4fd2838119428a3ab3d068ca6d1cc3443b",
+        "sha256": "ccf6d1efe183f55629c62e4307531b4fd2838119428a3ab3d068ca6d1cc3443b",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview12.md",
+        "anchor_sha256": "4e17f519c77660f6987c4305bac206c00c58d76cdfa3a5017706f5876bf21587",
+        "sha256": "4e17f519c77660f6987c4305bac206c00c58d76cdfa3a5017706f5876bf21587",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview13.md",
+        "anchor_sha256": "6ab09d0db1c449f2d9a9546fde8548e360ad27f0180bcc7589762f9cdba1790c",
+        "sha256": "6ab09d0db1c449f2d9a9546fde8548e360ad27f0180bcc7589762f9cdba1790c",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview14.md",
+        "anchor_sha256": "77d764564c0591b26715af5099919ebf01f6e34fab317713c30e43eef89b0f2d",
+        "sha256": "77d764564c0591b26715af5099919ebf01f6e34fab317713c30e43eef89b0f2d",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview4.md",
+        "anchor_sha256": "771ebbf0782e193f082f6dba8d4b2d64fef6efc7e46eb36e08d5712a7412ebec",
+        "sha256": "771ebbf0782e193f082f6dba8d4b2d64fef6efc7e46eb36e08d5712a7412ebec",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview5.md",
+        "anchor_sha256": "85fcd21f4ba937e3d38700e7ea2f1c4428007c478856d7225c6c9e45e3d13b4f",
+        "sha256": "85fcd21f4ba937e3d38700e7ea2f1c4428007c478856d7225c6c9e45e3d13b4f",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview6.md",
+        "anchor_sha256": "80eb8a8f4bcf711246385d1f9d1da4affb506bc88b5e4bd2488506f212d2717d",
+        "sha256": "80eb8a8f4bcf711246385d1f9d1da4affb506bc88b5e4bd2488506f212d2717d",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview7.md",
+        "anchor_sha256": "a7182cbbba65b35fcf1fe1feaa064adc14b51a12ce29bcd590f585ec4869127a",
+        "sha256": "a7182cbbba65b35fcf1fe1feaa064adc14b51a12ce29bcd590f585ec4869127a",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview8.md",
+        "anchor_sha256": "e8c81808003b425320e8a769a5f226734cecd5799cc808b6a55a084c30e618dd",
+        "sha256": "e8c81808003b425320e8a769a5f226734cecd5799cc808b6a55a084c30e618dd",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/independentreview9.md",
+        "anchor_sha256": "a38420f577d822de770c3c090a9a2d8851584df953426bdbfbe2828653476a05",
+        "sha256": "a38420f577d822de770c3c090a9a2d8851584df953426bdbfbe2828653476a05",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/mcp-startup-1440.png",
+        "anchor_sha256": "993931cec638a29c0de5919e9c304ecab53e9c15c6abf4d505be3f54b7a0cdfc",
+        "sha256": "993931cec638a29c0de5919e9c304ecab53e9c15c6abf4d505be3f54b7a0cdfc",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/mcp-startup-390.png",
+        "anchor_sha256": "4ce692e83424e3f32ae4b2bfc80704d611565b7a0fa171eeb5cebe0467be39a0",
+        "sha256": "4ce692e83424e3f32ae4b2bfc80704d611565b7a0fa171eeb5cebe0467be39a0",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/measurement-revision.json",
+        "anchor_sha256": "5e598319cb049e719ded7dba3d2acbfcdc0930b00c3cbabd6b6cff78923d0054",
+        "sha256": "5e598319cb049e719ded7dba3d2acbfcdc0930b00c3cbabd6b6cff78923d0054",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/ownership-settlement-validation.json",
+        "anchor_sha256": "88757cef96303d6d0e08dfd2b2cd529de4a1d7cbdb543c89ab1a9340d38af53d",
+        "sha256": "88757cef96303d6d0e08dfd2b2cd529de4a1d7cbdb543c89ab1a9340d38af53d",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/readiness-ownership-validation.json",
+        "anchor_sha256": "b851cd8c28b8b2bb071b379765c99e2bd631f47446ff3292acd6a2bb98c53ab3",
+        "sha256": "b851cd8c28b8b2bb071b379765c99e2bd631f47446ff3292acd6a2bb98c53ab3",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/review-fix-validation.json",
+        "anchor_sha256": "278474307516943a023d5fc6b3ea09f7779226b6f242525329f2f77f169790be",
+        "sha256": "278474307516943a023d5fc6b3ea09f7779226b6f242525329f2f77f169790be",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-baseline-adapter.json",
+        "anchor_sha256": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+        "sha256": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-baseline.json",
+        "anchor_sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+        "sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-current.json",
+        "anchor_sha256": "96debdb6fb3abd627b20773f5f00dca5ed1a9cff346edbec0e0f3f44f021f3a1",
+        "sha256": "96debdb6fb3abd627b20773f5f00dca5ed1a9cff346edbec0e0f3f44f021f3a1",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-independent-review.md",
+        "anchor_sha256": "c526535c732c49e7eecdbbdcf39723d87e8c723a1b303ff8e4c50a9a88c61505",
+        "sha256": "c526535c732c49e7eecdbbdcf39723d87e8c723a1b303ff8e4c50a9a88c61505",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-manifest.json",
+        "anchor_sha256": "b2fd3cbd7b6fe207d7fd11f08a2b7e1ecaeecf96cf42b79a506b19feb7d87aa7",
+        "sha256": "b2fd3cbd7b6fe207d7fd11f08a2b7e1ecaeecf96cf42b79a506b19feb7d87aa7",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review2-current.json",
+        "anchor_sha256": "e502c37e9f7493e882fd7bbd8a8b9abd15c3d0a436de8254aa22da3618348029",
+        "sha256": "e502c37e9f7493e882fd7bbd8a8b9abd15c3d0a436de8254aa22da3618348029",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review2-independent-review.md",
+        "anchor_sha256": "e71ea3aa67e35470fb26cc70d976b52059289505283feda3fd2a9e2e2d40e2fc",
+        "sha256": "e71ea3aa67e35470fb26cc70d976b52059289505283feda3fd2a9e2e2d40e2fc",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review2-manifest.json",
+        "anchor_sha256": "597a25a4f48d81f536780a3ae024acdb0f6823f201724109cab420d3c1b123a9",
+        "sha256": "597a25a4f48d81f536780a3ae024acdb0f6823f201724109cab420d3c1b123a9",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review3-current.json",
+        "anchor_sha256": "03bdf903a3bb60f740960e13eb2563e3c867c553e93e767f160fe17877b5ce2a",
+        "sha256": "03bdf903a3bb60f740960e13eb2563e3c867c553e93e767f160fe17877b5ce2a",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review3-independent-review.md",
+        "anchor_sha256": "9e547d732123142deadc4038298193826aaabc26461f8744602257ccf9e1225f",
+        "sha256": "9e547d732123142deadc4038298193826aaabc26461f8744602257ccf9e1225f",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review3-manifest.json",
+        "anchor_sha256": "58c153fb3af095e262dbb4290fa8281be9d28128d9b2a98fac94216c98cc2505",
+        "sha256": "58c153fb3af095e262dbb4290fa8281be9d28128d9b2a98fac94216c98cc2505",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review4-current.json",
+        "anchor_sha256": "e096a82ccc8c045374da1b86f05c84608f684855b4971d0b294059a50afab9e8",
+        "sha256": "e096a82ccc8c045374da1b86f05c84608f684855b4971d0b294059a50afab9e8",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review4-manifest.json",
+        "anchor_sha256": "3affeb7704e3b40fcfc6f54da6daba57c46845099f9ccdceca64a33cf6153f73",
+        "sha256": "3affeb7704e3b40fcfc6f54da6daba57c46845099f9ccdceca64a33cf6153f73",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review5-current.json",
+        "anchor_sha256": "f5c1c8a01448846b136f6a70f349e9073aa9dab32fa571cb421fb10ee6fbe15c",
+        "sha256": "f5c1c8a01448846b136f6a70f349e9073aa9dab32fa571cb421fb10ee6fbe15c",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review5-manifest.json",
+        "anchor_sha256": "c2aaf9f983617c27e1d4b589639ab0d3b6dd8dc741133617232f0f9b6df33eab",
+        "sha256": "c2aaf9f983617c27e1d4b589639ab0d3b6dd8dc741133617232f0f9b6df33eab",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review8-current.json",
+        "anchor_sha256": "2ac10e9242eda0d6df0d94beb8ebafa4d4cde2636d40e170bb1a397b36519899",
+        "sha256": "2ac10e9242eda0d6df0d94beb8ebafa4d4cde2636d40e170bb1a397b36519899",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/submission-live-review8-manifest.json",
+        "anchor_sha256": "f10a0c70663878543cb0efcaca31d5e6e5312b34152824c4de0ae5ec1e594e36",
+        "sha256": "f10a0c70663878543cb0efcaca31d5e6e5312b34152824c4de0ae5ec1e594e36",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-redesign.json",
+        "anchor_sha256": "017026bf07dc5d0226312aa404eabba6161a69742a6e9782e579c52c7f594974",
+        "sha256": "017026bf07dc5d0226312aa404eabba6161a69742a6e9782e579c52c7f594974",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review10.json",
+        "anchor_sha256": "55a6a8a5245ba7212d6bef78761c0b9a7caccd17f263aea7dc0e3d045cd8e9b9",
+        "sha256": "55a6a8a5245ba7212d6bef78761c0b9a7caccd17f263aea7dc0e3d045cd8e9b9",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review11.json",
+        "anchor_sha256": "f53196f0de111beef221ff04b06671b2a62f1a26ff493cd01df7c5f694daf4d5",
+        "sha256": "f53196f0de111beef221ff04b06671b2a62f1a26ff493cd01df7c5f694daf4d5",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review12.json",
+        "anchor_sha256": "7f7d776fb5d53ad090dc674ea59f326add88ff016e35e8fdb44c539822b552ef",
+        "sha256": "7f7d776fb5d53ad090dc674ea59f326add88ff016e35e8fdb44c539822b552ef",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review13.json",
+        "anchor_sha256": "962b26885040e9bcccfc539ad96195bc3b3fb4d503bd471196418349712eb75a",
+        "sha256": "962b26885040e9bcccfc539ad96195bc3b3fb4d503bd471196418349712eb75a",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review14.json",
+        "anchor_sha256": "bd31d47337ed1001c44e271c619015f18e2b31243db70c1a2bb364d495bb7715",
+        "sha256": "bd31d47337ed1001c44e271c619015f18e2b31243db70c1a2bb364d495bb7715",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review2.json",
+        "anchor_sha256": "ee2a29b811aceb0867bc1fe4a44fe9ca978cb64b395de5c21886b739c3b45178",
+        "sha256": "ee2a29b811aceb0867bc1fe4a44fe9ca978cb64b395de5c21886b739c3b45178",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review3.json",
+        "anchor_sha256": "291e943bc5a24414170307a380d28ef1dca132106d2a13af17b56c41780172e4",
+        "sha256": "291e943bc5a24414170307a380d28ef1dca132106d2a13af17b56c41780172e4",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review4.json",
+        "anchor_sha256": "2e4a44f3eec7e6bdebc9c986fa12a5e56df3c46e117e82874a3c8282d47223d5",
+        "sha256": "2e4a44f3eec7e6bdebc9c986fa12a5e56df3c46e117e82874a3c8282d47223d5",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review5.json",
+        "anchor_sha256": "9c57eee3f559b7bb98873a9792057067e74d8492d6e6987df7b2c6a30d65f43b",
+        "sha256": "9c57eee3f559b7bb98873a9792057067e74d8492d6e6987df7b2c6a30d65f43b",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review6.json",
+        "anchor_sha256": "561ea4f3da96661c3bc89a62a5880746d317d4776db37954e3c4f557005cb552",
+        "sha256": "561ea4f3da96661c3bc89a62a5880746d317d4776db37954e3c4f557005cb552",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review7.json",
+        "anchor_sha256": "6bd27ef419f17651d0e7c31774dc5a243e5cf709d5f0684026aa323ddd60620a",
+        "sha256": "6bd27ef419f17651d0e7c31774dc5a243e5cf709d5f0684026aa323ddd60620a",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review8.json",
+        "anchor_sha256": "d570d0362d5855006d857afaacb35032f7811f3724dc7eafe3ad2afa0071745a",
+        "sha256": "d570d0362d5855006d857afaacb35032f7811f3724dc7eafe3ad2afa0071745a",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-review9.json",
+        "anchor_sha256": "7c717ae767f203b7306c0a6ec1ba075200f5da90f81540e88eda718e41eb5158",
+        "sha256": "7c717ae767f203b7306c0a6ec1ba075200f5da90f81540e88eda718e41eb5158",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation-tui-ci-repair.json",
+        "anchor_sha256": "6edfbf0b10059b7887b18ec87e2a326715d1721ab212c388f8003a412f322785",
+        "sha256": "6edfbf0b10059b7887b18ec87e2a326715d1721ab212c388f8003a412f322785",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/validation.json",
+        "anchor_sha256": "7dcc657506832c9dace475bdeb4e849fd76ab8ad5bbfb735a8b867cd2348e561",
+        "sha256": "7dcc657506832c9dace475bdeb4e849fd76ab8ad5bbfb735a8b867cd2348e561",
+        "unchanged": true
+      },
+      {
+        "path": "docs/issue-499/evidence/warm-seed-synchronization.json",
+        "anchor_sha256": "b3c5ce6e024ab19f4a8fdc376be9cbe5d67039d567df93564a4746d9a8ba6a70",
+        "sha256": "b3c5ce6e024ab19f4a8fdc376be9cbe5d67039d567df93564a4746d9a8ba6a70",
+        "unchanged": true
+      }
+    ]
+  },
+  "independent_review": {
+    "path": "independentreview15.md",
+    "sha256": "2b8f3a20ce2b86c13bc8c75d62613e47e0250ff0580516fc72447632a3d80edf",
+    "role": "Independent reviewer neither authored nor implemented review15 source/tests. Own final focused execution after one test-only Clippy correction; separate from authorship.",
+    "final_inventory": {
+      "path": "/tmp/issue499/review15-independent-source-inventory-post-clippy.json",
+      "sha256": "2ad8784ce0c4861dad399a9d300175f8ee664fa229b1567df1ad9e8dc69dedb8"
+    }
+  },
+  "owner_diagrams": {
+    "target_input": "A exact-key complete draft -> selection caches A/unbinds presentation and dispatch -> B independent never-bound draft (typing/paste allowed, Send disabled) -> awaited B metadata fills node -> same connecting owner/intent -> actual Attach Conversation proof -> matching exact-key draft only -> one captured content+queue dispatch; failures retain target input and never restore A authority.",
+    "diagnostic": "resolved SourceCredentials captured by exact transport generation -> framing recorder redacts full reason/raw line ->256/160byte previews -> runtime credential owner sanitizes and bounds1024 health/list diagnostic -> catalog early failure -> Failed.error/canonical model_facing_projection; unchanged bytes go to SDK and retirement owner still settles."
+  },
+  "deterministic_test_mapping": [
+    {
+      "invariant": "Before first metadata await input belongs to selected Session; prior text/uploads stay owned by A",
+      "cases": "8 actual App selector+keyboard cases: typed/pasted Q \u00d7 held metadata/Attach \u00d7 plain/confirmed-upload A; zero target calls before metadata proof, exact B content, returning A exact ordered blocks."
+    },
+    {
+      "invariant": "Failed target selection cannot submit to old target; bound Conversation input cannot alias new Conversation",
+      "cases": "2 metadata/Attach refusal plus fresh real Enter picker A/B,3 retired-B same/different Conversation and queued-input controls,1 failed bound-X reconnect\u2192Y\u2192X exact receipts,1 stale old Host metadata. Fifteen new cases; focused179/0 independently executed."
+    },
+    {
+      "invariant": "Known secret does not escape pre-dispatch health/poison/list/framing failure and physical owner settles",
+      "cases": "2 real stdio fixtures, short and longer-than-preview synthetic credentials. before_validate_pause after healthy discovery, release malformed numeric-method JSON, wait recorded violation, validate fails. Each1 established generation/1 peer listing/0 tools-call effects, owned retirement+supervisorESRCH before result/projection/no-prefix assertions. No provider request in these focused cases; unchanged downstream model projection is asserted directly."
+    },
+    {
+      "invariant": "Sanitize before bounded evidence cannot retain a clipped credential prefix; framing behavior unchanged",
+      "cases": "new full-reason/full-line pre-bound unit plus existing byte-preservation/noise/splitline/first-violation tests. Independent final framing9/0; catalog19/0 includes existing generation/schema/epoch/reconnect cancellation fences."
+    }
+  ],
+  "completed_checks": {
+    "review15-native-fmt-final": {
+      "command": "cargo fmt --all -- --check",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:37:55.939535+00:00",
+      "finished_at": "2026-10-25T01:38:01.772847+00:00",
+      "elapsed_seconds": 5.833316893025767,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-fmt-final.result.json",
+        "sha256": "76019f0c28f066700c17d24c3b97012a406e1fe735254e8f1de403150e0f3ad1"
+      },
+      "log": "/tmp/issue499/review15-native-fmt-final.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-fmt-final.source.json",
+        "sha256": "7ea4cde664518f047a5b9a7e5705767c3f94d5b1e07435432d4122be11f27d13"
+      }
+    },
+    "review15-native-clippy-final": {
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:38:01.858757+00:00",
+      "finished_at": "2026-10-25T01:39:27.587429+00:00",
+      "elapsed_seconds": 85.72867768199649,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "ceb731b206cf3419a4eea1ee47d5c15bd3eb5de2367ba9c8a3ff27d5fb54384e",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-clippy-final.result.json",
+        "sha256": "df59693db48fce7b51814ddfc718977863d0984c752e3c95e2bd9ee34ee32921"
+      },
+      "log": "/tmp/issue499/review15-native-clippy-final.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-clippy-final.source.json",
+        "sha256": "0d2d95c760cbee183be21bc16236373d1fa9aae65e0d52c4351ebf9e1960dd7e"
+      }
+    },
+    "review15-native-build-bins": {
+      "command": "cargo build --bins",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:39:27.678724+00:00",
+      "finished_at": "2026-10-25T01:40:55.711373+00:00",
+      "elapsed_seconds": 88.032652881986,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "78a417796cf2ce9b21db3b43462a0d894dd96cf3c581313ca01f622c66da6c35",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-build-bins.result.json",
+        "sha256": "08aa18b82c1566be34f62000aa2278f2d7d0fcae5365730e320bc495084293e8"
+      },
+      "log": "/tmp/issue499/review15-native-build-bins.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-build-bins.source.json",
+        "sha256": "374dcf7ea0549f812db7faff349db39332c61539b00de26d4582b66bbe4b4844"
+      }
+    },
+    "review15-native-emulator-sync": {
+      "command": "uv sync --project test-support/fake-provider --frozen",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:27:26.185950+00:00",
+      "finished_at": "2026-10-25T01:27:26.194966+00:00",
+      "elapsed_seconds": 0.009013282018713653,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "3384f5404334f37d06ae13119a3b74390f6868f4d4488d3fa754be95c8881597",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-emulator-sync.result.json",
+        "sha256": "b7a40053954a855d28f9016821f4835b80ac522159c64a29501a9ed2add591b0"
+      },
+      "log": "/tmp/issue499/review15-native-emulator-sync.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-emulator-sync.source.json",
+        "sha256": "fce9fefe15ecb02f30cd3fe52dfeb2f812562ae2595e2bdc466a9f86a8771045"
+      }
+    },
+    "review15-native-emulator": {
+      "command": "uv run --project test-support/fake-provider --frozen pytest -o addopts= -q test-support/fake-provider/tests",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:27:26.279856+00:00",
+      "finished_at": "2026-10-25T01:27:26.560389+00:00",
+      "elapsed_seconds": 0.2805348790134303,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "3824326efcc1598acc1024f40c8fa480e4370e5981a0d1d1a4fbff8f55dd0ddc",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-emulator.result.json",
+        "sha256": "7b4956f99b5704ea159fc7bb3d1be5a0ca47ab39933d40a3f90391d1f410f03b"
+      },
+      "log": "/tmp/issue499/review15-native-emulator.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-emulator.source.json",
+        "sha256": "2e513ab5534fdc342128aa14184a5949d6b801b81ac08f2b67582a1ec144e551"
+      }
+    },
+    "review15-native-protocol-typecheck": {
+      "command": "pnpm --dir protocol/app-server typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:30:32.589702+00:00",
+      "finished_at": "2026-10-25T01:30:33.667775+00:00",
+      "elapsed_seconds": 1.0780760549823754,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-protocol-typecheck.result.json",
+        "sha256": "860a07d63235363ca60e25a399d50dd75407ae8db912f2377a56abb91a52d8cc"
+      },
+      "log": "/tmp/issue499/review15-native-protocol-typecheck.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-protocol-typecheck.source.json",
+        "sha256": "dbe4ae6e2e548cd23a56f2e908ff4cb745363a69ffed44f07d371aabab142671"
+      }
+    },
+    "review15-native-launcher-typecheck": {
+      "command": "pnpm --dir dev typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:30:33.756145+00:00",
+      "finished_at": "2026-10-25T01:30:35.183970+00:00",
+      "elapsed_seconds": 1.4278298079734668,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-launcher-typecheck.result.json",
+        "sha256": "c34f7f75093121f9036dd33e77f52cf2890522b0121852dda25b5c9635229416"
+      },
+      "log": "/tmp/issue499/review15-native-launcher-typecheck.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-launcher-typecheck.source.json",
+        "sha256": "58e7e3b831f10c557c215b4166544440d682b86ca4b909845ce693a8634201a6"
+      }
+    },
+    "review15-native-launcher-test": {
+      "command": "pnpm --dir dev test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:30:35.270784+00:00",
+      "finished_at": "2026-10-25T01:30:38.663851+00:00",
+      "elapsed_seconds": 3.3930704750237055,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "2300424ddff100f5c3c79b99bee35d3fcb2df9c6709ee3f162b50f7f6278411d",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-launcher-test.result.json",
+        "sha256": "72f5dfe6a7dff89b5f2386b878865a8fc3383963eb1c1f60013e38a057385def"
+      },
+      "log": "/tmp/issue499/review15-native-launcher-test.log",
+      "rust_summaries": [],
+      "node_counts": {
+        "tests": 41,
+        "suites": 0,
+        "pass": 41,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-launcher-test.source.json",
+        "sha256": "6a7e451934324a982415f1db3400471f2baa5abdc5b9a76abaa8d88760ccaa1d"
+      }
+    },
+    "review15-tui-typecheck-root": {
+      "command": "pnpm --dir tui typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:42:55.974004+00:00",
+      "finished_at": "2026-10-25T01:43:00.962529+00:00",
+      "elapsed_seconds": 4.988526831031777,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+      "receipt": {
+        "path": "/tmp/issue499/review15-tui-typecheck-root.result.json",
+        "sha256": "cfee10b80a368b07d1f7f55667d4d159f99cae13348c90d056b55c1a59607fd0"
+      },
+      "log": "/tmp/issue499/review15-tui-typecheck-root.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": []
+    },
+    "review15-tui-full-stable": {
+      "command": "pnpm --dir tui test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:48:20.425514+00:00",
+      "finished_at": "2026-10-25T01:48:58.552707+00:00",
+      "elapsed_seconds": 38.12719929002924,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "5f86e3a2b00a3435606ef4a75209d1591910ee4b6a3737b045776ec48ccb6cbd",
+      "receipt": {
+        "path": "/tmp/issue499/review15-tui-full-stable.result.json",
+        "sha256": "217fbfd6c524feef8ecf0f7cc24db1a8cf2940c6d7f13ee87db465699f2af99e"
+      },
+      "log": "/tmp/issue499/review15-tui-full-stable.log",
+      "rust_summaries": [],
+      "node_counts": {
+        "tests": 1281,
+        "suites": 105,
+        "pass": 1280,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 1,
+        "todo": 0
+      },
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-tui-full-stable.source.json",
+        "sha256": "7ac765ec5abda5abba2cde38c7a4d0403fad8b1968c5fdeb330f73faba6d9706"
+      }
+    },
+    "review15-web-typecheck-root": {
+      "command": "pnpm --dir web-console typecheck",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:49:05.632094+00:00",
+      "finished_at": "2026-10-25T01:49:21.729288+00:00",
+      "elapsed_seconds": 16.097199756011833,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+      "receipt": {
+        "path": "/tmp/issue499/review15-web-typecheck-root.result.json",
+        "sha256": "c6549b2c3d765023b33f7244f8fbe40cb1d9d9b4d07c144682a47a865e6fd057"
+      },
+      "log": "/tmp/issue499/review15-web-typecheck-root.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-web-typecheck-root.source.json",
+        "sha256": "2a6ff212366477907db5af6357a64a7274548a0b60068ef6e2cec93d5f8c700b"
+      }
+    },
+    "review15-web-full": {
+      "command": "pnpm --dir web-console test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:49:28.745491+00:00",
+      "finished_at": "2026-10-25T01:50:09.486666+00:00",
+      "elapsed_seconds": 40.741175492992625,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "fe48372810150d29d4f915b77061c9706904c0df30968e787a745698ff46c4cd",
+      "receipt": {
+        "path": "/tmp/issue499/review15-web-full.result.json",
+        "sha256": "666794b70f8abeefef382ad1592df7a1a7a74853612258cefa12ee8c04915fc6"
+      },
+      "log": "/tmp/issue499/review15-web-full.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [
+        "Test Files  214 passed | 1 skipped (215)",
+        "Tests  3300 passed | 4 skipped (3304)"
+      ],
+      "source.json": {
+        "path": "/tmp/issue499/review15-web-full.source.json",
+        "sha256": "6b6687bcc966aa6335779aa33d3f11883d21620a5c7c14d519bb31f0a080819e"
+      }
+    },
+    "review15-i18n": {
+      "command": "pnpm --dir web-console check:i18n",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:50:16.565073+00:00",
+      "finished_at": "2026-10-25T01:50:17.511020+00:00",
+      "elapsed_seconds": 0.9459528820007108,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b",
+      "receipt": {
+        "path": "/tmp/issue499/review15-i18n.result.json",
+        "sha256": "6dd360c7c4228ad8c5d7b1ad0493d32657cc2972e87c7d6a8e63ef781ac2f30b"
+      },
+      "log": "/tmp/issue499/review15-i18n.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-i18n.source.json",
+        "sha256": "ef803e64fbce56aa163f08892014d95f277aaa4d418d12f6ad142d08c8a05ae8"
+      }
+    },
+    "review15-provenance": {
+      "command": "pnpm --dir web-console check:provenance",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:50:24.516774+00:00",
+      "finished_at": "2026-10-25T01:50:25.606132+00:00",
+      "elapsed_seconds": 1.0893591640051454,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2",
+      "receipt": {
+        "path": "/tmp/issue499/review15-provenance.result.json",
+        "sha256": "5557e57ff74968d2c0843973c6a18f871d19cbaf1a3ae3ead5aab51e15fbab7d"
+      },
+      "log": "/tmp/issue499/review15-provenance.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-provenance.source.json",
+        "sha256": "50260c8fd385901b17614e1a99bd12d8475b55952f46a7d0adb573c8b2c583b7"
+      }
+    },
+    "review15-independent-tui-focused": {
+      "command": [
+        "node",
+        "--test",
+        "--test-timeout=20000",
+        "tui/test/startup.test.ts",
+        "tui/test/composer-app.test.ts",
+        "tui/test/session-focus.test.ts",
+        "tui/test/convergence.test.ts"
+      ],
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:19:20.370801+00:00",
+      "finished_at": "2026-10-25T01:19:23.113616+00:00",
+      "elapsed_seconds": 2.7428204730385914,
+      "exit_code": 0,
+      "source_before": {
+        "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+        "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+      },
+      "source_after": {
+        "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+        "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+      },
+      "log_sha256": "75d321cde250c2cd4f3621a086a857ce811caa4389bc8d38176c985222148738",
+      "receipt": {
+        "path": "/tmp/issue499/review15-independent-tui-focused.result.json",
+        "sha256": "26dd075b0263eae62aa1f43fd3463e45c97b421ef421c08338eb6db091784ea2"
+      },
+      "log": "/tmp/issue499/review15-independent-tui-focused.log",
+      "rust_summaries": [],
+      "node_counts": {
+        "tests": 179,
+        "suites": 3,
+        "pass": 179,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "web_summary": []
+    },
+    "review15-independent-tui-typecheck": {
+      "command": [
+        "pnpm",
+        "--dir",
+        "tui",
+        "typecheck"
+      ],
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:19:23.114711+00:00",
+      "finished_at": "2026-10-25T01:19:27.311975+00:00",
+      "elapsed_seconds": 4.197272782039363,
+      "exit_code": 0,
+      "source_before": {
+        "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+        "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+      },
+      "source_after": {
+        "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+        "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+      },
+      "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+      "receipt": {
+        "path": "/tmp/issue499/review15-independent-tui-typecheck.result.json",
+        "sha256": "95fc261b7f10df57c4dbe20ad6255c18f6e5a243a8db5550d0afff0d78770031"
+      },
+      "log": "/tmp/issue499/review15-independent-tui-typecheck.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": []
+    },
+    "review15-independent-mcp-catalog-post-clippy": {
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "--all-features",
+        "tools::mcp::connection::catalog_tests",
+        "--",
+        "--nocapture",
+        "--test-threads=4"
+      ],
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:33:02.794029+00:00",
+      "finished_at": "2026-10-25T01:36:17.248171+00:00",
+      "elapsed_seconds": 194.45414596202318,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "source_before": {
+        "src/tools/mcp/connect.rs": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72",
+        "src/tools/mcp/framing.rs": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7",
+        "src/tools/mcp/runtime.rs": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6",
+        "src/tools/mcp/connection/catalog.rs": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090",
+        "src/tools/mcp/connection/catalog_tests.rs": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37",
+        "src/tools/mcp/connection/catalog_tests/redaction.rs": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459",
+        "src/tools/mcp/fixture/raw.rs": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+      },
+      "source_after": {
+        "src/tools/mcp/connect.rs": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72",
+        "src/tools/mcp/framing.rs": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7",
+        "src/tools/mcp/runtime.rs": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6",
+        "src/tools/mcp/connection/catalog.rs": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090",
+        "src/tools/mcp/connection/catalog_tests.rs": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37",
+        "src/tools/mcp/connection/catalog_tests/redaction.rs": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459",
+        "src/tools/mcp/fixture/raw.rs": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+      },
+      "log_sha256": "efe55d0289879b6112e64a6e1ca65a50e0a7af1a841099e195ceb065f78f25c5",
+      "receipt": {
+        "path": "/tmp/issue499/review15-independent-mcp-catalog-post-clippy.result.json",
+        "sha256": "879a6922351b071796430c1db3fdfc8c3ac3fcb969b4e2677502e9134e83fba4"
+      },
+      "log": "/tmp/issue499/review15-independent-mcp-catalog-post-clippy.log",
+      "rust_summaries": [
+        {
+          "status": "ok",
+          "passed": "19",
+          "failed": "0",
+          "ignored": "0",
+          "measured": "0",
+          "filtered": "4757"
+        }
+      ],
+      "node_counts": {},
+      "web_summary": []
+    },
+    "review15-independent-mcp-framing-post-clippy": {
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "--all-features",
+        "tools::mcp::framing::tests",
+        "--",
+        "--nocapture",
+        "--test-threads=4"
+      ],
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:36:17.249096+00:00",
+      "finished_at": "2026-10-25T01:36:17.525609+00:00",
+      "elapsed_seconds": 0.27651898097246885,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "source_before": {
+        "src/tools/mcp/connect.rs": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72",
+        "src/tools/mcp/framing.rs": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7",
+        "src/tools/mcp/runtime.rs": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6",
+        "src/tools/mcp/connection/catalog.rs": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090",
+        "src/tools/mcp/connection/catalog_tests.rs": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37",
+        "src/tools/mcp/connection/catalog_tests/redaction.rs": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459",
+        "src/tools/mcp/fixture/raw.rs": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+      },
+      "source_after": {
+        "src/tools/mcp/connect.rs": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72",
+        "src/tools/mcp/framing.rs": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7",
+        "src/tools/mcp/runtime.rs": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6",
+        "src/tools/mcp/connection/catalog.rs": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090",
+        "src/tools/mcp/connection/catalog_tests.rs": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37",
+        "src/tools/mcp/connection/catalog_tests/redaction.rs": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459",
+        "src/tools/mcp/fixture/raw.rs": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+      },
+      "log_sha256": "c0a99ffdd0df82529671d5c0ffb05748c0649fb08300a33b48cea2da2cd8029e",
+      "receipt": {
+        "path": "/tmp/issue499/review15-independent-mcp-framing-post-clippy.result.json",
+        "sha256": "8ae686cea376d824b7fc503d369155bb90843fccbe021257cc0839cedbe7b2e7"
+      },
+      "log": "/tmp/issue499/review15-independent-mcp-framing-post-clippy.log",
+      "rust_summaries": [
+        {
+          "status": "ok",
+          "passed": "9",
+          "failed": "0",
+          "ignored": "0",
+          "measured": "0",
+          "filtered": "4767"
+        }
+      ],
+      "node_counts": {},
+      "web_summary": []
+    }
+  },
+  "stable_client_products": {
+    "recorded_at": "2026-10-25T01:48:04.536365+00:00",
+    "native_source_sha256": "1ea25f55fe1012ad6f26e2bd1e718c427ef82c193659e279d29c6daedbc797ff",
+    "reason": "Existing supported RUSTX_BINARY override isolates already built final-source products from concurrent test-lane Cargo relinking. Original fullTUI ENOENT failure stays failed; no product/test-source change. All three siblings copied, not live-shared symlinks.",
+    "files": [
+      {
+        "name": "rustx",
+        "source": "/home/capi/Documents/codes/rustX/target/debug/rustx",
+        "copy": "/tmp/issue499/review15-validated-bins/rustx",
+        "sha256": "ecbf8656222e533cbe4dbc4d0bf004bf194f5224b54a15ec8e0ee5f33b53bdaf",
+        "size": 1466065648,
+        "source_before_after_and_copy_equal": true
+      },
+      {
+        "name": "interactive-supervisor",
+        "source": "/home/capi/Documents/codes/rustX/target/debug/interactive-supervisor",
+        "copy": "/tmp/issue499/review15-validated-bins/interactive-supervisor",
+        "sha256": "1974c5d315b3ae1c4f41d9a07422988de4e13880d66d814050e2693cba681393",
+        "size": 1101490768,
+        "source_before_after_and_copy_equal": true
+      },
+      {
+        "name": "bash-supervisor",
+        "source": "/home/capi/Documents/codes/rustX/target/debug/bash-supervisor",
+        "copy": "/tmp/issue499/review15-validated-bins/bash-supervisor",
+        "sha256": "a93582b0de9a01be25c972ba45bf4583cd01864b938d139390fdd86685324ee0",
+        "size": 1101392144,
+        "source_before_after_and_copy_equal": true
+      }
+    ],
+    "manifest": {
+      "path": "/tmp/issue499/review15-validated-bins.json",
+      "sha256": "4022db5e5cbac252b94b04e7dd6655c7a10c308a3d4ae480fc41edf8d4f3cf3d"
+    },
+    "environment": {
+      "RUSTX_BINARY": "/tmp/issue499/review15-validated-bins/rustx",
+      "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+    },
+    "purpose": "Supported test binary override isolates completed final-source product files from concurrent Cargo link-path replacement. It changes no source/test oracle or executable bytes. Whole TUI rerun is actual1280/0/1 platform skip, not relabeling initial1277/3/1. Each subsequent client check rehashes all8 source inputs and3 copied products before/after."
+  },
+  "preserved_failures_and_intermediates": {
+    "tui_author_development": {
+      "observed_at": "2026-10-25T01:18:41.943901+00:00",
+      "role": "implementation/test author; not independent source approval",
+      "parent_head": "31d2394fe935e545466f18f9ae8fac18083422cb",
+      "current_tui_sources": {
+        "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+        "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49"
+      },
+      "records": [
+        {
+          "receipt": "/tmp/issue499/review15-tui-bound-draft-red-asserted.result.json",
+          "receipt_sha256": "205e9ca08b43cb98745dae0ca87f00ea19c816ffb85c8b28d8ce2421da05eebc",
+          "log": "/tmp/issue499/review15-tui-bound-draft-red-asserted.log",
+          "log_sha256": "ce16d5f82f96814ce86f27a9b884ef407a0df83ea11ad5457e313b7addec4f3a",
+          "exit_code": 1,
+          "counts": {
+            "tests": 1,
+            "suites": 0,
+            "pass": 0,
+            "fail": 1,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 1.201645327033475,
+          "source_before": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Explicit assertion confirms intermediate implementation carried known X draft content into new Y editor after failed reconnect/reselection. Not a31d source run; motivates final bound/unbound cache distinction."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-bound-draft-red.result.json",
+          "receipt_sha256": "4cc9d0e1efebe99cb04228b85f94c269b4369df3abdddfcc37dfb0889e1335b4",
+          "log": "/tmp/issue499/review15-tui-bound-draft-red.log",
+          "log_sha256": "02f503f97f06eec4c63aed2a2ba6212e6efad1ba067b30e3117457cd349645a7",
+          "exit_code": 1,
+          "counts": {
+            "tests": 1,
+            "suites": 0,
+            "pass": 0,
+            "fail": 0,
+            "cancelled": 1,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 21.081022446975112,
+          "source_before": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "fb382318541442ee1c2ab1900e4aecf6f7b10346b009ec58a3be0ccd409062c0",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "fb382318541442ee1c2ab1900e4aecf6f7b10346b009ec58a3be0ccd409062c0",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate first-author implementation foreign-Conversation test timed out after product refused editing the carried canonical upload-separated text. This is not dispatch/leak evidence. Preserved unchanged; strengthened deterministic editor-content assertion in next receipt."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-focused-final-candidate.result.json",
+          "receipt_sha256": "c7f7ca0f8702904fa7c81ac49480cfa135c2d11aa3386b2acc133368ea535940",
+          "log": "/tmp/issue499/review15-tui-focused-final-candidate.log",
+          "log_sha256": "936b9cbbe9930f371cbbeb4656ae0018b86c02d8ca9a4693fdcf8e6d2138e19f",
+          "exit_code": 1,
+          "counts": {
+            "tests": 178,
+            "suites": 3,
+            "pass": 177,
+            "fail": 1,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 3.525405196007341,
+          "source_before": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "4f0832cc9fc69ff3d87aff70d623d34d9d0404e239efcb1b155b19a6c38ae344",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "4f0832cc9fc69ff3d87aff70d623d34d9d0404e239efcb1b155b19a6c38ae344",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "177 pass/1failure. New queued-Q fixture assumed old structured draft editor had been flattened to prefix+tail; product correctly preserved editable tail separately. Expected tail corrected, full exact blocks assertion retained."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-focused-final.result.json",
+          "receipt_sha256": "df0e09d6ad41f07f249a1d6431ccd991264a9b719add947a4c7fc494688751cc",
+          "log": "/tmp/issue499/review15-tui-focused-final.log",
+          "log_sha256": "006320d7838135f040694233471a046a737f855d643375dccdb31c68d1cb8481",
+          "exit_code": 0,
+          "counts": {
+            "tests": 178,
+            "suites": 3,
+            "pass": 178,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 2.7119062619749457,
+          "source_before": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "a3d59fc7e38baff8cfdcae86a1966b467d3e53d88990567ea9a0989d4bf07d33",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "a3d59fc7e38baff8cfdcae86a1966b467d3e53d88990567ea9a0989d4bf07d33",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate development result; not final source proof."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-focused-final2.result.json",
+          "receipt_sha256": "a3f3702b97792990c0bd090fa571e72631ea21089a7fdb28f0d0d0165e578d3e",
+          "log": "/tmp/issue499/review15-tui-focused-final2.log",
+          "log_sha256": "11b57c635654989ffdee79d6f2cc1d4126edad97cdc2dd06eb9348a0e5b239c9",
+          "exit_code": 0,
+          "counts": {
+            "tests": 179,
+            "suites": 3,
+            "pass": 179,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 2.952885120990686,
+          "source_before": {
+            "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Final source behavior proof179/0, original164 plus15new. No wholeTUI/native/browser claims."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-focused-first.result.json",
+          "receipt_sha256": "28f0f2363061b91d09ca052698d4daf6c73db5ca2591ab85a01ed62c41c5471d",
+          "log": "/tmp/issue499/review15-tui-focused-first.log",
+          "log_sha256": "4c5430223f0de67664857bfb94fcb9dc02a845249956af90cb5f0e1586565454",
+          "exit_code": 1,
+          "counts": {
+            "tests": 126,
+            "suites": 3,
+            "pass": 125,
+            "fail": 0,
+            "cancelled": 1,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 22.704652507964056,
+          "source_before": {
+            "tui/src/ui/app.ts": "b6b0a118f4dfacd17c997af5e84267ffa2574edc90e8e8099375d03e9f8c3b4b",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "b6b0a118f4dfacd17c997af5e84267ffa2574edc90e8e8099375d03e9f8c3b4b",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "125 pass/1cancelled. Prior controlled-A test directly reused a retired selector callback after first-await presentation withdrawal. Rewritten to real Enter/catalog/new picker plus explicit assertion old callback sends no second Attach."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-focused-second.result.json",
+          "receipt_sha256": "a0c683704fcd71673b3f7638b75a4c1ab033eaaa0eeee23a03bc1a014cb40f33",
+          "log": "/tmp/issue499/review15-tui-focused-second.log",
+          "log_sha256": "7c64b914cac49a0317e7666585546a6ed97ff509475b6690ea0987e547f671cc",
+          "exit_code": 0,
+          "counts": {
+            "tests": 128,
+            "suites": 3,
+            "pass": 128,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 2.8257265799911693,
+          "source_before": {
+            "tui/src/ui/app.ts": "24d5ee071cb4ee499efed8996632d841c72145b3c94991f8cc161df5b62ee886",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "c5eddd86d6f98e92b331db9d4a55c9d843f805fe7fcd08e0ad2014c7ebd04bac",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "24d5ee071cb4ee499efed8996632d841c72145b3c94991f8cc161df5b62ee886",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "c5eddd86d6f98e92b331db9d4a55c9d843f805fe7fcd08e0ad2014c7ebd04bac",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate development result; not final source proof."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-focused-third.result.json",
+          "receipt_sha256": "598f53dbb206a5f1c7e6ee71de7da8cb12e84ecc065e355c7df41f10c99b2794",
+          "log": "/tmp/issue499/review15-tui-focused-third.log",
+          "log_sha256": "2c28ae9de0de2677364c834d1497cc36126e9773f755d23b304b00a26493e6fe",
+          "exit_code": 0,
+          "counts": {
+            "tests": 132,
+            "suites": 3,
+            "pass": 132,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 2.8547581410384737,
+          "source_before": {
+            "tui/src/ui/app.ts": "24d5ee071cb4ee499efed8996632d841c72145b3c94991f8cc161df5b62ee886",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "4f0832cc9fc69ff3d87aff70d623d34d9d0404e239efcb1b155b19a6c38ae344",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "24d5ee071cb4ee499efed8996632d841c72145b3c94991f8cc161df5b62ee886",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "4f0832cc9fc69ff3d87aff70d623d34d9d0404e239efcb1b155b19a6c38ae344",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate development result; not final source proof."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-metadata-draft-first-green.result.json",
+          "receipt_sha256": "3ab27b64e442299ce19853631307bdedbb16b6134cedab7fa2e8578a51336e36",
+          "log": "/tmp/issue499/review15-tui-metadata-draft-first-green.log",
+          "log_sha256": "f45a92a6a2ad30f36124f9fb13db3c1832307424957d16131d26b447f248c838",
+          "exit_code": 0,
+          "counts": {
+            "tests": 8,
+            "suites": 0,
+            "pass": 8,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 1.2471294220304117,
+          "source_before": {
+            "tui/src/ui/app.ts": "7a7e9da0585d3438820237c2cf47c4671a35370e003850f96383fb5dc45608c3",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "7a7e9da0585d3438820237c2cf47c4671a35370e003850f96383fb5dc45608c3",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate development result; not final source proof."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-metadata-draft-red.result.json",
+          "receipt_sha256": "72f23d3bba43d32b554bf556f64bb99b62acaafb835a4e743810b68c5a277346",
+          "log": "/tmp/issue499/review15-tui-metadata-draft-red.log",
+          "log_sha256": "f29985225bf95a4eec58236cd7e7762683e6c79896e228316c446367b1c44e72",
+          "exit_code": 1,
+          "counts": {
+            "tests": 8,
+            "suites": 0,
+            "pass": 4,
+            "fail": 4,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          },
+          "elapsed_seconds": 1.2505766169633716,
+          "source_before": {
+            "tui/src/ui/app.ts": "ac6a9dcfe24cd5d0711ace493c6fee99166df56dab67ed66a9843f53bbf6d2af",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "ac6a9dcfe24cd5d0711ace493c6fee99166df56dab67ed66a9843f53bbf6d2af",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Actual public selector/control flow on committed31d TUI production: held metadata typing/paste crosses A text into B in4cases; heldAttach4controls pass. Real/attach receipts exercised."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-typecheck-final-candidate.result.json",
+          "receipt_sha256": "e99b6729eb89d3ea8b6754c38ace33dc017c7b7017a9d15e98eb64e7195d2219",
+          "log": "/tmp/issue499/review15-tui-typecheck-final-candidate.log",
+          "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+          "exit_code": 0,
+          "counts": {},
+          "elapsed_seconds": 4.684352912998293,
+          "source_before": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "4f0832cc9fc69ff3d87aff70d623d34d9d0404e239efcb1b155b19a6c38ae344",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "4f0832cc9fc69ff3d87aff70d623d34d9d0404e239efcb1b155b19a6c38ae344",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate development result; not final source proof."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-typecheck-final.result.json",
+          "receipt_sha256": "be80da5c61f30913a07dfe0f88e319458276f422c6f70d43f20b6eadccc3e6b9",
+          "log": "/tmp/issue499/review15-tui-typecheck-final.log",
+          "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+          "exit_code": 0,
+          "counts": {},
+          "elapsed_seconds": 4.246397731010802,
+          "source_before": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "a3d59fc7e38baff8cfdcae86a1966b467d3e53d88990567ea9a0989d4bf07d33",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "5420e213ccb9fd4a55bba6437828cb361d8518915f24943f3e5b1955cd62c122",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "a3d59fc7e38baff8cfdcae86a1966b467d3e53d88990567ea9a0989d4bf07d33",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate development result; not final source proof."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-typecheck-final2.result.json",
+          "receipt_sha256": "4bbbdfbbbb11293b9c74a0f899815cc5b2ed2e7ea73980f412a4cab5c0248216",
+          "log": "/tmp/issue499/review15-tui-typecheck-final2.log",
+          "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+          "exit_code": 0,
+          "counts": {},
+          "elapsed_seconds": 4.38011251197895,
+          "source_before": {
+            "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "f6180810eb08de5187c2b725ddba461a037ab01690bc94eb0d5007f6a6e20de3",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "30eab4a3e11d81e447ca1a80c94b9345ab6d882d2bf2034b6325bc3604da3b49",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Final source typecheck exit0."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-typecheck-first.result.json",
+          "receipt_sha256": "ecb1ca58da5255d884c24eead1197e8ad5248cb12a98131d007565f052ccbdc6",
+          "log": "/tmp/issue499/review15-tui-typecheck-first.log",
+          "log_sha256": "12111d15028012e0b8e585e52d8ca1718d380171bd7806bd8b78dafdabd20705",
+          "exit_code": 2,
+          "counts": {},
+          "elapsed_seconds": 4.343053191027138,
+          "source_before": {
+            "tui/src/ui/app.ts": "7a7e9da0585d3438820237c2cf47c4671a35370e003850f96383fb5dc45608c3",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "7a7e9da0585d3438820237c2cf47c4671a35370e003850f96383fb5dc45608c3",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate source7a7 type error string|undefined at submissionIntent. Fixed capture of nodeId local."
+        },
+        {
+          "receipt": "/tmp/issue499/review15-tui-typecheck-second.result.json",
+          "receipt_sha256": "6d7a6623e865983a2e0b75306028935a9502cf64ba7ece4bccb4f0a8378513be",
+          "log": "/tmp/issue499/review15-tui-typecheck-second.log",
+          "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+          "exit_code": 0,
+          "counts": {},
+          "elapsed_seconds": 4.194986295013223,
+          "source_before": {
+            "tui/src/ui/app.ts": "b6b0a118f4dfacd17c997af5e84267ffa2574edc90e8e8099375d03e9f8c3b4b",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_after": {
+            "tui/src/ui/app.ts": "b6b0a118f4dfacd17c997af5e84267ffa2574edc90e8e8099375d03e9f8c3b4b",
+            "tui/src/ui/composer.ts": "725956ac05b58d958326ecccdb9c9329b33f9d4beba377fdab52b3fbdf9a274c",
+            "tui/src/ui/composer-draft.ts": "f8a704070e59dafa1ddba47f07320dd80ad9da299665e195e2fa6575ac488ae7",
+            "tui/test/startup.test.ts": "af4d6877af2b8cff9234f0222b8edf088cdcf9e43545c96f2aa9020344cf7f61",
+            "tui/test/convergence.test.ts": "d15ea7e7d8208a95f7467a0fa3ba36c0361dbbbfb30ebcc6471f8fe710056f46"
+          },
+          "source_stable": true,
+          "scope_note": "Intermediate development result; not final source proof."
+        }
+      ]
+    },
+    "mcp_short_red": {
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "--all-features",
+        "malformed_stdio_after_listing_redacts_pre_dispatch_failure_and_model_projection",
+        "--",
+        "--nocapture",
+        "--test-threads=4"
+      ],
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:10:02.368383+00:00",
+      "finished_at": "2026-10-25T01:13:31.813408+00:00",
+      "elapsed_seconds": 209.44501866202336,
+      "exit_code": 101,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_path": "/tmp/issue499/review15-mcp-red.log",
+      "log_sha256": "e5f7e985577ac158f4cf587614318cec3ab6701dd08d684edabb91c60879a9c5",
+      "source_before": [
+        {
+          "path": "src/tools/mcp/connection/catalog.rs",
+          "sha256": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "679636cde32cbb8483a6df73dbf68448a1840bca4f9f2a44266cc6d2bb5b6d86"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "62bd3bed19d31d92a6e0ca28f41996cf8fba79500ca0e41b430b11c2c4ead631"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "3949140f28cb449f4166b4c84c06bc4af57a54d01d29cd47dfca9d4ab0c0f57d"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "a76867a8f9dc9fe39fea4f0a89beb504cefda12a2d75520d165a7cb9b2242c19"
+        }
+      ],
+      "source_after": [
+        {
+          "path": "src/tools/mcp/connection/catalog.rs",
+          "sha256": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "679636cde32cbb8483a6df73dbf68448a1840bca4f9f2a44266cc6d2bb5b6d86"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "62bd3bed19d31d92a6e0ca28f41996cf8fba79500ca0e41b430b11c2c4ead631"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "3949140f28cb449f4166b4c84c06bc4af57a54d01d29cd47dfca9d4ab0c0f57d"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "a76867a8f9dc9fe39fea4f0a89beb504cefda12a2d75520d165a7cb9b2242c19"
+        }
+      ],
+      "source_stable": true,
+      "binaries_before": [
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/rustx",
+          "sha256": "5aed814bfa218291ad22bbfc7a5a9ec35c6d371836796f86ad1aaa0eff6d81c1",
+          "size": 1467464920
+        },
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/interactive-supervisor",
+          "sha256": "ad060c8d92511629b37c81d77995c4084157a3d425d0bc808dda98c8d7106c04",
+          "size": 1102887736
+        },
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/bash-supervisor",
+          "sha256": "95e63d199ecd490356d8824bd9604bd3cdbf2f0f2468e7b0deae6a2ba714d632",
+          "size": 1102789096
+        }
+      ],
+      "binaries_after": [
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/rustx",
+          "sha256": "5aed814bfa218291ad22bbfc7a5a9ec35c6d371836796f86ad1aaa0eff6d81c1",
+          "size": 1467464920
+        },
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/interactive-supervisor",
+          "sha256": "ad060c8d92511629b37c81d77995c4084157a3d425d0bc808dda98c8d7106c04",
+          "size": 1102887736
+        },
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/bash-supervisor",
+          "sha256": "95e63d199ecd490356d8824bd9604bd3cdbf2f0f2468e7b0deae6a2ba714d632",
+          "size": 1102789096
+        }
+      ],
+      "binaries_stable": true,
+      "receipt": {
+        "path": "/tmp/issue499/review15-mcp-red.result.json",
+        "sha256": "0ad069979efbe4ecd577cd2b44422455118fb900864a68bd14643c225a359b28"
+      },
+      "log": "/tmp/issue499/review15-mcp-red.log",
+      "rust_summaries": [
+        {
+          "status": "FAILED",
+          "passed": "0",
+          "failed": "1",
+          "ignored": "0",
+          "measured": "0",
+          "filtered": "4773"
+        }
+      ],
+      "node_counts": {},
+      "web_summary": []
+    },
+    "mcp_short_long_red": {
+      "command": [
+        "cargo",
+        "test",
+        "--lib",
+        "--all-features",
+        "tools::mcp::connection::catalog_tests::redaction",
+        "--",
+        "--nocapture",
+        "--test-threads=4"
+      ],
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:14:40.448744+00:00",
+      "finished_at": "2026-10-25T01:17:58.260259+00:00",
+      "elapsed_seconds": 197.81151043903083,
+      "exit_code": 101,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_path": "/tmp/issue499/review15-mcp-short-long-red.log",
+      "log_sha256": "1dc83841b7b0e7a142f7efd6f417e062454a568df850d3427106e12bb405ec27",
+      "source_before": [
+        {
+          "path": "src/tools/mcp/connection/catalog.rs",
+          "sha256": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "679636cde32cbb8483a6df73dbf68448a1840bca4f9f2a44266cc6d2bb5b6d86"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "69793f10e6e465a58fb15b2741e6fb4354a9f5f2bde86a72280371ab5d8b6462"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "3949140f28cb449f4166b4c84c06bc4af57a54d01d29cd47dfca9d4ab0c0f57d"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "a76867a8f9dc9fe39fea4f0a89beb504cefda12a2d75520d165a7cb9b2242c19"
+        }
+      ],
+      "source_after": [
+        {
+          "path": "src/tools/mcp/connection/catalog.rs",
+          "sha256": "2f17c6f724b9d43f7769faf165e7cee66610a3165f22248ac0b7193ea4b5f090"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "679636cde32cbb8483a6df73dbf68448a1840bca4f9f2a44266cc6d2bb5b6d86"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "69793f10e6e465a58fb15b2741e6fb4354a9f5f2bde86a72280371ab5d8b6462"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "3949140f28cb449f4166b4c84c06bc4af57a54d01d29cd47dfca9d4ab0c0f57d"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "a76867a8f9dc9fe39fea4f0a89beb504cefda12a2d75520d165a7cb9b2242c19"
+        }
+      ],
+      "source_stable": true,
+      "binaries_before": [
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/rustx",
+          "sha256": "5aed814bfa218291ad22bbfc7a5a9ec35c6d371836796f86ad1aaa0eff6d81c1",
+          "size": 1467464920
+        },
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/interactive-supervisor",
+          "sha256": "ad060c8d92511629b37c81d77995c4084157a3d425d0bc808dda98c8d7106c04",
+          "size": 1102887736
+        },
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/bash-supervisor",
+          "sha256": "95e63d199ecd490356d8824bd9604bd3cdbf2f0f2468e7b0deae6a2ba714d632",
+          "size": 1102789096
+        }
+      ],
+      "binaries_after": [
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/rustx",
+          "sha256": "5aed814bfa218291ad22bbfc7a5a9ec35c6d371836796f86ad1aaa0eff6d81c1",
+          "size": 1467464920
+        },
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/interactive-supervisor",
+          "sha256": "ad060c8d92511629b37c81d77995c4084157a3d425d0bc808dda98c8d7106c04",
+          "size": 1102887736
+        },
+        {
+          "path": "/home/capi/Documents/codes/rustX/target/debug/bash-supervisor",
+          "sha256": "95e63d199ecd490356d8824bd9604bd3cdbf2f0f2468e7b0deae6a2ba714d632",
+          "size": 1102789096
+        }
+      ],
+      "binaries_stable": true,
+      "receipt": {
+        "path": "/tmp/issue499/review15-mcp-short-long-red.result.json",
+        "sha256": "15d00631cb6e0ed749c83cc92e1517f231c8add715293ffb4aa5e08d076336c8"
+      },
+      "log": "/tmp/issue499/review15-mcp-short-long-red.log",
+      "rust_summaries": [
+        {
+          "status": "FAILED",
+          "passed": "0",
+          "failed": "2",
+          "ignored": "0",
+          "measured": "0",
+          "filtered": "4773"
+        }
+      ],
+      "node_counts": {},
+      "web_summary": []
+    },
+    "clippy_first_failed": {
+      "command": "cargo clippy --all-targets --all-features -- -D warnings",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:26:25.119937+00:00",
+      "finished_at": "2026-10-25T01:27:51.030932+00:00",
+      "elapsed_seconds": 85.91099551599473,
+      "exit_code": 101,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "ef5dacf16713069a96c62c364aa03430a4243aaec130f24a3d9a039df4fdde62",
+      "receipt": {
+        "path": "/tmp/issue499/review15-native-clippy.result.json",
+        "sha256": "d903d9aff59198eb6f0215ebd10c330e7a5ad1f5b17ae00cf3f69b24c71b5493"
+      },
+      "log": "/tmp/issue499/review15-native-clippy.log",
+      "rust_summaries": [],
+      "node_counts": {},
+      "web_summary": [],
+      "source.json": {
+        "path": "/tmp/issue499/review15-native-clippy.source.json",
+        "sha256": "4a251cffe2510ae7055811fa8c764ce993dfbfaca56722c2f4aed19d4b22bdd8"
+      }
+    },
+    "clippy_resolution": "Only .err().expect -> .expect_err in new test. Final production unchanged, current test source recompiled and independently rerun19/0+9/0; final Native1013 fingerprint1ea25.",
+    "first_whole_tui_failed": {
+      "command": "pnpm --dir tui test",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:43:00.989661+00:00",
+      "finished_at": "2026-10-25T01:45:53.749488+00:00",
+      "elapsed_seconds": 172.75982720201137,
+      "exit_code": 1,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "5ab4784180ee786d04d72ae4ebdb719ccbd7e00d45a96de2013f5fa9284c0486",
+      "receipt": {
+        "path": "/tmp/issue499/review15-tui-full.result.json",
+        "sha256": "fb1ffb44577742bfd51c6655d2b93026bd00d4b887d80e060cfcc6f9aedd2872"
+      },
+      "log": "/tmp/issue499/review15-tui-full.log",
+      "rust_summaries": [],
+      "node_counts": {
+        "tests": 1281,
+        "suites": 105,
+        "pass": 1277,
+        "fail": 3,
+        "cancelled": 0,
+        "skipped": 1,
+        "todo": 0
+      },
+      "web_summary": []
+    },
+    "first_whole_tui_diagnosis": "Actual1277pass/3fail/1skip. First failing spawn explicitlyENOENT on shared target/debug/rustx while fullCargo re-linked allfeatures product files; other two setup failures report statusnull without error.code, so do not claim same exact cause. Two owned provider leaves left by setup were explicitly terminated so original Node reporter emitted stack and realexit1. No tests/source changed to retry.",
+    "first_whole_tui_owned_cleanup": {
+      "recorded_at": "2026-10-25T01:45:53.659922+00:00",
+      "reason": "Only two provider fixtures retained by failed setup; terminate their Python leaves so original Node full reporter can reach diagnostic/terminal receipt. No failed result becomes passing.",
+      "owners": [
+        {
+          "pid": 42973,
+          "ppid": 40170,
+          "pgid": 39671,
+          "args": "uv run --project /home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider --frozen fake-provider --scenario tui_subagent_inspection --port 0"
+        },
+        {
+          "pid": 42976,
+          "ppid": 42973,
+          "pgid": 39671,
+          "args": "/home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider/.venv/bin/python /home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider/.venv/bin/fake-provider --scenario tui_subagent_inspection --port 0"
+        },
+        {
+          "pid": 42980,
+          "ppid": 40170,
+          "pgid": 39671,
+          "args": "uv run --project /home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider --frozen fake-provider --scenario tui_subagent_inspection --port 0"
+        },
+        {
+          "pid": 42983,
+          "ppid": 42980,
+          "pgid": 39671,
+          "args": "/home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider/.venv/bin/python /home/capi/.codex/worktrees/issue-499/rustX/test-support/fake-provider/.venv/bin/fake-provider --scenario tui_subagent_inspection --port 0"
+        }
+      ],
+      "signals": [
+        {
+          "pid": 42976,
+          "signal": "SIGTERM"
+        },
+        {
+          "pid": 42983,
+          "signal": "SIGTERM"
+        }
+      ]
+    },
+    "tap_diagnostic": {
+      "path": "/tmp/issue499/review15-tui-process-diagnostic-conclusion.json",
+      "sha256": "f43f93144536c25e580486580919368313f8e934322e52a286939fa2041750b1"
+    },
+    "tap_diagnostic_limit": "90second external watchdog exit124, no case terminal proof. Three stdio lifecycle cycles had physically retired before interruption; this diagnostic neither passes nor proves the ordinary120second test failed. Original complete-suite failure remains failed.",
+    "earlier_measurement": {
+      "recorded_at": "2026-10-25T01:30:29.278371+00:00",
+      "reason": "Initial Native01046 measurements preceded one test-only err().expect\u2192expect_err Clippy correction. Preserve initial bytes/receipt; final Native1ea25 run will generate a fresh pair before commit. No previously committed evidence is touched.",
+      "files": [
+        {
+          "original_path": "/home/capi/.codex/worktrees/issue-499/rustX/docs/issue-499/evidence/submission-live-review15-current.json",
+          "preserved_path": "/tmp/issue499/review15-before-clippy-measurement/submission-live-review15-current.json",
+          "sha256": "79e3b568626e04fac93c6bfc2c60021124e6a8d2e7be49a4b90c54773486074f"
+        },
+        {
+          "original_path": "/home/capi/.codex/worktrees/issue-499/rustX/docs/issue-499/evidence/submission-live-review15-manifest.json",
+          "preserved_path": "/tmp/issue499/review15-before-clippy-measurement/submission-live-review15-manifest.json",
+          "sha256": "4e75d669e77f2a4761071909066815c46f9b9c9990119faf27b1da9f98a361fc"
+        }
+      ]
+    }
+  },
+  "measurement": {
+    "manifest": "submission-live-review15-manifest.json",
+    "manifest_sha256": "f26009d9941e2773f7764425512c33eafc60045b6b13f6ea72503bda9644d5ca",
+    "raw": "submission-live-review15-current.json",
+    "raw_sha256": "d7366f0ae506db1f31aad0462c6135a0808c163c27e5a0a3690483e800fe1aed",
+    "rows": 24,
+    "source": "finalNative1013 1ea25; actual fresh final-source measurement52.699020419sec exit0; baseline samefixture00978 preserved sample not rerun. Each row provider1, Nhandshake/Nlisting, healthy N>0 postAttempt explicitTool1, failureTool0, peakmin(N,4),serverprocess0,shutdownactive0. HTTP handler instances are not physical TCP connection counts. Historical42ms grace result superseded."
+  },
+  "running_or_pending_at_cut": {
+    "full_native": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4 running; terminal receipt not yet present. Mandatory provider emulator prepared/fresh55/0, never replaced with skipped coverage.",
+    "test_lane_coverage": "Queued after fullNative, actual current example check_test_lanes. Not green until terminalexit0.",
+    "generated_protocol_drift": "Queued after Native/lane pipeline; schema v57/runtime77 unchanged. Product and source fingerprint checked before/after. No generated vocabulary change expected, drift check still mandatory.",
+    "complete_browser": "pnpm --dir web-console test:e2e started after actual completeTUI/Web/type/i18n/provenance0. Its canonical default-feature cargo build is deliberately paused as owned pgid64913 before product relink until mandatory fullNative using CARGO_BIN_EXE completes. Then resume same command; total receipt includes scheduling pause. Full417cases without retries/spec filters not yet result. Old31d417/0 cannot validate newTUI/MCP.",
+    "actual_final_head_ci": "New follow-up not committed at this cut, therefore no final-head FULL CI/Merge verification yet. Existing31d CI1540 in_progress/macOS pending as of01:49UTC; it cannot validate this follow-up. Full-verification label retained; do not merge."
+  },
+  "unchanged_contract": "No owner elapsed deadline before first submission. Earliest Native submission receipt arms one absoluteT0+effectivewait_timeout_ms(default15000) for finite selected Root/enabledWorkflow batch including queue/negotiation/full pagination/canonical validation/stableepoch. Cancellation retires and waits physical settlement, late success fenced, optionalRootfailure isolated,requiredWorkflow/child strict. Runtime readiness exactadoptedbinding auto safeidle/admissionlock, frozenAttempt, pendingauthoredintent separate/rebased;source-wide/exactselection unchanged. No new prewarm/UI/RPC/factory/sharedpool/504scope."
+}

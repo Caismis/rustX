@@ -15,7 +15,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands/autocomplete.ts";
-import { CommandDispatcher, renderTools } from "../src/commands/dispatcher.ts";
+import { CommandDispatcher } from "../src/commands/dispatcher.ts";
+import { renderTools } from "../src/commands/presentation.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
@@ -57,7 +58,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v52.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v73.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -158,7 +159,8 @@ describe("command registry", () => {
     assert.deepEqual(
       COMMANDS.map((command) => command.name),
       [
-        "/context-model", "/capabilities", "/attach", "/queue",
+        "/workflow-recovery", "/schedules",
+      "/context-model", "/capabilities", "/attach", "/queue",
         "/export",
         "/settings",
         "/content",
@@ -442,6 +444,9 @@ describe("CommandDispatcher", () => {
       request_params: { summary_tag: "keep" },
       max_output_tokens: 300,
     };
+    const titlePolicy = { ...summaryPolicy, model: "title/model-t", max_output_tokens: 128 };
+    const classificationPolicy = { ...summaryPolicy, model: "classifier/model-c" };
+    const btwPolicy = { mode: "session" as const };
     const h = await harness(
       snapshot({
         model: {
@@ -452,6 +457,9 @@ describe("CommandDispatcher", () => {
             requestParams: { temperature: 0.2 },
             maxOutputTokens: 777,
             summaryModel: summaryPolicy,
+            titleModel: titlePolicy,
+            classificationModel: classificationPolicy,
+            btwModel: btwPolicy,
           },
         },
         attempt: {
@@ -477,16 +485,14 @@ describe("CommandDispatcher", () => {
             declaredCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
+              jsonSchemaOutput: false,
             },
             effectiveCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
+              jsonSchemaOutput: false,
             },
-            profiles: [{ id: "off", reasoningEnabled: false }],
+            profiles: [{ id: "off" }],
             defaultProfile: "off",
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },
@@ -503,6 +509,9 @@ describe("CommandDispatcher", () => {
       model: "beta/model-b",
       requestParams: {},
       summaryModel: summaryPolicy,
+      titleModel: titlePolicy,
+      classificationModel: classificationPolicy,
+      btwModel: btwPolicy,
     });
     h.transport.respond(modelSet.id, {type:"model_set",settings_revision:"1"});
     const confirmedModelRead = await nextRequest(h,"session/model");
@@ -605,14 +614,12 @@ describe("CommandDispatcher", () => {
             declaredCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
+              jsonSchemaOutput: false,
             },
             effectiveCapabilities: {
               inputModalities: ["text"],
               outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
+              jsonSchemaOutput: false,
             },
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },
@@ -697,10 +704,12 @@ describe("CommandDispatcher", () => {
     // the app performs the attach when it changes focus.
     assert.deepEqual(h.dispatcher.selectSession("ses_5d906140-8048-712d-8539-25aed45333a1"), {
       kind: "focus_session",
+      retryInitialization: true,
       sessionId: "ses_5d906140-8048-712d-8539-25aed45333a1",
     });
     assert.deepEqual(h.dispatcher.selectTreeNode("ses_5d906140-8048-712d-8539-25aed45333a1", "node_cda805b6-0c45-73dd-81b4-8a4571613b8e"), {
       kind: "focus_session",
+      retryInitialization: true,
       sessionId: "ses_5d906140-8048-712d-8539-25aed45333a1",
       nodeId: "node_cda805b6-0c45-73dd-81b4-8a4571613b8e",
     });
@@ -996,7 +1005,7 @@ describe("CommandDispatcher", () => {
     h.transport.respond(confirmed.id,domainReceipt('model',[current]));
     const outcome = await choosing;
     assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") assert.match(outcome.text, /profile, overrides and summary policy preserved/);
+    if (outcome.kind === "transient") assert.match(outcome.text, /profile, overrides and auxiliary policies preserved/);
     assert.equal(h.transport.log.count("session/setModel"), 1);
   });
 

@@ -31,6 +31,7 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use rustx::context::ContextGeneration;
+use rustx::durable::{CanonicalStore, JournalStore, PublicationStore, RequestStore};
 use rustx::durable::{
     ConversationStore, ConversationStoreError, SqliteConversationStore,
     interaction_audit_capability,
@@ -49,8 +50,8 @@ use rustx::message::types::{
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
-    ModelFinishReason, ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestParams,
-    RequestSnapshot,
+    ModelFinishReason, ModelInvocationConfig, ModelProtocol, ModelRequestOwner, RequestIdentity,
+    RequestParams, RequestSnapshot,
 };
 use rustx::publication::{PublicationFrame, PublicationPayload, PublicationStreamStart};
 use rustx::runtime::ApprovalDecision;
@@ -129,7 +130,7 @@ fn invocation() -> ModelInvocationConfig {
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,
         request_params: RequestParams::new(),
-        capabilities: ModelCapabilities::text_only(true, true),
+        capabilities: ModelCapabilities::text_only(),
         compat: ModelCompat::default(),
     }
 }
@@ -288,7 +289,6 @@ fn start_request(
         invocation(),
         64_000,
         None,
-        false,
         Vec::new(),
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -495,6 +495,13 @@ fn commit_generation_with_request(
                 generation.attempt, generation.turn
             ),
             RuntimeEvent::ModelRequestCompleted {
+                owner: ModelRequestOwner::Agent {
+                    identity: RequestIdentity {
+                        attempt_id: generation.attempt.clone(),
+                        turn: generation.turn.clone(),
+                        retry_number: 0,
+                    },
+                },
                 request_id,
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,
@@ -1062,7 +1069,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
             block: WorkflowBlockInstance {
                 run: WorkflowRunId {
                     conversation_id: conversation_id(),
-                    attempt_id: attempt(),
+                    origin: (attempt()).into(),
                     invocation: 0,
                 },
                 definition: WorkflowDefinitionPath {
@@ -1074,6 +1081,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
             node: "leaf".into(),
             visit: 0,
         }),
+        retry: 0,
     };
     let subject = InteractionSubject::Approval {
         invocation_id: invocation_id.clone(),
@@ -1115,7 +1123,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
     }
     let mut next_visit = subject;
     if let InteractionSubject::Approval {
-        invocation_id: ToolInvocationId::Workflow { node },
+        invocation_id: ToolInvocationId::Workflow { node, .. },
         ..
     } = &mut next_visit
     {
@@ -1732,7 +1740,6 @@ fn rusqlite_open(path: &std::path::Path) -> rusqlite::Connection {
 
 #[test]
 fn review_audit_validates_exact_instance_and_remains_inert_across_reopen() {
-    use rustx::events::review::{ReviewDecision, ReviewResponse};
     for answered in [false, true] {
         let durable = Durable::new();
         let id = interaction_id();
@@ -1745,12 +1752,8 @@ fn review_audit_validates_exact_instance_and_remains_inert_across_reopen() {
             panic!("Review")
         };
         review.instance.block.run.conversation_id = ConversationId::new(CONVERSATION);
-        review.instance.block.run.attempt_id = attempt();
-        let response = ReviewResponse {
-            instance: review.instance.clone(),
-            subject_digest: review.digest(),
-            decision: ReviewDecision::Accepted,
-        };
+        review.instance.block.run.origin = attempt().into();
+        let response = review.choose(0);
         store
             .append_interaction_audit(requested(&id, InteractionSubject::Review { review }))
             .unwrap();

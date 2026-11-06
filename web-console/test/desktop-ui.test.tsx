@@ -23,7 +23,8 @@ it('primary and application menu send exact targets without paths or native brow
   const f = await fixture(); render(<OpenWorkspace {...f.props}/>);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open workspace' })));
   expect(f.host.openWorkspace).toHaveBeenCalledExactlyOnceWith({ authorityId: 'host-one', endpoint: 'ws://localhost:8080/' }, f.props.target, 'files');
-  expect(screen.getByRole('status').textContent).toContain('Launcher started');
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
   expect(f.host.desktopCatalog).toHaveBeenLastCalledWith(expect.anything(), false);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose workspace application' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Visual Studio Code' })));
@@ -58,8 +59,8 @@ it('unavailable, explicit retry, localized failure and lost acknowledgement are 
   const f = await fixture(); f.host.desktopCatalog.mockResolvedValueOnce({ available: false, reason: 'headless' });
   render(<OpenWorkspace {...f.props}/>);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open workspace' })));
-  expect(screen.getByRole('status').textContent).toContain('cannot verify a local desktop'); expect(f.host.openWorkspace).not.toHaveBeenCalled();
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Check applications again' })));
+  expect(screen.getByRole('alert').textContent).toContain('cannot verify a local desktop'); expect(f.host.openWorkspace).not.toHaveBeenCalled();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose workspace application' })));
   expect(f.host.desktopCatalog).toHaveBeenLastCalledWith(expect.anything(), true);
   expect(f.host.openWorkspace).not.toHaveBeenCalled();
   f.host.openWorkspace.mockRejectedValueOnce(new Error('adapter failure'));

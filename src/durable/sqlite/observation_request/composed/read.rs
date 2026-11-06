@@ -425,7 +425,7 @@ fn field_in(
         b"\"\"".to_vec()
     } else {
         let value = preview(connection, root, path, &mut 32)?;
-        crate::runtime_client::checkpoint::bounded_bytes(&value, 16384)
+        crate::observation::bounded::bounded_bytes(&value, 16384)
             .unwrap_or_else(|| b"null".to_vec())
     };
     if header.len() > 16384 {
@@ -437,7 +437,7 @@ fn field_in(
         .map(|encoded_bytes| {
             let mut key_path = path.to_vec();
             key_path.push("$key".into());
-            crate::runtime_client::checkpoint::bounded_bytes(
+            crate::observation::bounded::bounded_bytes(
                 &crate::durable::observation::RequestObservationKey {
                     path: key_path,
                     preview: String::new(),
@@ -518,7 +518,7 @@ pub(in crate::durable::sqlite::observation_request) fn page(
             deferred,
         });
     }
-    while crate::runtime_client::checkpoint::bounded_bytes(&fields, 524_288).is_none() {
+    while crate::observation::bounded::bounded_bytes(&fields, 524_288).is_none() {
         if fields.len() <= 1 {
             return Err(storage("composed field page exceeds bound"));
         }

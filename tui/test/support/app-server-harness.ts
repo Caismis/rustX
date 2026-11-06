@@ -20,7 +20,7 @@ import {
 import { AppServerHost } from "../../src/app-server/host.ts";
 import type { AppServerSession } from "../../src/app-server/session.ts";
 import { CommandDispatcher } from "../../src/commands/dispatcher.ts";
-import type { DebugDiagnostics } from "../../src/commands/dispatcher.ts";
+import type { DebugDiagnostics } from "../../src/commands/presentation.ts";
 import type {
   AttachmentTarget,
   RuntimeClientSnapshot,
@@ -66,6 +66,7 @@ export async function harness(
   initial: RuntimeClientSnapshot = defaultSnapshot(),
   sessionId = "ses_84097828-fc31-78c8-9292-10df48901a85",
   previousHost?: AppServerHost,
+  nodeId?: string,
 ): Promise<Harness> {
   const transport = new FakeTransport();
   const connecting = AppServerClient.initialize({ transport });
@@ -86,7 +87,7 @@ export async function harness(
     runtime_incarnation: "1",
     attachment_id: "att-1",
   };
-  const attaching = host.attach(sessionId);
+  const attaching = host.attach(sessionId, nodeId);
   const attach = (await transport.log.awaitMethod("session/attach")).at(-1)!;
   // Identity admission precedes the independently bounded cut and registration.
   transport.respond(attach.id, {type:'attached', target, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});

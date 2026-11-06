@@ -30,19 +30,20 @@ pub(super) fn read_at(
     // owns structure, not execution time; the same R at a newer C may observe
     // newer outcomes. Later commits cannot alter this captured (R, C).
     let read_cut = super::reading::cut(connection, conversation)?;
-    let (ids, surface_history) = super::replay_surface_history(connection, revision)?;
+    let (ids, surface_history) =
+        super::canonical::ledger::replay_surface_history(connection, revision)?;
     let referenced: BTreeSet<_> = surface_history
         .iter()
         .flat_map(SurfaceOp::message_ids)
         .cloned()
         .collect();
-    let canonical: Vec<_> = super::load_canonical_rows(connection)?
+    let canonical: Vec<_> = super::canonical::transcript::load_canonical_rows(connection)?
         .into_iter()
         .filter(|message| referenced.contains(&crate::conversation::message_id_of(message)))
         .collect();
     let messages = ids
         .iter()
-        .map(|id| super::load_message(connection, id))
+        .map(|id| super::canonical::ledger::load_message(connection, id))
         .collect::<Result<Vec<_>, _>>()?;
     let mut turns = super::reading::lineage_turns(connection, conversation, read_cut.journal)?;
     // Member presence selects message-backed history. A terminal-only predecessor
@@ -68,7 +69,8 @@ pub(super) fn read_at(
             .is_none_or(|id| referenced.contains(id))
     });
     let completed_responses = responses(connection, conversation, read_cut.journal, &canonical)?;
-    let raw_tool_arguments = super::content::canonical_raw_arguments(connection, &canonical)?;
+    let raw_tool_arguments =
+        crate::durable::sqlite::content::canonical_raw_arguments(connection, &canonical)?;
     let projection_len = if let Some((id, include)) = boundary {
         canonical.iter().position(|m| m.id() == id).ok_or_else(|| {
             ConversationStoreError::InvalidReference(
@@ -86,7 +88,14 @@ pub(super) fn read_at(
         read_cut.journal,
         activation,
     )?;
+    let auxiliary_audits = super::projection::read_auxiliary_lineage_dependencies(
+        connection,
+        conversation,
+        &projections,
+        read_cut.journal,
+    )?;
     Ok(LineageReadCut {
+        auxiliary_audits,
         projections,
         raw_tool_arguments,
         read_cut,
@@ -200,16 +209,19 @@ fn responses(
             .map(|response| (response.closing_message_id.clone(), response))
             .collect();
     let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
-    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type') IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence")
-        .map_err(|error|storage(error.to_string()))?;
+    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type') IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') AND (json_extract(event_json,'$.event.type') NOT IN ('model_request_started','model_request_completed','model_request_failed') OR json_extract(event_json,'$.event.owner.type')='agent') ORDER BY sequence")
+        .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map([seq_to_i64(through)?], |row| row.get::<_, String>(0))
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     for json in rows {
         let event: RuntimeEventEnvelope = decode(
             &json.map_err(|error| storage(error.to_string()))?,
             "lineage response fact",
         )?;
+        if event.event.auxiliary_call_id().is_some() {
+            continue;
+        }
         let Some(id) = event.attempt_id else {
             continue;
         };
@@ -220,7 +232,9 @@ fn responses(
                 evidence.members.insert(message_id.clone());
                 evidence.closing = Some(message_id);
             }
-            RuntimeEvent::ModelRequestStarted { request_id, model } => {
+            RuntimeEvent::ModelRequestStarted {
+                request_id, model, ..
+            } => {
                 evidence.request_started(request_id, model);
             }
             RuntimeEvent::ModelRequestCompleted {

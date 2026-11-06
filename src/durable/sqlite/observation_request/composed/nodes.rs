@@ -16,7 +16,7 @@ fn find_stored_hash(
     let _measurement = super::measurement::Measurement::new(
         crate::agent::execution::attribution::SourceScope::Lookup,
     );
-    let digest: Option<Option<Vec<u8>>> = connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice()], |row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let digest: Option<Option<Vec<u8>>> = connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END FROM request_source_nodes WHERE native_id=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![native.id,native.digest.as_slice()], |row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     digest
         .map(|digest| {
             digest
@@ -64,7 +64,7 @@ fn load_reusing(
         work.set(value);
     });
     let actual = manifest::node(connection, &native)?;
-    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(metadata)='blob' AND length(metadata)<=65536 AND native_digest=?2 AND hash=?3 THEN metadata END FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice(),expected.as_slice()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(metadata)='blob' AND length(metadata)<=65536 AND native_digest=?2 AND hash=?3 THEN metadata END FROM request_source_nodes WHERE native_id=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![native.id,native.digest.as_slice(),expected.as_slice()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let bytes = bytes.ok_or_else(|| storage("captured Source augmentation unavailable"))?;
     #[cfg(test)]
     super::record_metadata(bytes.len());
@@ -207,7 +207,7 @@ fn store(
     });
     let bytes = super::record::encode(&node, 65536)?;
     let digest = hash(&bytes);
-    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata) VALUES(?1,?2,?3,?4)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes]).map_err(|error|storage(error.to_string()))?;
+    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata) VALUES(?1,?2,?3,?4)").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(CapturedNode {
         digest,
         prepared: Some((node, bytes)),

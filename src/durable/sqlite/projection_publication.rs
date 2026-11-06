@@ -32,7 +32,7 @@ pub(super) fn index(
     id: &CompactionOperationId,
     native: &str,
     batch: Option<&NativeObservationBatch>,
-) {
+) -> Result<(), ConversationStoreError> {
     let _ = super::optional_display_layout(transaction, || {
         let batch = batch.ok_or_else(|| storage("original compaction publication unavailable"))?;
         let NativeObservationTransition::Single(witness) = &batch.transition else {
@@ -47,12 +47,13 @@ pub(super) fn index(
             journal_range: batch.journal_range,
             witness: witness.clone(),
         };
-        let bytes = crate::runtime_client::checkpoint::bounded_bytes(&evidence, MAX)
+        let bytes = crate::observation::bounded::bounded_bytes(&evidence, MAX)
             .ok_or_else(|| storage("compaction publication exceeds bound"))?;
         let witness = digest(native, &bytes);
-        transaction.execute("UPDATE compaction_operations SET observation_receipt=?1,observation_receipt_witness=?2 WHERE operation_id=?3",params![bytes,witness.as_slice(),id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute("UPDATE compaction_operations SET observation_receipt=?1,observation_receipt_witness=?2 WHERE operation_id=?3",params![bytes,witness.as_slice(),id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(())
-    });
+    })?;
+    Ok(())
 }
 pub(super) fn read(
     connection: &Connection,
@@ -61,7 +62,7 @@ pub(super) fn read(
     original: &crate::events::types::RuntimeEventEnvelope,
 ) -> Result<Option<std::sync::Arc<NativeObservationBatch>>, ConversationStoreError> {
     type Row = (Option<Vec<u8>>, Option<Vec<u8>>);
-    let row:Option<Row>=connection.query_row("SELECT CASE WHEN typeof(observation_receipt)='blob' AND length(observation_receipt)<=65536 THEN observation_receipt END,CASE WHEN typeof(observation_receipt_witness)='blob' AND length(observation_receipt_witness)=32 THEN observation_receipt_witness END FROM compaction_operations WHERE operation_id=?1",[id.as_str()],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let row:Option<Row>=connection.query_row("SELECT CASE WHEN typeof(observation_receipt)='blob' AND length(observation_receipt)<=65536 THEN observation_receipt END,CASE WHEN typeof(observation_receipt_witness)='blob' AND length(observation_receipt_witness)=32 THEN observation_receipt_witness END FROM compaction_operations WHERE operation_id=?1",[id.as_str()],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let Some((Some(bytes), Some(witness))) = row else {
         return Err(storage("original compaction publication unavailable"));
     };

@@ -267,7 +267,7 @@ fn response_cache_new_tool_result_alias_rechecks_source_without_changing_process
     let mut page = response_page_at(&store, &cut);
     page.entries.retain(|entry| {
         matches!(&entry.item,
-        crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+        crate::observation::transcript::RuntimeClientTranscriptItem::Message {
             message: MessageBlock::Assistant(message)
         } if message.id.as_str() == "cache-alias-message")
     });

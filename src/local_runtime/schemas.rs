@@ -20,7 +20,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         ),
         (
             "rustx.schema.json",
-            super::configuration::authoring_schema(),
+            super::configuration::semantics::authoring_schema(),
         ),
         (
             "mcp.schema.json",
@@ -32,7 +32,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         (
             "workflow.schema.json",
             serde_json::to_value(schemars::schema_for!(
-                crate::runtime::workflow::WorkflowDefinition
+                crate::workflow_file::WorkflowFileDocument
             ))
             .expect("schema serializes"),
         ),
@@ -86,22 +86,19 @@ mod tests {
         json!({
             "description":"selector contract",
             "block":{
-                "input":{"type":"object"}, "output":{"type":"object"}, "entry":"work",
-                "nodes":{
+                "input":{"type":"object"}, "nodes": {"workflow_start":{"type":"start"},
                     "work":node,
-                    "done":{"type":"return","output":{"type":"reference","path":["work"]}}
-                },
-                "edges":[{"from":"work","to":"done"}]
-            }
+                    "done":{"type":"return","outputs":[]}
+                },"edges": [{"from":"workflow_start","to":"work"},{"from":"work","to":"done"}],}
         })
     }
 
     #[test]
     fn workflow_tool_authoring_and_schema_are_exact_only() {
-        use crate::capabilities::selection::ExactToolSelector;
+        use crate::runtime::workflow::WorkflowToolSelector;
         let schema = super::generate()["workflow.schema.json"].clone();
         let validator = jsonschema::Validator::new(&schema).unwrap();
-        let variants = schema["$defs"]["ExactToolSelector"]["oneOf"]
+        let variants = schema["$defs"]["WorkflowToolSelector"]["oneOf"]
             .as_array()
             .unwrap();
         assert_eq!(variants.len(), 2);
@@ -115,7 +112,7 @@ mod tests {
         ] {
             let node = json!({"type":"tool","selector":selector,
                 "arguments":{"type":"literal","value":{}},
-                "result":{"type":"json","part":0,"schema":{"type":"object"}}});
+                "result":{"type":"json","schema":{"type":"object"}}});
             let document = workflow(&node);
             assert!(validator.is_valid(&document));
             let parsed: WorkflowDefinition =
@@ -128,9 +125,8 @@ mod tests {
             };
             // Exhaustive: every authored executable selector has one exact name.
             let name = match exact {
-                ExactToolSelector::Builtin { name } | ExactToolSelector::Source { name, .. } => {
-                    name
-                }
+                WorkflowToolSelector::Builtin { name }
+                | WorkflowToolSelector::Source { name, .. } => name,
             };
             assert_eq!(name, selector["name"].as_str().unwrap());
             {
@@ -151,42 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn workflow_agent_override_authoring_and_schema_keep_all_and_exact() {
-        use crate::capabilities::selection::SourceToolSelection;
-        let schema = super::generate()["workflow.schema.json"].clone();
-        let validator = jsonschema::Validator::new(&schema).unwrap();
-        for (selection, expected) in [
-            (json!("all"), SourceToolSelection::All),
-            (
-                json!(["get_issue"]),
-                SourceToolSelection::Exact(vec!["get_issue".into()]),
-            ),
-        ] {
-            let document = workflow(&json!({"type":"agent","profile":"reviewer","task":"Review",
-                "output":{"type":"object"},"override":{"tools":{"sources":{"github":selection}}}}));
-            assert!(validator.is_valid(&document));
-            let parsed: WorkflowDefinition =
-                serde_yaml::from_str(&serde_yaml::to_string(&document).unwrap()).unwrap();
-            let WorkflowNodeDefinition::Agent {
-                invocation_override: Some(overrides),
-                ..
-            } = &parsed.block.nodes["work"]
-            else {
-                panic!("Agent override")
-            };
-            assert_eq!(
-                overrides.tools.as_ref().unwrap().sources.values().next(),
-                Some(&expected)
-            );
-            crate::runtime::workflow::WorkflowProgram::compile(
-                crate::runtime::workflow::WorkflowId::parse("selector-contract").unwrap(),
-                parsed,
-            )
-            .unwrap();
-        }
-    }
-
-    #[test]
     fn source_request_parameter_schemas_are_json_strings() {
         for (name, schema) in super::generate() {
             if matches!(name, "workflow.schema.json" | "mcp.schema.json") {
@@ -194,7 +154,9 @@ mod tests {
             }
             let text = schema.to_string();
             assert!(!text.contains("request_params_json"));
-            assert!(!text.contains("reasoning_profile"));
+            // The obsolete per-invocation field remains absent; the optional
+            // Model-owned reasoning_profile_order is a separate contract.
+            assert!(!text.contains("\"reasoning_profile\""));
             assert!(!text.contains("\"RequestParams\""), "{name}");
             let parameter_schema =
                 json!({"$ref":"#/$defs/RequestParamsJson", "$defs":schema["$defs"]});

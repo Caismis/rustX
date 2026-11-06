@@ -4,7 +4,7 @@ The dev launcher owns the App Server, exact endpoint, transport credential, brow
 launch credential, Host config, carrier and private scratch lifetime. Carrier
 authentication hands admission material to the browser; it adds no App Server RPC,
 proxy, native configuration or Workspace authority. The browser connects directly
-with the existing AppServerClient and App Server protocol **v52**.
+with the existing AppServerClient and App Server protocol **v73**.
 
 `GET /?token=<browser-launch-token>` accepts exactly one bounded 43-character
 base64url credential on the root route. Timing-safe comparison follows format checks.
@@ -47,7 +47,8 @@ Authenticated `GET /__rustx/bootstrap` returns only:
 {
   "connectionMode": "local",
   "appServerEndpoint": "ws://127.0.0.1:<native-port>/",
-  "appServerTransportToken": "<native-transport-token>"
+  "appServerTransportToken": "<native-transport-token>",
+  "appServerDeliveryToken": "<separate-native-delivery-token>"
 }
 ```
 
@@ -69,7 +70,7 @@ of duplicating it. Child settlement precedes scratch deletion. Only the derived
 browser proof may enter sessionStorage. Launch/native/provider/MCP credentials and
 bootstrap JSON never enter any browser storage; no proof enters localStorage or
 IndexedDB. Only the initial
-browser launch URL is printed, once; transport details belong in advanced Settings/Inspector.
+browser launch URL is printed, once; transport details belong in advanced Settings.
 
 ConnectionController owns source selection: **LocalManaged** fetches authenticated
 same-origin bootstrap, while **RemoteExplicit** requires a Settings gesture and
@@ -82,6 +83,23 @@ Remote endpoint/token has already been supplied, selecting Remote explicitly use
 that remembered material. Selecting Local fetches and validates bootstrap before
 requesting a transition. `selectedMode` describes the material-entry selection;
 `mode` describes committed ownership and never changes on admission refusal.
+
+## Client module ownership (Issue #487)
+
+`client/app-server.ts` (`AppServerClient`) owns the connection lifecycle, the
+one published `ClientView`, the Session lifecycle projection and the composition
+of narrow collaborators; it is the only writer of client state. Each
+collaborator receives a port listing exactly what it reads and writes:
+
+| Module | Owns |
+| --- | --- |
+| `client/contracts.ts`, `client/errors.ts` | published view/operation contracts and request outcome errors, below both the client and application flows |
+| `client/request-pipeline.ts` | request ids, lanes from the shared `protocol/app-server/method-policy.ts`, admission re-validation adjacent to send, correlation, deadlines, exactly-once uncertainty at disconnect |
+| `client/session-catalog.ts` | catalog pages, exact summary reads and native invalidations |
+| `client/session-reads.ts`, `client/configuration-observations.ts` | bounded domain/model/settings/content reads; the per-scope configuration cache |
+| `client/reading.ts`, `client/cold-reads.ts`, `client/trace-reads.ts` | Turn outline and transcript windows; read-only previews of opening Sessions; Trace reads and their authority |
+| `client/session-controls.ts`, `client/model-selection.ts`, `client/interactions.ts`, `client/session-uploads.ts` | Goal/inbound/compaction/cancellation, model selection, pending interactions, the native upload operation |
+| `client/source-repairs.ts` | the connection's Source repair observations under the shared `protocol/app-server/source-repair.ts` rules |
 
 AppServerClient owns endpoint/token validation and replacement admission. Its
 side-effect-free admission check runs immediately before synchronous fencing, with
@@ -208,7 +226,7 @@ browser secret or expiry database. Existing adapted Settings provenance is retai
 
 ## Native upload data lane
 
-App Server v52 advertises ordinary file policy at initialization. Upload prepare
+App Server v73 advertises ordinary file policy at initialization. Upload prepare
 is authenticated through the exact native attachment; a short-lived single-use
 capability authorizes a separate binary socket at the same selected native origin.
 No transport key, Product Host credential or local path appears in the descriptor.
@@ -261,3 +279,20 @@ readonly projection and supplies finite port I/O. React cannot create control
 proofs or decide native settlement. The former imperative attachment queue and
 settlement methods are removed. See [the formal lifecycle contract](SESSION-LIFECYCLE.md)
 for the gesture matrix, transaction correlation, revocation boundaries and bounds.
+
+An initialized transport becomes connected after inert catalog synchronization;
+it does not await retained Sessions' runtime restoration. Each Session actor
+restores independently under its current generation and authority. A cold MCP
+attachment may remain connecting before the first submission, while that same
+Session can submit its exact-node intent to arm Native's readiness deadline.
+Other Sessions remain usable. `connect()` completion establishes transport
+readiness; callers needing a live target await that Session's attachment and
+observation proof. Uncertain operations and retired claims are never replayed.
+
+The managed launcher creates a separate owner-only Delivery Access credential,
+passes it to the native server and returns it only through the authenticated,
+no-store bootstrap. The client retains it in page memory and offers the existing
+`rustx-delivery-access` subprotocol. Remote Settings accepts that separate token
+optionally. Temporary questions are enabled only when native initialization
+confirms `capabilities.delivery_access`; the transport credential alone cannot
+grant it. No delivery credential is written to browser storage or logs.

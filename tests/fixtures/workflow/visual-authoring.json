@@ -1,0 +1,219 @@
+{
+  "description": "Editor-authored nested file used by Web and native execution tests.",
+  "block": {
+    "input": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "Text supplied by the caller."
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "nodes": {
+      "start": {
+        "type": "start"
+      },
+      "left": {
+        "type": "loop",
+        "loop_variables": [
+          {
+            "label": "echo",
+            "var_type": "string",
+            "value": {
+              "type": "reference",
+              "path": [
+                "args",
+                "message"
+              ]
+            }
+          }
+        ],
+        "loop_count": 1,
+        "body": {
+          "nodes": {
+            "loop_start": {
+              "type": "start"
+            }
+          },
+          "edges": []
+        }
+      },
+      "right": {
+        "type": "loop",
+        "loop_variables": [
+          {
+            "label": "echo",
+            "var_type": "string",
+            "value": {
+              "type": "reference",
+              "path": [
+                "args",
+                "message"
+              ]
+            }
+          }
+        ],
+        "loop_count": 1,
+        "body": {
+          "nodes": {
+            "loop_start": {
+              "type": "start"
+            }
+          },
+          "edges": []
+        }
+      },
+      "repeat": {
+        "type": "loop",
+        "loop_variables": [
+          {
+            "label": "count",
+            "var_type": "number",
+            "value": {
+              "type": "literal",
+              "value": 0
+            }
+          },
+          {
+            "label": "echo",
+            "var_type": "string",
+            "value": {
+              "type": "reference",
+              "path": [
+                "args",
+                "message"
+              ]
+            }
+          }
+        ],
+        "loop_count": 3,
+        "body": {
+          "nodes": {
+            "loop_start": {
+              "type": "start"
+            },
+            "bump": {
+              "type": "assigner",
+              "items": [
+                {
+                  "variable": [
+                    "repeat",
+                    "count"
+                  ],
+                  "operation": "increment",
+                  "value": {
+                    "type": "literal",
+                    "value": 1
+                  }
+                }
+              ]
+            }
+          },
+          "edges": [
+            {
+              "from": "loop_start",
+              "to": "bump"
+            }
+          ]
+        }
+      },
+      "done": {
+        "type": "return",
+        "outputs": [
+          {
+            "variable": "left",
+            "value_selector": [
+              "left"
+            ]
+          },
+          {
+            "variable": "right",
+            "value_selector": [
+              "right"
+            ]
+          },
+          {
+            "variable": "loop",
+            "value_selector": [
+              "repeat"
+            ]
+          }
+        ]
+      }
+    },
+    "edges": [
+      {
+        "from": "start",
+        "to": "left"
+      },
+      {
+        "from": "start",
+        "to": "right"
+      },
+      {
+        "from": "left",
+        "to": "repeat"
+      },
+      {
+        "from": "right",
+        "to": "repeat"
+      },
+      {
+        "from": "repeat",
+        "to": "done"
+      }
+    ]
+  },
+  "editor": {
+    "nodes": [
+      {
+        "address": {
+          "block": [],
+          "node": "left"
+        },
+        "title": "Left echo",
+        "position": {
+          "x": 360,
+          "y": 80
+        }
+      },
+      {
+        "address": {
+          "block": [],
+          "node": "right"
+        },
+        "title": "Right echo",
+        "position": {
+          "x": 360,
+          "y": 400
+        }
+      }
+    ],
+    "notes": [
+      {
+        "id": "author_note",
+        "block": [
+          {
+            "node": "repeat"
+          }
+        ],
+        "text": "{\"root\":{\"children\":[{\"children\":[{\"detail\":0,\"format\":0,\"mode\":\"normal\",\"style\":\"\",\"text\":\"A body reads the variables around it.\",\"type\":\"text\",\"version\":1}],\"direction\":null,\"format\":\"\",\"indent\":0,\"type\":\"paragraph\",\"version\":1,\"textFormat\":0,\"textStyle\":\"\"}],\"direction\":null,\"format\":\"\",\"indent\":0,\"type\":\"root\",\"version\":1}}",
+        "theme": "yellow",
+        "position": {
+          "x": 32,
+          "y": 300
+        },
+        "dimensions": {
+          "width": 280,
+          "height": 140
+        }
+      }
+    ],
+    "orders": []
+  }
+}

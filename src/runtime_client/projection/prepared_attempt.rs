@@ -3,8 +3,9 @@
 //! and deferred evidence are always assembled from the current seed.
 use super::shared_attempt::SharedAttempt;
 use super::{ForegroundToolExecution, ForegroundToolState, InFlightBlock};
-use crate::model::session::{AttemptModelView, SummaryModelView};
-use crate::runtime_client::checkpoint::{CHECKPOINT_PAGE_ITEMS, Capture, prepare_capture_item};
+use crate::model::session::{AttemptModelView, AuxiliaryModelView};
+use crate::observation::bounded::{CHECKPOINT_PAGE_ITEMS, prepare_capture_item};
+use crate::observation::capture::Capture;
 use crate::runtime_client::settings::AdmittedSettings;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -269,8 +270,8 @@ fn same_model(left: Option<&AttemptModelView>, right: Option<&AttemptModelView>)
         (Some(left), Some(right)) => {
             same_invocation(&left.primary, &right.primary)
                 && match (&left.summary, &right.summary) {
-                    (SummaryModelView::Session, SummaryModelView::Session) => true,
-                    (SummaryModelView::Explicit(left), SummaryModelView::Explicit(right)) => {
+                    (AuxiliaryModelView::Session, AuxiliaryModelView::Session) => true,
+                    (AuxiliaryModelView::Explicit(left), AuxiliaryModelView::Explicit(right)) => {
                         same_invocation(left, right)
                     }
                     _ => false,
@@ -293,7 +294,6 @@ fn same_invocation(
         model_max_output_tokens,
         max_output_tokens,
         profile,
-        reasoning_enabled,
         request_params,
         capabilities,
         declared_capabilities,
@@ -304,7 +304,6 @@ fn same_invocation(
         && model_max_output_tokens == &right.model_max_output_tokens
         && max_output_tokens == &right.max_output_tokens
         && profile == &right.profile
-        && reasoning_enabled == &right.reasoning_enabled
         && capabilities == &right.capabilities
         && declared_capabilities == &right.declared_capabilities
         && exact_map(request_params, &right.request_params, 0, &mut 16_384)
@@ -407,9 +406,9 @@ mod tests;
 fn output_budget(value: &impl serde::Serialize) -> Option<usize> {
     #[cfg(test)]
     BUDGET_WORK.with(|work| work.set(work.get() + 1));
-    crate::runtime_client::preflight::required_safe_integer_budget(
+    crate::observation::preflight::required_safe_integer_budget(
         value,
-        crate::runtime_client::checkpoint::CHECKPOINT_TARGET_BYTES,
+        crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
     )
 }
 pub(super) fn shared_budget<T: serde::Serialize>(

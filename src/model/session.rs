@@ -52,15 +52,15 @@ use crate::model::invocation::{
     RequestParamsLayer, ResolvedModelInvocation,
 };
 
-/// The compaction summary model policy of a session.
+/// A Session auxiliary invocation follows primary or selects a catalog model.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub enum SummaryModelPolicy {
-    /// Summary generation follows the admitted attempt's primary model.
+pub enum AuxiliaryModelPolicy {
+    /// Generation follows the primary invocation captured by the consumer.
     #[default]
     Session,
-    /// Summary generation uses an explicitly configured catalog model.
+    /// Generation uses an explicitly configured catalog model.
     Explicit {
         /// The catalog model reference.
         model: ModelRef,
@@ -68,10 +68,10 @@ pub enum SummaryModelPolicy {
         /// when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<ModelProfileId>,
-        /// The explicit summary request-parameter overrides.
+        /// The explicit auxiliary request-parameter overrides.
         #[serde(default)]
         request_params: RequestParams,
-        /// The explicit summary output-budget override.
+        /// The explicit auxiliary output-budget override.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_output_tokens: Option<u32>,
     },
@@ -102,7 +102,14 @@ pub struct SessionModelConfig {
     pub max_output_tokens: Option<u32>,
     /// The compaction summary model policy.
     #[serde(default)]
-    pub summary_model: SummaryModelPolicy,
+    pub summary_model: AuxiliaryModelPolicy,
+    /// The independent automatic title model policy.
+    #[serde(default)]
+    pub title_model: AuxiliaryModelPolicy,
+    #[serde(default)]
+    pub classification_model: Box<AuxiliaryModelPolicy>,
+    #[serde(default)]
+    pub btw_model: Box<AuxiliaryModelPolicy>,
 }
 
 /// A native catalog choice at the exact resource generation the client read.
@@ -126,7 +133,10 @@ impl SessionModelConfig {
             profile: None,
             request_params: RequestParams::new(),
             max_output_tokens: None,
-            summary_model: SummaryModelPolicy::Session,
+            summary_model: AuxiliaryModelPolicy::Session,
+            title_model: AuxiliaryModelPolicy::Session,
+            classification_model: Box::new(AuxiliaryModelPolicy::Session),
+            btw_model: Box::new(AuxiliaryModelPolicy::Session),
         }
     }
 
@@ -144,9 +154,33 @@ impl SessionModelConfig {
     /// The explicit summary model selection, when the policy is explicit.
     #[must_use]
     pub fn summary_selection(&self) -> Option<ModelSelection> {
-        match &self.summary_model {
-            SummaryModelPolicy::Session => None,
-            SummaryModelPolicy::Explicit {
+        self.summary_model.selection()
+    }
+
+    /// The explicit title model selection, when the policy is explicit.
+    #[must_use]
+    pub fn title_selection(&self) -> Option<ModelSelection> {
+        self.title_model.selection()
+    }
+    /// The explicit classification model selection, when the policy is explicit.
+    #[must_use]
+    pub fn classification_selection(&self) -> Option<ModelSelection> {
+        self.classification_model.selection()
+    }
+    /// The explicit btw model selection, when the policy is explicit.
+    #[must_use]
+    pub fn btw_selection(&self) -> Option<ModelSelection> {
+        self.btw_model.selection()
+    }
+}
+
+impl AuxiliaryModelPolicy {
+    /// Select the same native catalog semantics used by primary invocations.
+    #[must_use]
+    pub fn selection(&self) -> Option<ModelSelection> {
+        match self {
+            Self::Session => None,
+            Self::Explicit {
                 model,
                 profile,
                 request_params,
@@ -159,6 +193,54 @@ impl SessionModelConfig {
             }),
         }
     }
+}
+
+/// Whether `left` resolved against `left_catalog` runs exactly the
+/// invocations `right` resolves to against `right_catalog`: the primary
+/// model and every explicit auxiliary one, over the same provider binding
+/// ([`crate::model::catalog::ModelCatalog::same_invocation`]).
+pub(crate) fn same_session_invocation(
+    left_catalog: &crate::model::catalog::ModelCatalog,
+    left: &SessionModelConfig,
+    right_catalog: &crate::model::catalog::ModelCatalog,
+    right: &SessionModelConfig,
+) -> bool {
+    use crate::model::invocation::RequestParamsLayer;
+    left_catalog.same_invocation(
+        &left.selection(),
+        right_catalog,
+        &right.selection(),
+        RequestParamsLayer::SessionOverrides,
+    ) && [
+        (
+            left.summary_selection(),
+            right.summary_selection(),
+            RequestParamsLayer::SummaryOverrides,
+        ),
+        (
+            left.title_selection(),
+            right.title_selection(),
+            RequestParamsLayer::TitleOverrides,
+        ),
+        (
+            left.classification_selection(),
+            right.classification_selection(),
+            RequestParamsLayer::ClassificationOverrides,
+        ),
+        (
+            left.btw_selection(),
+            right.btw_selection(),
+            RequestParamsLayer::BtwOverrides,
+        ),
+    ]
+    .into_iter()
+    .all(|(left, right, layer)| match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left_catalog.same_invocation(&left, right_catalog, &right, layer)
+        }
+        _ => false,
+    })
 }
 
 /// Analyze the complete Session configuration without credentials, bindings, or I/O.
@@ -180,6 +262,15 @@ pub(crate) fn analyze_session_model_config(
         .summary_selection()
         .map(|selection| analyze(selection, RequestParamsLayer::SummaryOverrides))
         .transpose()?;
+    if let Some(selection) = config.title_selection() {
+        analyze(selection, RequestParamsLayer::TitleOverrides)?;
+    }
+    if let Some(selection) = config.classification_selection() {
+        analyze(selection, RequestParamsLayer::ClassificationOverrides)?;
+    }
+    if let Some(selection) = config.btw_selection() {
+        analyze(selection, RequestParamsLayer::BtwOverrides)?;
+    }
     Ok((primary, summary))
 }
 
@@ -243,9 +334,9 @@ impl AttemptModelSnapshot {
         AttemptModelView {
             primary: self.primary.view(),
             summary: match self.summary.as_ref() {
-                AttemptSummaryModel::Session => SummaryModelView::Session,
+                AttemptSummaryModel::Session => AuxiliaryModelView::Session,
                 AttemptSummaryModel::Explicit(invocation) => {
-                    SummaryModelView::Explicit(Box::new(invocation.view()))
+                    AuxiliaryModelView::Explicit(Box::new(invocation.view()))
                 }
             },
         }
@@ -288,6 +379,10 @@ pub struct SessionModelState {
     /// The invocation last resolved for `config`; absent only when this
     /// state was restored with an already unavailable selection.
     resolved: Option<std::sync::Arc<(ResolvedModelInvocation, AttemptSummaryModel)>>,
+    /// Explicit Title invocation resolved with the current native configuration.
+    title: Option<std::sync::Arc<ResolvedModelInvocation>>,
+    classification: Option<std::sync::Arc<ResolvedModelInvocation>>,
+    btw: Option<std::sync::Arc<ResolvedModelInvocation>>,
     /// Why the authority's catalog does not admit `config`.
     unavailable: Option<std::sync::Arc<ModelInvocationError>>,
 }
@@ -304,7 +399,13 @@ impl SessionModelState {
         config: SessionModelConfig,
     ) -> Result<Self, ModelInvocationError> {
         let resolved = resolve(&registry, &config)?;
+        let title = resolve_title(&registry, &config)?;
+        let classification = resolve_classification(&registry, &config)?;
+        let btw = resolve_btw(&registry, &config)?;
         Ok(Self {
+            title,
+            classification,
+            btw,
             authority: ModelAuthority::Catalog(registry),
             config: std::sync::Arc::new(config),
             resolved: Some(std::sync::Arc::new(resolved)),
@@ -333,6 +434,9 @@ impl SessionModelState {
                 authority: ModelAuthority::Catalog(registry),
                 config: std::sync::Arc::new(config),
                 resolved: None,
+                title: None,
+                classification: None,
+                btw: None,
                 unavailable: Some(std::sync::Arc::new(error)),
             });
         }
@@ -364,6 +468,13 @@ impl SessionModelState {
                 resolved: (config == *self.config)
                     .then(|| self.resolved.clone())
                     .flatten(),
+                title: (config == *self.config)
+                    .then(|| self.title.clone())
+                    .flatten(),
+                classification: (config == *self.config)
+                    .then(|| self.classification.clone())
+                    .flatten(),
+                btw: (config == *self.config).then(|| self.btw.clone()).flatten(),
                 config: std::sync::Arc::new(config),
                 unavailable: Some(std::sync::Arc::new(error)),
             }),
@@ -390,10 +501,22 @@ impl SessionModelState {
         let resolved = frozen.materialize(credentials)?;
         Ok(Self {
             authority: ModelAuthority::Frozen(std::sync::Arc::new(frozen.clone())),
+            title: None,
+            classification: None,
+            btw: None,
             config: std::sync::Arc::new(frozen.configured.clone()),
             resolved: Some(std::sync::Arc::new(resolved)),
             unavailable: None,
         })
+    }
+
+    /// The catalog this Session resolves against; `None` for a child running
+    /// a parent-frozen model.
+    pub(crate) fn catalog(&self) -> Option<&crate::model::catalog::ModelCatalog> {
+        match &self.authority {
+            ModelAuthority::Catalog(registry) => Some(registry.catalog().catalog()),
+            ModelAuthority::Frozen(_) => None,
+        }
     }
 
     /// The authoritative desired configuration.
@@ -454,6 +577,97 @@ impl SessionModelState {
         }
     }
 
+    /// Freeze the independent Title invocation at native admission. The caller
+    /// retains the Session model/resource revision fence through final admission.
+    ///
+    /// # Errors
+    /// Returns unavailable or frozen authority instead of falling back.
+    ///
+    /// # Panics
+    /// Panics if an available selection violates its resolved-invocation invariant.
+    pub fn title_invocation(&self) -> Result<ResolvedModelInvocation, ModelInvocationError> {
+        if let Some(error) = self.unavailable.as_deref() {
+            return Err(error.clone());
+        }
+        if matches!(self.authority, ModelAuthority::Frozen(_)) {
+            return Err(ModelInvocationError::ImmutableModelAuthority {
+                model: self.config.model.clone(),
+            });
+        }
+        Ok(match &self.config.title_model {
+            AuxiliaryModelPolicy::Session => self
+                .resolved
+                .as_deref()
+                .expect("available model is resolved")
+                .0
+                .clone(),
+            AuxiliaryModelPolicy::Explicit { .. } => self
+                .title
+                .as_deref()
+                .expect("explicit title is resolved")
+                .clone(),
+        })
+    }
+
+    /// Resolve the independent auxiliary policy frozen at native admission.
+    /// # Errors
+    /// Rejects unavailable or frozen authority.
+    /// # Panics
+    /// An available native configuration must have resolved invocations.
+    pub fn classification_invocation(
+        &self,
+    ) -> Result<&ResolvedModelInvocation, ModelInvocationError> {
+        if let Some(error) = self.unavailable.as_deref() {
+            return Err(error.clone());
+        }
+        if matches!(self.authority, ModelAuthority::Frozen(_)) {
+            return Err(ModelInvocationError::ImmutableModelAuthority {
+                model: self.config.model.clone(),
+            });
+        }
+        Ok(match self.config.classification_model.as_ref() {
+            AuxiliaryModelPolicy::Session => {
+                &self
+                    .resolved
+                    .as_deref()
+                    .expect("available model is resolved")
+                    .0
+            }
+            AuxiliaryModelPolicy::Explicit { .. } => self
+                .classification
+                .as_deref()
+                .expect("explicit classification is resolved"),
+        })
+    }
+
+    /// Resolve the independent auxiliary policy frozen at native admission.
+    /// # Errors
+    /// Rejects unavailable or frozen authority.
+    /// # Panics
+    /// An available native configuration must have resolved invocations.
+    pub fn btw_invocation(&self) -> Result<&ResolvedModelInvocation, ModelInvocationError> {
+        if let Some(error) = self.unavailable.as_deref() {
+            return Err(error.clone());
+        }
+        if matches!(self.authority, ModelAuthority::Frozen(_)) {
+            return Err(ModelInvocationError::ImmutableModelAuthority {
+                model: self.config.model.clone(),
+            });
+        }
+        Ok(match self.config.btw_model.as_ref() {
+            AuxiliaryModelPolicy::Session => {
+                &self
+                    .resolved
+                    .as_deref()
+                    .expect("available model is resolved")
+                    .0
+            }
+            AuxiliaryModelPolicy::Explicit { .. } => {
+                self.btw.as_deref().expect("explicit btw is resolved")
+            }
+        })
+    }
+
     /// Applies a whole-state configuration replacement transactionally.
     ///
     /// # Errors
@@ -468,6 +682,12 @@ impl SessionModelState {
             });
         };
         let resolved = resolve(registry, &config)?;
+        let title = resolve_title(registry, &config)?;
+        let classification = resolve_classification(registry, &config)?;
+        let btw = resolve_btw(registry, &config)?;
+        self.title = title;
+        self.classification = classification;
+        self.btw = btw;
         self.config = std::sync::Arc::new(config);
         self.resolved = Some(std::sync::Arc::new(resolved));
         self.unavailable = None;
@@ -519,6 +739,20 @@ impl SessionModelState {
                 .config
                 .summary_selection()
                 .is_some_and(|summary| !same(summary, RequestParamsLayer::SummaryOverrides))
+            || self
+                .config
+                .title_selection()
+                .is_some_and(|title| !same(title, RequestParamsLayer::TitleOverrides))
+            || self
+                .config
+                .classification_selection()
+                .is_some_and(|classification| {
+                    !same(classification, RequestParamsLayer::ClassificationOverrides)
+                })
+            || self
+                .config
+                .btw_selection()
+                .is_some_and(|btw| !same(btw, RequestParamsLayer::BtwOverrides))
         {
             return false;
         }
@@ -542,10 +776,31 @@ impl SessionModelState {
             configured: (*self.config).clone(),
             effective: self.resolved.as_deref().map(|(primary, _)| primary.view()),
             summary: self.resolved.as_deref().map(|(_, summary)| match summary {
-                AttemptSummaryModel::Session => SummaryModelView::Session,
+                AttemptSummaryModel::Session => AuxiliaryModelView::Session,
                 AttemptSummaryModel::Explicit(invocation) => {
-                    SummaryModelView::Explicit(Box::new(invocation.view()))
+                    AuxiliaryModelView::Explicit(Box::new(invocation.view()))
                 }
+            }),
+            title: self.registry().and(self.resolved.as_ref()).map(|_| {
+                self.title
+                    .as_deref()
+                    .map_or(AuxiliaryModelView::Session, |title| {
+                        AuxiliaryModelView::Explicit(Box::new(title.view()))
+                    })
+            }),
+            classification: self.registry().and(self.resolved.as_ref()).map(|_| {
+                self.classification
+                    .as_deref()
+                    .map_or(AuxiliaryModelView::Session, |classification| {
+                        AuxiliaryModelView::Explicit(Box::new(classification.view()))
+                    })
+            }),
+            btw: self.registry().and(self.resolved.as_ref()).map(|_| {
+                self.btw
+                    .as_deref()
+                    .map_or(AuxiliaryModelView::Session, |btw| {
+                        AuxiliaryModelView::Explicit(Box::new(btw.view()))
+                    })
             }),
             unavailable: self.unavailable.as_ref().map(ToString::to_string),
         }
@@ -570,7 +825,7 @@ impl SessionModelReadSource {
     }
     pub(crate) fn prepare(&self) {
         self.inline.get_or_init(|| {
-            serde_json::from_slice(&crate::runtime_client::checkpoint::bounded_item_bytes(
+            serde_json::from_slice(&crate::observation::bounded::bounded_item_bytes(
                 self, 16_384,
             )?)
             .ok()
@@ -600,12 +855,21 @@ impl SessionModelReadSource {
                     .as_ref()
                     .map(super::catalog::ModelProfileId::as_str),
                 "requestParams" => parameter_text(&self.state.config.request_params, &path[2..]),
+                "summaryModel" => policy_text(&self.state.config.summary_model, &path[2..]),
+                "titleModel" => policy_text(&self.state.config.title_model, &path[2..]),
+                "classificationModel" => {
+                    policy_text(&self.state.config.classification_model, &path[2..])
+                }
+                "btwModel" => policy_text(&self.state.config.btw_model, &path[2..]),
                 _ => None,
             },
             "effective" => {
                 let (primary, _) = self.state.resolved.as_deref()?;
                 invocation_text(primary, &path[1..])
             }
+            "title" => invocation_text(self.state.title.as_deref()?, &path[1..]),
+            "classification" => invocation_text(self.state.classification.as_deref()?, &path[1..]),
+            "btw" => invocation_text(self.state.btw.as_deref()?, &path[1..]),
             "summary" => {
                 let (_, summary) = self.state.resolved.as_deref()?;
                 match summary {
@@ -632,11 +896,37 @@ impl SessionModelReadSource {
 impl Serialize for SessionModelReadSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut view = serializer.serialize_struct("SessionModelView", 4)?;
+        let mut view = serializer.serialize_struct("SessionModelView", 7)?;
         view.serialize_field("configured", self.state.config.as_ref())?;
         if let Some((primary, summary)) = self.state.resolved.as_deref() {
             view.serialize_field("effective", &primary.read_view())?;
             view.serialize_field("summary", &SummaryReadView(summary))?;
+            if self.state.registry().is_some() {
+                let title = self
+                    .state
+                    .title
+                    .as_deref()
+                    .map_or(BorrowedSummary::Session, |title| {
+                        BorrowedSummary::Explicit(title.read_view())
+                    });
+                view.serialize_field("title", &title)?;
+                let classification = self
+                    .state
+                    .classification
+                    .as_deref()
+                    .map_or(BorrowedSummary::Session, |classification| {
+                        BorrowedSummary::Explicit(classification.read_view())
+                    });
+                view.serialize_field("classification", &classification)?;
+                let btw = self
+                    .state
+                    .btw
+                    .as_deref()
+                    .map_or(BorrowedSummary::Session, |btw| {
+                        BorrowedSummary::Explicit(btw.read_view())
+                    });
+                view.serialize_field("btw", &btw)?;
+            }
         }
         if let Some(error) = self.state.unavailable.as_deref() {
             view.serialize_field("unavailable", &DisplayReadView(error))?;
@@ -680,7 +970,7 @@ impl AttemptModelReadSource {
     }
     pub(crate) fn prepare(&self) {
         self.inline.get_or_init(|| {
-            serde_json::from_slice(&crate::runtime_client::checkpoint::bounded_item_bytes(
+            serde_json::from_slice(&crate::observation::bounded::bounded_item_bytes(
                 self, 16_384,
             )?)
             .ok()
@@ -751,6 +1041,9 @@ impl ModelCatalogReadSource {
         }
         let profiles_deferred = profiles.len() != total;
         model.profiles = super::catalog::ProfilesReadView::Header(profiles);
+        // This bounded selection header carries no complete reasoning metadata.
+        // The ordinary full catalog and source documents expose the order.
+        model.reasoning_profile_order = None;
         Some(super::catalog::NativeCatalogModelHeader {
             model,
             profile_count: total as u64,
@@ -792,14 +1085,11 @@ impl ModelCatalogReadSource {
                     return None;
                 }
                 let row = frozen.catalog_model_at(model)?;
-                let super::catalog::ProfilesReadView::Frozen(Some((id, reasoning_enabled))) =
-                    row.profiles
-                else {
+                let super::catalog::ProfilesReadView::Frozen(Some(id)) = row.profiles else {
                     return None;
                 };
                 Some(super::catalog::CatalogProfileReadView {
                     id,
-                    reasoning_enabled,
                     max_output_tokens: None,
                 })
             }
@@ -850,6 +1140,26 @@ fn invocation_text<'a>(
         _ => None,
     }
 }
+fn policy_text<'a>(policy: &'a AuxiliaryModelPolicy, path: &[String]) -> Option<&'a str> {
+    let AuxiliaryModelPolicy::Explicit {
+        model,
+        profile,
+        request_params,
+        ..
+    } = policy
+    else {
+        return None;
+    };
+    match path.first()?.as_str() {
+        "model" if path.len() == 1 => Some(model.as_str()),
+        "profile" if path.len() == 1 => {
+            profile.as_ref().map(super::catalog::ModelProfileId::as_str)
+        }
+        "request_params" => parameter_text(request_params, &path[1..]),
+        _ => None,
+    }
+}
+
 fn parameter_text<'a>(params: &'a RequestParams, path: &[String]) -> Option<&'a str> {
     // Ordinal object selection is handled by the immutable indexed source.
     // Named paths borrow the native map in logarithmic work, then return exact bytes.
@@ -910,6 +1220,48 @@ fn resolve(
     Ok((primary, summary))
 }
 
+fn resolve_title(
+    registry: &ModelBindingRegistry,
+    config: &SessionModelConfig,
+) -> Result<Option<std::sync::Arc<ResolvedModelInvocation>>, ModelInvocationError> {
+    config
+        .title_selection()
+        .map(|selection| {
+            registry
+                .resolve_with_layer(&selection, RequestParamsLayer::TitleOverrides)
+                .map(std::sync::Arc::new)
+        })
+        .transpose()
+}
+
+fn resolve_classification(
+    registry: &ModelBindingRegistry,
+    config: &SessionModelConfig,
+) -> Result<Option<std::sync::Arc<ResolvedModelInvocation>>, ModelInvocationError> {
+    config
+        .classification_selection()
+        .map(|selection| {
+            registry
+                .resolve_with_layer(&selection, RequestParamsLayer::ClassificationOverrides)
+                .map(std::sync::Arc::new)
+        })
+        .transpose()
+}
+
+fn resolve_btw(
+    registry: &ModelBindingRegistry,
+    config: &SessionModelConfig,
+) -> Result<Option<std::sync::Arc<ResolvedModelInvocation>>, ModelInvocationError> {
+    config
+        .btw_selection()
+        .map(|selection| {
+            registry
+                .resolve_with_layer(&selection, RequestParamsLayer::BtwOverrides)
+                .map(std::sync::Arc::new)
+        })
+        .transpose()
+}
+
 /// The redacted client-facing projection of the session model state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -926,7 +1278,14 @@ pub struct SessionModelView {
     /// The summary policy last resolved for `configured`, absent exactly
     /// when `effective` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<SummaryModelView>,
+    pub summary: Option<AuxiliaryModelView>,
+    /// The independent Title policy last resolved for this configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<AuxiliaryModelView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification: Option<AuxiliaryModelView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub btw: Option<AuxiliaryModelView>,
     /// Why the Session's published Model Catalog does not admit
     /// `configured`. While present, `effective` and `summary` are display
     /// facts only: no new Attempt is admitted until a valid selection is
@@ -935,14 +1294,14 @@ pub struct SessionModelView {
     pub unavailable: Option<String>,
 }
 
-/// The redacted client-facing projection of a summary policy.
+/// The redacted client-facing projection of an auxiliary policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub enum SummaryModelView {
-    /// The summary follows the primary model.
+pub enum AuxiliaryModelView {
+    /// The auxiliary invocation follows the primary model.
     Session,
-    /// The summary uses this resolved explicit invocation.
+    /// The auxiliary invocation uses this resolved explicit invocation.
     Explicit(Box<ModelInvocationView>),
 }
 
@@ -958,7 +1317,7 @@ pub struct AttemptModelView {
     /// The attempt's frozen primary invocation.
     pub primary: ModelInvocationView,
     /// The attempt's frozen summary policy.
-    pub summary: SummaryModelView,
+    pub summary: AuxiliaryModelView,
 }
 
 #[cfg(test)]
@@ -1106,7 +1465,7 @@ mod tests {
         .unwrap();
         let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
         config.max_output_tokens = Some(2048);
-        config.summary_model = SummaryModelPolicy::Explicit {
+        config.summary_model = AuxiliaryModelPolicy::Explicit {
             model: config.model.clone(),
             profile: None,
             request_params: RequestParams::new(),
@@ -1126,7 +1485,8 @@ mod tests {
         };
         assert_eq!(error.layer, RequestParamsLayer::SessionOverrides);
         config.request_params.clear();
-        let SummaryModelPolicy::Explicit { request_params, .. } = &mut config.summary_model else {
+        let AuxiliaryModelPolicy::Explicit { request_params, .. } = &mut config.summary_model
+        else {
             unreachable!()
         };
         request_params.insert("messages".into(), serde_json::json!([]));
@@ -1160,13 +1520,152 @@ mod tests {
             ("example/demo-model", None, Some(0)),
             ("example/demo-model", None, Some(4097)),
         ] {
-            config.summary_model = SummaryModelPolicy::Explicit {
+            config.summary_model = AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse(model).unwrap(),
                 profile: profile.map(|p| ModelProfileId::parse(p).unwrap()),
                 request_params: RequestParams::new(),
                 max_output_tokens: budget,
             };
             assert!(analyze_session_model_config(&catalog, &config).is_err());
+        }
+    }
+    fn title_registry() -> ModelBindingRegistry {
+        let document: crate::local_runtime::authoring::RuntimeLayer = crate::toml_authoring::parse(
+            include_bytes!("../../examples/local-runtime/minimal/rustx.toml"),
+        )
+        .unwrap();
+        let catalog = ModelCatalog::from_document(
+            crate::model::authoring::Catalog {
+                schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+                providers: document.providers.unwrap(),
+                models: document.models.unwrap(),
+            }
+            .into(),
+        )
+        .unwrap();
+        ModelBindingRegistry::new(
+            catalog
+                .resolve(&crate::model::catalog::MapCredentialEnvironment::new([(
+                    "RUSTX_EXAMPLE_API_KEY".into(),
+                    "test-only".into(),
+                )]))
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn title_policy_follows_only_later_admissions_and_explicit_selection_is_independent() {
+        let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+        config.max_output_tokens = Some(2048);
+        let mut state = SessionModelState::new(title_registry(), config.clone()).unwrap();
+        let admitted = state.title_invocation().unwrap();
+        assert_eq!(admitted.view().max_output_tokens, 2048);
+        config.max_output_tokens = Some(512);
+        state.apply(config.clone()).unwrap();
+        assert_eq!(
+            state.title_invocation().unwrap().view().max_output_tokens,
+            512
+        );
+        assert_eq!(admitted.view().max_output_tokens, 2048);
+        config.title_model = AuxiliaryModelPolicy::Explicit {
+            model: config.model.clone(),
+            profile: None,
+            request_params: serde_json::from_value(serde_json::json!({"title_tag": "exact"}))
+                .unwrap(),
+            max_output_tokens: Some(128),
+        };
+        state.apply(config.clone()).unwrap();
+        config.max_output_tokens = Some(256);
+        state.apply(config).unwrap();
+        let invocation = state.title_invocation().unwrap().view();
+        assert_eq!(invocation.max_output_tokens, 128);
+        assert_eq!(invocation.request_params["title_tag"], "exact");
+        assert!(matches!(
+            state.view().title,
+            Some(AuxiliaryModelView::Explicit(_))
+        ));
+        let source = state.read_source();
+        source.prepare();
+        assert_eq!(source.inline(), Some(state.view()));
+        assert_eq!(
+            serde_json::to_value(source).unwrap(),
+            serde_json::to_value(state.view()).unwrap()
+        );
+    }
+
+    #[test]
+    fn title_policy_deferred_views_keep_exact_configured_and_effective_values() {
+        let original = "native title input é\n".repeat(20_000);
+        let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+        config.title_model = AuxiliaryModelPolicy::Explicit {
+            model: config.model.clone(),
+            profile: None,
+            request_params: serde_json::from_value(serde_json::json!({"native_payload": original}))
+                .unwrap(),
+            max_output_tokens: Some(128),
+        };
+        let state = SessionModelState::new(title_registry(), config).unwrap();
+        let source = state.read_source();
+        source.prepare();
+        assert!(source.inline().is_none());
+        for path in [
+            vec![
+                "configured",
+                "titleModel",
+                "request_params",
+                "native_payload",
+            ],
+            vec!["title", "requestParams", "native_payload"],
+        ] {
+            let path = path.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert_eq!(source.selected_text(&path), Some(original.as_str()));
+        }
+        assert_eq!(
+            serde_json::to_value(source).unwrap(),
+            serde_json::to_value(state.view()).unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_title_selection_refuses_without_changing_native_authority() {
+        let config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+        let mut state = SessionModelState::new(title_registry(), config.clone()).unwrap();
+        let original = state.view();
+        for (model, profile, budget, params) in [
+            ("example/missing", None, None, serde_json::json!({})),
+            (
+                "example/demo-model",
+                Some("missing"),
+                None,
+                serde_json::json!({}),
+            ),
+            ("example/demo-model", None, Some(0), serde_json::json!({})),
+            (
+                "example/demo-model",
+                None,
+                Some(4097),
+                serde_json::json!({}),
+            ),
+            (
+                "example/demo-model",
+                None,
+                None,
+                serde_json::json!({"messages": []}),
+            ),
+        ] {
+            let mut invalid = config.clone();
+            invalid.title_model = AuxiliaryModelPolicy::Explicit {
+                model: ModelRef::parse(model).unwrap(),
+                profile: profile.map(|profile| ModelProfileId::parse(profile).unwrap()),
+                request_params: serde_json::from_value(params).unwrap(),
+                max_output_tokens: budget,
+            };
+            let error = state.apply(invalid).unwrap_err();
+            if let ModelInvocationError::ProtectedKey(error) = error {
+                assert_eq!(error.layer, RequestParamsLayer::TitleOverrides);
+            }
+            assert_eq!(state.view(), original);
         }
     }
 }

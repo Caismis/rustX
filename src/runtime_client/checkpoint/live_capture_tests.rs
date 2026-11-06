@@ -1,9 +1,10 @@
 use super::*;
 use crate::message::types::ContentBlockIndex;
-use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
-use crate::runtime_client::content::{
+use crate::observation::bounded::bounded_clone;
+use crate::observation::content::{
     CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
 };
+use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
 use crate::runtime_client::snapshot::InFlightBlock;
 
 fn original(capture: &mut Capture, block: &InFlightBlock) -> Option<InFlightBlock> {
@@ -62,7 +63,7 @@ fn live_capture_matches_original_bytes_and_budgets_at_both_admission_boundaries(
         for block in variants(&text) {
             let encoded = serde_json::to_vec(&block).unwrap().len();
             let required =
-                crate::runtime_client::preflight::required_budget(&block, CHECKPOINT_TARGET_BYTES)
+                crate::observation::preflight::required_budget(&block, CHECKPOINT_TARGET_BYTES)
                     .unwrap();
             for remaining in [
                 0,

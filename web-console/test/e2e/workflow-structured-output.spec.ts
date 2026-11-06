@@ -1,0 +1,225 @@
+import { test, expect } from '@playwright/test';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parse } from 'yaml';
+import { rootBlock } from '../workflow-root';
+import { setNodePresentation } from '../../src/app/workflows/document/geometry';
+import type { WorkflowDocument } from '../../src/app/workflows/document/model';
+import { startDogfood } from './dogfood-server';
+import { connectRemote, openEmptySession } from './shell-actions';
+import { routeWorkspaceHost } from './workspace-host';
+import { captureEvidence } from './screenshot';
+import { addOutputField, replaceJson, schemaJson, structuredDialog } from './workflow-schema-actions';
+import scopeCases from '../../../tests/fixtures/workflow/schema-rename-scopes.json' with { type: 'json' };
+import clipboardCases from '../../../tests/fixtures/workflow/clipboard-producer-scopes.json' with { type: 'json' };
+import { copyFragment } from '../../src/app/workflows/document/clipboard';
+
+test('structured output uses transactional Dify-style visual and JSON editors with native validation', async ({ page }, info) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    let document: WorkflowDocument = { description: 'Structured output editor.', block: rootBlock() };
+    document.block.nodes.model = { type: 'model', model: { mode: 'session' }, messages: [{ role: 'system', content: [{ type: 'literal', value: 'Classify the input.' }] }, { role: 'user', content: [{ type: 'literal', value: 'Classify.' }] }],
+      output: { type: 'json_schema', schema: { type: 'object', properties: { risk: { type: 'string', enum: ['low', 'high'] } }, required: ['risk'], additionalProperties: false } } };
+    document.block.nodes.done = { type: 'return', outputs: [{ variable: 'value', value_selector: ['model', 'structured_output', 'risk'] }]};
+    document.block.edges = [{ from: 'start', to: 'model' }, { from: 'model', to: 'done' }];
+    document = setNodePresentation(document, [], 'model', { title: 'Model call', position: { x: 360, y: 100 } });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'schema_editor.yaml'); writeFileSync(file, JSON.stringify(document));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'schema_editor', exact: true }).click();
+    await expect(page).toHaveTitle(/rustX$/);
+    const model = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Model node model', { exact: true });
+    await model.focus(); await model.press('Enter');
+    const panel = page.getByRole('complementary', { name: 'Inspector' });
+    const dialog = structuredDialog(page);
+    const configure = async () => { await panel.getByRole('button', { name: 'Configure', exact: true }).click(); await expect(dialog).toBeVisible(); };
+    const save = async () => { await dialog.getByRole('button', { name: 'Save', exact: true }).click(); await expect(dialog).toHaveCount(0); };
+    await configure();
+    await page.setViewportSize({ width: 1001, height: 832 });
+    const field = await addOutputField(page, 'status');
+    await field.getByRole('textbox', { name: 'Model-facing description' }).fill('Classification status.');
+    await field.getByRole('textbox', { name: 'Enum', exact: true }).fill('approved, rejected');
+    await captureEvidence(page, 'structured-output-field', info);
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Confirm or cancel');
+    await field.getByRole('textbox', { name: 'Enum', exact: true }).press('ControlOrMeta+Enter');
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await configure();
+    await expect(dialog.locator('[data-schema-field="status"]')).toHaveCount(0);
+
+    await dialog.getByRole('button', { name: 'Import from JSON', exact: true }).click();
+    const importer = page.getByRole('dialog', { name: 'Import from JSON', exact: true });
+    await replaceJson(importer.getByRole('textbox', { name: 'JSON', exact: true }), '[]');
+    await importer.getByRole('button', { name: 'Import', exact: true }).click();
+    await expect(importer.getByRole('alert')).toContainText('must be an object');
+    await replaceJson(importer.getByRole('textbox', { name: 'JSON', exact: true }), JSON.stringify({ risk: 'low', tags: ['tag'], details: { approved: true } }));
+    await importer.getByRole('button', { name: 'Import', exact: true }).click();
+    await expect(importer).toHaveCount(0);
+    await expect(dialog.locator('[data-schema-field="approved"]')).toBeVisible();
+    const code = await schemaJson(dialog), valid = await code.innerText();
+    await expect(code).toContainText('additionalProperties');
+    await captureEvidence(page, 'structured-output-json', info);
+    const surface = dialog.locator('.cm-editor');
+    expect((await surface.boundingBox())!.height).toBeGreaterThan(400);
+    await replaceJson(code, '{"type":');
+    await dialog.getByRole('tab', { name: 'Visual Editor', exact: true }).click();
+    await expect(dialog.getByRole('tab', { name: 'JSON Schema', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(code).toHaveText('{"type":');
+    await replaceJson(code, '{"type":"array"}');
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('object root');
+    await replaceJson(code, valid);
+    await dialog.getByRole('tab', { name: 'Visual Editor', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Edit field risk', exact: true }).click();
+    await dialog.getByRole('switch', { name: 'Required', exact: true }).click();
+    await dialog.getByRole('button', { name: /^Confirm/ }).click();
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('required');
+    await dialog.getByRole('button', { name: 'Edit field risk', exact: true }).click();
+    await dialog.getByRole('switch', { name: 'Required', exact: true }).click();
+    await dialog.getByRole('button', { name: /^Confirm/ }).click();
+    await save();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await configure(); await expect(dialog.locator('[data-schema-field="tags"]')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+
+    await configure();
+    await dialog.getByRole('button', { name: 'Edit field risk', exact: true }).click();
+    await dialog.getByRole('textbox', { name: 'Field name', exact: true }).fill('rating');
+    await dialog.getByRole('button', { name: /^Confirm/ }).click();
+    await save();
+    await configure();
+    await dialog.getByRole('button', { name: 'Clear configuration', exact: true }).click();
+    await expect(dialog.locator('[data-schema-field="rating"]')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await configure(); await expect(dialog.locator('[data-schema-field="rating"]')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Clear configuration', exact: true }).click(); await save();
+    await expect(panel).toContainText('Structured output is not configured');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await configure(); await schemaJson(dialog);
+    await page.evaluate(() => window.document.body.setAttribute('data-ds-dark-theme', ''));
+    await captureEvidence(page, 'structured-output-dark', info);
+    await page.evaluate(() => window.document.body.removeAttribute('data-ds-dark-theme'));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await captureEvidence(page, 'structured-output-mobile', info);
+    const bounds = (await dialog.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
+    await expect(panel).not.toContainText('presentation target no longer exists');
+    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    const saved = parse(readFileSync(file, 'utf8'));
+    expect(saved.block.nodes.model.output.schema).toMatchObject({ properties: { rating: { type: 'string' }, tags: { type: 'array' }, details: { properties: { approved: { type: 'boolean' } } } } });
+    expect(saved.block.nodes.done.outputs[0].value_selector).toEqual(['model', 'structured_output', 'rating']);
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'schema_editor', exact: true }).click();
+    await model.focus(); await model.press('Enter'); await configure();
+    expect(await dialog.locator('[data-schema-field]').evaluateAll(elements => elements.map(element => element.getAttribute('data-schema-field')))).toEqual(['structured_output', 'rating', 'tags', 'details', 'approved']);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+
+test('structured output rename preserves a preceding Iteration with an independent same-name producer', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood');
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    const example = scopeCases.find(example => example.kind === 'model')!;
+    const document = setNodePresentation(example.before as WorkflowDocument, [], 'generate', { title: 'Root generator', position: { x: 960, y: 140 } });
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'scope_rename.yaml'); writeFileSync(file, JSON.stringify(document));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'scope_rename', exact: true }).click();
+    await expect(page).toHaveTitle(/rustX$/);
+    const root = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Model node generate', { exact: true }).filter({ hasText: 'Root generator' });
+    await root.focus(); await root.press('Enter');
+    const panel = page.getByRole('complementary', { name: 'Inspector' }), dialog = structuredDialog(page);
+    const configure = async () => { await panel.getByRole('button', { name: 'Configure', exact: true }).click(); await expect(dialog).toBeVisible(); };
+    await configure();
+    await dialog.getByRole('button', { name: 'Edit field foo', exact: true }).click();
+    await dialog.getByRole('textbox', { name: 'Field name', exact: true }).fill('bar');
+    await dialog.getByRole('button', { name: /^Confirm/ }).click();
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await configure(); await expect(dialog.locator('[data-schema-field="foo"]')).toBeVisible(); await expect(dialog.locator('[data-schema-field="bar"]')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await configure(); await expect(dialog.locator('[data-schema-field="bar"]')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Save File', exact: true }).click(); await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    const saved = parse(readFileSync(file, 'utf8'));
+    expect(saved).toMatchObject(example.after);
+    expect(saved.block.nodes.sibling.output.path).toEqual(['generate', 'structured_output', 'foo']);
+    expect(saved.block.nodes.sibling.body.nodes.generate.output.schema.properties).toEqual({ foo: { type: 'boolean' } });
+    expect(saved.block.nodes.sibling.body.nodes.consume.messages[1].content[0].path).toEqual(['generate', 'structured_output', 'foo']);
+    await page.screenshot({ path: '/tmp/rustx-scoped-schema-rename.png' });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});
+
+
+test('cross-workflow paste rejects incomplete groups and preserves local and inherited bindings through native save', async ({ page }) => {
+  const fixture = await startDogfood('web_console_dogfood'), errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    const example = clipboardCases.find(example => example.kind === 'model')!;
+    const directory = join(fixture.workspaceA, '.agents/workflows'); mkdirSync(directory, { recursive: true });
+    const file = join(directory, 'scope_paste.yaml'); writeFileSync(file, JSON.stringify(example.target));
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
+    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('button', { name: 'scope_paste', exact: true }).click();
+    await expect(page).toHaveTitle(/rustX$/);
+    const canvas = page.getByRole('region', { name: 'Workflow canvas' });
+    const start = canvas.getByLabel('Workflow Start', { exact: true }); await start.focus(); await start.press('Enter');
+    const paste = async (selection: string[]) => {
+      await canvas.focus();
+      await canvas.evaluate((element, text) => {
+        const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', text);
+        element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData }));
+      }, copyFragment(example.source as WorkflowDocument, 'another-workflow', [], selection));
+    };
+    const seed = canvas.getByLabel('Loop node seed_copy', { exact: true });
+    for (const localBody of [true, false]) {
+      await paste(example.selection.filter(id => id !== 'generate' && (localBody || id !== 'sibling')));
+      await expect(page.getByText('This operation crosses a private Block scope. Copy its producers too, or bind inputs explicitly.', { exact: true })).toBeVisible();
+      await expect(seed).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeDisabled();
+      await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+      expect(parse(readFileSync(file, 'utf8'))).toEqual(example.target);
+    }
+    await paste(example.selection);
+    await expect(seed).toBeVisible();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click(); await expect(seed).toHaveCount(0);
+    await page.getByRole('button', { name: 'Redo', exact: true }).click(); await expect(seed).toBeVisible();
+    await start.focus(); await start.press('Enter');
+    const panel = page.getByRole('complementary', { name: 'Inspector' });
+    await panel.getByRole('button', { name: 'Choose next node for Next step', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Choose a workflow node' });
+    await picker.getByRole('tab', { name: 'Existing', exact: true }).click();
+    await picker.locator('[data-node-id="seed_copy"]').click();
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    const { editor: _presentation, ...saved } = parse(readFileSync(file, 'utf8'));
+    // Native files materialize the default as an integer; the editor DTO
+    // represents this optional u64 field as a decimal string.
+    expect(saved).toEqual({ ...example.pasted, timeout_ms: 600000 });
+    await page.screenshot({ path: '/tmp/rustx-scoped-workflow-paste.png' });
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+    expect((await fixture.control('requests')).requests).toHaveLength(0);
+  } finally { await fixture.stop(false); }
+});

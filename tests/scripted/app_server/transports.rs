@@ -121,9 +121,89 @@ async fn attach(client: &impl AppServerConformanceDriver, f: &Fixture) -> Attach
     target
 }
 
+pub(crate) async fn cached_python_catalog_disconnect_scenario() {
+    use futures_util::FutureExt as _;
+    use tokio::io::AsyncWriteExt as _;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let package = fixture.workspaces[0].join(".agents/tools/demo");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("requirements.txt"), "").unwrap();
+        std::fs::write(package.join("server.py"), "from fastmcp import FastMCP\nmcp = FastMCP('demo')\n@mcp.tool\ndef hello() -> str:\n    return 'hello'\nif __name__ == '__main__':\n    mcp.run()\n").unwrap();
+        let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() };
+        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), Some("python:demo".into()), None).await.unwrap();
+        assert!(!catalog.sources[0].tools.is_empty(), "warm the real prepared environment: {catalog:?}");
+        let packages = fixture.manager.configuration.sources.runtime_root.join("environments/python-tools/packages");
+        let states: Vec<_> = std::fs::read_dir(packages).unwrap().map(|entry| entry.unwrap().path()).filter(|path| path.is_dir()).collect();
+        assert_eq!(states.len(), 1);
+        let (entered, release) = crate::tools::python::gate_cached_verification_for_test(states[0].clone());
+        let listings = crate::local_runtime::workflow_tools::listings_for_test();
+        let _other_listings = listings.acquire_many(3).await.unwrap();
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        super::protocol::initialize(&connection).await;
+        let (mut input, reader) = tokio::io::duplex(65_536);
+        let serving = tokio::spawn(stdio::serve(connection.clone(), reader, tokio::io::sink(), CancellationToken::new()));
+        let request = Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(713), call: Method::WorkflowToolCatalog { target, source: Some("python:demo".into()), cursor: None } };
+        input.write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes()).await.unwrap();
+        entered.await.unwrap();
+        let mut operations = fixture.host.request_operations();
+        assert_eq!(*operations.borrow(), 1);
+        assert_eq!(listings.available_permits(), 0);
+        input.shutdown().await.unwrap();
+        serving.await.unwrap().unwrap();
+        assert!(connection.closed_for_test());
+        assert_eq!(*operations.borrow(), 1, "EOF retains the cached verification owner");
+        assert_eq!(listings.available_permits(), 0, "physical verification retains listing admission");
+        let draining = fixture.host.drain();
+        tokio::pin!(draining);
+        assert!(draining.as_mut().now_or_never().is_none());
+        release.send(()).unwrap();
+        operations.wait_for(|count| *count == 0).await.unwrap();
+        assert_eq!(listings.available_permits(), 1);
+        assert!(draining.await.is_empty());
+        fixture.close().await;
+    })).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t12_workflow_scratch_disconnect_retains_physical_request_until_settlement() {
+    use base64::Engine as _;
+    use futures_util::FutureExt as _;
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncWriteExt as _;
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+        super::protocol::initialize(&connection).await;
+        let target = crate::local_runtime::configuration::settings::SourceTarget::User;
+        let bytes = serde_json::to_vec(&serde_json::json!({"description":"owned scratch", "block":{"input":{"type":"object","properties":{},"additionalProperties":false},"nodes":{"start":{"type":"start"},"done":{"type":"return","outputs":[]}},"edges":[{"from":"start","to":"done"}]}})).unwrap();
+        let MethodResult::WorkflowDocument { reference } = super::protocol::call(&connection, 710, Method::WorkflowDocumentBegin { target: target.clone(), byte_length: u32::try_from(bytes.len()).unwrap(), sha256: format!("{:x}", Sha256::digest(&bytes)) }).await else { panic!("scratch reference") };
+        super::protocol::call(&connection, 711, Method::WorkflowDocumentWrite { target: target.clone(), reference: reference.clone(), offset: 0, data: base64::engine::general_purpose::STANDARD.encode(&bytes) }).await;
+        let (entered, release) = connection.gate_workflow_finish_for_test();
+        let (mut input, reader) = tokio::io::duplex(65_536);
+        let serving = tokio::spawn(stdio::serve(connection.clone(), reader, tokio::io::sink(), CancellationToken::new()));
+        let request = Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(712), call: Method::WorkflowDocumentFinish { target, reference } };
+        input.write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes()).await.unwrap();
+        entered.await.unwrap();
+        let mut operations = fixture.host.request_operations();
+        assert_eq!(*operations.borrow(), 1);
+        input.shutdown().await.unwrap();
+        serving.await.unwrap().unwrap();
+        assert!(connection.closed_for_test());
+        assert_eq!(*operations.borrow(), 1, "EOF must not release the physical job's request capacity");
+        let draining = fixture.host.drain();
+        tokio::pin!(draining);
+        assert!(draining.as_mut().now_or_never().is_none(), "host drain must await the scratch worker");
+        release.send(()).unwrap();
+        operations.wait_for(|count| *count == 0).await.unwrap();
+        assert!(draining.await.is_empty());
+        fixture.close().await;
+    }).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_following() {
-    use crate::runtime_client::content::{CanonicalContentComponent, ContentSource};
+    use crate::observation::content::{CanonicalContentComponent, ContentSource};
     use base64::Engine as _;
     bounded(async {
         // TCP WebSocket and the production Stdio framing use the same read contract.
@@ -399,7 +479,7 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
 async fn blocked_pipe_overflows_and_drops_writer_while_runtime_progresses() {
     bounded(async {
         use tokio::io::AsyncWriteExt;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
@@ -451,7 +531,7 @@ async fn blocked_pipe_overflows_and_drops_writer_while_runtime_progresses() {
 async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
     bounded(async {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 0).await;
         // Real WebSocket HTTP handshake and framing over an exactly bounded byte pipe.
         let (client, server) = tokio::io::duplex(128);
         let manager = f.host.clone();
@@ -464,7 +544,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v52, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v73, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -518,7 +598,7 @@ async fn adapters_share_direct_semantic_expectations() {
 #[tokio::test]
 async fn blocked_writer_deadline_is_cancellable_without_another_input_record() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let f = Fixture::new().await;
+    let f = Fixture::with_session_count(None, 0).await;
     let connection = Arc::new(AppServerConnection::new(f.host.clone()));
     let (mut input, reader) = tokio::io::duplex(1024);
     let (writer, mut unread) = tokio::io::duplex(1);
@@ -567,7 +647,7 @@ async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_
  {
     bounded(async {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
@@ -582,7 +662,7 @@ async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_
             writer,
             CancellationToken::new(),
         ));
-        assert_eq!(transport::IN_FLIGHT_REQUESTS, 16);
+        assert_eq!(transport::IN_FLIGHT_REQUESTS, 50);
         for id in 0..=transport::IN_FLIGHT_REQUESTS {
             let request = Request {
                 jsonrpc: JsonRpcVersion::V2,
@@ -609,7 +689,7 @@ async fn request_admission_overflow_is_correlated_and_disconnect_retains_server_
             };
             assert!(refused.insert(id));
         }
-        assert_eq!(refused, (6..=16).collect());
+        assert_eq!(refused, (6..=50).collect());
         probe.before_operation.parked(6).await;
         assert_eq!(connection.attachment_counts(), (1, 0));
         assert!(
@@ -772,7 +852,7 @@ async fn adapter_disconnect_does_not_cancel_server_owned_background_execution() 
 
 #[tokio::test]
 async fn incomplete_websocket_handshake_has_a_finite_deadline() {
-    let f = Fixture::new().await;
+    let f = Fixture::with_session_count(None, 0).await;
     let (_silent_client, server) = tokio::io::duplex(1024);
     tokio::time::pause();
     let result = websocket::connection(
@@ -852,7 +932,7 @@ async fn one_pending_session_request_does_not_serialize_another_session() {
 async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
     bounded(async {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 0).await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let stop = CancellationToken::new();
@@ -875,7 +955,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v52, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v73, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -970,7 +1050,7 @@ impl tokio::io::AsyncWrite for ReplenishingWriter {
 async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
     bounded(async {
         use tokio::io::AsyncWriteExt;
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
@@ -1012,6 +1092,49 @@ async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
     .await;
 }
 
+/// Slow source ingestion may delay an application notice, but never the
+/// independent events of an already admitted attachment.
+#[tokio::test]
+async fn pending_application_observation_does_not_block_attachment_notifications() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let connection = AppServerConnection::new(f.host.clone());
+        let direct = app_server_conformance::DirectDriver(&connection);
+        initialize(&direct).await;
+        let target = attach(&direct, &f).await;
+        let managed = f.manager.load(&target.session_id, None).await.unwrap();
+        let native = managed.inspect_runtime().unwrap();
+        let owner = f.manager.clone();
+        let (entered, held) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let ingestion = std::thread::spawn(move || {
+            let _application = owner.applications.lock();
+            entered.send(()).unwrap();
+            released
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok()
+        });
+        held.await.unwrap();
+        replenish_observation(&native);
+        loop {
+            if matches!(connection.next_notification().await.notification,
+                NotificationMethod::Event { target: observed, .. } if observed == target)
+            {
+                break;
+            }
+        }
+        let released = release.send(()).is_ok();
+        assert!(
+            ingestion.join().unwrap(),
+            "attachment events waited for ingestion"
+        );
+        assert!(released);
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
 // Delivery access is a separate owner-only credential, additive to the
 // ordinary transport token. It never substitutes for it, a wrong value fails
 // the handshake closed, and native credential removal revokes live grants.
@@ -1043,7 +1166,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
                 id: RequestId::Integer(9),
                 call: Method::DeliveryRead {
                     target,
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: crate::runtime::identity::MessageId::new("invented"),
                     },
                     delivery_index: 0,
@@ -1058,7 +1181,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
     bounded(async {
         const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
         const PRODUCT_HOST: &str = "product-host-secret-0000000000000000000000000000000000";
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         f.host
             .bind_delivery_access(Some(websocket::Credential::new(DELIVERY.into()).unwrap()));
         f.host
@@ -1074,11 +1197,11 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ));
         let token = driver::TOKEN;
         for offered in [
-            format!("rustx.app-server.v52, rustx-delivery-access.{DELIVERY}"),
-            format!("rustx.app-server.v52, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
-            format!("rustx.app-server.v52, rustx-token.{token}, rustx-delivery-access.{token}"),
-            format!("rustx.app-server.v52, rustx-token.{token}, rustx-delivery-access.wrong"),
-            format!("rustx.app-server.v52, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
+            format!("rustx.app-server.v73, rustx-delivery-access.{DELIVERY}"),
+            format!("rustx.app-server.v73, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
+            format!("rustx.app-server.v73, rustx-token.{token}, rustx-delivery-access.{token}"),
+            format!("rustx.app-server.v73, rustx-token.{token}, rustx-delivery-access.wrong"),
+            format!("rustx.app-server.v73, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
         ] {
             assert!(driver::try_socket(&url, &offered).await.is_err(), "{offered}");
         }
@@ -1088,7 +1211,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         // A Product Host secret offered on the ordinary lane is not delivery access.
         let ordinary = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v52, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
+            &format!("rustx.app-server.v73, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
         )
         .await;
         assert!(!delivery_access(&ordinary).await);
@@ -1098,7 +1221,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         ordinary.close().await;
         let granted = driver::websocket_offering(
             &url,
-            &format!("rustx.app-server.v52, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+            &format!("rustx.app-server.v73, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
         )
         .await;
         assert!(delivery_access(&granted).await);
@@ -1115,7 +1238,7 @@ async fn websocket_delivery_access_is_a_separate_additive_revocable_credential()
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v52, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
+                &format!("rustx.app-server.v73, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
             )
             .await
             .is_err()
@@ -1477,13 +1600,13 @@ fn answered_once(received: &Received, id: i64, times: usize) {
 /// requests answered, every native read permit returned.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, cancel_delivery, committed_delivery, delivered_bytes, delivery_request,
         failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
         let permits = f.host.file_reads();
@@ -1688,13 +1811,13 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
 /// waiting, and has not completed; only the release completes both.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_acceptance() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, cancel_delivery, committed_delivery, delivered_bytes, delivery_request,
         failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
         let permits = f.host.file_reads();
@@ -1844,7 +1967,7 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
 /// forwarded it to tungstenite after the revocation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
-    use super::protocol::{committed_delivery, delivery_request, failed_with};
+    use super::protocol::delivery::{committed_delivery, delivery_request, failed_with};
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     use futures_util::StreamExt;
     use tokio_tungstenite::{
@@ -1852,7 +1975,7 @@ async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
         tungstenite::{Message, protocol::Role},
     };
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
         let connection = Arc::new(AppServerConnection::with_delivery_access(
@@ -1952,7 +2075,7 @@ async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
 /// retract it: that is the documented WebSocket limit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_frame() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
@@ -1960,7 +2083,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     bounded(Box::pin(async {
         const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let probe = f.host.file_read_probe();
         let permits = f.host.file_reads();
@@ -1985,7 +2108,7 @@ async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_fr
             request.headers_mut().insert(
                 "sec-websocket-protocol",
                 format!(
-                    "rustx.app-server.v52, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
+                    "rustx.app-server.v73, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
                     driver::TOKEN
                 )
                 .parse()
@@ -2125,7 +2248,7 @@ async fn delivery_websocket(
     request.headers_mut().insert(
         "sec-websocket-protocol",
         format!(
-            "rustx.app-server.v52, rustx-token.{}, rustx-delivery-access.{credential}",
+            "rustx.app-server.v73, rustx-token.{}, rustx-delivery-access.{credential}",
             driver::TOKEN
         )
         .parse()
@@ -2156,12 +2279,12 @@ async fn delivery_websocket(
 /// `unauthorized`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delivery_credential_rotation_is_one_transition_ordered_against_publication() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
     };
     use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
         for next in [Some(ROTATION_B), None] {
@@ -2246,13 +2369,12 @@ async fn delivery_credential_rotation_is_one_transition_ordered_against_publicat
 /// credential and an ordinary connection keep their authority.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn product_host_credential_rotation_is_one_transition_ordered_against_publication() {
-    use super::protocol::{DELIVERED, committed_delivery};
+    use super::protocol::delivery::{DELIVERED, committed_delivery};
     use crate::tools::session_files::SESSION_FILE_MAX_READS;
-    use base64::Engine;
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
         f.host
@@ -2282,7 +2404,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             .unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.product-host.file-read.v4, rustx-product-host.{ROTATION_A}")
+            format!("rustx.product-host.file-read.v5, rustx-product-host.{ROTATION_A}")
                 .parse()
                 .unwrap(),
         );
@@ -2292,15 +2414,19 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
         f.host.revocations().waited.send_replace(0);
         valve
             .writes
-            .arm_for(|frame| response(frame_payload(frame), 0) == Some(true));
+            .arm_for(|frame| frame_payload(frame) == DELIVERED);
         socket
             .send(Message::Text(
                 serde_json::to_string(&crate::app_server::product_host::FileRead {
+                    read: crate::tools::session_files::preview::ReadOptions::Bytes {
+                        max_bytes: crate::tools::session_files::preview::FILE_BYTES,
+                        range: None,
+                    },
                     target: target.clone(),
                     source: crate::app_server::product_host::ReadSource::SessionFile {
                         agent_id: None,
                         locator:
-                            crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                            crate::observation::content::CanonicalContentLocator::ByMessageId {
                                 message_id: tool,
                             },
                         delivery_index: 0,
@@ -2312,6 +2438,13 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             ))
             .await
             .unwrap();
+        let metadata = socket.next().await.unwrap().unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(metadata.to_text().unwrap()).unwrap();
+        assert_eq!(
+            metadata["result"]["length"].as_u64(),
+            Some(DELIVERED.len() as u64)
+        );
         let (frame, ()) = tokio::join!(socket.next(), async {
             valve.writes.entered().await;
             let rotating = tokio::task::spawn_blocking({
@@ -2329,21 +2462,10 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
             rotating.await.unwrap();
             assert!(early.is_cancelled(), "revoked by the rotation");
         });
-        let Some(Ok(Message::Text(text))) = frame else {
-            panic!("the accepted response")
+        let Some(Ok(Message::Binary(data))) = frame else {
+            panic!("the binary body accepted before rotation")
         };
-        let Response::Success(success) = serde_json::from_str(&text).unwrap() else {
-            panic!("accepted before the rotation: the success stands")
-        };
-        let MethodResult::SessionFileBytes { data, .. } = success.result else {
-            panic!("bytes")
-        };
-        assert_eq!(
-            base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .unwrap(),
-            DELIVERED
-        );
+        assert_eq!(data.as_ref(), DELIVERED);
         assert!(product_host_token(&f, ROTATION_A).is_none(), "A is revoked");
         assert!(!product_host_token(&f, ROTATION_B).unwrap().is_cancelled());
         // Unrelated authority is untouched.
@@ -2372,7 +2494,7 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
 /// revoked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn overlapping_delivery_credential_rotations_take_one_total_order() {
-    use super::protocol::{
+    use super::protocol::delivery::{
         DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
     };
     use crate::tools::session_files::SessionFileReadFailure;
@@ -2466,7 +2588,7 @@ async fn overlapping_delivery_credential_rotations_take_one_total_order() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn authentication_racing_a_rotation_sees_one_side_of_it() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let probe = f.host.file_read_probe();
         f.host
             .bind_delivery_access(Some(rotation_credential(ROTATION_A)));
@@ -2521,11 +2643,11 @@ async fn authentication_racing_a_rotation_sees_one_side_of_it() {
 /// together. A real TCP WebSocket carries the selected correlated terminal reply.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t07_oversized_controlled_response_keeps_publication_owner_at_websocket_handoff() {
-    use super::protocol::{cancel_delivery, committed_delivery, delivery_request};
+    use super::protocol::delivery::{cancel_delivery, committed_delivery, delivery_request};
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
     bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
+        let f = Fixture::with_session_count(Some("present"), 1).await;
         let message = committed_delivery(&f).await;
         for cancel_first in [true, false] {
             let connection =
@@ -2606,7 +2728,7 @@ async fn t16_pending_receipt_supersession_and_stale_queue_progression() {
     use std::task::Poll;
     use tokio_tungstenite::tungstenite::protocol::Role;
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -2732,7 +2854,7 @@ async fn t16_physical_acceptance_wins_before_replacement_no_lock_cycle() {
     use crate::app_server::registration::Acceptance;
     use std::{io::Write, task::Poll};
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -2867,7 +2989,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for FirstByteGate<W
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t17_partial_os_pipe_record_finishes_after_registration_replacement() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -2969,7 +3091,7 @@ async fn t17_t20_stdio_saturation_deadline_finishes_the_physically_accepted_reco
     use tokio::io::AsyncWriteExt;
     bounded(async {
         eprintln!("T17 saturation deadline: fixture");
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::with_session_count(None, 0).await;
         let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
         super::protocol::initialize(&connection).await;
         eprintln!("T17 saturation deadline: initialized");
@@ -3083,7 +3205,7 @@ async fn t17_stdio_teardown_retires_unaccepted_record_without_write_readiness() 
     bounded(async {
         for eof in [true, false] {
             eprintln!("T17 teardown eof={eof}: fixture");
-            let fixture = Fixture::new().await;
+            let fixture = Fixture::with_session_count(None, 0).await;
             let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
             super::protocol::initialize(&connection).await;
             let valve = ValveControl::new();
@@ -3181,7 +3303,7 @@ async fn t17_stdio_teardown_retires_unaccepted_record_without_write_readiness() 
 async fn t17_stdio_input_eof_finishes_the_physically_accepted_output_record() {
     use tokio::io::AsyncWriteExt;
     bounded(async {
-        let fixture = Fixture::new().await;
+        let fixture = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &fixture, 0).await;
@@ -3305,7 +3427,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PendingWritePro
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t16_pending_physical_pipe_replacement_advances_without_readiness() {
     Box::pin(bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -3402,7 +3524,7 @@ async fn t16_pending_physical_pipe_replacement_advances_without_readiness() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn t17_partial_event_disconnect_replays_from_locally_applied_cursor() {
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;
@@ -3552,7 +3674,7 @@ async fn t16_t17_websocket_frame_handoff_precedes_physical_write_failure() {
     use tokio::io::AsyncWriteExt;
     use tokio_tungstenite::tungstenite::protocol::Role;
     bounded(async {
-        let f = Fixture::new().await;
+        let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         super::protocol::initialize(&connection).await;
         let target = super::protocol::attach(&connection, &f, 0).await;

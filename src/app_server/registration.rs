@@ -39,10 +39,19 @@ pub(crate) struct Registration {
     slot: Arc<Slot>,
     pub(crate) id: String,
 }
-pub(crate) enum Kind {
-    Receipt { superseded: String },
-    Event { cursor: RuntimeClientCursor },
+pub(super) enum Kind {
+    Receipt {
+        superseded: String,
+    },
+    Event {
+        cursor: RuntimeClientCursor,
+    },
     Resync,
+    Auxiliary {
+        access: tokio_util::sync::CancellationToken,
+        route: Arc<super::connection::Route>,
+        revocations: Arc<super::delivery_access::Revocations>,
+    },
 }
 pub(crate) struct Publication {
     registration: Registration,
@@ -147,9 +156,9 @@ impl Slot {
 }
 impl Registration {
     pub(crate) fn receipt(self, id: &RequestId) -> io::Result<Publication> {
-        let superseded = super::transport::serialize_record(&super::connection::failure(
+        let superseded = super::transport::serialize_record(&super::rpc_error::failure(
             Some(id.clone()),
-            super::connection::domain(super::protocol::ErrorData::SubscriptionSuperseded),
+            super::rpc_error::domain(super::protocol::ErrorData::SubscriptionSuperseded),
         ))?;
         Ok(Publication {
             registration: self,
@@ -160,6 +169,21 @@ impl Registration {
         Publication {
             registration: self,
             kind: Kind::Event { cursor },
+        }
+    }
+    pub(super) fn auxiliary(
+        self,
+        access: tokio_util::sync::CancellationToken,
+        route: Arc<super::connection::Route>,
+        revocations: Arc<super::delivery_access::Revocations>,
+    ) -> Publication {
+        Publication {
+            registration: self,
+            kind: Kind::Auxiliary {
+                access,
+                route,
+                revocations,
+            },
         }
     }
     pub(crate) fn recovery(self) -> (Publication, RuntimeClientCursor) {
@@ -199,12 +223,35 @@ impl Publication {
         match (&self.kind, current) {
             (Kind::Receipt { .. }, _) => false,
             (Kind::Event { .. }, Some(current)) => current.state != State::Following,
+            (Kind::Auxiliary { access, .. }, Some(current)) => {
+                access.is_cancelled() || current.state != State::Following
+            }
             (Kind::Resync, Some(current)) => current.state != State::RecoveryRequired,
             _ => true,
         }
     }
 
     pub(crate) fn hand_off<T>(
+        &self,
+        record: &str,
+        accept: impl FnOnce(&str) -> Poll<io::Result<T>>,
+    ) -> Acceptance<T> {
+        if let Kind::Auxiliary {
+            access,
+            route,
+            revocations,
+        } = &self.kind
+        {
+            return revocations.publish(|| {
+                if access.is_cancelled() || route.attachment.read_authority().is_err() {
+                    return Acceptance::Discarded;
+                }
+                self.hand_off_current(record, accept)
+            });
+        }
+        self.hand_off_current(record, accept)
+    }
+    fn hand_off_current<T>(
         &self,
         record: &str,
         accept: impl FnOnce(&str) -> Poll<io::Result<T>>,
@@ -218,7 +265,11 @@ impl Publication {
                 record
             }
             (Kind::Receipt { superseded }, _) => superseded,
-            (Kind::Event { .. }, Some(current)) if current.state == State::Following => record,
+            (Kind::Event { .. } | Kind::Auxiliary { .. }, Some(current))
+                if current.state == State::Following =>
+            {
+                record
+            }
             (Kind::Resync, Some(current)) if current.state == State::RecoveryRequired => record,
             _ => return Acceptance::Discarded,
         };
@@ -227,11 +278,11 @@ impl Publication {
             Poll::Ready(Err(error)) => Acceptance::Failed(error),
             Poll::Ready(Ok(value)) => {
                 if let Some(current) = current {
-                    match self.kind {
+                    match &self.kind {
                         Kind::Receipt { .. } if current.state == State::PendingReceipt => {
                             current.state = State::Following;
                         }
-                        Kind::Event { cursor } => current.accepted = cursor,
+                        Kind::Event { cursor } => current.accepted = *cursor,
                         _ => {}
                     }
                 }

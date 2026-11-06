@@ -90,7 +90,7 @@ async fn capability_projection_carries_mcp_origin_metadata() {
     let response = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(1),
     });
-    let capabilities: rustx::runtime_client::snapshot::CapabilityView =
+    let capabilities: rustx::observation::capability_source::CapabilityView =
         super::super::common::native_domain_single(
             response.result.expect("successful native domain read"),
         );

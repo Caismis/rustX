@@ -2,8 +2,8 @@
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::message::types::MessageBlock;
+use crate::observation::content::CanonicalContentLocator;
 use crate::runtime::identity::ConversationId;
-use crate::runtime_client::content::CanonicalContentLocator;
 
 pub(super) fn index(
     connection: &Connection,
@@ -20,7 +20,7 @@ pub(super) fn index(
     };
     let total = tool.map_or(0, |tool| tool.result.deliveries.len());
     let total = u64::try_from(total).map_err(|_| storage("native delivery count exhausted"))?;
-    connection.execute_cached("UPDATE message_ledger SET observation_delivery_success=?2,observation_delivery_total=?3 WHERE position=?1", params![position,tool.is_some(),total]).map_err(|error|storage(error.to_string()))?;
+    connection.execute_cached("UPDATE message_ledger SET observation_delivery_success=?2,observation_delivery_total=?3 WHERE position=?1", params![position,tool.is_some(),total]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if let Some(tool) = tool {
         let key = format!("ledger:{position}");
         for (index, file) in tool.result.deliveries.iter().enumerate() {
@@ -32,7 +32,7 @@ pub(super) fn index(
                     "canonical_file_delivery",
                     &key,
                     ordinal,
-                    crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+                    crate::observation::content::ContentRepresentation::CanonicalJsonV1,
                 ),
                 1,
                 file,
@@ -49,15 +49,15 @@ pub(super) fn selected(
     locator: &CanonicalContentLocator,
     index: u64,
 ) -> Result<crate::durable::observation::NativeFileDelivery, ConversationStoreError> {
-    super::content::validate_canonical_locator(locator)?;
+    crate::durable::sqlite::content::validate_canonical_locator(locator)?;
     let cut = super::observation::cut(connection, conversation)?;
-    let position = super::content::canonical_position(connection, locator)?;
+    let position = crate::durable::sqlite::content::canonical_position(connection, locator)?;
     if position > cut.ledger_through {
         return Err(ConversationStoreError::InvalidReference(
             "delivery beyond original canonical cut".into(),
         ));
     }
-    let (success,total):(Option<bool>,Option<u64>) = connection.query_row("SELECT observation_delivery_success,observation_delivery_total FROM message_ledger WHERE position=?1",[position],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|storage(error.to_string()))?;
+    let (success,total):(Option<bool>,Option<u64>) = connection.query_row("SELECT observation_delivery_success,observation_delivery_total FROM message_ledger WHERE position=?1",[position],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let success = success.ok_or_else(|| storage("native delivery status evidence unavailable"))?;
     let total = total.ok_or_else(|| storage("native delivery count evidence unavailable"))?;
     if !success {
@@ -70,12 +70,12 @@ pub(super) fn selected(
     }
     let ordinal = u32::try_from(index).map_err(|_| ConversationStoreError::InvalidContentRange)?;
     let key = format!("ledger:{position}");
-    let end:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical_file_delivery' AND source_id=?1 AND block_index=?2 AND representation='j' AND revision=1",params![key,ordinal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let end:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical_file_delivery' AND source_id=?1 AND block_index=?2 AND representation='j' AND revision=1",params![key,ordinal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let end = end.ok_or_else(|| storage("native selected delivery span unavailable"))?;
     if end > 65_536 {
         return Err(storage("native selected delivery exceeds finite capacity"));
     }
-    let chunk = super::content::structural_field_read(
+    let chunk = crate::durable::sqlite::content::structural_field_read(
         connection,
         "canonical_file_delivery",
         &key,
@@ -100,7 +100,7 @@ pub(super) fn selected(
 }
 
 fn total(connection: &Connection, position: u64) -> Result<u64, ConversationStoreError> {
-    let (success,total):(Option<bool>,Option<u64>)=connection.query_row("SELECT observation_delivery_success,observation_delivery_total FROM message_ledger WHERE position=?1",[position],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|_|storage("native delivery evidence unavailable"))?;
+    let (success,total):(Option<bool>,Option<u64>)=connection.query_row("SELECT observation_delivery_success,observation_delivery_total FROM message_ledger WHERE position=?1",[position],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native delivery evidence unavailable"))?;
     let success = success.ok_or_else(|| storage("native delivery status evidence unavailable"))?;
     if !success {
         return Err(ConversationStoreError::InvalidReference(
@@ -115,7 +115,7 @@ fn metadata_end(
     index: u64,
 ) -> Result<u64, ConversationStoreError> {
     let ordinal = u32::try_from(index).map_err(|_| ConversationStoreError::InvalidContentRange)?;
-    connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical_file_delivery' AND source_id=?1 AND block_index=?2 AND representation='j' AND revision=1",params![format!("ledger:{position}"),ordinal],|row|row.get(0)).map_err(|_|storage("native selected delivery span unavailable"))
+    connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical_file_delivery' AND source_id=?1 AND block_index=?2 AND representation='j' AND revision=1",params![format!("ledger:{position}"),ordinal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native selected delivery span unavailable"))
 }
 pub(super) fn read(
     connection: &Connection,
@@ -128,7 +128,7 @@ pub(super) fn read(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     metadata_end(connection, position, index)?;
-    super::content::structural_field_read(
+    crate::durable::sqlite::content::structural_field_read(
         connection,
         "canonical_file_delivery",
         &format!("ledger:{position}"),
@@ -142,9 +142,8 @@ pub(super) fn head(
     position: u64,
     offset: u64,
     limit: usize,
-) -> Result<crate::runtime_client::delivery::RuntimeClientDeliveryHead, ConversationStoreError> {
-    if limit == 0 || limit > 32 || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
-    {
+) -> Result<crate::observation::delivery::RuntimeClientDeliveryHead, ConversationStoreError> {
+    if limit == 0 || limit > 32 || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let total = total(connection, position)?;
@@ -167,7 +166,7 @@ pub(super) fn head(
         } else {
             None
         };
-        items.push(crate::runtime_client::delivery::RuntimeClientDeliveryItem {
+        items.push(crate::observation::delivery::RuntimeClientDeliveryItem {
             index,
             locator: CanonicalContentLocator::ByLedgerPosition { position },
             metadata_deferred: file.is_none(),
@@ -176,7 +175,7 @@ pub(super) fn head(
             metadata_domain: format!("messages.ledger:{position}.deliveries.{index}.metadata"),
         });
     }
-    Ok(crate::runtime_client::delivery::RuntimeClientDeliveryHead {
+    Ok(crate::observation::delivery::RuntimeClientDeliveryHead {
         domain: format!("messages.ledger:{position}.deliveries"),
         total,
         items,

@@ -1,7 +1,8 @@
-import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v52';
+import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v73';
 import type { AppServerClient } from './app-server';
 import type { Observation } from './session-lifecycle/port';
-import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_LIMIT, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceFieldReader,type TraceCache } from './trace';
+import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceFieldReader,type TraceCache } from './trace';
+import { traceWindowReady } from './history-policy';
 
 /** One child Conversation's finite, read-only Trace domain. Parent attachment
  * is the access proof, not the identity of the records being inspected. */
@@ -26,7 +27,7 @@ export class AgentTraceReader {
     return this.fieldReader={
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointValueRead',params:{target:this.proof.target,agent_id:this.agentId,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>this.current()&&owns());valid(cut,owns);return result.chunk;},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointPage',params:{target:this.proof.target,agent_id:this.agentId,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>this.current()&&owns());valid(cut,owns);return result.page;},
-      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Child Trace content source changed.');return this.client.readContent(this.proof.target,this.agentId,reference,offset,()=>this.current()&&owns());},
+      content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Child Trace content source changed.');return this.client.reads.readContent(this.proof.target,this.agentId,reference,offset,()=>this.current()&&owns());},
     };
   }
   private pageCut(page:TraceCache['page']){const cut=standaloneTraceCut(page,this.scope.child_conversation_id,this.scope.activation_id);this.validateCut(cut);}
@@ -36,7 +37,13 @@ export class AgentTraceReader {
   private publish(cache: TraceCache) { this.cache = cache; this.listeners.forEach(listener => listener()); }
   retire() { this.live = false; this.listeners.clear(); }
   select = (id?: string) => this.publish(selectTrace(this.cache, id));
-  refresh = async () => {
+  refresh = async (state = this.scope.state) => {
+    this.scope = { ...this.scope, state };
+    if (state === 'inactive' || state === 'unavailable') {
+      const details = Object.fromEntries(Object.entries(this.cache.details).map(([id, entry]) =>
+        [id, entry.error ? { ...entry, error: undefined, stale: true } : entry]));
+      if (Object.values(this.cache.details).some(entry => entry.error)) this.publish({ ...this.cache, details });
+    }
     this.dirty = true;
     if (this.busy || !this.current()) return;
     this.busy = true;
@@ -86,30 +93,52 @@ export class AgentTraceReader {
     this.publish(replaceTrace({ records: [], next_cursor: null }, this.cache));
     await this.refresh();
   };
-  earlier = async () => {
-    const cache = this.cache, limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.records.length);
-    if (!this.current() || cache.loading || !cache.page.next_cursor || limit < 1) return;
+  initial = () => {
+    if (this.cache.located || this.cache.error || traceWindowReady(this.cache.page.records)) return Promise.resolve();
+    return this.earlier(true);
+  };
+  earlier = async (initial = false) => {
+    const cache = this.cache;
+    if (!this.current() || cache.loading || !cache.page.next_cursor) return;
     const operation = {};
     const current = () => this.current() && this.cache.epoch === cache.epoch && this.paging === operation;
     this.paging = operation;
     this.publish({ ...cache, loading: true, error: undefined });
     try {
-      const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, before: cache.page.next_cursor, limit } }, 'trace', undefined, current);
-      if (current()) { this.pageCut(result.page);this.paging = undefined; this.publish(prependTrace(this.cache, result.page)); await this.refresh(); }
+      let next = cache;
+      const visited = new Set<string>();
+      const added: TraceCache['page']['records'] = [];
+      do {
+        const before = next.page.next_cursor!;
+        if (visited.has(before)) throw new Error('Native child Trace history did not advance.');
+        visited.add(before);
+        const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, before, limit: TRACE_PAGE_SIZE } }, 'trace', undefined, current);
+        if (!current()) return;
+        this.pageCut(result.page);
+        if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Native child Trace history did not advance.');
+        added.push(...result.page.records); next = prependTrace(next, result.page);
+      } while (next.page.next_cursor != null && !traceWindowReady(initial ? next.page.records : added));
+      if (current()) {
+        const live = this.cache;
+        this.paging = undefined;
+        this.publish({ ...prependTrace(live, next.page), readCuts: { ...next.readCuts, ...live.readCuts } });
+        await this.refresh();
+      }
     } catch (cause) { if (current()) this.publish({ ...this.cache, loading: false, error: String(cause) }); }
     finally { if (this.paging === operation) this.paging = undefined; }
   };
   detail = async (id: string) => {
-    if (!this.current() || this.cache.details[id]?.loading || this.cache.details[id]?.detail || this.cache.details[id]?.page) return;
+    const existing = this.cache.details[id];
+    if (!this.current() || existing?.loading || existing && !existing.stale && !existing.error && (existing.detail || existing.page)) return;
     const pending = beginTraceDetail(this.cache, id), epoch = pending.epoch;
-    const current = () => this.current() && this.cache.epoch === epoch && this.cache.details[id] === pending.details[id];
+    const current = () => this.current() && this.cache.epoch === epoch && this.cache.details[id]?.read === pending.details[id].read;
     this.publish(pending);
     try {
       const result = await this.client.request({ method: 'agent/traceDetail', params: { target: this.proof.target, agent_id: this.agentId, record_id: id } }, 'domain_page', undefined, current);
       const detail=inlineTraceDetail(result.page,id),page=retainedTraceDetailPage(result.page,id);
       if(page)this.validateCut(page.read_cut);
       const reader=page?bindTraceDetailReader(this.fields,page,()=>this.current()&&this.cache.epoch===epoch&&this.cache.details[id]?.page===page):undefined;
-      if (current()) this.publish(completeTraceDetail(this.cache,id,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.client.readContent(this.proof.target,this.agentId,ref,offset,()=>ownsView()&&this.current()&&this.cache.epoch===epoch),page,reader));
+      if (current()) this.publish(completeTraceDetail(this.cache,id,epoch,detail,undefined,result.page.items.flatMap(item=>item.content),(ref,offset,ownsView)=>this.client.reads.readContent(this.proof.target,this.agentId,ref,offset,()=>ownsView()&&this.current()&&this.cache.epoch===epoch),page,reader));
     } catch (cause) { if (current()) this.publish(completeTraceDetail(this.cache, id, epoch, undefined, String(cause))); }
   };
 }

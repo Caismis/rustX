@@ -93,8 +93,20 @@ class Classification(unittest.TestCase):
                 self.assertEqual(classified["risk"], "high")
                 self.assertEqual(classified["surfaces"], sorted(v.SURFACES))
 
-    def test_documentation_selects_no_suite(self):
-        self.assertEqual(v.classify(modified("README.md", "docs/a.md")), {"risk": "low", "surfaces": [], "reasons": []})
+    def test_contract_documentation_selects_only_the_documentation_contracts(self):
+        for path in ("README.md", "docs/a.md", "web-console/CHAT.md", "tui/README.md"):
+            with self.subTest(path=path):
+                self.assertEqual(v.classify(modified(path)), {"risk": "low", "surfaces": ["documentation"], "reasons": []})
+                planned = v.plan("pull_request", [], modified(path))
+                self.assertEqual({job for job, selected in planned["run"].items() if selected}, {"documentation-contracts"})
+        promoted = v.plan("pull_request", [v.PROMOTION_LABEL], modified("docs/a.md"))
+        self.assertFalse(promoted["run"]["documentation-contracts"])
+        self.assertTrue(promoted["run"]["rust-contracts"])
+
+    def test_documentation_no_contract_reads_selects_no_suite(self):
+        for path in ("tests/README.md", "LICENSE"):
+            with self.subTest(path=path):
+                self.assertEqual(v.classify(modified(path)), {"risk": "low", "surfaces": [], "reasons": []})
 
 
 def listed(pages):
@@ -227,6 +239,8 @@ class Planning(unittest.TestCase):
         self.assertTrue(run["rust-fast"] and run["rust-platform-core"] and run["web-client"])
         self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"])
         run = v.plan("pull_request", [], modified("README.md"))["run"]
+        self.assertEqual({job for job, selected in run.items() if selected}, {"documentation-contracts"})
+        run = v.plan("pull_request", [], modified("tests/README.md"))["run"]
         self.assertFalse(any(run.values()))
 
 

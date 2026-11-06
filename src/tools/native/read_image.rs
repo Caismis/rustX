@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn catalog_requires_effective_image_and_selected_implementation() {
         let fixture = common::native_fixture();
-        let mut declared = ModelCapabilities::text_only(true, true);
+        let mut declared = ModelCapabilities::text_only();
         declared.input_modalities.insert(Modality::Image);
         for protocol in [
             ModelProtocol::AnthropicMessages,
@@ -274,7 +274,7 @@ mod tests {
                     .iter()
                     .any(|tool| tool.name == "read_image")
             );
-            let text = effective_capabilities(&ModelCapabilities::text_only(true, true), protocol);
+            let text = effective_capabilities(&ModelCapabilities::text_only(), protocol);
             assert!(
                 !fixture
                     .registry
@@ -284,7 +284,7 @@ mod tests {
                     .any(|tool| tool.name == "read_image")
             );
         }
-        let text = ModelCapabilities::text_only(true, true);
+        let text = ModelCapabilities::text_only();
         assert!(
             !fixture
                 .registry

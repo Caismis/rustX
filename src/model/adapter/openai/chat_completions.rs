@@ -21,9 +21,9 @@
 //!
 //! No request-level reasoning control is ever synthesized: whatever the
 //! selected Model Profile configured is exactly what appears on the
-//! wire. Previous assistant reasoning is replayed through the model-declared
-//! provider-specific `reasoning` or `reasoning_content` field, or omitted by
-//! policy, rather than flattened into visible assistant text.
+//! wire. Previous assistant reasoning uses `reasoning_content` by default;
+//! an optional override selects `reasoning` or omission. Reasoning stays
+//! separate from visible assistant text.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -37,7 +37,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, CompletionUsage,
+    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools,
     CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
 };
 use futures_util::StreamExt;
@@ -62,7 +62,6 @@ use crate::model::error::{
     MalformedToolProposalSource, ModelError, ModelErrorKind, is_context_window_error,
 };
 use crate::model::event::ModelEvent;
-use crate::model::input::RequestOnlyModelContext;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
@@ -72,6 +71,7 @@ use crate::runtime::identity::ToolCallId;
 /// Adapter for the `OpenAI` Chat Completions protocol.
 pub struct OpenAiChatCompletionsAdapter {
     client: Client<OpenAIConfig>,
+    http_client: reqwest::Client,
 }
 
 impl std::fmt::Debug for OpenAiChatCompletionsAdapter {
@@ -86,8 +86,10 @@ impl OpenAiChatCompletionsAdapter {
     #[must_use]
     pub fn new(config: OpenAiAdapterConfig) -> Self {
         let (api_key, api_base, http_client) = config.into_parts();
+        let http_client = http_client.unwrap_or_default();
         Self {
-            client: build_client(&api_key, &api_base, http_client),
+            client: build_client(&api_key, &api_base, Some(http_client.clone())),
+            http_client,
         }
     }
 }
@@ -109,7 +111,16 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
             Ok(translated) => translated,
             Err(error) => return model_stream_of_failure(error),
         };
-        let client = self.client.clone();
+        let client = if let Some(limit) = request.response_byte_limit {
+            self.client
+                .clone()
+                .with_http_service(super::client::NoRetryService::bounded(
+                    self.http_client.clone(),
+                    limit,
+                ))
+        } else {
+            self.client.clone()
+        };
         Box::pin(futures_util::stream::unfold(
             ChatPhase::Preparing {
                 client,
@@ -332,7 +343,7 @@ struct ChatChunkWire {
     #[serde(default)]
     choices: Vec<ChatChoiceWire>,
     #[serde(default)]
-    usage: Option<CompletionUsage>,
+    usage: Option<serde_json::Value>,
     /// Moderation carries output semantics that the canonical event model
     /// cannot represent losslessly.
     #[serde(default)]
@@ -679,8 +690,7 @@ impl ChatStreamNormalizer {
             ));
         }
         let mut events = Vec::new();
-        if let Some(usage) = chunk.usage {
-            let usage = normalize_chat_usage(&usage);
+        if let Some(usage) = chunk.usage.as_ref().and_then(normalize_chat_usage) {
             self.usage = Some(usage.clone());
             events.push(ModelEvent::UsageUpdate { usage });
         }
@@ -1416,22 +1426,11 @@ pub(crate) fn translate_request(request: &ModelRequest) -> Result<serde_json::Va
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
-    construct_request(request, true)
+    construct_request(request)
 }
 
-/// Configuration comparison uses the real constructor with history omitted.
-/// This evidence is never submitted to the provider or canonical history.
-pub(crate) fn configuration_request(
-    request: &ModelRequest,
-) -> Result<serde_json::Value, ModelError> {
-    construct_request(request, false)
-}
-
-fn construct_request(
-    request: &ModelRequest,
-    require_history: bool,
-) -> Result<serde_json::Value, ModelError> {
-    let messages = translate_messages(request, require_history)?;
+fn construct_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
+    let messages = translate_messages(request)?;
     let assistant_reasoning: Vec<Option<String>> = messages
         .iter()
         .map(|message| message.reasoning.clone())
@@ -1446,16 +1445,7 @@ fn construct_request(
             include_obfuscation: None,
         });
     }
-    // Tool definitions are only sent to a model whose effective capabilities
-    // include tool calls; the runtime never compiles tools for a text-only
-    // model, and this is the adapter-side guard for the same invariant.
     if !request.tools.is_empty() {
-        if !request.invocation.capabilities.tool_calls {
-            return Err(unsupported(
-                "the effective model capabilities do not include tool calls; \
-                 tool definitions are never sent to a text-only model",
-            ));
-        }
         builder.tools(translate_tools(&request.tools));
     }
     let typed = builder
@@ -1497,27 +1487,19 @@ fn construct_request(
             "serialized Chat Completions message count changed unexpectedly",
         ));
     }
+    let replay = request
+        .invocation
+        .compat
+        .chat_reasoning_replay
+        .unwrap_or_default();
     for (wire_message, reasoning) in wire_messages.iter_mut().zip(assistant_reasoning) {
         let Some(reasoning) = reasoning else {
             continue;
         };
-        let object = wire_message.as_object_mut().ok_or_else(|| ModelError {
-            kind: ModelErrorKind::InvalidRequest,
-            message: "serialized Chat Completions message is not an object".to_owned(),
-            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-            retry_after_ms: None,
-            provider_code: None,
-            context_overflow: None,
-            malformed_tool_proposal: None,
-            timeout_phase: None,
-            generation: None,
+        let object = wire_message.as_object_mut().ok_or_else(|| {
+            invalid_request("serialized Chat Completions message is not an object")
         })?;
-        if let Some(field) = request
-            .invocation
-            .compat
-            .chat_reasoning_replay
-            .and_then(ChatReasoningReplay::wire_name)
-        {
+        if let Some(field) = replay.wire_name() {
             object.insert(field.to_owned(), reasoning.into());
         }
     }
@@ -1533,11 +1515,12 @@ fn construct_request(
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    finalize_provider_request(
+    let value = finalize_provider_request(
         value,
         request.request_params(),
         ModelProtocol::OpenAiChatCompletions,
-    )
+    )?;
+    crate::model::adapter::structured::finalize_request(value, request)
 }
 
 /// Translates the canonical message list into typed Chat Completions
@@ -1570,10 +1553,7 @@ struct TranslatedChatMessage {
     reasoning: Option<String>,
 }
 
-fn translate_messages(
-    request: &ModelRequest,
-    require_history: bool,
-) -> Result<Vec<TranslatedChatMessage>, ModelError> {
+fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessage>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::TranslateMessages,
@@ -1623,10 +1603,11 @@ fn translate_messages(
                 )?),
                 None,
             ),
-            ModelMessageView::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
-                carryover,
-            )) => (
-                ChatMessage::Standard(translate_runtime_context(&carryover.render())),
+            ModelMessageView::RequestOnly(carryover) => (
+                ChatMessage::Standard(translate_runtime_context(
+                    &carryover.render(),
+                    carryover.is_assistant(),
+                )),
                 None,
             ),
         };
@@ -1645,7 +1626,7 @@ fn translate_messages(
     }
     let mut messages = system_messages;
     messages.extend(transcript_messages);
-    if require_history && messages.is_empty() {
+    if messages.is_empty() {
         return Err(invalid_request(
             "a Chat Completions request requires at least one message",
         ));
@@ -1653,7 +1634,17 @@ fn translate_messages(
     Ok(messages)
 }
 
-fn translate_runtime_context(text: &str) -> ChatCompletionRequestMessage {
+fn translate_runtime_context(text: &str, assistant: bool) -> ChatCompletionRequestMessage {
+    if assistant {
+        return ChatCompletionRequestMessage::Assistant(
+            async_openai::types::chat::ChatCompletionRequestAssistantMessage {
+                content: Some(ChatCompletionRequestAssistantMessageContent::Text(
+                    text.to_owned(),
+                )),
+                ..Default::default()
+            },
+        );
+    }
     ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
         content: ChatCompletionRequestUserMessageContent::Array(vec![
             ChatCompletionRequestUserMessageContentPart::Text(
@@ -1704,11 +1695,10 @@ fn translate_user_message(
 /// Translates one canonical Assistant message into the provider's assistant
 /// message shape.
 ///
-/// A Chat Completions dialect represents one previous reasoning block in its
-/// provider-specific extension field. The typed `OpenAI` SDK message and that
-/// extension value stay separate until the final BYOT JSON is assembled.
-/// Shapes that cannot be represented losslessly remain unsupported; the
-/// explicit omit policy skips canonical reasoning before this validation.
+/// Like the OpenAI-compatible SDK path, concatenate exposed reasoning into
+/// one extension field. Opaque reasoning from another protocol has no Chat
+/// representation and is not replayed. The typed `OpenAI` SDK message and
+/// extension stay separate until the final BYOT JSON is assembled.
 fn translate_assistant_message(
     assistant: &[crate::message::types::AssistantContentBlock],
     reasoning_replay: Option<ChatReasoningReplay>,
@@ -1760,24 +1750,10 @@ fn translate_assistant_message(
                 // Omit is a translation policy, not a serialized-JSON
                 // cleanup step: this branch deliberately does nothing for
                 // that policy, without inspecting text or provider state.
-                if reasoning_replay != Some(ChatReasoningReplay::Omit) {
-                    if reasoning_replay.is_none() {
-                        return Err(unsupported(
-                            "OpenAI Chat Completions requires an explicit chatReasoningReplay compat value to replay historical reasoning",
-                        ));
-                    }
-                    let text = block.text.as_ref().ok_or_else(|| {
-                        unsupported(
-                            "OpenAI Chat Completions cannot replay a previous reasoning block \
-                             whose text was not exposed by the provider",
-                        )
-                    })?;
-                    if reasoning.replace(text.clone()).is_some() {
-                        return Err(unsupported(
-                            "OpenAI Chat Completions cannot losslessly represent multiple \
-                             reasoning blocks in one assistant message",
-                        ));
-                    }
+                if reasoning_replay != Some(ChatReasoningReplay::Omit)
+                    && let Some(text) = block.text.as_ref().filter(|text| !text.is_empty())
+                {
+                    reasoning.get_or_insert_with(String::new).push_str(text);
                 }
             }
             AssistantContentBlock::Image(_) => {

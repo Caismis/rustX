@@ -1,6 +1,7 @@
 //! Opt-in offline measurement through the production composition and provider boundary.
 //! Run in a fresh process with `RUSTX_BENCH_CASE` and `RUSTX_BENCH_OUTPUT`.
 use super::*;
+use rustx::durable::{CanonicalStore, JournalStore};
 use serde_json::json;
 use std::time::Instant;
 

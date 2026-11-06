@@ -532,7 +532,7 @@ fn prepared_terminal_and_interaction_headers_match_stored_path_without_event_upd
     );
     assert!(page.headers.iter().any(|header| matches!(
         header.display.as_ref().map(|display| &display.item),
-        Some(crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal { turn }) if turn.failure.is_some()
+        Some(crate::observation::transcript::RuntimeClientTranscriptItem::AttemptTerminal { turn }) if turn.failure.is_some()
     )));
 }
 

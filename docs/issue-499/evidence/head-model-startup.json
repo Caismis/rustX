@@ -1,0 +1,397 @@
+{
+  "measurement": "real ConversationRuntime inbound -> AgentExecution -> scripted ModelAdapter::stream(request); timestamp recorded at adapter entry",
+  "timing_scope": "starts immediately before native source preparation, includes runtime construction, activation, admission and context assembly; authored config, fixture servers and tool-runtime storage setup are outside the clock",
+  "provider": "scripted model, one real ModelRequest per successful composition; no external provider network latency",
+  "rows": [
+    {
+      "profile": "fast",
+      "servers": 0,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1.170415,
+      "composition_error": null,
+      "first_model_request_ms": 58.137783,
+      "attempt_settled_ms": 75.758475,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "fast",
+      "servers": 0,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.383815,
+      "composition_error": null,
+      "first_model_request_ms": 35.272256,
+      "attempt_settled_ms": 51.633792,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "fast",
+      "servers": 1,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 81.954109,
+      "composition_error": null,
+      "first_model_request_ms": 116.402586,
+      "attempt_settled_ms": 133.266926,
+      "model_request_count": 1,
+      "first_request_tool_count": 1,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 1,
+      "warm": true,
+      "cache_eligible_hits": 1,
+      "composition_settled_ms": 0.8473620000000001,
+      "composition_error": null,
+      "first_model_request_ms": 34.57138500000001,
+      "attempt_settled_ms": 51.371874999999996,
+      "model_request_count": 1,
+      "first_request_tool_count": 1,
+      "initial_connecting_sources": 1,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 4,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 114.257734,
+      "composition_error": null,
+      "first_model_request_ms": 149.50645400000002,
+      "attempt_settled_ms": 166.065271,
+      "model_request_count": 1,
+      "first_request_tool_count": 4,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 4,
+      "warm": true,
+      "cache_eligible_hits": 4,
+      "composition_settled_ms": 1.733492,
+      "composition_error": null,
+      "first_model_request_ms": 39.21225,
+      "attempt_settled_ms": 57.096008,
+      "model_request_count": 1,
+      "first_request_tool_count": 4,
+      "initial_connecting_sources": 4,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 8,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 228.098732,
+      "composition_error": null,
+      "first_model_request_ms": 277.90292900000003,
+      "attempt_settled_ms": 294.083615,
+      "model_request_count": 1,
+      "first_request_tool_count": 8,
+      "initial_connecting_sources": 0,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "fast",
+      "servers": 8,
+      "warm": true,
+      "cache_eligible_hits": 8,
+      "composition_settled_ms": 2.3194320000000004,
+      "composition_error": null,
+      "first_model_request_ms": 40.670145,
+      "attempt_settled_ms": 56.884018000000005,
+      "model_request_count": 1,
+      "first_request_tool_count": 8,
+      "initial_connecting_sources": 8,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 0,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.405298,
+      "composition_error": null,
+      "first_model_request_ms": 32.791238,
+      "attempt_settled_ms": 48.416353,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "slow",
+      "servers": 0,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.20794800000000002,
+      "composition_error": null,
+      "first_model_request_ms": 31.165807,
+      "attempt_settled_ms": 46.738368,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "slow",
+      "servers": 1,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1002.2914810000001,
+      "composition_error": null,
+      "first_model_request_ms": 1044.663127,
+      "attempt_settled_ms": 1060.476253,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 1,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 1,
+      "warm": true,
+      "cache_eligible_hits": 1,
+      "composition_settled_ms": 0.7047559999999999,
+      "composition_error": null,
+      "first_model_request_ms": 34.021998999999994,
+      "attempt_settled_ms": 49.853437,
+      "model_request_count": 1,
+      "first_request_tool_count": 1,
+      "initial_connecting_sources": 1,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 4,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1002.3885939999999,
+      "composition_error": null,
+      "first_model_request_ms": 1041.461177,
+      "attempt_settled_ms": 1057.00989,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 4,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 4,
+      "warm": true,
+      "cache_eligible_hits": 4,
+      "composition_settled_ms": 2.228253,
+      "composition_error": null,
+      "first_model_request_ms": 40.67924,
+      "attempt_settled_ms": 57.861748999999996,
+      "model_request_count": 1,
+      "first_request_tool_count": 4,
+      "initial_connecting_sources": 4,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 8,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1002.9635079999999,
+      "composition_error": null,
+      "first_model_request_ms": 1040.287741,
+      "attempt_settled_ms": 1056.16646,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 8,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "slow",
+      "servers": 8,
+      "warm": true,
+      "cache_eligible_hits": 8,
+      "composition_settled_ms": 2.252338,
+      "composition_error": null,
+      "first_model_request_ms": 41.481599,
+      "attempt_settled_ms": 57.73724,
+      "model_request_count": 1,
+      "first_request_tool_count": 8,
+      "initial_connecting_sources": 8,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 0,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.307548,
+      "composition_error": null,
+      "first_model_request_ms": 45.514875,
+      "attempt_settled_ms": 61.568645,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "failed",
+      "servers": 0,
+      "warm": true,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 0.283977,
+      "composition_error": null,
+      "first_model_request_ms": 31.414741000000003,
+      "attempt_settled_ms": 47.060308,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 0,
+      "startup_requests": {}
+    },
+    {
+      "profile": "failed",
+      "servers": 1,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1001.367973,
+      "composition_error": null,
+      "first_model_request_ms": 1039.668814,
+      "attempt_settled_ms": 1055.590624,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 1,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 1,
+      "warm": true,
+      "cache_eligible_hits": 1,
+      "composition_settled_ms": 0.7166520000000001,
+      "composition_error": null,
+      "first_model_request_ms": 33.295071,
+      "attempt_settled_ms": 49.438207999999996,
+      "model_request_count": 1,
+      "first_request_tool_count": 1,
+      "initial_connecting_sources": 1,
+      "startup_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 4,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1002.290814,
+      "composition_error": null,
+      "first_model_request_ms": 1036.071072,
+      "attempt_settled_ms": 1052.17699,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 4,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 4,
+      "warm": true,
+      "cache_eligible_hits": 4,
+      "composition_settled_ms": 1.520212,
+      "composition_error": null,
+      "first_model_request_ms": 40.703959999999995,
+      "attempt_settled_ms": 57.766054999999994,
+      "model_request_count": 1,
+      "first_request_tool_count": 4,
+      "initial_connecting_sources": 4,
+      "startup_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 8,
+      "warm": false,
+      "cache_eligible_hits": 0,
+      "composition_settled_ms": 1003.608488,
+      "composition_error": null,
+      "first_model_request_ms": 1045.417338,
+      "attempt_settled_ms": 1061.795131,
+      "model_request_count": 1,
+      "first_request_tool_count": 0,
+      "initial_connecting_sources": 8,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    },
+    {
+      "profile": "failed",
+      "servers": 8,
+      "warm": true,
+      "cache_eligible_hits": 8,
+      "composition_settled_ms": 2.486701,
+      "composition_error": null,
+      "first_model_request_ms": 40.962986,
+      "attempt_settled_ms": 57.078806,
+      "model_request_count": 1,
+      "first_request_tool_count": 8,
+      "initial_connecting_sources": 8,
+      "startup_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      }
+    }
+  ]
+}

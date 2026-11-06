@@ -5,7 +5,7 @@ use super::{
 use crate::durable::observation::{
     NativeToolObservationHeader, NativeToolObservationPage, ObservationReadCut,
 };
-use crate::runtime_client::content::CanonicalContentLocator;
+use crate::observation::content::CanonicalContentLocator;
 
 /// Exact inputs already encoded by the native page's mandatory admission pass.
 /// The cut is deliberately separate: the transcript reader records the actual
@@ -104,7 +104,7 @@ fn page_at(
     let mut headers = Vec::new();
     for mut association in page.headers {
         let block = association.block_index.get();
-        let name = connection.query_row("SELECT observation_name FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![ledger,block],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let name = connection.query_row("SELECT observation_name FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![ledger,block],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let argument_ref = argument_reference(connection, conversation, ledger, block)?;
         if let Some(reference) = &argument_ref
             && !association
@@ -116,7 +116,7 @@ fn page_at(
             association
                 .call
                 .content
-                .push(crate::runtime_client::checkpoint::ContentBinding {
+                .push(crate::observation::cut::ContentBinding {
                     source_path: None,
                     path: vec!["value".into(), "arguments".into()],
                     content_ref: reference.clone(),
@@ -144,8 +144,7 @@ fn page_at(
         };
         #[cfg(test)]
         PAGE_WORK.with(|work| work.set(work.get() + 1));
-        let Some(bytes) = crate::runtime_client::checkpoint::bounded_bytes(&header, remaining)
-        else {
+        let Some(bytes) = crate::observation::bounded::bounded_bytes(&header, remaining) else {
             next_offset = Some(u64::from(block));
             break;
         };
@@ -193,7 +192,7 @@ fn witness(
     let sequence: Option<u64> = connection.query_row(
         "SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_phase IS NOT NULL AND observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=?3 AND sequence<=?4 ORDER BY sequence DESC LIMIT 1",
         params![ledger,block,phase,cut.read.journal], |row| row.get(0),
-    ).optional().map_err(|error| storage(error.to_string()))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     sequence
         .map(|sequence| {
             super::observation_event::witness(connection, sequence, cut.read.journal)?
@@ -205,7 +204,7 @@ fn witness(
 pub(super) fn result_header(
     result: &crate::tools::types::ToolExecutionResult,
 ) -> crate::durable::observation::NativeToolResultHeader {
-    let complete = crate::runtime_client::checkpoint::bounded_clone(result, 14_336);
+    let complete = crate::observation::bounded::bounded_clone(result, 14_336);
     crate::durable::observation::NativeToolResultHeader {
         content_total: result.content.len() as u64,
         result_deferred: complete.is_none(),
@@ -232,7 +231,7 @@ fn committed_result(
             [ledger],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let bytes = bytes.ok_or_else(|| storage("native Tool result summary unavailable"))?;
     if bytes.len() > 16_384 {
         return Err(storage("oversized native Tool result summary"));
@@ -253,8 +252,8 @@ fn argument_reference(
     conversation: &ConversationId,
     ledger: u64,
     block: u32,
-) -> Result<Option<crate::runtime_client::content::ContentRef>, ConversationStoreError> {
-    use crate::runtime_client::content::{
+) -> Result<Option<crate::observation::content::ContentRef>, ConversationStoreError> {
+    use crate::observation::content::{
         CanonicalContentComponent, ContentRepresentation, ContentSource,
     };
     let source = ContentSource::CanonicalMessageBlock {
@@ -262,7 +261,7 @@ fn argument_reference(
         block_index: crate::message::types::ContentBlockIndex::new(block),
         component: CanonicalContentComponent::Payload,
     };
-    let raw = super::content::canonical_descriptor_at_position(
+    let raw = crate::durable::sqlite::content::canonical_descriptor_at_position(
         connection,
         conversation,
         &source,
@@ -271,7 +270,7 @@ fn argument_reference(
     )?;
     let reference = match raw.filter(|reference| reference.readable_end > 0) {
         Some(raw) => Some(raw),
-        None => super::content::canonical_descriptor_at_position(
+        None => crate::durable::sqlite::content::canonical_descriptor_at_position(
             connection,
             conversation,
             &source,
@@ -284,13 +283,13 @@ fn argument_reference(
 fn arguments(
     connection: &Connection,
     conversation: &ConversationId,
-    reference: Option<&crate::runtime_client::content::ContentRef>,
+    reference: Option<&crate::observation::content::ContentRef>,
     ledger: u64,
 ) -> Result<Option<String>, ConversationStoreError> {
     let Some(reference) = reference.filter(|reference| reference.readable_end <= 1024) else {
         return Ok(None);
     };
-    let (bytes, _) = super::content::canonical_read_bytes_at_position(
+    let (bytes, _) = crate::durable::sqlite::content::canonical_read_bytes_at_position(
         connection,
         conversation,
         reference,

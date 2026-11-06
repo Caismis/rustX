@@ -6,7 +6,7 @@ use crate::durable::sqlite::observation_codec as codec;
 use crate::runtime::identity::{EventId, MessageId, RequestId};
 
 type Failure = (
-    Option<crate::runtime_client::event::RuntimeClientAttemptFailure>,
+    Option<crate::observation::failure::RuntimeClientAttemptFailure>,
     bool,
     u64,
 );
@@ -26,7 +26,7 @@ type Request = (
     Option<u64>,
     Option<RequestId>,
     Option<u64>,
-    Option<crate::runtime_client::snapshot::JournalFieldRef>,
+    Option<crate::observation::tool::JournalFieldRef>,
     u64,
     u64,
     Option<crate::model::ModelUsage>,
@@ -112,10 +112,8 @@ impl From<&crate::durable::response::CompletedResponseTiming> for JsonTiming {
 pub(super) fn encode(state: &ExecutionLayout) -> Option<Vec<u8>> {
     // The public-shaped preflight and original tuple admission are distinct.
     // Neither may use the smaller binary form or normalized nonfinite timings.
-    if !crate::runtime_client::preflight::fits(
-        state,
-        crate::durable::observation::HEADER_ENCODED_MAX,
-    ) {
+    if !crate::observation::preflight::fits(state, crate::durable::observation::HEADER_ENCODED_MAX)
+    {
         return None;
     }
     codec::encode(
@@ -209,9 +207,9 @@ mod tests {
     use super::*;
 
     fn original_encode(state: &ExecutionLayout) -> Option<Vec<u8>> {
-        crate::runtime_client::preflight::fits(state, 16_384)
+        crate::observation::preflight::fits(state, 16_384)
             .then(|| {
-                crate::runtime_client::checkpoint::bounded_bytes(
+                crate::observation::bounded::bounded_bytes(
                     &fields(state, &state.summary.timing),
                     16_384,
                 )
@@ -225,7 +223,7 @@ mod tests {
             owner_anchor: 1,
             summary: AttemptExecutionSummary {
                 failure: Some(
-                    crate::runtime_client::event::RuntimeClientAttemptFailure::Runtime {
+                    crate::observation::failure::RuntimeClientAttemptFailure::Runtime {
                         error: crate::runtime::types::RuntimeError::Internal {
                             message: "diagnostic 水".into(),
                         },
@@ -246,7 +244,7 @@ mod tests {
                 closing_identity_sequence: Some(7),
                 last_request_id: Some(RequestId::new("request")),
                 last_request_sequence: Some(8),
-                last_request_id_source: Some(crate::runtime_client::snapshot::JournalFieldRef {
+                last_request_id_source: Some(crate::observation::tool::JournalFieldRef {
                     sequence: 9,
                     path: vec!["event".into(), "request_id".into()],
                     encoded_bytes: 10,
@@ -254,9 +252,9 @@ mod tests {
                 requests: 11,
                 reports: 12,
                 usage: Some(crate::model::ModelUsage {
-                    input_tokens: u64::MAX,
-                    output_tokens: 13,
-                    total_tokens: u64::MAX,
+                    input_tokens: Some(u64::MAX),
+                    output_tokens: Some(13),
+                    total_tokens: Some(u64::MAX),
                     details: None,
                 }),
                 timing: Some(crate::durable::response::CompletedResponseTiming {
@@ -309,7 +307,7 @@ mod tests {
         for bytes in [0, 128, 8192, 14000, 15000, 16000, 16384, 20000] {
             let mut state = populated();
             state.summary.models = vec!["水\n".repeat(bytes / 4)];
-            let original = crate::runtime_client::checkpoint::bounded_bytes(
+            let original = crate::observation::bounded::bounded_bytes(
                 &state,
                 crate::durable::observation::HEADER_ENCODED_MAX,
             );

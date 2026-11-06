@@ -1,0 +1,94 @@
+{
+  "schema": "issue-499-diagnostic-redaction-measurement-v1",
+  "recorded_at": "2026-10-25T01:38:53.912886+00:00",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "previous_head": "31d2394fe935e545466f18f9ae8fac18083422cb",
+  "source": {
+    "native_inputs": 1013,
+    "native_sha256": "1ea25f55fe1012ad6f26e2bd1e718c427ef82c193659e279d29c6daedbc797ff",
+    "delta_native": {
+      "count": 6,
+      "sha256": "36d1ae0103d77758cb46847f60614b2f14b4a57b5640dfeea32078c0279f0f8d",
+      "inputs": [
+        {
+          "path": "src/tools/mcp/connect.rs",
+          "sha256": "fc17fda7eb7102f5115060fa843c09c31ba080396783c5c6ed8bcc450bbd5f72"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests.rs",
+          "sha256": "34f191e9cb3e05caf335e3f94305c0ae3a75d4aa6a8b567dd33b1b37795d3b37"
+        },
+        {
+          "path": "src/tools/mcp/connection/catalog_tests/redaction.rs",
+          "sha256": "e74387c8501c44c609c92c5f97c7e3ef2eb6a344aaa3069880c4895d18adc459"
+        },
+        {
+          "path": "src/tools/mcp/fixture/raw.rs",
+          "sha256": "79797e1b486a57223ea4296bf2510d8ce88f981d4a553f2914c8416dd9c7e36a"
+        },
+        {
+          "path": "src/tools/mcp/framing.rs",
+          "sha256": "04a124335edcfe829434566d2066c64609239f02418fe96ec140c779e4173da7"
+        },
+        {
+          "path": "src/tools/mcp/runtime.rs",
+          "sha256": "457c96dccd89747775e9a5b23f2cc16a8ce835608f27276bcaed96feca848af6"
+        }
+      ]
+    },
+    "recipe": "For each direct git diff anchor to current worktree, union untracked non-ignored paths; exclude docs/ and *.md; sort POSIX paths; SHA256(path+NUL+ASCII SHA256(file)+LF). Native closure reuses all1012 review14 Native paths plus every current tracked/untracked Rust source under src/tests/examples; all files independently rehashed. No old manifest or proof is rewritten.",
+    "reconstruction": "Prior review14 complete1012 inventory with these6 replacements/addition. New redaction test adds one Native input; all1013 were rehashed."
+  },
+  "measurement": {
+    "current": "submission-live-review15-current.json",
+    "current_sha256": "d7366f0ae506db1f31aad0462c6135a0808c163c27e5a0a3690483e800fe1aed",
+    "receipt": {
+      "command": "env RUSTX_STARTUP_TIMING_JSON=docs/issue-499/evidence/submission-live-review15-current.json cargo test --lib --all-features capabilities::coordinator::startup_performance_tests::model::bounded_live_startup_timing -- --ignored --exact --nocapture",
+      "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+      "started_at": "2026-10-25T01:36:50.852959+00:00",
+      "finished_at": "2026-10-25T01:37:43.551977+00:00",
+      "elapsed_seconds": 52.69902041897876,
+      "exit_code": 0,
+      "environment": {
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+        "CARGO_BUILD_JOBS": "4",
+        "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+        "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+      },
+      "log_sha256": "5e38b2f64ff7f484c5590c06f502045f1045a63a0f3f0749d13b41f9dc396e55"
+    },
+    "rows": 24,
+    "baseline": "submission-live-baseline.json",
+    "baseline_sha256": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "baseline_adapter": "submission-live-baseline-adapter.json",
+    "baseline_adapter_sha256": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+    "fixtures": [
+      {
+        "path": "src/capabilities/coordinator/tests/performance_startup.rs",
+        "previous_sha256": "3afb33655fcdfe50d3b8dca65cf18f1615d6d03ae293dd4e415d02f9df8ca236",
+        "sha256": "3afb33655fcdfe50d3b8dca65cf18f1615d6d03ae293dd4e415d02f9df8ca236",
+        "unchanged": true
+      },
+      {
+        "path": "src/capabilities/coordinator/tests/performance_startup_model.rs",
+        "previous_sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029",
+        "sha256": "aba76489e70fd3691feb1807ba1a7100714840b3499cd026b4eda0321de6c029",
+        "unchanged": true
+      }
+    ],
+    "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "interpretation": "Fresh final-source run after the test-only Clippy correction. Controlled loopback HTTP with one actual scripted ModelRequest and explicit post-Attempt affected Tool dispatch. Baseline is preserved same-fixture main00978 sample, not rerun this round. Single shared-host samples do not establish percentiles/significance; handler counts are not physical connections. Historical grace42ms stays superseded."
+  },
+  "preceding_measurement_preserved": {
+    "archive": "/tmp/issue499/review15-before-clippy-measurement",
+    "native_sha256": "01046fcae9efdaf1fc0ebe6890fd6b76e767321994053936e51e1d01095b97d2",
+    "raw_sha256": "79e3b568626e04fac93c6bfc2c60021124e6a8d2e7be49a4b90c54773486074f",
+    "manifest_sha256": "4e75d669e77f2a4761071909066815c46f9b9c9990119faf27b1da9f98a361fc",
+    "note": "Initial52-second-class run predates the single err().expect\u2192expect_err test-only edit. Bytes/receipt retained separately; not substituted for this final-source measurement."
+  },
+  "independent_review": "independentreview15.md",
+  "independent_review_sha256": "2b8f3a20ce2b86c13bc8c75d62613e47e0250ff0580516fc72447632a3d80edf",
+  "validation_record": "validation-review15.json"
+}

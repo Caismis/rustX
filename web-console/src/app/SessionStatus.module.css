@@ -1,0 +1,9 @@
+.status { flex: none; display: flex; align-items: baseline; gap: 8px; margin: 6px 26px; min-width: 0; font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.status > :first-child { align-self: baseline; }
+.status[data-severity=error] { color: var(--dsw-alias-state-error-primary); }
+.status[data-severity=warning] { color: var(--dsw-alias-state-warn-label); }
+.details { min-width: 0; }
+.details summary { padding: 0; font-size: inherit; cursor: pointer; }
+.details p { max-width: 640px; margin: 4px 0; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
+.status > button { flex: none; min-height: 24px; padding: 0 4px; color: var(--dsw-alias-state-business-primary); background: none; border-color: transparent; font-size: inherit; }
+@media (max-width: 600px) { .status { margin-inline: 20px; flex-wrap: wrap; } }

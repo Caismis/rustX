@@ -23,7 +23,7 @@ Object.assign(window, { artifactDocument: {
       const [viewState, setViewState] = useState<PreviewViewState>({}), occurrence = useRef(0);
       const open = () => {
         selected?.lease.dispose(); setViewState({});
-        const artifact: PreviewArtifact = { source: { kind: 'artifact', id }, name: '报告 original.xlsx', image: false };
+        const artifact: PreviewArtifact = { source: { kind: 'artifact', id }, name: '报告 original.docx', image: false };
         set({ artifact, lease: resources.acquire(++occurrence.current, artifact.source) });
       };
       return <><button onClick={open}>Open Artifact</button>

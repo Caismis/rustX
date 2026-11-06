@@ -1,8 +1,10 @@
 use super::*;
+#[cfg(test)]
+use crate::durable::CanonicalStore;
 
 #[test]
 fn event_guard_keeps_installed_proof_after_successful_and_rolled_back_workspace_spills() {
-    use crate::durable::{ConversationStore, sqlite::SqliteConversationStore};
+    use crate::durable::sqlite::SqliteConversationStore;
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store.initialize(&[]).unwrap();
     let connection = store.lock().unwrap();
@@ -12,14 +14,14 @@ fn event_guard_keeps_installed_proof_after_successful_and_rolled_back_workspace_
     for committed in [true, false, true] {
         let transaction = connection.unchecked_transaction().unwrap();
         super::super::observation_request::exercise_workspace_spill(&transaction).unwrap();
-        assert!(store.conn.event_guard.can_prepare(&transaction));
+        assert!(store.conn.event_guard.can_prepare(&transaction).unwrap());
         if committed {
             transaction.commit().unwrap();
         } else {
             transaction.rollback().unwrap();
         }
-        assert_eq!(schema_versions(&connection), Some(installed));
-        assert!(store.conn.event_guard.can_prepare(&connection));
+        assert_eq!(schema_versions(&connection).unwrap(), installed);
+        assert!(store.conn.event_guard.can_prepare(&connection).unwrap());
     }
     assert_eq!(GUARD_SCANS.with(std::cell::Cell::get), 0);
     assert_eq!(
@@ -47,16 +49,16 @@ fn event_guard_reuses_only_the_installed_main_and_temp_schema() {
     assert!(guard.installed.is_some());
     GUARD_SCANS.with(|count| count.set(0));
     for _ in 0..32 {
-        assert!(guard.can_prepare(&connection));
+        assert!(guard.can_prepare(&connection).unwrap());
     }
     assert_eq!(GUARD_SCANS.with(std::cell::Cell::get), 0);
     for schema in ["", "TEMP "] {
         connection.execute_batch(&format!("CREATE {schema}TRIGGER observes_insert AFTER INSERT ON target BEGIN SELECT NEW.value; END")).unwrap();
-        assert!(!guard.can_prepare(&connection));
+        assert!(!guard.can_prepare(&connection).unwrap());
         connection
             .execute_batch("DROP TRIGGER observes_insert")
             .unwrap();
-        assert!(guard.can_prepare(&connection));
+        assert!(guard.can_prepare(&connection).unwrap());
     }
     assert!(GUARD_SCANS.with(std::cell::Cell::get) >= 4);
 }
@@ -74,17 +76,17 @@ fn event_guard_does_not_seat_reused_savepoint_schema_versions() {
     connection
         .execute_batch("SAVEPOINT change_schema; CREATE TABLE harmless(value INTEGER)")
         .unwrap();
-    assert!(guard.can_prepare(&connection));
+    assert!(guard.can_prepare(&connection).unwrap());
     let abandoned = schema_versions(&connection).unwrap();
     connection.execute_batch("ROLLBACK TO change_schema; RELEASE change_schema; CREATE TRIGGER must_observe AFTER INSERT ON target BEGIN SELECT NEW.value; END").unwrap();
     assert_eq!(schema_versions(&connection).unwrap(), abandoned);
-    assert!(!guard.can_prepare(&connection));
+    assert!(!guard.can_prepare(&connection).unwrap());
     connection.execute_batch("DROP TRIGGER must_observe; SAVEPOINT temporary; CREATE TEMP TRIGGER temp_observer AFTER INSERT ON main.target BEGIN SELECT NEW.value; END").unwrap();
-    assert!(!guard.can_prepare(&connection));
+    assert!(!guard.can_prepare(&connection).unwrap());
     connection
         .execute_batch("ROLLBACK TO temporary; RELEASE temporary")
         .unwrap();
-    assert!(guard.can_prepare(&connection));
+    assert!(guard.can_prepare(&connection).unwrap());
 }
 
 #[test]
@@ -101,20 +103,20 @@ fn event_guard_observes_external_schema_changes_in_the_current_snapshot() {
     );
     let writer = Connection::open(&path).unwrap();
     let transaction = connection.unchecked_transaction().unwrap();
-    assert!(guard.can_prepare(&transaction));
+    assert!(guard.can_prepare(&transaction).unwrap());
     writer
         .execute_batch(
             "CREATE TRIGGER external_observer AFTER INSERT ON target BEGIN SELECT NEW.value; END",
         )
         .unwrap();
     // The existing snapshot has the old schema; the next one must observe DDL.
-    assert!(guard.can_prepare(&transaction));
+    assert!(guard.can_prepare(&transaction).unwrap());
     transaction.commit().unwrap();
-    assert!(!guard.can_prepare(&connection));
+    assert!(!guard.can_prepare(&connection).unwrap());
     writer
         .execute_batch("DROP TRIGGER external_observer")
         .unwrap();
-    assert!(guard.can_prepare(&connection));
+    assert!(guard.can_prepare(&connection).unwrap());
 }
 
 #[test]
@@ -126,9 +128,9 @@ fn event_guard_does_not_trust_an_initial_custom_trigger_or_a_cleanup_name() {
         observation_statistics::FoldCache::uninstalled(),
     );
     assert!(guard.installed.is_none());
-    assert!(!guard.can_prepare(&connection));
+    assert!(!guard.can_prepare(&connection).unwrap());
     connection
         .execute_batch("DROP TRIGGER event_readiness_source_deleted")
         .unwrap();
-    assert!(guard.can_prepare(&connection));
+    assert!(guard.can_prepare(&connection).unwrap());
 }

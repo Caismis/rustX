@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <uv.h>
 
 static napi_value fail(napi_env env, const char *message) {
   napi_throw_error(env, NULL, message);
@@ -28,7 +29,11 @@ static napi_value open_child(napi_env env, napi_callback_info info) {
   if (strlen(name) != length || strchr(name, '/') || !strcmp(name, ".") || !strcmp(name, "..")) return fail(env, "Invalid path component");
   CHECK(napi_get_value_bool(env, args[2], &directory));
   int fd = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
-  if (fd < 0) return fail(env, strerror(errno));
+  if (fd < 0) {
+    int error = errno;
+    napi_throw_error(env, uv_err_name(uv_translate_sys_error(error)), strerror(error));
+    return NULL;
+  }
   if (napi_create_int32(env, fd, &result) != napi_ok) { close(fd); return fail(env, "Cannot return descriptor"); }
   return result;
 }

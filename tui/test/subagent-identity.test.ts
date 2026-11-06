@@ -63,8 +63,7 @@ describe("subagent identity", () => {
             execution_profile: {
               model: "alpha/model-a",
               profile: "reasoning:high",
-              reasoning_enabled: true,
-            },
+              },
           }),
         ],
       },
@@ -77,8 +76,7 @@ describe("subagent identity", () => {
     assert.deepEqual(child.execution_profile, {
       model: "alpha/model-a",
       profile: "reasoning:high",
-      reasoning_enabled: true,
-    });
+      });
   });
 
   it("carries the whole observation through a agent_updated upsert", () => {

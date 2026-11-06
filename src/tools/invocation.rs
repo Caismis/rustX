@@ -24,7 +24,7 @@ pub(crate) struct NativeInvocationServices {
     pub runtime: crate::tools::runtime::ConversationToolRuntime,
     pub clock: std::sync::Arc<dyn MonotonicClock>,
     pub leaf_policy: ToolExecutionDeadlinePolicy,
-    pub turn: u32,
+    pub execution: crate::runtime::interaction::InteractionExecution,
     pub scheduling: std::sync::Arc<tokio::sync::RwLock<()>>,
     pub descendants: NativeChildScope,
 }
@@ -41,6 +41,15 @@ impl Default for NativeChildScope {
 }
 
 impl NativeChildScope {
+    #[cfg(test)]
+    pub(crate) fn active_for_test(&self) -> usize {
+        *self.0.borrow()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn drained_for_test(&self) {
+        self.drained().await;
+    }
     pub(crate) fn enter(&self) -> NativeChildLease {
         self.0.send_modify(|active| *active += 1);
         NativeChildLease(self.clone())
@@ -93,7 +102,7 @@ pub(crate) async fn authorize(
         PreToolDecision::Ask { reason } => {
             let response = lifecycle
                 .request_approval(
-                    view.attempt_id.clone(),
+                    view.execution.clone(),
                     view.approval_facts(reason),
                     cancellation.clone(),
                 )
@@ -195,6 +204,13 @@ pub(crate) struct ForegroundInvocation<'a> {
     pub completion_won: Option<&'a (dyn Fn() + Send + Sync)>,
 }
 
+/// Execution status and physical certainty are independent owner-produced facts.
+pub(crate) struct InvocationOutcome {
+    pub result: ToolExecutionResult,
+    pub facts: Vec<InvocationFact>,
+    pub physical_settlement: ToolSettlementCertainty,
+}
+
 enum Winner {
     Cancellation(ToolCancellationCause),
     Deadline(ToolDeadlineKind),
@@ -228,7 +244,7 @@ impl ForegroundInvocation<'_> {
         invocation: ToolInvocation,
         progress_capability: ToolProgressCapability,
         context: ToolExecutionContext<'_>,
-    ) -> (ToolExecutionResult, Vec<InvocationFact>) {
+    ) -> InvocationOutcome {
         let descendants = context
             .subagent_context()
             .and_then(|context| context.native.as_ref())
@@ -309,7 +325,17 @@ impl ForegroundInvocation<'_> {
                 if let ToolExecutionStatus::Cancelled { phase, .. } = &mut result.status {
                     *phase = ToolCancellationPhase::DuringExecution;
                 }
-                return (result, facts);
+                let physical_settlement =
+                    if matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }) {
+                        ToolSettlementCertainty::Unconfirmed
+                    } else {
+                        ToolSettlementCertainty::Confirmed
+                    };
+                return InvocationOutcome {
+                    result,
+                    facts,
+                    physical_settlement,
+                };
             }
             Winner::Cancellation(cause) => cause,
             Winner::Deadline(kind) => {
@@ -345,7 +371,7 @@ impl ForegroundInvocation<'_> {
             evidence = settlement.as_mut() => Some(evidence),
             () = guard_wait => None,
         };
-        let result = match evidence {
+        let (result, physical_settlement) = match evidence {
             Some(ToolSettlement::Confirmed(mut result)) => {
                 facts.push(InvocationFact::SettlementObserved {
                     certainty: ToolSettlementCertainty::Confirmed,
@@ -359,23 +385,27 @@ impl ForegroundInvocation<'_> {
                         ToolCancellationCause::Deadline(_) => ToolExecutionStatus::TimedOut,
                     };
                 }
-                result
+                (result, ToolSettlementCertainty::Confirmed)
             }
             Some(ToolSettlement::Unconfirmed { detail }) => {
                 facts.push(InvocationFact::SettlementObserved {
                     certainty: ToolSettlementCertainty::Unconfirmed,
                 });
-                unknown(detail)
+                (unknown(detail), ToolSettlementCertainty::Unconfirmed)
             }
             None => {
                 let reason = "the executor's settlement control plane did not return within the guard window after the cancellation request; this is an executor settlement-contract violation, not proof about the physical operation".to_owned();
                 facts.push(InvocationFact::SettlementControlFailed {
                     reason: reason.clone(),
                 });
-                unknown(reason)
+                (unknown(reason), ToolSettlementCertainty::Unconfirmed)
             }
         };
-        (result, facts)
+        InvocationOutcome {
+            result,
+            facts,
+            physical_settlement,
+        }
     }
 }
 

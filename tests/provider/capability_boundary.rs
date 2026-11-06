@@ -216,11 +216,10 @@ async fn chat_replays_previous_reasoning() {
     );
 }
 
-/// The catalog selects the assistant reasoning replay dialect explicitly:
-/// vLLM/OpenRouter, preserved-thinking APIs, or providers that require it to
-/// be omitted from later ordinary turns.
+/// Default replay uses `reasoning_content`; optional overrides still select
+/// a different dialect or omission.
 #[tokio::test]
-async fn chat_reasoning_replay_dialects_are_explicit() {
+async fn chat_reasoning_replay_defaults_and_overrides_reach_the_wire() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "plain_text.sse")
     })
@@ -228,18 +227,19 @@ async fn chat_reasoning_replay_dialects_are_explicit() {
     let adapter =
         OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
     for (attempt, (dialect, field)) in [
-        (ChatReasoningReplay::Reasoning, Some("reasoning")),
+        (None, Some("reasoning_content")),
+        (Some(ChatReasoningReplay::Reasoning), Some("reasoning")),
         (
-            ChatReasoningReplay::ReasoningContent,
+            Some(ChatReasoningReplay::ReasoningContent),
             Some("reasoning_content"),
         ),
-        (ChatReasoningReplay::Omit, None),
+        (Some(ChatReasoningReplay::Omit), None),
     ]
     .into_iter()
     .enumerate()
     {
         let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
-        request.invocation.compat.chat_reasoning_replay = Some(dialect);
+        request.invocation.compat.chat_reasoning_replay = dialect;
         let assistant_index = request
             .messages
             .iter()
@@ -389,77 +389,58 @@ async fn chat_omit_ignores_multiple_reasoning_blocks() {
     assert_eq!(message["tool_calls"][0]["id"], "call-omit");
 }
 
-/// Replay modes fail before network execution when the canonical reasoning
-/// text was not exposed by the provider.
+/// Plaintext thinking is concatenated in canonical order. Opaque/redacted
+/// blocks from another protocol have no Chat extension text to replay.
 #[tokio::test]
-async fn chat_replay_modes_reject_unavailable_reasoning_text() {
+async fn chat_replay_concatenates_plaintext_and_skips_opaque_blocks() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "plain_text.sse")
     })
     .await;
-    for dialect in [
-        ChatReasoningReplay::Reasoning,
-        ChatReasoningReplay::ReasoningContent,
-    ] {
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
+    for (attempt, (dialect, field)) in [
+        (None, "reasoning_content"),
+        (Some(ChatReasoningReplay::Reasoning), "reasoning"),
+        (
+            Some(ChatReasoningReplay::ReasoningContent),
+            "reasoning_content",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
-        request.invocation.compat.chat_reasoning_replay = Some(dialect);
+        request.invocation.compat.chat_reasoning_replay = dialect;
         request.messages.insert(
             2,
             ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
-                id: MessageId::new(format!("msg-r-unavailable-{dialect:?}")),
-                content: vec![AssistantContentBlock::Reasoning(
-                    rustx::message::types::ReasoningBlock {
-                        text: None,
-                        provider_state: None,
-                    },
-                )],
+                id: MessageId::new(format!("msg-r-multiple-{attempt}")),
+                content: [Some("first"), None, Some(""), Some("second")]
+                    .into_iter()
+                    .map(|text| {
+                        AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                            text: text.map(str::to_owned),
+                            provider_state: None,
+                        })
+                    })
+                    .collect(),
             })),
         );
-        unsupported_rejected(
-            &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
-            request,
-            &server,
-        )
-        .await;
-    }
-}
-
-/// Replay modes fail explicitly rather than silently selecting, merging, or
-/// dropping one of multiple canonical reasoning blocks.
-#[tokio::test]
-async fn chat_replay_modes_reject_multiple_reasoning_blocks() {
-    let server = crate::common::FixtureServer::start(|_attempt, _head| {
-        sse_fixture("openai_chat", "plain_text.sse")
-    })
-    .await;
-    for dialect in [
-        ChatReasoningReplay::Reasoning,
-        ChatReasoningReplay::ReasoningContent,
-    ] {
-        let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
-        request.invocation.compat.chat_reasoning_replay = Some(dialect);
-        request.messages.insert(
-            2,
-            ModelInputMessage::Canonical(MessageBlock::Assistant(AssistantMessageBlock {
-                id: MessageId::new(format!("msg-r-multiple-{dialect:?}")),
-                content: vec![
-                    AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
-                        text: Some("first".to_owned()),
-                        provider_state: None,
-                    }),
-                    AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
-                        text: Some("second".to_owned()),
-                        provider_state: None,
-                    }),
-                ],
-            })),
+        let events = crate::common::collect_events(&adapter, request).await;
+        assert!(
+            matches!(events.last(), Some(ModelEvent::Completed { .. })),
+            "{}",
+            describe_events(&events)
         );
-        unsupported_rejected(
-            &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
-            request,
-            &server,
-        )
-        .await;
+        let body: serde_json::Value = serde_json::from_str(&server.request_body(attempt)).unwrap();
+        let messages = body["messages"].as_array().unwrap();
+        let reasoning = messages
+            .iter()
+            .find(|message| message.get(field).is_some())
+            .unwrap();
+        assert_eq!(reasoning[field], "firstsecond");
+        assert!(reasoning["content"].as_array().unwrap().is_empty());
     }
 }
 
@@ -876,4 +857,130 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
             assert_eq!(server.attempt_count(), before);
         }
     }
+}
+
+/// Explicit resource measurement, not a timing assertion. The fixture retains
+/// captured HTTP bodies, so RSS includes both client and test-server copies.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "explicit maximum-media allocation measurement"]
+async fn measure_auxiliary_maximum_media_concurrent_adapter_copies() {
+    fn png_bytes(padding: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2048, 2048);
+            encoder.set_color(png::ColorType::Rgba);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&vec![0; 16 * 1024 * 1024]).unwrap();
+            if padding > 0 {
+                writer
+                    .write_chunk(png::chunk::ChunkType(*b"ruSt"), &vec![0; padding])
+                    .unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes
+    }
+    let minimal = png_bytes(0);
+    let bytes = png_bytes(256 * 1024 - minimal.len() - 12);
+    assert_eq!(bytes.len(), 256 * 1024);
+    rustx::model::images::validate_png(&bytes).unwrap();
+    let gates: Vec<_> = (0..9).map(|_| crate::common::HeaderGate::new()).collect();
+    let server_gates = gates.clone();
+    let server = crate::common::FixtureServer::start(move |attempt, _| {
+        sse_fixture("openai_chat", "plain_text.sse")
+            .with_header_gate(server_gates[usize::try_from(attempt).unwrap()].clone())
+    })
+    .await;
+    let adapter = std::sync::Arc::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
+        "k",
+        server.url("/v1"),
+    )));
+    let mut request = simple_request(
+        ModelProtocol::OpenAiChatCompletions,
+        "media-measurement",
+        "inspect these images",
+    );
+    request.response_byte_limit = Some(2 * 1024 * 1024);
+    request
+        .invocation
+        .capabilities
+        .input_modalities
+        .insert(rustx::model::catalog::Modality::Image);
+    let ModelInputMessage::Canonical(MessageBlock::User(user)) = &mut request.messages[0] else {
+        panic!("user")
+    };
+    for index in 0..16 {
+        let id = ArtifactId::new(format!("artifact-measured-{index}"));
+        user.content.push(UserContentBlock::Image(ImageReference {
+            artifact_id: id.clone(),
+            alt: None,
+        }));
+        request.images.insert(id, bytes.clone());
+    }
+    let retained = request.images.values().map(Vec::capacity).sum::<usize>();
+    let mut peak_copies = 0;
+    let mut held_rss = Vec::new();
+    for phase in 0..3 {
+        let mut calls = Vec::new();
+        let mut cancellations = Vec::new();
+        for _ in 0..3 {
+            let frozen = request.clone();
+            peak_copies += frozen.images.values().map(Vec::capacity).sum::<usize>();
+            let adapter = adapter.clone();
+            let cancellation = rustx::runtime::CancellationSignal::new();
+            cancellations.push(cancellation.clone());
+            calls.push(tokio::spawn(async move {
+                crate::common::collect_events_with_cancellation(
+                    adapter.as_ref(),
+                    frozen,
+                    cancellation,
+                )
+                .await
+            }));
+        }
+        for gate in &gates[phase * 3..phase * 3 + 3] {
+            gate.wait_entered().await;
+        }
+        held_rss.push(
+            std::fs::read_to_string("/proc/self/status")
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        );
+        // At maximum concurrent translated requests, one physical attempt is
+        // cancelled and joined before the next phase may acquire its copies.
+        if phase == 1 {
+            cancellations[0].cancel();
+        }
+        for (index, call) in calls.into_iter().enumerate() {
+            if phase != 1 || index != 0 {
+                for gate in &gates[phase * 3..phase * 3 + 3] {
+                    gate.release();
+                }
+            }
+            let events = call.await.unwrap();
+            if phase == 1 && index == 0 {
+                assert!(
+                    matches!(events.last(), Some(ModelEvent::Failed { error }) if error.kind == rustx::model::ModelErrorKind::Cancelled)
+                );
+            } else {
+                assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+            }
+        }
+    }
+    let request_bytes = server.request_body(0).len();
+    assert_eq!(server.attempt_count(), 9);
+    assert_eq!(retained, 4 * 1024 * 1024);
+    assert_eq!(peak_copies, 9 * retained);
+    let process = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let rss: Vec<_> = process
+        .lines()
+        .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
+        .collect();
+    println!(
+        "media_bytes_per_frozen_request={retained} concurrent_request_image_bytes={} encoded_http_request_bytes={request_bytes} cumulative_clone_bytes={peak_copies} held_phase_rss_including_fixture={held_rss:?} final_rss_including_fixture={rss:?}",
+        3 * retained
+    );
 }

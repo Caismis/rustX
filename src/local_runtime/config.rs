@@ -71,6 +71,11 @@ pub struct CurrentRuntimeConfig {
     /// execution retains the frozen generation policy.
     #[serde(default)]
     pub tool_deadline_policy: ToolDeadlinePolicyDocument,
+    /// Initial MCP readiness wait, measured from Native's first submission
+    /// receipt. User < Workspace replaces this complete object atomically.
+    /// Preparation before submission does not consume the budget.
+    #[serde(default)]
+    pub mcp_startup_policy: McpStartupPolicyDocument,
     /// The ecosystem-compatible named MCP server map, keyed by server
     /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
@@ -314,6 +319,45 @@ impl ToolDeadlinePolicyDocument {
     }
 }
 
+/// One finite budget for the selected MCP initialization batch, including
+/// remaining queueing, negotiation, complete discovery and validation. This
+/// does not govern model responses or Tool execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct McpStartupPolicyDocument {
+    /// Milliseconds after the first native submission receipt.
+    #[schemars(range(min = 1))]
+    pub wait_timeout_ms: u64,
+}
+
+impl Default for McpStartupPolicyDocument {
+    fn default() -> Self {
+        Self {
+            wait_timeout_ms: 15_000,
+        }
+    }
+}
+
+impl McpStartupPolicyDocument {
+    /// Construct the absolute deadline without extending an earlier receipt.
+    ///
+    /// # Errors
+    /// Rejects zero or an interval that the monotonic clock cannot represent.
+    pub fn deadline_from(
+        self,
+        received_at: tokio::time::Instant,
+    ) -> Result<tokio::time::Instant, String> {
+        if self.wait_timeout_ms == 0 {
+            return Err("mcp_startup_policy.wait_timeout_ms must be positive".to_owned());
+        }
+        received_at
+            .checked_add(Duration::from_millis(self.wait_timeout_ms))
+            .ok_or_else(|| {
+                "mcp_startup_policy.wait_timeout_ms exceeds the monotonic clock range".to_owned()
+            })
+    }
+}
+
 const fn default_schema_version() -> u32 {
     CURRENT_RUNTIME_SCHEMA_VERSION
 }
@@ -350,6 +394,7 @@ impl CurrentRuntimeConfig {
             context: ContextPolicyDocument::default(),
             model_timeout_policy: ModelTimeoutPolicyDocument::default(),
             tool_deadline_policy: ToolDeadlinePolicyDocument::default(),
+            mcp_startup_policy: McpStartupPolicyDocument::default(),
             mcp_servers: BTreeMap::default(),
             mcp_tool_policies: BTreeMap::default(),
             native_tools: NativeToolPoliciesDocument::default(),
@@ -438,6 +483,11 @@ impl CurrentRuntimeConfig {
             .map_err(at("model_timeout_policy", "invalid model timeout policy"))?;
         self.tool_deadline_policy()
             .map_err(at("tool_deadline_policy", "invalid tool deadline policy"))?;
+        self.mcp_startup_policy
+            .deadline_from(tokio::time::Instant::now())
+            .map_err(|detail| {
+                at("mcp_startup_policy", "invalid MCP startup policy")(invalid(detail))
+            })?;
         self.tool_environment()
             .map_err(at("environment", "invalid Tool environment entry"))?;
         crate::runtime::agent_profile::AgentProfile::from_document(

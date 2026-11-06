@@ -61,14 +61,14 @@ impl AgentExecutionObserver for StartedSignal {
         &self,
         _attempt_id: &AttemptId,
         _block: &MessageBlock,
-        _receipt: &rustx::durable::inbox::TranscriptCommitReceipt,
+        _receipt: &rustx::durable::TranscriptCommitReceipt,
     ) {
     }
 
     fn observe_status(
         &self,
         _observation: &AgentStatusObservation,
-        _source: Option<&rustx::durable::inbox::StatusObservationSource>,
+        _source: Option<&rustx::durable::StatusObservationSource>,
     ) {
     }
 
@@ -87,7 +87,7 @@ impl AgentExecutionObserver for StartedSignal {
         &self,
         _attempt_id: &AttemptId,
         _audit: &PublicationAudit,
-        _receipt: &rustx::durable::inbox::PublicationAuditReceipt,
+        _receipt: &rustx::durable::PublicationAuditReceipt,
     ) {
     }
 }
@@ -190,6 +190,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
         capability.into_lease(),
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            workspace_changes: None,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: ToolExecutionDeadlinePolicy {
                 hard_deadline: Duration::from_secs(5),

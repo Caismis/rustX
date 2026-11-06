@@ -62,11 +62,13 @@ import type {
   TranscriptEntry,
   TranscriptInteractionRequested,
   TranscriptInteractionSettled,
+  TranscriptConfigurationApplied,
   TranscriptPublicationAudit,
 } from "../../presentation/state.ts";
 import type {
   AgentStatusView,
   AnswerSpecification,
+  BoundedNames,
   RuntimeClientOutcome,
   RuntimeError,
   ForegroundToolExecution,
@@ -90,7 +92,7 @@ import {
   type PresentationPreferences,
   isToolCallExpanded,
 } from "../preferences.ts";
-import { requesterLines } from "./questionnaire.ts";
+import { requesterLines } from "./questionnaire-answers.ts";
 import { type BackgroundRole, role, style } from "../theme.ts";
 import {
   type ToolCardPart,
@@ -170,7 +172,11 @@ export function renderTranscript(
     if (entry.kind === "committed" && entry.message.role === "assistant") {
       const response = entry.completedResponse;
       const facts: string[] = [];
-      if (response?.usage != null) facts.push(`${groupedQuantity(response.usage.total_tokens)} tok`);
+      if (response?.usage != null) {
+        const usage = response.usage;
+        if (usage.total_tokens != null) facts.push(`${groupedQuantity(usage.total_tokens)} tok`);
+        else if (usage.input_tokens != null || usage.output_tokens != null) facts.push(`↑${usage.input_tokens == null ? '?' : groupedQuantity(usage.input_tokens)} ↓${usage.output_tokens == null ? '?' : groupedQuantity(usage.output_tokens)} tok`);
+      }
       if (response?.timing?.total_duration_ms != null) facts.push(`${(response.timing.total_duration_ms / 1000).toFixed(1)}s`);
       if (facts.length) blocks.push({ kind: "text", key: `${entry.key}:response`, text: role.meta(facts.join(" · ")) });
     }
@@ -327,6 +333,8 @@ export function renderEntryBlocks(
       return renderInteractionRequested(entry);
     case "interaction_settled":
       return renderInteractionSettled(entry);
+    case "configuration_applied":
+      return renderConfigurationApplied(entry);
   }
 }
 
@@ -438,7 +446,10 @@ function renderInteractionRequested(
       ...bar(`arguments digest: ${entry.subject.arguments_digest}`, style.dim),
     );
   } else if (entry.subject.type === "review") {
-    lines.push(role.warning(`Review · ${entry.subject.review.instance.node} · ${entry.subject.review.subject.type}`));
+    lines.push(role.warning(`Human Input · ${entry.subject.review.instance.node}`));
+    for (const question of entry.subject.review.questionnaire.questions) {
+      lines.push(...bar(question.question, style.dim));
+    }
   } else {
     lines.push(role.warning("questionnaire"));
     for (const line of requesterLines(entry.subject.requester)) {
@@ -463,10 +474,11 @@ function renderInteractionSettled(
   ];
   if (entry.settlement.type === "denied" || entry.settlement.type === "cancelled") {
     lines.push(...bar(entry.settlement.reason, style.dim));
-  } else if (entry.settlement.type === "questionnaire_submitted") {
+  } else if (entry.settlement.type === "questionnaire_submitted" || entry.settlement.type === "reviewed") {
+    const submission = entry.settlement.type === "reviewed" ? entry.settlement.response.submission : entry.settlement.submission;
     lines.push(
       ...bar(
-        entry.settlement.submission.answers
+        submission.answers
           .map((answer) => `${answer.question_index}: ${answer.answer.type}`)
           .join(", "),
         style.dim,
@@ -476,11 +488,29 @@ function renderInteractionSettled(
   return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
 }
 
+/**
+ * One committed Session configuration change as a Codex-style info notice:
+ * a dim bullet naming what changed, then bounded Tool and Skill names. The
+ * full change stays in Trace and `/session settings`.
+ */
+function renderConfigurationApplied(entry: TranscriptConfigurationApplied): TranscriptBlock[] {
+  const { change } = entry;
+  const names = (list: BoundedNames) => list.total > list.names.length
+    ? `${list.names.join(", ")} +${list.total - list.names.length} more` : list.names.join(", ");
+  const lines = [role.meta(`• Configuration applied · ${change.domains.map(domain => domain.replaceAll("_", " ")).join(", ")}`)];
+  for (const [label, changes] of [["Tools", change.tools], ["Skills", change.skills]] as const) {
+    for (const kind of ["added", "removed", "changed"] as const) {
+      if (changes[kind].total > 0) lines.push(style.dim(`  ${label} ${kind}: ${names(changes[kind])}`));
+    }
+  }
+  return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
+}
+
 function settlementLabel(
   settlement: TranscriptInteractionSettled["settlement"],
 ): string {
   switch (settlement.type) {
-    case "reviewed": return settlement.response.decision.type;
+    case "reviewed": return "answered";
     case "deadline_expired":
       return "deadline expired";
     case "approved":

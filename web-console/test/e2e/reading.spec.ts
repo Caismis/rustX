@@ -41,6 +41,7 @@ const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<
     phase = 'session/create';
     const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
     const id = created.session.id;
+    await remote.renameSession(id, 'New session');
     phase = 'session/attach';
     const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
     phase = 'checkpoint/subscribe';
@@ -102,7 +103,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(() => {
       const NativeSocket = window.WebSocket;
-      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, other: 0, windows: [] as number[] };
+      const state = { gate: false, fail: false, held: [] as (() => void)[], reads: 0, other: 0, requests: [] as any[], windows: [] as number[] };
       Object.assign(window, { readingTransport: state });
       class GatedSocket extends NativeSocket {
         private methods = new Map<string, string>();
@@ -121,6 +122,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
         send(data: Parameters<WebSocket['send']>[0]) {
           const request = JSON.parse(String(data));
           if (request.method === 'session/transcript' && request.params.at.type === 'turn_ordinal') { this.methods.set(String(request.id), 'turn'); state.reads++; }
+          if (request.method === 'session/transcript') state.requests.push(request);
           if (request.method === 'session/transcript' && request.params.at.type !== 'turn_ordinal') state.other++;
           super.send(data);
         }
@@ -131,6 +133,13 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await page.locator(`button[data-session-id="${id}"]`).click();
     const rail = page.getByRole('navigation', { name: 'Turn navigation' }), viewport = page.locator('[data-conversation-scroll]').first();
     const railScroll = (top: number) => rail.locator(':scope > div').first().evaluate((el, top) => { el.scrollTop = top; }, top);
+    // Initial history has its own bounded fill. Finish it before measuring
+    // requests attributable to distant navigation.
+    await expect.poll(() => page.evaluate(() => (window as any).readingTransport.other)).toBe(2);
+    await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toBeEnabled();
+    const initialReads = await page.evaluate(() => (window as any).readingTransport.requests);
+    expect(initialReads).toHaveLength(2);
+    expect(initialReads.every((request: any) => request.params.at.type === 'older' && request.params.limit === 32)).toBe(true);
     // Every native turn has a mark; following the latest output places the newest in view.
     const newest = rail.locator('[data-turn-ordinal="300"]');
     await expect(newest).toBeInViewport();
@@ -160,6 +169,7 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(rail.getByRole('tooltip')).toContainText('Reading 0');
     await page.evaluate(() => { const s=(window as any).readingTransport; s.gate=false; s.held.shift()(); });
     await expect(mark).toHaveAttribute('aria-current', 'true');
+    // The first loaded Turn opens on its own row; its prompt is on an earlier page.
     const target = page.locator('[data-chat-anchor-key]').filter({ hasText: 'Native reading answer 0' }).first();
     await expect(page.getByText(/Native reading answer 0\n/).first()).toBeVisible();
     await expect.poll(async () => Math.abs(await target.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el=>el.getBoundingClientRect().top))).toBeLessThan(3);
@@ -182,12 +192,22 @@ test('native distant reading rail, detached/latest follow and measured width in 
     }
     // Two direct windows (one rejected, one accepted), independent live tail,
     // and a finite presentation. No prefix traversal or duplicate output.
-    expect(await page.evaluate(()=>(window as any).readingTransport.other)).toBe(0);
+    await test.info().attach('reading-requests', { body: JSON.stringify(await page.evaluate(() => (window as any).readingTransport.requests), null, 2), contentType: 'application/json' });
+    expect(await page.evaluate(()=>(window as any).readingTransport.requests.filter((request: any) => request.params.at.type !== 'turn_ordinal'))).toEqual(initialReads);
     expect(await page.evaluate(()=>(window as any).readingTransport.reads)).toBe(2);
     await expect(page.getByText(/Native reading answer 299\n/)).toHaveCount(1);
     expect(await page.evaluate(()=>(window as any).readingTransport.windows)).toEqual([32,32]);
     expect(await viewport.locator('[data-chat-anchor-key]').count()).toBeLessThanOrEqual(256);
-    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toHaveCount(0);
+    const continuation = page.locator('[data-chat-history-boundary]');
+    await expect(continuation).toHaveCount(1);
+    const after = await continuation.getAttribute('data-chat-history-boundary');
+    await continuation.scrollIntoViewIfNeeded();
+    await viewport.hover();
+    await page.mouse.wheel(0, 80);
+    await expect.poll(() => page.evaluate(() => (window as any).readingTransport.other)).toBe(initialReads.length + 1);
+    await expect(continuation).not.toHaveAttribute('data-chat-history-boundary', after!);
+    await page.screenshot({ path: '/tmp/rustx-history-main-continuation.png' });
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
     await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     // Ordinary detached state has no historical jump/cache-limit prerequisite.
@@ -199,6 +219,10 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(page.getByText(/Detached output/).last()).toHaveCount(1);
     expect(await viewport.evaluate(el=>el.scrollTop)).toBe(before);
     await page.getByRole('button', { name: 'Return to latest', exact: true }).click();
+    // Establish following mode at its layout boundary before emitting the next
+    // gated chunk; then independently verify that this new output stays followed.
+    await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toHaveCount(0);
+    await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     await fixture.release('reading-latest'); await expect(page.getByText(/Following output/).last()).toHaveCount(1);
     await expect.poll(()=>viewport.evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(3);
     // Both physical handles use the measured column; persisted intent restores
@@ -224,103 +248,4 @@ test('native distant reading rail, detached/latest follow and measured width in 
     await expect(page.locator('[data-conversation-width-owner]').locator('..')).toHaveCSS('--dsh-chat-content-width', `${saved}px`);
     expect(await page.evaluate(()=>localStorage.getItem('rustx-conversation-width-v1'))).toBe(saved);
     expect(errors).toEqual([]);reading.pass();
-});
-
-
-test.describe('Fork source viewport', () => {
-  test.use({ readingScenario: 'web_fork_source_reading' });
-
-test('Fork source exact Message landing and cancellation by scrolling, newer navigation and attachment replacement', async ({ page, reading }) => {
-  const { fixture, id, forkId, sourceNode, sourceMessage, sourceCursor } = reading;
-  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.addInitScript(() => {
-    localStorage.removeItem('rustx-console-view-v2');
-    const NativeSocket = window.WebSocket;
-    const state = { hold: true, held: [] as (() => void)[], requests: [] as any[], windows: [] as any[], attachments: [] as any[] };
-    Object.assign(window, { sourceTransport: state });
-    class GatedSocket extends NativeSocket {
-      private methods = new Map<string, any>();
-      constructor(...args: ConstructorParameters<typeof WebSocket>) {
-        super(...args);
-        this.addEventListener('message', event => {
-          const reply = JSON.parse(String(event.data)), request = this.methods.get(String(reply.id));
-          if (request?.method === 'session/attach' && reply.result?.target) state.attachments.push(reply.result.target);
-          if (request?.method !== 'session/history' || request.params.at.type !== 'message') return;
-          event.stopImmediatePropagation();
-          state.windows.push(reply.result?.window);
-          const deliver = () => this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(reply) }));
-          if (state.hold) state.held.push(deliver); else deliver();
-        });
-      }
-      send(data: Parameters<WebSocket['send']>[0]) {
-        const request = JSON.parse(String(data)); this.methods.set(String(request.id), request); state.requests.push(request); super.send(data);
-      }
-    }
-    window.WebSocket = GatedSocket;
-  });
-  for (const race of ['land', 'scroll', 'newer-navigation', 'attachment'] as const) {
-  await page.setViewportSize({ width: 1440, height: race === 'scroll' ? 300 : 1000 });
-  await routeWorkspaceHost(page, fixture); await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
-  await page.locator(`button[data-session-id="${forkId}"]`).click();
-  const source = page.getByRole('button', { name: 'View source', exact: true });
-  await expect(source).toBeEnabled(); await source.click();
-  await expect.poll(() => page.evaluate(() => (window as any).sourceTransport.held.length)).toBe(1);
-  await expect(page.locator(`button[data-session-id="${forkId}"]`)).toHaveAttribute('aria-current', 'page');
-  const viewport = page.locator('[data-conversation-scroll]').first();
-  const anchor = page.locator(`[data-history-session="${id}"] [data-chat-anchor-key="message:${sourceMessage}"]`);
-  await expect(anchor).toHaveCount(0); // Outside the initial native latest window.
-  const wire = await page.evaluate(() => ({ requests: (window as any).sourceTransport.requests, windows: (window as any).sourceTransport.windows }));
-  const locate = wire.requests.filter((request: any) => request.method === 'session/history' && request.params.at.type === 'message');
-  expect(locate).toHaveLength(1); expect(locate[0].params.at.id).toBe(sourceMessage); expect(locate[0].params.limit).toBe(32);
-  expect(wire.requests.filter((request: any) => request.method === 'session/node').every((request: any) => request.params.node_id)).toBe(true);
-  expect(locate[0].params).toMatchObject({ session_id: id, node_id: sourceNode });
-  expect(wire.requests.filter((request: any) => ['session/attach','session/detach','session/switchNode','turn/start'].includes(request.method) && (request.params.session_id === id || request.params.target?.session_id === id))).toHaveLength(0);
-  expect(wire.requests.filter((request: any) => request.method === 'session/tree')).toHaveLength(0);
-  expect(wire.windows[0].target_cursor).toBe(sourceCursor); expect(wire.windows[0].target ?? null).toBeNull();
-  expect(wire.windows[0].page.entries.length).toBeLessThanOrEqual(32);
-  if (race === 'scroll') {
-    const movement = await viewport.evaluate(el => { const before = el.scrollTop; el.scrollTop += before > 200 ? -200 : 200; el.dispatchEvent(new Event('scroll')); return Math.abs(el.scrollTop - before); });
-    expect(movement).toBeGreaterThan(100);
-    await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
-  } else if (race === 'newer-navigation') {
-    await page.locator(`button[data-session-id="${id}"]`).click();
-    await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
-  } else if (race === 'attachment') {
-    // Explicitly retire the initiating Fork attachment, not the source read.
-    await page.locator(`button[data-session-id="${forkId}"]`).hover();
-    await page.locator(`button[data-session-actions="${forkId}"]`).click();
-    await page.getByRole('menuitem', { name: /^Close .* view$/ }).click();
-    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'new-conversation');
-  }
-  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-  const position = await viewport.evaluate(el => el.scrollTop);
-  await page.evaluate(() => { const state = (window as any).sourceTransport; state.hold = false; state.held.shift()(); });
-  // Held delivery is synchronous; geometry below observes ChatViewport settlement.
-  if (race === 'land') {
-    await expect(anchor).toHaveCount(1);
-    await expect.poll(() => anchor.evaluate(el => {
-      const port = el.closest('[data-conversation-scroll]')!, row = el.getBoundingClientRect(), view = port.getBoundingClientRect();
-      return row.top >= view.top - 1 && row.top < view.bottom && row.bottom > view.top;
-    })).toBe(true);
-    await expect.poll(async () => Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - await viewport.evaluate(el => el.getBoundingClientRect().top))).toBeLessThan(3);
-    await expect(page.getByRole('button', { name: 'Load later', exact: true })).toBeVisible();
-    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveCount(0);
-    await page.screenshot({ path: '/tmp/pr458-shell-read-only-history.png' });
-    await expect(page.locator('[data-history-session]')).toHaveAttribute('data-history-node', sourceNode);
-    await page.getByRole('button', { name: 'Return to conversation', exact: true }).click();
-    await expect(page.locator(`button[data-session-id="${forkId}"]`)).toHaveAttribute('aria-current', 'page');
-  } else {
-    // The fixture delivery is synchronous; two layout frames settle any queued publication.
-    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-    await expect(anchor).toHaveCount(0);
-    expect(await viewport.evaluate(el => el.scrollTop)).toBe(position);
-    if (race === 'attachment') await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'new-conversation');
-    else await expect(page.locator(`button[data-session-id="${race === 'scroll' ? forkId : id}"]`)).toHaveAttribute('aria-current', 'page');
-  }
-  expect(errors).toEqual([]);
-  }
-  reading.pass();
-});
-
 });

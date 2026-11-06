@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { SessionModelConfig } from '../../protocol/app-server/v52';
+import type { SessionModelConfig } from '../../protocol/app-server/v73';
 import { nextModelSelection, selectionChanges } from '../src/bindings/model-catalog';
 import { offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../src/presentation/agent/ModelSelect';
 
@@ -110,4 +110,36 @@ it('a pinned Profile the Model no longer declares is cleared by the explicit def
   expect(recovered).toEqual({ model: chat, requestParams: { top_k: 40 }, maxOutputTokens: 1024, summaryModel: { mode: 'explicit', model: 'example/summary' } });
   expect(Object.hasOwn(recovered, 'profile')).toBe(false);
   expect(nextModelSelection(recovered, followDefault)).toEqual(recovered);
+});
+
+
+it('preserves explicit and follow-session Title policy across primary model and profile selection', () => {
+  for (const titleModel of [
+    { mode: 'session' as const },
+    { mode: 'explicit' as const, model: 'example/title', profile: 'short', request_params: { title_tag: ['exact', null] }, max_output_tokens: 128 },
+  ]) {
+    const configured: SessionModelConfig = { model: chat, titleModel, requestParams: { temperature: 0.5 } };
+    expect(nextModelSelection(configured, { kind: 'model', model: 'example/other' })).toEqual({ model: 'example/other', titleModel });
+    expect(nextModelSelection(configured, pin('balanced'))).toEqual({ ...configured, profile: 'balanced' });
+  }
+});
+
+it.each(['explicit', 'session'] as const)('primary model and profile gestures preserve complete %s auxiliary policies', mode => {
+  const classificationModel: SessionModelConfig['classificationModel'] = mode === 'session' ? { mode } : {
+    mode, model: 'classify/model', profile: 'precise', request_params: { temperature: 0.1, seed: 41 }, max_output_tokens: 123,
+  };
+  const btwModel: SessionModelConfig['btwModel'] = mode === 'session' ? { mode } : {
+    mode, model: 'btw/model', profile: 'short', request_params: { temperature: 0.6, seed: 43 }, max_output_tokens: 456,
+  };
+  const configured: SessionModelConfig = { model: chat, profile: 'high', requestParams: { temperature: 0.3 }, maxOutputTokens: 789, classificationModel, btwModel };
+  for (const intent of [
+    { kind: 'model', model: 'example/other' },
+    { kind: 'profile', model: 'example/other', profile: 'fast' },
+    { kind: 'model-default', model: 'example/other' },
+  ] satisfies ModelSelectionIntent[]) {
+    expect(nextModelSelection(configured, intent)).toEqual({ model: 'example/other', ...(intent.kind === 'profile' ? { profile: 'fast' } : {}), classificationModel, btwModel });
+  }
+  expect(nextModelSelection(configured, pin('balanced'))).toEqual({ ...configured, profile: 'balanced' });
+  expect(nextModelSelection(configured, { kind: 'model', model: chat })).toEqual(configured);
+  expect(nextModelSelection(configured, followDefault)).toEqual({ model: chat, requestParams: configured.requestParams, maxOutputTokens: 789, classificationModel, btwModel });
 });

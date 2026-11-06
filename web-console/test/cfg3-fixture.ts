@@ -5,8 +5,9 @@ import { boundedSettings } from "./fixture";
 import { cfg3Source, cfg3Effective, cfg3Application } from './cfg3-data';
 import { snapshot } from './fixture';
 import { vi } from 'vitest';
-import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v52';
-import { AppServerClient, type ClientView } from '../src/client/app-server';
+import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v73';
+import { AppServerClient } from '../src/client/app-server';
+import type { ClientView } from '../src/client/contracts';
 export const cfg3Session = 'ses_00000000-0000-7000-8000-000000000001';
 export const cfg3Target: AttachmentTarget = { session_id: cfg3Session, conversation_id: 'conv_00000000-0000-7000-8000-000000000001', runtime_incarnation: '1', attachment_id: 'attachment-1' };
 export function cfg3Client(handler?: (operation: Request1, source: SourceSettings, effective: EffectiveConfiguration) => Promise<MethodResult | void>) { const source = cfg3Source(), effective = cfg3Effective(), client = new AppServerClient(); let state: ClientView = { connection: 'connected', generation: 1, sessions: [], uncertain: [], interactionOperations: {}, views: { [cfg3Session]: { id: cfg3Session, attachmentIntent: 'wanted', attachment: 'attached', nodeId: 'node-fixture', attachmentNodeId: 'node-fixture', attachmentObservation: { generation: 1, nodeId: 'node-fixture', target: cfg3Target, intentRevision: 0 }, target: cfg3Target, snapshot: snapshot() } } }; vi.spyOn(client, 'getSnapshot').mockImplementation(() => state);
@@ -15,12 +16,7 @@ export function cfg3Client(handler?: (operation: Request1, source: SourceSetting
     const publish = (patch: Partial<ClientView>) => { state = { ...state, ...patch }; for (const listener of listeners) listener(); }; const request = vi.spyOn(client, 'request').mockImplementation(async (operation) => { const overridden = await handler?.(operation, source, effective); if (overridden)
     return overridden as never; if (operation.method === 'mcp/probe') return {type:'mcp_probe',result:{id:operation.params.id,revision:operation.params.expected_revision,outcome:'reachable'}} as never; if (operation.method === 'session/configuration')
     return { type: 'session_configuration', projection:(applicationReceipt((source.application ?? null))) } as never; if (operation.method === 'session/effectiveConfiguration')
-    return { type: 'effective_configuration', projection: {revision:'fixture',inline:structuredClone(effective),fields:[],collections:[]} } as never; if (operation.method === 'session/adoptConfiguration') {
-    source.application = { ...source.application!, version: '3', candidate: null, units: { instructions: { status: 'applied'} } };
-    effective.generation = '8';
-    effective.adopted_binding = '2';
-    return {type:'configuration_receipt',scope:(source.application)?.scope??'configuration',version:(source.application)?.version??'0'} as never;
-} if (operation.method === 'configuration/reconcile')
+    return { type: 'effective_configuration', projection: {revision:'fixture',inline:structuredClone(effective),fields:[],collections:[]} } as never; if (operation.method === 'configuration/reconcile')
     return {type:'configuration_receipt',scope:(source.application ?? cfg3Application())?.scope??'configuration',version:(source.application ?? cfg3Application())?.version??'0'} as never; if (operation.method === 'configuration/sourceWrite') {
     source.application = cfg3Application();
     source[operation.params.target.kind]!.revision = 'saved-2';

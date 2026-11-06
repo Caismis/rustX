@@ -1,9 +1,10 @@
 /** OOXML admission only. No archive path is ever extracted to the filesystem. */
 import { crc32, inflateRawSync } from 'node:zlib';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview.ts';
 
 export const OOXML_LIMITS = Object.freeze({
-  source: 512 * 1024, entries: 256, entry: 4 * 1024 * 1024,
-  expanded: 16 * 1024 * 1024, path: 240, ratio: 200,
+  source: FILE_PREVIEW_LIMITS.officeBytes, entries: 10000, entry: 50 * 1024 * 1024,
+  expanded: 250 * 1024 * 1024, path: 240, ratio: 200,
 });
 type Entry = { name: string; start: number; end: number; size: number; crc: number; method: number };
 const rejected = (): never => { throw new Error('archive_rejected'); };
@@ -36,7 +37,10 @@ export function admitOoxml(source: Uint8Array): Map<string, Buffer> {
     let name: string;
     try { name = decoder.decode(bytes.subarray(at + 46, at + 46 + length)); } catch { return rejected(); }
     if (name.startsWith('/') || /[\\:\x00-\x1f\x7f%]/.test(name) || name.split('/').some(p => p === '.' || p === '..' || !p)
-      || /\.(?:zip|docx|pptx|xlsx|xlsm|exe|dll|bin)$/i.test(name)) return rejected();
+      || /\.(?:zip|docx|pptx|xlsx|xlsm|exe|dll)$/i.test(name)
+      // Office stores ordinary printer settings in a binary part. Other binary
+      // parts (including VBA and embedded OLE objects) remain inadmissible.
+      || (/\.bin$/i.test(name) && !/^(?:word|ppt|xl)\/printerSettings\/printerSettings[0-9]+\.bin$/.test(name))) return rejected();
     const key = name.toLowerCase();
     if (names.has(key) || [...names].some(p => p.startsWith(`${key}/`) || key.startsWith(`${p}/`))) return rejected();
     names.add(key);

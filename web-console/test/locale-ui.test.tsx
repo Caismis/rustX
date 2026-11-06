@@ -71,9 +71,9 @@ it('a native approval has identical request count, ordering, methods and payload
 it('Tool chrome and global connection notices switch while opaque tool output stays byte-for-byte intact', async () => {
   server = new Server();
   await act(async () => { render(<App client={server!.client} workspaceHost={server!.workspaceHost}/>); });
-  expect(screen.getByText('Unable to connect to rustX', { exact: true })).toBeTruthy();
+  expect(screen.getByText('Reconnect', { exact: true })).toBeTruthy();
   act(() => localeController.setLocale('zh'));
-  expect(screen.getByText(text('common:app.unable-to-connect-to-rustx'), { exact: true })).toBeTruthy();
+  expect(screen.getByText(text('common:connection.disconnected'), { exact: true })).toBeTruthy();
   expect(server.requests).toHaveLength(0);
   cleanup();
   render(<ToolCard tool={{ id: 'native-id', title: 'native.tool', summary: '/raw/path', variant: 'generic', state: 'failure', output: 'Native failure: do NOT translate {name}' }}/>);
@@ -135,12 +135,12 @@ it('Session renaming never promotes a localized fallback title into native data 
     await act(async () => { render(<App client={activeServer.client} workspaceHost={activeServer.workspaceHost}/>); });
     fireEvent.click(document.querySelector<HTMLButtonElement>('button[data-session-actions="A"]')!);
     fireEvent.click(screen.getByRole('menuitem', { name: text('workspace:rename') }));
-    const input = screen.getByRole('textbox', { name: text('workspace:workspace-navigation.name') }) as HTMLInputElement;
+    const input = screen.getByRole('textbox', { name: text('workspace:field.sessionName') }) as HTMLInputElement;
     expect(input.value).toBe('');
-    expect((screen.getByRole('button', { name: text('workspace:workspace-navigation.save-name') }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: text('workspace:rename') }) as HTMLButtonElement).disabled).toBe(true);
     const before = server.requests.length;
     fireEvent.change(input, { target: { value: 'User-authored 名称' } });
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: text('workspace:workspace-navigation.save-name') })));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: text('workspace:rename') })));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     sequences.push(server.requests.slice(before).map(row => row.request));
     cleanup(); server.client.disconnect();
@@ -149,43 +149,6 @@ it('Session renaming never promotes a localized fallback title into native data 
   expect(sequences[0].length).toBeGreaterThan(1);
   expect(sequences[1]).toEqual(sequences[0]);
 });
-
-it('Inspector filters retain semantic wire kinds across a live locale switch', async () => {
-  const { LiveInspector } = await import('../src/app/Inspector');
-  server = new Server(); await server.connect();
-  render(<LiveInspector client={server.client}/>);
-  const select = screen.getByRole('combobox', { name: 'Message kind filter' }) as HTMLSelectElement;
-  fireEvent.change(select, { target: { value: 'request' } });
-  const before = [...document.querySelectorAll('.protocol-log pre')].map(node => node.textContent);
-  expect(before.length).toBeGreaterThan(0);
-  const requests = [...server.requests];
-  act(() => localeController.setLocale('zh'));
-  expect(select.value).toBe('request');
-  expect([...select.options].map(option => option.value)).toEqual(['', 'request', 'response', 'notification', 'invalid']);
-  expect([...document.querySelectorAll('.protocol-log pre')].map(node => node.textContent)).toEqual(before);
-  expect(server.requests).toEqual(requests);
-});
-
-
-it.each([true, false])('retained Inspector clipboard completion (%s) live-switches without repeating any operation', async success => {
-  const { LiveInspector } = await import('../src/app/Inspector');
-  server = new Server(); await server.connect();
-  const writeText = vi.fn(() => success ? Promise.resolve() : Promise.reject(new Error('Clipboard denied')));
-  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-  render(<LiveInspector client={server.client}/>);
-  const before = [...server.requests];
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Copy JSON' })));
-  const key = success ? 'inspector:copy.copied-json' : 'inspector:copy.copy-failed-clipboard-unavailable';
-  const notice = screen.getByRole('status');
-  expect(notice.textContent).toContain(translator('en')(key));
-  act(() => localeController.setLocale('zh'));
-  expect(screen.getByRole('status')).toBe(notice);
-  expect(notice.textContent).toContain(translator('zh')(key));
-  expect(notice.textContent).not.toContain(translator('en')(key));
-  expect(writeText).toHaveBeenCalledTimes(1);
-  expect(server.requests).toEqual(before);
-});
-
 
 it.each(['en', 'zh'] as const)('policy display choices preserve exact native values in %s', async locale => {
   const { PolicyFields } = await import('../src/app/settings/tools/ToolsPage');

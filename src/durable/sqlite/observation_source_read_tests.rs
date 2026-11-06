@@ -1,5 +1,9 @@
 use super::*;
-use crate::durable::{ConversationStore, SqliteConversationStore};
+#[cfg(test)]
+use crate::durable::CanonicalStore;
+use crate::durable::SqliteConversationStore;
+use crate::durable::observation::MessageBlockHeader;
+use crate::durable::sqlite::observation::index::index_blocks;
 use crate::message::content::TextBlock;
 use crate::message::types::{UserContentBlock, UserMessageBlock, UserSource};
 use crate::runtime::identity::MessageId;
@@ -25,13 +29,13 @@ fn canonical_block_descriptors_share_one_ledger_lookup_per_block() {
     let (store, message) = fixture();
     let mut connection = store.lock().unwrap();
     let transaction = connection.transaction().unwrap();
-    super::super::content::take_source_work();
+    crate::durable::sqlite::content::take_source_work();
     for value in [Some(serde_json::json!({"text":"first"})), None] {
         let bytes = block_bytes(&transaction, &message, 0, "text", value, &["text"]).unwrap();
         let header: MessageBlockHeader = serde_json::from_slice(&bytes).unwrap();
         assert!(!header.content.is_empty());
         assert_eq!(
-            super::super::content::take_source_work(),
+            crate::durable::sqlite::content::take_source_work(),
             (1, 0),
             "four representations and optional metadata share this block's lookup"
         );
@@ -54,10 +58,10 @@ fn canonical_block_source_is_reread_after_an_intervening_insert_trigger() {
             )
             .unwrap();
         transaction.execute_batch("CREATE TEMP TRIGGER erase_block_source AFTER INSERT ON observation_block_headers WHEN NEW.block_index=0 BEGIN DELETE FROM message_ledger WHERE message_id=NEW.message_id; END").unwrap();
-        super::super::content::take_source_work();
+        crate::durable::sqlite::content::take_source_work();
         assert!(index_blocks(&transaction, &message).is_err());
         assert_eq!(
-            super::super::content::take_source_work(),
+            crate::durable::sqlite::content::take_source_work(),
             (2, 0),
             "the second block cannot reuse position evidence from before the first INSERT"
         );

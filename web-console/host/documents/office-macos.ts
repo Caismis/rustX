@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OfficeSettlementError } from './office-cgroup.ts';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview.ts';
 
-const maximumOutput = 4 * 1024 * 1024;
+const maximumOutput = FILE_PREVIEW_LIMITS.convertedPdfBytes;
 /** Seatbelt paths are literals, never interpolated predicates. */
 const literal = (path: string) => JSON.stringify(path);
 export function macOfficeProfile(directory: string, runtimeRoots: string[]): string {
@@ -84,7 +85,7 @@ export async function convertMacOffice(bytes: Buffer, extension: 'docx' | 'pptx'
     await copyFile(new URL('./office-macos-worker.mjs', import.meta.url), worker);
     await writeFile(join(directory, `source.${extension}`), bytes, { mode: 0o600, flag: 'wx', signal });
     // POSIX file-size units are 512 bytes. Native font staging needs up to the
-    // engine's 256 MiB per-font limit; published PDF bytes stay capped at 4 MiB.
+    // engine's 256 MiB per-font limit; published PDF bytes have a separate bound.
     const result = await runMacOfficeSandbox(directory,
       ['/bin/sh', '-c', 'ulimit -f 524288; ulimit -n 128; ulimit -t 60; exec "$@"', 'rustx-office', node, worker, entry, directory, extension],
       [modules, resolve(dirname(node), '..'), '/bin/sh'], signal);

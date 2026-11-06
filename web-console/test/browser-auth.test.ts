@@ -11,7 +11,7 @@ import { BROWSER_SESSION_HEADER, BROWSER_SESSION_STORAGE } from '../browser-sess
 import { workspaceHandler } from '../host/http';
 import { LocalWorkspaceHost } from '../host/workspaces';
 
-const launch = 'L'.repeat(43), transport = 'T'.repeat(43);
+const launch = 'L'.repeat(43), transport = 'T'.repeat(43), delivery = 'D'.repeat(43);
 const servers: Server[] = [], directories: string[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
@@ -20,7 +20,8 @@ afterEach(async () => {
 async function carrier() {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-auth-test-')); directories.push(directory);
   const tokenFile = join(directory, 'token'); writeFileSync(tokenFile, transport, { mode: 0o600 });
-  const config = { appServerEndpoint: 'ws://127.0.0.1:3456/', transportTokenFile: tokenFile, browserLaunchToken: launch };
+  const deliveryTokenFile = join(directory, 'delivery'); writeFileSync(deliveryTokenFile, delivery, { mode: 0o600 });
+  const config = { deliveryTokenFile, appServerEndpoint: 'ws://127.0.0.1:3456/', transportTokenFile: tokenFile, browserLaunchToken: launch };
   let auth = browserAuth(config);
   const host = workspaceHandler(new LocalWorkspaceHost({ endpoint: config.appServerEndpoint, metadataFile: join(directory, 'workspaces.json'), picker: true, roots: [{ id: 'root', cwd: directory, displayName: 'Root' }] }));
   const server = createServer((req, res) => auth(req, res, () => { void host(req, res, () => res.end('application')); }));
@@ -33,7 +34,7 @@ async function carrier() {
     expect(response.status).toBe(200); expect(response.headers.get('set-cookie')).toBeNull();
     expect(response.headers.get('cache-control')).toBe('no-store'); expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     const html = await response.text(), script = html.match(/<script>(.*?)<\/script>/)![1];
-    expect(html).not.toContain(launch); expect(html).not.toContain(transport); expect(html).not.toMatch(/src=|href=/);
+    expect(html).not.toContain(launch); expect(html).not.toContain(transport); expect(html).not.toContain(delivery); expect(html).not.toMatch(/src=|href=/);
     expect(response.headers.get('content-security-policy')).toBe(`default-src 'none'; script-src 'sha256-${createHash('sha256').update(script).digest('base64')}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
     const stored = new Map<string, string>(), navigation: string[] = [];
     runInNewContext(script, { sessionStorage: { setItem: (key: string, value: string) => stored.set(key, value) }, location: { replace: (path: string) => navigation.push(path) } });
@@ -48,7 +49,7 @@ it('resource-free exchange mints fresh separated proofs and replaces the credent
   const c = await carrier(), proof = await c.login(); expect(await c.login()).not.toBe(proof);
   const response = await fetch(`${c.url}/__rustx/bootstrap`, { headers: { [BROWSER_SESSION_HEADER]: proof } });
   expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('no-store');
-  expect(await response.json()).toEqual({ connectionMode: 'local', appServerEndpoint: 'ws://127.0.0.1:3456/', appServerTransportToken: transport });
+  expect(await response.json()).toEqual({ connectionMode: 'local', appServerEndpoint: 'ws://127.0.0.1:3456/', appServerTransportToken: transport, appServerDeliveryToken: delivery });
   expect(await (await fetch(`${c.url}/`)).text()).toBe('application');
 });
 it('rejects malformed/wrong/native/duplicate launch credentials and non-root exchanges', async () => {

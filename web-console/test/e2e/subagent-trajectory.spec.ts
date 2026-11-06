@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 const fixture = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/startup.html?existing&models&subagents`;
-for (const width of [1440, 390]) test(`child-owned trajectory, paging and conversation switching at ${width}`, async ({ page }) => {
+for (const width of [1440, 390]) test(`child-owned trajectory, automatic history and conversation switching at ${width}`, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.setViewportSize({ width, height: 1000 }); await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
   await page.goto(fixture);
@@ -25,12 +25,13 @@ for (const width of [1440, 390]) test(`child-owned trajectory, paging and conver
   await input.fill('Preserved child draft\n'.repeat(8));
   await expect.poll(async () => ledger.evaluate(el => parseFloat(getComputedStyle(el).paddingBottom))).toBe((await seat.boundingBox())!.height + 16);
   await input.fill('Preserved child draft');
-  await page.getByRole('region', { name: 'Trajectory timeline' }).getByRole('button', { name: 'Load earlier history' }).click();
   await expect.poll(async () => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'agent/trace' && request.params.before).length)).toBeGreaterThan(0);
+  await expect(page.getByRole('region', { name: 'Trajectory timeline' }).getByRole('button', { name: 'Load earlier history' })).toHaveCount(0);
   await page.getByRole('searchbox', { name: 'Search trajectory' }).fill('child-1 tool 70');
   await ledger.getByText(/child-1 tool 70/).click();
   const inspector = page.getByRole('complementary', { name: 'Event details' });
   await expect(inspector).toBeVisible();
+  await expect(inspector).not.toContainText('Between turns');
   await expect.poll(async () => page.evaluate(() => (window as any).startupFixture.requests().filter((request: any) => request.method === 'agent/traceDetail').map((request: any) => request.params.agent_id))).toContain('child-1');
   await page.screenshot({ path: `/tmp/rustx-child-trajectory-${width}.png` });
   await page.getByRole('tab', { name: 'Chat', exact: true }).click();

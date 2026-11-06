@@ -67,6 +67,9 @@ pub const RECOVERY_CORRUPT_GENERATIONS_ENV: &str = "RUSTX_MCP_RECOVERY_CORRUPT_G
 /// The comma-separated generation numbers that publish the extra tool in
 /// their catalog, so a successful refresh has an observable catalog change.
 pub const RECOVERY_EXTRA_TOOL_GENERATIONS_ENV: &str = "RUSTX_MCP_RECOVERY_EXTRA_TOOL_GENERATIONS";
+/// The comma-separated generation numbers that publish a valid empty catalog.
+pub const RECOVERY_EMPTY_CATALOG_GENERATIONS_ENV: &str =
+    "RUSTX_MCP_RECOVERY_EMPTY_CATALOG_GENERATIONS";
 /// The positive SEP-2549 `ttlMs` every generation declares on its
 /// `tools/list` response, when set.
 ///
@@ -168,6 +171,8 @@ pub struct RecoveryScript {
     pub corrupt_generations: Vec<u64>,
     /// Generations that publish [`TOOL_EXTRA`] in their catalog.
     pub extra_tool_generations: Vec<u64>,
+    /// Generations that successfully publish an empty tool catalog.
+    pub empty_catalog_generations: Vec<u64>,
     /// How many gated progress pulses [`TOOL_HANG`] emits.
     pub hang_pulses: u32,
     /// When set, every generation declares this positive `ttlMs` on its
@@ -250,6 +255,10 @@ impl RecoveryControl {
             (
                 RECOVERY_EXTRA_TOOL_GENERATIONS_ENV.to_owned(),
                 joined(&script.extra_tool_generations),
+            ),
+            (
+                RECOVERY_EMPTY_CATALOG_GENERATIONS_ENV.to_owned(),
+                joined(&script.empty_catalog_generations),
             ),
             (
                 RECOVERY_HANG_PULSES_ENV.to_owned(),
@@ -523,7 +532,11 @@ async fn serve_lifecycle(
                 &format!("{JOURNAL_LIST_PREFIX}{}", generation.number),
             );
             let mut result = ListToolsResult {
-                tools: catalog(generation.publishes_extra_tool),
+                tools: if generation.publishes_empty_catalog {
+                    Vec::new()
+                } else {
+                    catalog(generation.publishes_extra_tool)
+                },
                 ..Default::default()
             };
             result.ttl_ms = generation.list_ttl_ms;
@@ -560,6 +573,7 @@ struct Generation {
     corrupts: bool,
     refuses: bool,
     publishes_extra_tool: bool,
+    publishes_empty_catalog: bool,
     hang_pulses: u32,
     list_ttl_ms: Option<u64>,
 }
@@ -582,6 +596,8 @@ impl Generation {
             corrupts: generations(RECOVERY_CORRUPT_GENERATIONS_ENV).contains(&number),
             refuses: generations(RECOVERY_REFUSE_GENERATIONS_ENV).contains(&number),
             publishes_extra_tool: generations(RECOVERY_EXTRA_TOOL_GENERATIONS_ENV)
+                .contains(&number),
+            publishes_empty_catalog: generations(RECOVERY_EMPTY_CATALOG_GENERATIONS_ENV)
                 .contains(&number),
             hang_pulses: std::env::var(RECOVERY_HANG_PULSES_ENV)
                 .ok()

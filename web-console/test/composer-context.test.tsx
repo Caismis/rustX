@@ -3,14 +3,15 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v52';
+import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v73';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
 import { QueueDock } from '../src/app/composer/QueueDock';
 import { TodoDock } from '../src/app/composer/TodoDock';
 import { goalDock, queueRows, todoDock, type TodoDockState } from '../src/bindings/composer-context';
-import { AppServerClient, type GoalControlOutcome } from '../src/client/app-server';
+import { AppServerClient } from '../src/client/app-server';
+import type { GoalControlOutcome } from '../src/client/contracts';
 import { Server, snapshot } from './fixture';
 
 const task = (id: string, status: TodoTask['status'], extra: Partial<TodoTask> = {}): TodoTask => ({ id, subject: `Task ${id}`, status, ...extra });
@@ -46,7 +47,7 @@ const withStatusHistory = (base = snapshot()): RuntimeClientSnapshot => {
 const withTodoHistory = (base = snapshot()): RuntimeClientSnapshot => {
   const call = { role: 'assistant' as const, id: 'history-call', content: [{ type: 'tool_call' as const, id: 'call-todo', tool_id: 'tool-todo', name: 'todo', arguments: { action: 'create', subject: 'Historical task' } }] };
   const result = { role: 'tool' as const, occurrence: { assistant_message_id: 'history-call', block_index: 0 }, id: 'history-result', tool_call_id: 'call-todo', tool_id: 'tool-todo', result: { status: { type: 'success' as const }, duration_ms: '1' } };
-  return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message } })) } };
+  return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message }, tool_calls: message.role === 'assistant' ? [{ message_id: call.id, occurrence: { locator: { type: 'by_message_id' as const, message_id: call.id }, block_index: 0 }, block_index: 0, call_id: 'call-todo', tool_id: 'tool-todo', name: 'todo', assembly_complete: true, committed_result_deferred: false, committed_result: result.result, state: { type: 'assembled' as const, arguments: JSON.stringify(call.content[0].arguments) } }] : [] })) } };
 };
 
 let server: Server;
@@ -64,7 +65,7 @@ const methods = () => server.requests.map(item => item.request.method);
 const goalControls = () => server.requests.flatMap(item => item.request.method === 'goal/control' ? [item.request.params.control] : []);
 const snapshotReads = () => methods().filter(method => method === 'session/checkpoint').length;
 const goalButton = (name: string) => within(dock('Goal')).getByRole('button', { name });
-const CONFIGURATION_WRITES = ['settings/replace', 'configuration/sourceWrite', 'configuration/reconcile', 'session/adoptConfiguration', 'session/setModel', 'session/create'];
+const CONFIGURATION_WRITES = ['settings/replace', 'configuration/sourceWrite', 'configuration/reconcile', 'session/setModel', 'session/create'];
 const update = (next: RuntimeClientSnapshot) => act(() => server.update('A', next));
 /** Answer a held authoritative read with a transport-level failure. */
 const failRead = (request: { id: string | number }) => act(async () => {
@@ -82,9 +83,9 @@ describe('Todo dock binds only the composed native Todo projection', () => {
     const state = todoDock(withTodos([]), { domain: 'todos.tasks', revision: '7', total: '1000', loaded: '0', next_offset: '0' });
     expect(state).toEqual({ kind: 'current', tasks: [], deferred: true });
     render(<TodoDock state={state}/>);
-    expect(dock('To-dos').textContent).toContain('Content deferred');
+    expect(dock('To-dos').textContent).toContain('Loading…');
     fireEvent.click(within(dock('To-dos')).getByRole('button'));
-    expect(within(dock('To-dos')).getByRole('status').textContent).toBe('Content deferred');
+    expect(within(dock('To-dos')).getByRole('status').textContent).toBe('Loading…');
     expect(within(dock('To-dos')).queryAllByRole('listitem')).toHaveLength(0);
     expect(todoDock(snapshot(), { domain: 'todos.tasks', revision: '7', total: '1000', loaded: '0', next_offset: '0' })).toEqual({ kind: 'absent' });
   });
@@ -182,7 +183,7 @@ describe('Todo dock binds only the composed native Todo projection', () => {
   it('follows native projection changes and never reconstructs from historical todo Tool facts', async () => {
     await mount(withTodoHistory(snapshot()));
     // History is visible as execution fact, yet no Todo extension means no current dock.
-    expect(screen.getByText('Assembling todo…')).toBeTruthy();
+    expect(document.querySelector('[data-tool-call-id="call-todo"]')).not.toBeNull();
     expect(region('To-dos')).toBeNull();
     await update(withTodoHistory(withTodos([])));
     expect(region('To-dos')).toBeNull();
@@ -211,7 +212,7 @@ describe('Todo dock binds only the composed native Todo projection', () => {
     for (const key of ['message:a1', 'message:u2']) {
       expect(within(document.querySelector(`[data-chat-anchor-key="${key}"]`) as HTMLElement).queryByRole('note')).toBeNull();
     }
-    expect(screen.getByText('Assembling todo…')).toBeTruthy();
+    expect(document.querySelector('[data-tool-call-id="call-todo"]')).not.toBeNull();
     // The historical annotation still carries the historical Todo section, and no
     // current Todo selector ever reads an Agent Status section.
     fireEvent.click(within(notes[0]).getByRole('button', { expanded: false }));
@@ -552,7 +553,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     server.held.add('turn/start');
     await sendQueued('Queued draft');
     const turn = await server.waitFor('turn/start', 1);
-    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Sending…' })).toHaveProperty('disabled', true);
     expect(screen.queryByText('Awaiting acknowledgement…')).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message' }).closest('[data-composer-card]')?.getAttribute('aria-busy')).toBe('true');
     // No count header: the in-flight request is not counted as queued.
@@ -716,8 +717,8 @@ describe('exact pending QueueDock mutations', () => {
 
   const row = () => inbound('7', 'before');
   it('edits an authoritative occurrence with its original revision and waits for readback', async () => {
-    let finish!: (value: import('../src/client/app-server').InboundControlOutcome) => void;
-    const edit = vi.fn(() => new Promise<import('../src/client/app-server').InboundControlOutcome>(resolve => { finish = resolve; }));
+    let finish!: (value: import('../src/client/contracts').InboundControlOutcome) => void;
+    const edit = vi.fn(() => new Promise<import('../src/client/contracts').InboundControlOutcome>(resolve => { finish = resolve; }));
     const ui = render(<QueueDock rows={[row()]} submissions={[]} running edit={edit} remove={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'after' } });

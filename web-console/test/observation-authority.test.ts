@@ -2,7 +2,7 @@ import {traceRefreshed} from './fixture';
 import{traceReceipt}from'./fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v52';
+import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v73';
 import { Server, snapshot } from './fixture';
 import { tracePage, traceRecord, requestDetail } from './trace-fixture';
 const servers: Server[] = [];
@@ -31,7 +31,7 @@ function event(s: Server, type: 'message' | 'trace' = 'message') {
 }
 it.each(['release', 'switch'] as const)('%s revokes Runtime event publication before native cleanup settles', async kind => {
   const s = await setup(), before = view(s), proof = before.attachmentObservation;
-  const reconcile = vi.spyOn(s.client as unknown as { reconcileInteractions(id: string): void }, 'reconcileInteractions');
+  const reconcile = vi.spyOn(s.client as unknown as { reconcile(id: string): void }, 'reconcile');
   const submissions = vi.spyOn(s.client as unknown as { settleSubmissions(id: string): void }, 'settleSubmissions');
   const closing = await revoke(s, kind); reconcile.mockClear(); submissions.mockClear();
   event(s); event(s, 'trace');
@@ -50,7 +50,7 @@ it('a held Snapshot cannot publish or reconcile after Release, and cleanup retai
   const s = await setup(), before = view(s); s.held.add('session/checkpoint');
   const refresh = s.client.refresh('A'), read = await s.waitFor('session/checkpoint', 1);
   const closing = await revoke(s, 'release');
-  const reconcile = vi.spyOn(s.client as unknown as { reconcileInteractions(id: string): void }, 'reconcileInteractions');
+  const reconcile = vi.spyOn(s.client as unknown as { reconcile(id: string): void }, 'reconcile');
   s.socket.success(read, {type:'checkpoint', checkpoint:checkpoint({ ...snapshot(), messages: [{ id: 'obsolete', role: 'assistant', content: [] }], transcript: { entries: [entry(99)] }, trace: { records: [traceRecord(99)] } },'99')});
   await refresh;
   expect(view(s).snapshot).toBe(before.snapshot); expect(view(s).cursor).toBe(before.cursor);
@@ -63,7 +63,7 @@ it.each(['latest', 'earlier', 'detail'] as const)('held Trace %s cannot publish 
   const s = await setup(), before = view(s).trace!;
   const method = kind === 'detail' ? 'session/traceDetail' : 'session/trace'; s.held.add(method);
   const work = kind === 'detail' ? s.client.loadTraceDetail('A', 'trace:10') : kind === 'earlier' ? s.client.loadEarlierTrace('A')
-    : (s.client as unknown as { refreshTraceDomain(id: string): Promise<void> }).refreshTraceDomain('A');
+    : (s.client as unknown as { traces: { refreshDomain(id: string): Promise<void> } }).traces.refreshDomain('A');
   const read = await s.waitFor(method, 1), closing = await revoke(s, 'release');
   s.handlers.set('session/trace', request => ({refreshed:traceRefreshed(request), type: 'trace', page: tracePage(request, [traceRecord(9)]) }));
   s.held.delete(method);
@@ -151,9 +151,9 @@ it.each([false, true])('late Snapshot cannot enter restored generation (authorit
   expect(count(s, 'session/attach')).toBe(2); expect(count(s,'session/checkpoint')).toBe(replacement?2:1);
 });
 it('RPC capacity cannot dispatch a Snapshot after its observation proof is revoked', async () => {
-  const s = await setup(); s.held.add('session/read');
-  const blockers = Array.from({ length: 6 }, () => s.client.request({ method: 'session/read', params: { session_id: 'A' } }, 'session'));
-  const reads = s.requests.filter(r => r.request.method === 'session/read').slice(-6);
+  const s = await setup(); s.held.add('session/summary');
+  const blockers = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary'));
+  const reads = s.requests.filter(r => r.request.method === 'session/summary').slice(-6);
   const refresh = s.client.refresh('A'); const refused = refresh.catch(error => error);
   expect(count(s, 'session/checkpoint')).toBe(0);
   s.held.add('session/detach'); const release = s.client.release('A'); void release.catch(() => {});
@@ -163,7 +163,7 @@ it('RPC capacity cannot dispatch a Snapshot after its observation proof is revok
   expect(String(await refused)).toContain('No operation was sent'); expect(count(s, 'session/checkpoint')).toBe(0);
   s.reply(detach); await release;
   expect(view(s).attachment).toBe('detached'); expect(s.claims()).toHaveLength(0);
-  s.held.delete('session/read'); await s.client.attach('A'); await s.client.refresh('A');
+  s.held.delete('session/summary'); await s.client.attach('A'); await s.client.refresh('A');
   expect(count(s, 'session/attach')).toBe(2); expect(count(s, 'session/checkpoint')).toBe(2); expect(s.claims()).toHaveLength(1);
 });
 it('failed detach retains only cleanup ownership, and old notifications cannot trigger observation repair', async () => {
@@ -211,7 +211,7 @@ it.each([true, false])('pending inbound invalidation rechecks after synchronous 
       released = view(s); release = s.client.release('A'); void release.catch(() => {}); released = view(s);
     }
   });
-  const reconcile = vi.spyOn(s.client as unknown as { reconcileInteractions(id: string): void }, 'reconcileInteractions');
+  const reconcile = vi.spyOn(s.client as unknown as { reconcile(id: string): void }, 'reconcile');
   const submissions = vi.spyOn(s.client as unknown as { settleSubmissions(id: string): void }, 'settleSubmissions');
   s.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: s.target('A'), cursor: '1', event: { type: 'pending_inbound_changed', pending: [] } } }); stop();
   if (releaseDuringInvalidation) {

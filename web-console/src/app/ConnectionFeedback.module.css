@@ -1,0 +1,3 @@
+.details { flex: none; display: grid; place-items: center; width: 24px; height: 28px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: none; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.details:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.details:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

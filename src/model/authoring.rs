@@ -47,9 +47,12 @@ pub struct Model {
     pub request_params: Option<AuthoredRequestParams>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<ModelProfileId>,
+    /// Optional complete Profile order, from lower to higher declared reasoning strength.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile_order: Option<Vec<ModelProfileId>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profiles: Option<BTreeMap<ModelProfileId, Profile>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Compat::is_empty")]
     pub compat: Compat,
 }
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
@@ -57,8 +60,9 @@ pub struct Model {
 pub struct Capabilities {
     pub input_modalities: BTreeSet<Modality>,
     pub output_modalities: BTreeSet<Modality>,
-    pub tool_calls: bool,
-    pub reasoning: bool,
+    /// Verified native JSON Schema enforcement; never inferred from a model name.
+    #[serde(default)]
+    pub json_schema_output: bool,
 }
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -74,14 +78,15 @@ pub struct Compat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responses_storage: Option<ResponsesStorageMode>,
 }
+impl Compat {
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
 /// One authored Model Profile: a complete, independent invocation preset.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
-    /// Required for every profile of a reasoning-capable Model; omission
-    /// means `false` for a non-reasoning Model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_enabled: Option<bool>,
     /// Default output budget; at most the Model's `max_output_tokens`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
@@ -125,11 +130,11 @@ impl From<Model> for ModelDocument {
             capabilities: ModelCapabilities {
                 input_modalities: value.capabilities.input_modalities,
                 output_modalities: value.capabilities.output_modalities,
-                tool_calls: value.capabilities.tool_calls,
-                reasoning: value.capabilities.reasoning,
+                json_schema_output: value.capabilities.json_schema_output,
             },
             request_params: value.request_params.map(|params| params.0),
             default_profile: value.default_profile,
+            reasoning_profile_order: value.reasoning_profile_order,
             profiles: value.profiles.map(|profiles| {
                 profiles
                     .into_iter()
@@ -137,7 +142,6 @@ impl From<Model> for ModelDocument {
                         (
                             id,
                             ModelProfileDocument {
-                                reasoning_enabled: p.reasoning_enabled,
                                 max_output_tokens: p.max_output_tokens,
                                 request_params: p.request_params.0,
                             },
@@ -157,6 +161,7 @@ mod tests {
         MapCredentialEnvironment, ModelCatalog, ModelCatalogError, ModelRef,
     };
     use crate::model::invocation::{ModelBindingRegistry, ModelSelection};
+    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
     use serde_json::json;
 
     const CATALOG: &str = r#"
@@ -175,10 +180,6 @@ request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"temperature
 [models."p/plain".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = true
-[models."p/plain".compat]
-chat_reasoning_replay = "omit"
 
 [models."p/m"]
 provider = "p"
@@ -190,16 +191,10 @@ default_profile = "balanced"
 [models."p/m".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = true
-[models."p/m".compat]
-chat_reasoning_replay = "omit"
 [models."p/m".profiles.fast]
-reasoning_enabled = true
 max_output_tokens = 1024
 request_params = '{"reasoning_effort":"low"}'
 [models."p/m".profiles.balanced]
-reasoning_enabled = true
 request_params = '''
 {
   "reasoning_effort": "medium",
@@ -207,7 +202,6 @@ request_params = '''
 }
 '''
 [models."p/m".profiles.off]
-reasoning_enabled = false
 request_params = '{"thinking":{"type":"disabled"}}'
 "#;
     const PLAIN_PARAMS: &str = r#"request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"temperature":0.1}'"#;
@@ -266,7 +260,190 @@ request_params = '{"thinking":{"type":"disabled"}}'
             4000
         );
         selection.profile = Some(ModelProfileId::new("off"));
-        assert!(!registry.resolve(&selection).unwrap().reasoning_enabled());
+        assert_eq!(
+            registry.resolve(&selection).unwrap().request_params()["thinking"],
+            json!({"type":"disabled"})
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one serialization and execution-isolation matrix
+    fn reasoning_order_round_trips_without_changing_selection_or_frozen_authority() {
+        let mut baseline = None;
+        for order in [
+            None,
+            Some(["off", "fast", "balanced"]),
+            Some(["balanced", "off", "fast"]),
+        ] {
+            let text = match order {
+                None => CATALOG.to_owned(),
+                Some(order) => {
+                    let declaration = format!(
+                        "default_profile = \"balanced\"\nreasoning_profile_order = {order:?}"
+                    );
+                    CATALOG.replace("default_profile = \"balanced\"", &declaration)
+                }
+            };
+            let authored: Catalog = crate::toml_authoring::parse(text.as_bytes()).unwrap();
+            let written = crate::toml_authoring::write(&authored).unwrap();
+            assert_eq!(written.contains("reasoning_profile_order"), order.is_some());
+            let catalog = ModelCatalog::from_toml_slice(written.as_bytes()).unwrap();
+            let ids = order.map(|ids| ids.map(ModelProfileId::new).to_vec());
+            assert_eq!(catalog.view().models[0].reasoning_profile_order, ids);
+            let document: ModelCatalogDocument = authored.clone().into();
+            let json = serde_json::to_value(&document).unwrap();
+            assert_eq!(
+                json["models"]["p/m"].get("reasoningProfileOrder").is_some(),
+                order.is_some()
+            );
+            assert_eq!(
+                ModelCatalog::from_document(serde_json::from_value(json).unwrap()).unwrap(),
+                catalog
+            );
+            assert_eq!(
+                serde_json::from_value::<Catalog>(serde_json::to_value(&authored).unwrap())
+                    .unwrap(),
+                authored
+            );
+            let bindings = registry(&catalog);
+            let mut invocations = Vec::new();
+            for primary in [None, Some("off"), Some("fast")] {
+                for auxiliary in [None, Some(None), Some(Some("off"))] {
+                    let mut config = SessionModelConfig::of(ModelRef::parse("p/m").unwrap());
+                    config.profile = primary.map(ModelProfileId::new);
+                    let policy = auxiliary.map_or(AuxiliaryModelPolicy::Session, |profile| {
+                        AuxiliaryModelPolicy::Explicit {
+                            model: config.model.clone(),
+                            profile: profile.map(ModelProfileId::new),
+                            request_params: serde_json::Map::new(),
+                            max_output_tokens: None,
+                        }
+                    });
+                    config.summary_model = policy.clone();
+                    config.title_model = policy.clone();
+                    config.classification_model = Box::new(policy.clone());
+                    config.btw_model = Box::new(policy);
+                    let state = SessionModelState::new(bindings.clone(), config).unwrap();
+                    let attempt = state.snapshot().unwrap();
+                    let admitted = serde_json::to_value(attempt.view()).unwrap();
+                    invocations.push(admitted.clone());
+                    for invocation in [
+                        state.title_invocation().unwrap().view(),
+                        state.classification_invocation().unwrap().view(),
+                        state.btw_invocation().unwrap().view(),
+                    ] {
+                        assert_eq!(invocation, attempt.summary_invocation().view());
+                        invocations.push(serde_json::to_value(invocation).unwrap());
+                    }
+                    assert_eq!(serde_json::to_value(attempt.view()).unwrap(), admitted);
+                }
+            }
+            for profile in [None, Some("off"), Some("fast"), Some("balanced")] {
+                let mut selection = ModelSelection::of(ModelRef::parse("p/m").unwrap());
+                selection.profile = profile.map(ModelProfileId::new);
+                let frozen = bindings.freeze(&selection).unwrap();
+                assert!(
+                    frozen
+                        .catalog_model_view()
+                        .reasoning_profile_order
+                        .is_none()
+                );
+                assert!(
+                    serde_json::to_value(frozen.catalog_model_view())
+                        .unwrap()
+                        .get("reasoningProfileOrder")
+                        .is_none()
+                );
+                invocations.push(serde_json::to_value(&frozen).unwrap());
+            }
+            if let Some(baseline) = &baseline {
+                assert_eq!(&invocations, baseline);
+            } else {
+                baseline = Some(invocations);
+            }
+        }
+    }
+
+    #[test]
+    fn reasoning_order_rejects_invalid_toml_and_validates_without_a_default_model() {
+        for declaration in [
+            "[]",
+            "[\"fast\"]",
+            "[\"off\", \"off\", \"balanced\"]",
+            "[\"off\", \"foreign\", \"balanced\"]",
+            "[\"bad/id\"]",
+        ] {
+            let text = CATALOG.replace(
+                "default_profile = \"balanced\"",
+                &format!("default_profile = \"balanced\"\nreasoning_profile_order = {declaration}"),
+            );
+            assert!(
+                ModelCatalog::from_toml_slice(text.as_bytes()).is_err(),
+                "{declaration}"
+            );
+            let layer = crate::toml_authoring::parse::<crate::local_runtime::authoring::RuntimeLayer>(
+                text.as_bytes(),
+            );
+            if let Ok(layer) = layer {
+                assert!(layer.agent.is_none());
+                assert!(
+                    ModelCatalog::validate_entries(ModelCatalogDocument::from(Catalog {
+                        schema_version: MODEL_CATALOG_SCHEMA_VERSION,
+                        providers: layer.providers.unwrap(),
+                        models: layer.models.unwrap(),
+                    }))
+                    .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_schema_claim_defaults_false_and_survives_authoring_and_frozen_views() {
+        let omitted = ModelCatalog::from_toml_slice(CATALOG.as_bytes()).unwrap();
+        let selected = ModelRef::parse("p/m").unwrap();
+        assert!(
+            !omitted
+                .model(&selected)
+                .unwrap()
+                .capabilities
+                .json_schema_output
+        );
+        for enabled in [false, true] {
+            let source = CATALOG.replace(
+                "output_modalities = [\"text\"]",
+                &format!("output_modalities = [\"text\"]\njson_schema_output = {enabled}"),
+            );
+            let authored: Catalog = crate::toml_authoring::parse(source.as_bytes()).unwrap();
+            let written = crate::toml_authoring::write(&authored).unwrap();
+            let read = ModelCatalog::from_toml_slice(written.as_bytes()).unwrap();
+            assert_eq!(
+                read.model(&selected)
+                    .unwrap()
+                    .capabilities
+                    .json_schema_output,
+                enabled
+            );
+            let bindings = registry(&read);
+            let mut selection = ModelSelection::of(selected.clone());
+            for profile in [None, Some("fast"), Some("off")] {
+                selection.profile = profile.map(ModelProfileId::new);
+                let invocation = bindings.resolve(&selection).unwrap();
+                assert_eq!(invocation.capabilities().json_schema_output, enabled);
+                let view = serde_json::to_value(invocation.view()).unwrap();
+                assert_eq!(view["capabilities"]["jsonSchemaOutput"], enabled);
+                assert_eq!(view["declaredCapabilities"]["jsonSchemaOutput"], enabled);
+                let before = invocation.view();
+                // A separately authored replacement cannot mutate an admitted invocation.
+                let replacement = registry(&omitted).resolve(&selection).unwrap();
+                assert!(!replacement.capabilities().json_schema_output);
+                assert_eq!(invocation.view(), before);
+            }
+            for model in bindings.catalog_view().models {
+                assert_eq!(model.declared_capabilities.json_schema_output, enabled);
+                assert_eq!(model.effective_capabilities.json_schema_output, enabled);
+            }
+        }
     }
 
     #[test]
@@ -335,9 +512,19 @@ request_params = '{"thinking":{"type":"disabled"}}'
                 "unknown field `reasoning`",
             ),
             (
-                "reasoning_enabled = false",
-                "enabled = false",
-                "unknown field `enabled`",
+                "output_modalities = [\"text\"]",
+                "output_modalities = [\"text\"]\nreasoning = true",
+                "unknown field `reasoning`",
+            ),
+            (
+                "output_modalities = [\"text\"]",
+                "output_modalities = [\"text\"]\ntool_calls = false",
+                "unknown field `tool_calls`",
+            ),
+            (
+                "[models.\"p/m\".profiles.off]",
+                "[models.\"p/m\".profiles.off]\nreasoning_enabled = false",
+                "unknown field `reasoning_enabled`",
             ),
         ] {
             let text = CATALOG.replace(original, replacement);
@@ -372,11 +559,6 @@ request_params = '{"thinking":{"type":"disabled"}}'
                 "default_profile = \"balanced\"",
                 "default_profile = \"balanced\"\nrequest_params = '{}'",
                 "must not declare model-level request_params",
-            ),
-            (
-                "reasoning_enabled = true\nmax_output_tokens = 1024",
-                "max_output_tokens = 1024",
-                "must declare reasoning_enabled",
             ),
             (
                 "max_output_tokens = 1024",

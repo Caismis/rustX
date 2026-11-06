@@ -294,9 +294,9 @@ fn completed_with_usage(input_tokens: u64, output_tokens: u64) -> ModelEvent {
     ModelEvent::Completed {
         finish_reason: ModelFinishReason::Stop,
         usage: Some(ModelUsage {
-            input_tokens,
-            output_tokens,
-            total_tokens: input_tokens + output_tokens,
+            input_tokens: Some(input_tokens),
+            output_tokens: Some(output_tokens),
+            total_tokens: Some(input_tokens + output_tokens),
             details: None,
         }),
     }
@@ -373,6 +373,32 @@ async fn transient_retry_uses_shared_identity_and_frozen_request() {
         audit.snapshot_history()[0].provisional_message_id,
         audit.snapshot_history()[1].provisional_message_id
     );
+    for snapshot in audit.snapshot_history() {
+        let expected_owner = rustx::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        };
+        let start_owner = audit.event_history.iter().find_map(|event| match event {
+            RuntimeEvent::ModelRequestStarted {
+                request_id, owner, ..
+            } if request_id == &snapshot.request_id => Some(owner),
+            _ => None,
+        });
+        assert_eq!(start_owner, Some(&expected_owner));
+        let terminal_owner = audit.event_history.iter().find_map(|event| match event {
+            RuntimeEvent::ModelRequestCompleted {
+                request_id, owner, ..
+            }
+            | RuntimeEvent::ModelRequestFailed {
+                request_id, owner, ..
+            } if request_id == &snapshot.request_id => Some(owner),
+            _ => None,
+        });
+        assert_eq!(
+            terminal_owner,
+            Some(&expected_owner),
+            "each terminal identifies the exact request start it settles"
+        );
+    }
     let opened = publication.opened();
     assert_eq!(opened.len(), 2);
     assert_ne!(opened[0].stream_id, opened[1].stream_id);
@@ -1213,17 +1239,17 @@ async fn failed_request_usage_is_latest_known_snapshot_and_not_duplicated() {
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::Emit(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
-                    input_tokens: 10,
-                    output_tokens: 2,
-                    total_tokens: 12,
+                    input_tokens: Some(10),
+                    output_tokens: Some(2),
+                    total_tokens: Some(12),
                     details: None,
                 },
             }),
             FakeStep::Emit(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
-                    input_tokens: 11,
-                    output_tokens: 3,
-                    total_tokens: 14,
+                    input_tokens: Some(11),
+                    output_tokens: Some(3),
+                    total_tokens: Some(14),
                     details: None,
                 },
             }),
@@ -1254,9 +1280,9 @@ async fn failed_request_usage_is_latest_known_snapshot_and_not_duplicated() {
     assert_eq!(
         failed_usage,
         Some(ModelUsage {
-            input_tokens: 11,
-            output_tokens: 3,
-            total_tokens: 14,
+            input_tokens: Some(11),
+            output_tokens: Some(3),
+            total_tokens: Some(14),
             details: None,
         })
     );
@@ -1276,9 +1302,9 @@ async fn failed_request_usage_is_latest_known_snapshot_and_not_duplicated() {
             event,
             RuntimeEvent::ModelRequestCompleted {
                 usage: Some(ModelUsage {
-                    input_tokens: 20,
-                    output_tokens: 4,
-                    total_tokens: 24,
+                    input_tokens: Some(20),
+                    output_tokens: Some(4),
+                    total_tokens: Some(24),
                     ..
                 }),
                 ..

@@ -1,12 +1,12 @@
 //! A captured Attempt is borrowed until a public snapshot actually needs ownership.
 use super::super::{
-    response::AttemptIdentitySource,
     settings::AdmittedSettings,
     snapshot::{
-        ForegroundToolExecution, InFlightAssistantMessage, InFlightBlock, RuntimeClientAttempt,
-        RuntimeClientAttemptPhase,
+        InFlightAssistantMessage, InFlightBlock, RuntimeClientAttempt, RuntimeClientAttemptPhase,
     },
 };
+use crate::observation::tool::ForegroundToolExecution;
+use crate::observation::turn::AttemptIdentitySource;
 use crate::{
     model::{ModelUsage, session::AttemptModelView},
     runtime::identity::{AttemptId, MessageId},

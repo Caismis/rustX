@@ -1,9 +1,7 @@
 //! Bounded pages of immutable publication audit blocks at a frozen native cut.
-use super::checkpoint::{
-    CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier,
-};
-use super::types::{RuntimeClientCursor, RuntimeClientError};
-use crate::durable::ConversationStore;
+use super::checkpoint::CheckpointPage;
+use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut, CollectionFrontier};
+use crate::runtime_client::types::{RuntimeClientCursor, RuntimeClientError};
 
 pub(crate) fn selection(domain: &str) -> Option<u64> {
     let domain = domain.replace('/', ".");
@@ -15,7 +13,7 @@ pub(crate) fn selection(domain: &str) -> Option<u64> {
 }
 
 pub(crate) fn page(
-    store: &dyn ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     cut: &CheckpointReadCut,
     domain: &str,
     offset: u64,

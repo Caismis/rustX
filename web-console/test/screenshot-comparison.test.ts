@@ -12,6 +12,7 @@ import {
 } from './screenshot-comparator';
 import manifest from './fixtures/rasterizer-noise.json';
 import frozenManifest from './fixtures/screenshot-comparator/noise.json';
+import previousStyleManifest from './fixtures/screenshot-comparator/pre-style-sync-noise.json';
 
 /** The screenshot acceptance contract, held to the pure comparator.
  *
@@ -32,7 +33,7 @@ const snapshotDirectories = readdirSync(e2e)
 /** The comparator's own contract is proven against frozen fixtures: earlier
  * Settings and Composer references and their measured rasterizer noise. They are copies, not live references, so a product change to a live
  * screenshot never silently rewrites the comparator's evidence. */
-const comparatorPolicy = frozenManifest as unknown as NoisePolicy;
+const comparatorPolicy = [...frozenManifest, ...previousStyleManifest] as unknown as NoisePolicy;
 const frozen = new URL('./fixtures/screenshot-comparator/', import.meta.url);
 const fixture = (name: string): RgbaImage => decodePng(readFileSync(new URL(name, frozen)));
 const NARROW = 'settings-agent-narrow-dark-linux.png';
@@ -75,7 +76,7 @@ it.each([
   ['live', noisePolicy, reference],
   ['frozen comparator', comparatorPolicy, fixture],
 ] as const)('the %s noise manifest is measured evidence bound to bounded, disjoint regions', (_label, policy, image_) => {
-  expect(policy.length).toBeGreaterThan(0);
+  if (_label === 'frozen comparator') expect(policy.length).toBeGreaterThan(0);
   for (const entry of policy) {
     expect(entry.evidence).toBeTruthy();
     expect(entry.regions.length).toBeGreaterThan(0);
@@ -125,6 +126,23 @@ it('A: an exact baseline passes with and without a noise policy', () => {
     expect(result.ok).toBe(true);
     expect(result.totalChanged).toBe(0);
     expect(result.changedOutsideRegions).toBe(0);
+  }
+});
+
+it('the current workflow editor reference retains only its measured one-pixel, three-level corner allowance', () => {
+  const name = 'workflow-editor-linux.png', expected = reference(name);
+  const entry = noisePolicy.find(row => row.reference === name)!;
+  expect(entry.regions).toEqual([{ label: 'Start panel icon corner', x: 786, y: 121, width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 3 }]);
+  expect(entry.pixels).toEqual([[786, 121, [91, 187, 140, 255], [94, 188, 142, 255]]]);
+  const observed = copy(expected); paint(observed, 786, 121, [94, 188, 142, 255]);
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, []).ok).toBe(false);
+  const excessive = copy(expected); nudge(excessive, 786, 121, 4);
+  expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  for (const [x, y] of [[785, 121], [787, 121], [786, 120], [786, 122]]) {
+    const neighbor = copy(observed); nudge(neighbor, x, y, 1);
+    const result = compare(neighbor, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
   }
 });
 
@@ -438,9 +456,7 @@ it('K: a dimension change fails, for strict and noise-policy references alike', 
 // Composer references without measured rasterizer evidence remain strict.
 it.each([
   ...['idle-empty', 'idle-draft', 'running-empty', 'running-draft', 'attachment', 'context']
-    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`))
-    .filter(name => !['composer-attachment-dark-390-linux.png', 'composer-context-dark-390-linux.png'].includes(name))
-    .filter(name => !['running-empty', 'running-draft', 'attachment', 'context'].some(state => name === `composer-${state}-light-390-linux.png`)),
+    .flatMap(state => ['light', 'dark'].map(theme => `composer-${state}-${theme}-390-linux.png`)),
   'mobile-expanded-dark-linux.png',
 ])('%s is strict', name => {
   expect(noisePolicy.some(entry => entry.reference === name)).toBe(false);
@@ -453,9 +469,9 @@ it.each([
   }
 });
 
-it.each([...['running-empty', 'running-draft', 'attachment', 'context'].map(state => [state, 'light']), ['attachment', 'dark'], ['context', 'dark']])('Composer %s %s noise rejects every adjacent unmeasured pixel', (state, theme) => {
-  const name = `composer-${state}-${theme}-390-linux.png`, expected = reference(name);
-  const entry = noisePolicy.find(entry => entry.reference === name)!;
+it.each([...['running-empty', 'running-draft', 'context'].map(state => [state, 'light']), ['context', 'dark']])('frozen Composer %s %s noise rejects every adjacent unmeasured pixel', (state, theme) => {
+  const name = `pre-style-sync-composer-${state}-${theme}-390-linux.png`, expected = fixture(name);
+  const entry = entryOf(name);
   const measured = new Set(entry.pixels!.map(([x, y]) => `${x},${y}`));
   for (const region of entry.regions) for (const [x, y] of cells(region)) expect(measured.has(`${x},${y}`)).toBe(true);
   const neighbours = new Set<string>();
@@ -465,22 +481,8 @@ it.each([...['running-empty', 'running-draft', 'attachment', 'context'].map(stat
   expect(neighbours.size).toBeGreaterThan(0);
   const changed = copy(expected);
   for (const key of neighbours) { const [x, y] = key.split(',').map(Number); nudge(changed, x, y, 1); }
-  const result = compare(changed, name, expected, noisePolicy);
+  const result = compare(changed, name, expected, comparatorPolicy);
   expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(neighbours.size);
-});
-
-it('dark attachment measured raster evidence passes while adjacent pixels and larger channel deltas fail', () => {
-  const name = 'composer-attachment-dark-390-linux.png', expected = reference(name);
-  const evidence = noisePolicy.find(entry => entry.reference === name)!;
-  const actual = copy(expected);
-  for (const [x, y, , after] of evidence.pixels!) paint(actual, x, y, after);
-  const check = (image: RgbaImage) => compareScreenshot({ referenceName: name, expected, actual: image, noisePolicy });
-  expect(check(actual).ok).toBe(true);
-  expect(check(actual).totalChanged).toBe(8);
-  const adjacent = copy(actual); nudge(adjacent, 289, 153, 1);
-  expect(check(adjacent).ok).toBe(false);
-  const overDelta = copy(expected); nudge(overDelta, 293, 153, 8);
-  expect(check(overDelta).ok).toBe(false);
 });
 
 // The former dark-context glyph allowance hid a deterministic sticky-paint

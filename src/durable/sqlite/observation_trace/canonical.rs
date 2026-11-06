@@ -7,11 +7,11 @@ use crate::durable::sqlite::statements::FixedStatements;
 use crate::message::types::{
     AssistantContentBlock as A, ContextKind, InboundKind, MessageBlock, UserContentBlock as U,
 };
-use crate::runtime_client::content::{
+use crate::observation::content::{
     CanonicalContentComponent as Component, CanonicalContentLocator, ContentRepresentation as Rep,
     ContentSource,
 };
-use crate::runtime_client::trace::{TraceArtifact, TraceContextKind, TracePreview, TraceToolCall};
+use crate::observation::trace::{TraceArtifact, TraceContextKind, TracePreview, TraceToolCall};
 
 fn binding(
     connection: &Connection,
@@ -28,13 +28,18 @@ fn binding(
         block_index: crate::message::types::ContentBlockIndex::new(block),
     };
     let raw = if component == Component::Payload && field == TraceFieldKind::Arguments {
-        super::super::content::descriptor(connection, conversation, &source, Rep::RawJsonUtf8)?
+        crate::durable::sqlite::content::descriptor(
+            connection,
+            conversation,
+            &source,
+            Rep::RawJsonUtf8,
+        )?
     } else {
         None
     };
     let reference = match raw {
         Some(reference) => reference,
-        None => super::super::content::descriptor(
+        None => crate::durable::sqlite::content::descriptor(
             connection,
             conversation,
             &source,
@@ -44,7 +49,7 @@ fn binding(
     };
     Ok(TraceFieldSource::Content {
         field,
-        binding: crate::runtime_client::checkpoint::ContentBinding {
+        binding: crate::observation::cut::ContentBinding {
             path: Vec::new(),
             source_path: Some(path.iter().map(|part| (*part).into()).collect()),
             content_ref: reference,
@@ -272,7 +277,7 @@ pub(in crate::durable::sqlite) fn index_proposals(
             let index =
                 u32::try_from(index).map_err(|_| storage("native proposal block exhausted"))?;
             let summary = proposal_from(connection, conversation, position, index, ordinal, call)?;
-            connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?3,observation_tool_identity_digest=?4 WHERE observation_ledger=?1 AND block_index=?2",params![position,index,encode(&summary)?,super::inspection::tool_identity_digest(&call.tool_id).as_slice()]).map_err(|error|storage(error.to_string()))?;
+            connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?3,observation_tool_identity_digest=?4 WHERE observation_ledger=?1 AND block_index=?2",params![position,index,encode(&summary)?,super::inspection::tool_identity_digest(&call.tool_id).as_slice()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             ordinal += 1;
         }
     }
@@ -344,7 +349,7 @@ pub(in crate::durable::sqlite) fn index_canonical(
                         call_id: proposal.call_id,
                         tool_id: proposal.tool_id,
                         name: proposal.name,
-                        occurrence: crate::runtime_client::snapshot::RuntimeClientToolOccurrence {
+                        occurrence: crate::observation::tool::RuntimeClientToolOccurrence {
                             locator: summary.locator.clone(),
                             block_index: proposal.occurrence.block_index,
                         },
@@ -358,7 +363,7 @@ pub(in crate::durable::sqlite) fn index_canonical(
         }
         summary
             .collections
-            .push(crate::runtime_client::checkpoint::CollectionFrontier {
+            .push(crate::observation::cut::CollectionFrontier {
                 domain: format!("messages.ledger:{position}.tools"),
                 revision: 1,
                 total,
@@ -375,8 +380,7 @@ fn seal_canonical(
     summary: &mut TraceCanonicalSummary,
 ) -> Result<(), ConversationStoreError> {
     let bytes = loop {
-        if let Some(bytes) =
-            crate::runtime_client::checkpoint::bounded_bytes(summary, HEADER_ENCODED_MAX)
+        if let Some(bytes) = crate::observation::bounded::bounded_bytes(summary, HEADER_ENCODED_MAX)
         {
             break bytes;
         }
@@ -404,7 +408,7 @@ fn seal_canonical(
             "UPDATE message_ledger SET observation_trace_summary=?2 WHERE position=?1",
             params![position, bytes],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 
@@ -420,7 +424,7 @@ fn append_blocks_frontier(
     };
     summary
         .collections
-        .push(crate::runtime_client::checkpoint::CollectionFrontier {
+        .push(crate::observation::cut::CollectionFrontier {
             domain: format!("messages.ledger:{position}.blocks"),
             revision: 1,
             total: blocks as u64,

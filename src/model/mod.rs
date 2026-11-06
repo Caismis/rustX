@@ -10,8 +10,11 @@
 //! `crate::runtime::continuation`.
 
 pub mod adapter;
+pub mod assembly;
 pub mod authoring;
+pub mod auxiliary;
 pub mod catalog;
+mod compat;
 pub mod deadline;
 pub mod error;
 pub mod event;
@@ -26,6 +29,7 @@ pub(crate) mod selected_input;
 pub mod session;
 pub use selected_input::{SelectedInputManifest, SelectedModelInput};
 pub mod snapshot;
+pub mod structured;
 pub mod types;
 
 pub use adapter::anthropic::{AnthropicAdapterConfig, AnthropicMessagesAdapter};
@@ -34,6 +38,19 @@ pub use adapter::openai::{
 };
 pub use adapter::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
+};
+pub use auxiliary::{
+    AUXILIARY_AUDIT_PAGE_LIMIT_MAX, AUXILIARY_AUDIT_RECORD_ENCODED_MAX,
+    AUXILIARY_CALL_START_ENCODED_MAX, AUXILIARY_FINGERPRINT_HEX_BYTES,
+    AUXILIARY_INPUT_MESSAGE_REF_LIMIT_MAX, AUXILIARY_REQUEST_ID_BYTES_MAX,
+    AUXILIARY_REQUEST_MODEL_BYTES_MAX, AUXILIARY_REQUEST_START_ENCODED_MAX,
+    AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryAttribution, AuxiliaryAuditCut,
+    AuxiliaryAuditFact, AuxiliaryAuditPage, AuxiliaryAuditRecord, AuxiliaryBusinessSource,
+    AuxiliaryCallAudit, AuxiliaryCallOutcome, AuxiliaryCallStart, AuxiliaryCommitConfirmation,
+    AuxiliaryCommitDisposition, AuxiliaryFingerprint, AuxiliaryFinishReason,
+    AuxiliaryInputEvidence, AuxiliaryObservedProviderTerminal, AuxiliaryRequestAudit,
+    AuxiliaryRequestEvidence, AuxiliaryRequestStart, AuxiliaryRequestTerminal,
+    AuxiliaryUsageCompleteness,
 };
 pub use catalog::{
     ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol, CredentialSource,
@@ -74,11 +91,12 @@ pub use invocation::{
     RequestParams, ResolvedModelInvocation, runtime_fallback_generation_safety_policy,
 };
 pub use session::{
-    AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, SessionModelConfig,
-    SessionModelState, SessionModelView, SummaryModelPolicy, SummaryModelView,
+    AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, AuxiliaryModelPolicy,
+    AuxiliaryModelView, SessionModelConfig, SessionModelState, SessionModelView,
 };
 pub use snapshot::{
-    ContributionStart, RequestIdentity, RequestReconstructionError, RequestSnapshot,
+    ContributionStart, ModelRequestOwner, RequestIdentity, RequestReconstructionError,
+    RequestSnapshot,
 };
 pub use types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
 
@@ -95,8 +113,6 @@ pub(crate) fn chat_protocol() -> ModelProtocol {
 }
 
 pub mod uploads;
-
-pub mod request_shape;
 
 pub mod images;
 pub(crate) mod media;

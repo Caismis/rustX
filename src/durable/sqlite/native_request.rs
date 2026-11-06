@@ -49,6 +49,35 @@ struct MetadataRef<'a> {
 impl Serialize for MetadataRef<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let s = self.snapshot;
+        // Every frozen fact must have an explicit storage decision.
+        let RequestSnapshot {
+            response_schema: _,
+            tool_associations: _,
+            history_cut: _,
+            input: _,
+            images: _,
+            semantic_input_fingerprint: _,
+            request_id: _,
+            identity: _,
+            provisional_message_id: _,
+            canonical_frontier: _,
+            effective_system_prompt: _,
+            system_sections: _,
+            runtime_resource_revision: _,
+            invocation: _,
+            context_window_tokens: _,
+            profile: _,
+            tool_definitions: _,
+            capability_revision: _,
+            context_generation: _,
+            continuation: _,
+            continuation_source: _,
+            request_context_ids: _,
+            unresolved_output_carryover_source: _,
+            unresolved_output_carryover: _,
+            unresolved_output_carryover_anchor: _,
+            contributions: _,
+        } = s;
         let fields = 23
             + usize::from(s.continuation.is_some())
             + usize::from(s.unresolved_output_carryover_source.is_some())
@@ -76,7 +105,7 @@ impl Serialize for MetadataRef<'_> {
         field!(invocation);
         field!(context_window_tokens);
         field!(profile);
-        field!(reasoning_enabled);
+        field!(response_schema);
         state.serialize_field("tool_definitions", &[] as &[u8])?;
         field!(capability_revision);
         field!(context_generation);
@@ -185,10 +214,10 @@ impl FreshConfiguration {
             .prepare_cached(
                 "SELECT typeof(configuration_json)='text' AND octet_length(configuration_json)=?2 AND CAST(configuration_json AS BLOB)=?3 FROM request_configurations WHERE digest=?1",
             )
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
             .query_row(rusqlite::params![self.digest, self.json.len(), self.json.as_bytes()], |row| row.get(0))
             .optional()
-            .map_err(|error| storage(error.to_string()))
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))
     }
 
     pub(super) fn authenticate(
@@ -279,9 +308,9 @@ pub(super) fn persist(
                 .prepare_cached(
                     "INSERT INTO request_configurations(digest,configuration_json) VALUES(?1,?2)",
                 )
-                .map_err(|error| storage(error.to_string()))?
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
                 .execute(rusqlite::params![configuration.digest, configuration.json])
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
     }
     Ok((json, configuration))
@@ -319,9 +348,9 @@ fn read(
         .unwrap_or(0);
     let (configuration, length): (Option<String>, usize) = connection.prepare_cached(
         "SELECT CASE WHEN typeof(configuration_json)='text' AND octet_length(configuration_json)<=?2 THEN configuration_json END,octet_length(configuration_json) FROM request_configurations WHERE digest=?1"
-    ).map_err(|error| storage(error.to_string()))?
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
         .query_row(rusqlite::params![configuration_digest, configuration_limit], |row| Ok((row.get(0)?, row.get(1)?)))
-        .optional().map_err(|error| storage(error.to_string()))?
+        .optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
         .ok_or_else(|| invalid("frozen request configuration is unavailable"))?;
     let bytes = materialized_bytes(json.len(), length)?;
     if bytes > MAX_BYTES {

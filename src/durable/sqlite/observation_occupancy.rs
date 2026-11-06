@@ -1,7 +1,8 @@
 //! Finite native reading evidence; original model fields keep their immutable source.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::runtime_client::occupancy::RuntimeClientContextOccupancy;
+use crate::observation::occupancy::RuntimeClientContextOccupancy;
 #[cfg(test)]
 thread_local! {
     static FAIL_COMPACTION_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -24,26 +25,33 @@ pub(super) fn witness_with_pending(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
     pending: bool,
-) -> Option<crate::durable::observation::OccupancyObservation> {
-    match &event.event {
+) -> Result<Option<crate::durable::observation::OccupancyObservation>, ConversationStoreError> {
+    Ok(match &event.event {
         RuntimeEvent::CompactionCompleted { occupancy, .. } => {
             let Ok(compaction) = compaction(connection, event) else {
                 // The committing caller owns the fail-closed row marker;
                 // missing derived capture cannot refuse this original fact.
-                return None;
+                return Ok(None);
             };
             let projection_head = if pending {
-                super::observation_projection::pending_completion(connection, event).ok()?
+                super::optional_display_value(super::observation_projection::pending_completion(
+                    connection, event,
+                ))?
             } else {
-                super::observation_projection::read(connection, event.sequence)
-                    .ok()
-                    .flatten()?
+                super::optional_display_value(super::observation_projection::read(
+                    connection,
+                    event.sequence,
+                ))?
+                .flatten()
+            };
+            let Some(projection_head) = projection_head else {
+                return Ok(None);
             };
             if projection_head.activation_id != compaction.activation_id
                 || projection_head.checkpoint_id != compaction.checkpoint_id
                 || projection_head.origin.completed_journal.0 != event.sequence
             {
-                return None;
+                return Ok(None);
             }
             Some(crate::durable::observation::OccupancyObservation {
                 projection_head,
@@ -57,13 +65,13 @@ pub(super) fn witness_with_pending(
             })
         }
         _ => None,
-    }
+    })
 }
 
 pub(super) fn compaction(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-) -> Result<crate::runtime_client::snapshot::RuntimeClientCompactionView, ConversationStoreError> {
+) -> Result<crate::observation::head::RuntimeClientCompactionView, ConversationStoreError> {
     let RuntimeEvent::CompactionCompleted {
         generation,
         checkpoint_id,
@@ -82,15 +90,13 @@ pub(super) fn compaction(
         return Err(storage("fault injected at derived compaction capture"));
     }
     let _ = connection;
-    Ok(
-        crate::runtime_client::snapshot::RuntimeClientCompactionView {
-            generation: *generation,
-            checkpoint_id: checkpoint_id.clone(),
-            activation_id: *activation_id,
-            tokens_before: *tokens_before,
-            estimated_tokens_after: *estimated_tokens_after,
-        },
-    )
+    Ok(crate::observation::head::RuntimeClientCompactionView {
+        generation: *generation,
+        checkpoint_id: checkpoint_id.clone(),
+        activation_id: *activation_id,
+        tokens_before: *tokens_before,
+        estimated_tokens_after: *estimated_tokens_after,
+    })
 }
 
 #[cfg(test)]
@@ -110,7 +116,7 @@ pub(super) fn event(
                 "UPDATE events SET observation_occupancy=?1 WHERE sequence=?2",
                 params![bytes, event.sequence],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
 }
@@ -120,15 +126,17 @@ pub(super) fn prepare(
 ) -> Result<Option<Vec<u8>>, ConversationStoreError> {
     let value = match &event.event {
         RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
             request_id,
             usage: Some(usage),
             ..
         }
         | RuntimeEvent::ModelRequestFailed {
+            owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
             request_id,
             usage: Some(usage),
             ..
-        } => super::observation_request_summary::occupancy(
+        } if usage.input_tokens.is_some() => super::observation_request_summary::occupancy(
             connection,
             request_id,
             usage,
@@ -142,7 +150,7 @@ pub(super) fn prepare(
         }),
         _ => return Ok(None),
     };
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
+    let bytes = crate::observation::bounded::bounded_bytes(&value, 16_384)
         .ok_or_else(|| storage("native occupancy header exceeds bound"))?;
     Ok(Some(bytes))
 }
@@ -161,14 +169,14 @@ pub(super) fn inherited(
             Some("context.occupancy.inherited.model".into()),
         )
     });
-    let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
+    let bytes = crate::observation::bounded::bounded_bytes(&value, 16_384)
         .ok_or_else(|| storage("inherited occupancy header exceeds bound"))?;
     connection
         .execute(
             "UPDATE bootstrap_identity SET occupancy_observation=?1 WHERE id=1",
             [bytes],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     super::observation_request::index_state(
         connection,
         "observation_context",
@@ -184,20 +192,60 @@ pub(super) fn read(
     #[cfg(test)]
     READ_WORK.with(|work| work.set((0, 0)));
     let mut selected: Option<(u64, Option<Vec<u8>>)> = None;
-    // The three kind probes have one fixed plan. Keep it for the whole read,
-    // and retain it between cuts; bindings and row evidence are always fresh.
-    let mut latest = connection.prepare_cached(
-        "SELECT sequence,observation_occupancy FROM events INDEXED BY events_context_reading_idx WHERE json_extract(event_json,'$.event.type')=?1 AND (json_extract(event_json,'$.event.type')='compaction_completed' OR COALESCE(json_type(event_json,'$.event.usage'),'null')!='null')=1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
-    ).map_err(|error| storage(error.to_string()))?;
     for kind in [
         "model_request_completed",
         "model_request_failed",
         "compaction_completed",
     ] {
-        let row: Option<(u64, Option<Vec<u8>>)> = latest
-            .query_row(params![kind, through], |row| Ok((row.get(0)?, row.get(1)?)))
-            .optional()
-            .map_err(|error| storage(error.to_string()))?;
+        let row: Option<(u64, Option<Vec<u8>>)> = if kind == "compaction_completed" {
+            // Fix the index's middle expression even though the kind implies
+            // eligibility, so SQLite can seek and order directly by sequence.
+            connection
+                .query_row_cached(
+                    "SELECT sequence,observation_occupancy
+                     FROM events INDEXED BY events_context_reading_idx
+                     WHERE json_extract(event_json,'$.event.type')=?1
+                       AND (json_extract(event_json,'$.event.type')='compaction_completed'
+                            OR (COALESCE(json_type(event_json,'$.event.usage.input_tokens'),'null')!='null'
+                                AND json_extract(event_json,'$.event.owner.type')='agent'))=1
+                       AND sequence<=?2
+                     ORDER BY sequence DESC LIMIT 1",
+                    params![kind, through],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
+        } else {
+            let terminal_kind = if kind == "model_request_completed" {
+                "completed"
+            } else {
+                "failed"
+            };
+            let candidate: Option<(u64, Option<Vec<u8>>, bool)> = connection.query_row_cached(
+                "SELECT e.sequence,e.observation_occupancy,
+                    EXISTS(SELECT 1 FROM request_owners o JOIN request_snapshots s
+                        ON s.request_id=o.request_id AND s.started_sequence=o.start_sequence
+                        WHERE o.terminal_sequence=e.sequence AND o.owner_kind='agent'
+                          AND o.terminal_kind=?3 AND o.attempt_id=e.attempt_id AND o.turn_id=e.turn_id
+                          AND o.request_id='request:' || octet_length(o.attempt_id) || ':' || o.attempt_id || ':' || octet_length(o.turn_id) || ':' || o.turn_id || ':' || o.retry_number)
+                 FROM events e INDEXED BY events_context_reading_idx
+                 WHERE json_extract(e.event_json,'$.event.type')=?1
+                   AND (json_extract(e.event_json,'$.event.type')='compaction_completed'
+                        OR (COALESCE(json_type(e.event_json,'$.event.usage.input_tokens'),'null')!='null'
+                            AND json_extract(e.event_json,'$.event.owner.type')='agent'))=1
+                   AND e.sequence<=?2 ORDER BY e.sequence DESC LIMIT 1",
+                params![kind, through, terminal_kind],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            candidate.map(|(sequence, bytes, valid)| {
+                if !valid {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "primary occupancy fact has missing or inconsistent mandatory ownership".into(),
+                    ));
+                }
+                Ok((sequence, bytes))
+            }).transpose()?
+        };
         #[cfg(test)]
         if let Some((_, bytes)) = &row {
             READ_WORK.with(|work| {
@@ -216,13 +264,13 @@ pub(super) fn read(
         bytes.ok_or_else(|| storage("native occupancy reading source unavailable"))?
     } else {
         let row: Option<Option<Vec<u8>>> = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT occupancy_observation FROM bootstrap_identity WHERE id=1",
                 [],
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let Some(bytes) = row else {
             return Ok(None);
         };
@@ -259,7 +307,7 @@ pub(super) fn model_read(
                 [],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if !exists {
             return Err(ConversationStoreError::InvalidReference(
                 "inherited occupancy source unavailable".into(),

@@ -1,0 +1,63 @@
+{
+  "status": "historical_measurement",
+  "measured_implementation_revision": "f7053216aee9ba9155c5b893413e60ec14397fe0",
+  "baseline_revision": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "measured_source_identity": {
+    "algorithm": "SHA-256 of sorted path + NUL + file-byte SHA-256 hex + LF",
+    "scope": "Cargo.toml, Cargo.lock, rust-toolchain.toml and Rust sources under src/tests/examples",
+    "file_count": 1010,
+    "sha256": "8f8e8168e37c8a77c5549dd15196c411f15fc01f9dba931783979cdedf480c06"
+  },
+  "preserved_evidence": [
+    {
+      "file": "baseline-manifest.json",
+      "sha256": "ecaa33019a6a50fd02a7a2b98beaeb517b5e64e1daafc3eafab30b71df18c681"
+    },
+    {
+      "file": "baseline-model-startup.json",
+      "sha256": "c1f78e3982caa7916bbd5a1c9597ff18a1b010016b53e33cc9ebbbeaff5edea6"
+    },
+    {
+      "file": "baseline-source-preparation.json",
+      "sha256": "6fed4c601f0597b3881a996eb34e6373eff626d6695e0357ddbf3b56d8aacc96"
+    },
+    {
+      "file": "baseline-startup.json",
+      "sha256": "ae4a818719e3f00d676ab2b9941059b97f87b0382a82375d11f21e1321f7cbda"
+    },
+    {
+      "file": "head-manifest.json",
+      "sha256": "48d9900e8c864f7d4aed13ae411e55479a7556d28de61bfa00e41db96ce5a82b"
+    },
+    {
+      "file": "head-model-startup.json",
+      "sha256": "928364ab52b1780a08c5783ffa5199732b6ed696e02b199df6076a02862be075"
+    },
+    {
+      "file": "head-source-preparation.json",
+      "sha256": "3e7e58b4aa15f10257b86babec52c6ee966718d7d1137fa6f11c51be71d2e715"
+    },
+    {
+      "file": "head-startup.json",
+      "sha256": "1023426f9feaf277da61e0981a1a954184b19f3ad8801f4084978ef7c49cf26d"
+    },
+    {
+      "file": "mcp-startup-1440.png",
+      "sha256": "993931cec638a29c0de5919e9c304ecab53e9c15c6abf4d505be3f54b7a0cdfc"
+    },
+    {
+      "file": "mcp-startup-390.png",
+      "sha256": "4ce692e83424e3f32ae4b2bfc80704d611565b7a0fa171eeb5cebe0467be39a0"
+    },
+    {
+      "file": "validation.json",
+      "sha256": "7dcc657506832c9dace475bdeb4e849fd76ab8ad5bbfb735a8b867cd2348e561"
+    }
+  ],
+  "notes": [
+    "Existing head-* filenames refer to the implementation measured at the revision above, not the current working tree after review fixes.",
+    "Performance JSON, manifests, source digests, binary hashes and command/log records are preserved unchanged; no later source is claimed to match those binaries.",
+    "validation.json retains the original validation sequence leading to that revision, including its explicitly labeled earlier checkpoints and failed runs.",
+    "Validation of subsequent review fixes belongs to review-fix-validation.json. These fixes have no new benchmark measurements."
+  ]
+}

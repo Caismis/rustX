@@ -19,7 +19,7 @@ fn source() -> (SeekableObservationSource, Vec<u8>) {
         text: "水🙂".repeat(12_000),
     };
     let mut original = Vec::new();
-    crate::runtime_client::structural_json::to_writer(&mut original, &fixture).unwrap();
+    crate::observation::structural_json::to_writer(&mut original, &fixture).unwrap();
     (SeekableObservationSource::new(&fixture).unwrap(), original)
 }
 fn probes(source: &SeekableObservationSource, length: u64) -> Vec<(u64, u64)> {

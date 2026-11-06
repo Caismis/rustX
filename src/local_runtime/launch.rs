@@ -1,8 +1,9 @@
 //! Local CLI input translation and immutable process bindings. Configuration semantics live
 //! exclusively in `configuration::UserConfigManager`.
+use super::configuration::capture::{absolute, canonical_directory, present_on_disk};
 use super::configuration::{
     AdmittedSessionConfig, ProspectiveSessionConfig, SessionConfigInput, UserConfigManager,
-    UserConfigSources, absolute, canonical_directory, present_on_disk,
+    UserConfigSources,
 };
 use super::diagnostics::LaunchFailure;
 use std::path::{Path, PathBuf};

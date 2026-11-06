@@ -1,44 +1,4 @@
 //! Finite display of a native occupancy reading. Original models remain source-owned.
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RuntimeClientContextOccupancy {
-    pub estimated: bool,
-    pub input_tokens: u64,
-    pub context_window_tokens: u64,
-    pub model: Option<String>,
-    pub model_deferred: bool,
-    /// Exact selected-field domain, read with the occupancy's captured checkpoint cut.
-    pub model_source: Option<String>,
-    pub breakdown: crate::context::occupancy::ContextBreakdown,
-}
-
-impl RuntimeClientContextOccupancy {
-    pub(crate) fn from_native(
-        value: &crate::context::occupancy::ContextOccupancy,
-        model_source: Option<String>,
-    ) -> Self {
-        let model = (value.model.len() <= 512).then(|| value.model.clone());
-        Self {
-            estimated: value.estimated,
-            input_tokens: value.input_tokens,
-            context_window_tokens: value.context_window_tokens,
-            model_deferred: model.is_none(),
-            model_source: model.is_none().then_some(model_source).flatten(),
-            model,
-            breakdown: value.breakdown.clone(),
-        }
-    }
-}
-
-pub(crate) fn read(
-    store: &dyn crate::durable::ConversationStore,
-    through: u64,
-) -> Result<Option<RuntimeClientContextOccupancy>, crate::durable::ConversationStoreError> {
-    store.observation_occupancy(through)
-}
 
 pub(crate) enum OccupancyModelSource {
     Journal(u64),
@@ -61,7 +21,7 @@ pub(crate) fn selection(domain: &str) -> Option<OccupancyModelSource> {
 
 pub(crate) fn value_read(
     store: &dyn crate::durable::ConversationStore,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     item_offset: u64,
     path: &[String],
@@ -102,7 +62,7 @@ pub(crate) fn value_read(
 
 pub(crate) fn page(
     store: &dyn crate::durable::ConversationStore,
-    cut: &super::checkpoint::CheckpointReadCut,
+    cut: &crate::observation::cut::CheckpointReadCut,
     domain: &str,
     offset: u64,
     limit: usize,
@@ -132,7 +92,7 @@ pub(crate) fn page(
             None
         };
         loaded = u64::from(value.is_some());
-        items.push(super::checkpoint::CheckpointPageItem {
+        items.push(crate::observation::cut::CheckpointPageItem {
             body_complete: None,
             key: None,
             offset: 0,
@@ -149,7 +109,7 @@ pub(crate) fn page(
         total: 1,
         items,
         next_offset: None,
-        collections: vec![super::checkpoint::CollectionFrontier {
+        collections: vec![crate::observation::cut::CollectionFrontier {
             domain: domain.into(),
             revision: cut.through,
             total: 1,

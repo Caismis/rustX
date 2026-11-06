@@ -96,7 +96,7 @@ print('kernel environments clean')`);
     expect((await service()).stdout.trim()).toBe('0');
   }
 });
-it('all writable paths share one 64 MiB tmpfs; root, dev and input cannot supply another filesystem', async () => {
+it('all writable paths share one 256 MiB tmpfs; root, dev and input cannot supply another filesystem', async () => {
   if (process.platform !== 'linux') return;
   const result = await run(`import os,errno,json
 for directory in ['/','/dev','/etc','/input','/proc']:
@@ -108,17 +108,17 @@ for path in ['/escape','/dev/escape','/etc/escape','/input/escape']:
  except OSError as e:
   assert e.errno in [errno.EROFS,errno.EACCES],(path,e)
 assert os.stat('/tmp').st_dev == os.stat('/dev/shm').st_dev
-assert os.statvfs('/tmp').f_blocks * os.statvfs('/tmp').f_frsize == 67108864
+assert os.statvfs('/tmp').f_blocks * os.statvfs('/tmp').f_frsize == 268435456
 written=0
 try:
- for i in range(20):
+ for i in range(80):
   with open(('/tmp/' if i%2 else '/dev/shm/')+str(i),'wb',buffering=0) as f:
    for j in range(1024):
     written += f.write(b'x'*4096)
  raise AssertionError('unbounded writable storage')
 except OSError as e:
  assert e.errno == errno.ENOSPC,e
-assert written <= 67108864
+assert written <= 268435456
 print('storage bounded')`);
   expect(result.toString()).toContain('storage bounded');
 });
@@ -190,7 +190,7 @@ else:
   if (mode === 'launcher failure') observation.launcher!.kill('SIGKILL');
   await rejected; await empty(path);
   expect((await run("print('next operation')")).toString()).toContain('next operation');
-}, 25000);
+}, 70000);
 it('missing user manager never admits an unsandboxed payload', async () => {
   if (process.platform !== 'linux') return;
   vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/nonexistent/rustx-document-bus');

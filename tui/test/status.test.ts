@@ -28,7 +28,7 @@ import {
   workingStatus,
 } from "../src/ui/components/status.ts";
 import { plainText } from "../src/ui/theme.ts";
-import { renderModel } from "../src/commands/dispatcher.ts";
+import { renderModel } from "../src/commands/presentation.ts";
 import type { InteractionRequest } from "../src/protocol/app-server.ts";
 import {
   DEFAULT_PREVIEW_CHARS,
@@ -172,8 +172,8 @@ describe("working status", () => {
   it("keeps human Review distinct from tool permission and mixed waits", () => {
     const review = approvalInteraction();
     review.request.kind = { type: "review", subject_digest: "a".repeat(64), review: {
-      instance: { block: { run: { conversation_id: "conv_413055e0-cb3a-7c6d-b9b6-b446a98e0ad1", attempt_id: "attempt-1", invocation: "1" }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
-      subject: { type: "plan", content: { plan: "fixed" } }, context: [],
+      instance: { block: { run: { conversation_id: "conv_413055e0-cb3a-7c6d-b9b6-b446a98e0ad1", origin: {type:'tool' as const,attempt_id:"attempt-1"}, invocation: "1" }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
+      questionnaire: { questions: [{ question: "Ship it?", header: "review", answer: { type: "single_choice", options: [{ label: "Approve", description: "" }], allow_custom: false } }] },
     } };
     assert.equal(workingStatus(stateOf({ pending_interactions: [review] })), "Waiting for human review…");
     for (const other of [approvalInteraction(), questionnaireInteraction()]) {
@@ -356,6 +356,15 @@ describe("footer", () => {
     );
   });
 
+  it("keeps absent reported token fields distinct from a reported zero", () => {
+    const state = stateOf({ transcript: { statistics: {
+      turns: "1", steps: "1", completed_responses: "1", model_requests: "1", requests_with_usage: "1",
+      reported_usage: { output_tokens: "0" },
+    } } });
+    assert.match(footer(state, "connected"), /reported ↑\? ↓0/);
+    assert.doesNotMatch(footer(state, "connected"), /reported ↑0/);
+  });
+
   it("does not duplicate pending inbound, background, and approval activity", () => {
     const rendered = footer(
       stateOf({
@@ -463,10 +472,8 @@ describe("startup and context", () => {
         capabilities: {
           inputModalities: ["text"],
           outputModalities: ["text"],
-          toolCalls: true,
-          reasoning: true,
+          jsonSchemaOutput: false,
         },
-        reasoningEnabled: true,
         profile: "medium",
       }),
     });
@@ -486,7 +493,7 @@ describe("startup and context", () => {
     assert.match(rendered, /model alpha\/model-a/);
     assert.match(rendered, /provider alpha · Responses/);
     assert.match(rendered, /context unreported/);
-    assert.match(rendered, /profile medium · reasoning on/);
+    assert.match(rendered, /profile medium/);
     assert.match(rendered, /session review branch/);
     assert.match(rendered, /Ctrl\+L model/);
     assert.match(rendered, /\/help commands/);
@@ -928,4 +935,29 @@ it('deferred occupancy model keeps native quantities without a guessed identity'
     breakdown:{system_tokens:'600',tool_tokens:'5000',message_tokens:'20000'},
   }}});
   assert.equal(contextLabel(state), 'last context 25.6k/256k · model deferred (/context-model)');
+});
+
+describe("Session configuration status", () => {
+  type Status = "applied" | "preparing" | "ready" | "failed" | "uncertain";
+  const unit = (status: Status) => status === "failed" || status === "uncertain" ? { status, diagnostic: "store unavailable" } : { status };
+  const application = (status: Status, capabilities: Status = "applied") => ({
+    scope: "s", sources: [{ kind: "user" as const }], version: "1", desired: { input_revision: "i", attempt: "1" },
+    units: { execution_policy: { status: "applied" as const }, instructions: unit(status), capabilities: unit(capabilities) },
+  });
+  it("never claims the previous configuration was kept for an uncertain commit", () => {
+    for (const shown of [application("uncertain"), application("failed", "uncertain")]) {
+      const wide = footer(stateOf(), "connected", 160, undefined, undefined, shown);
+      assert.match(wide, /config applied, not recorded · new work waits/);
+      assert.doesNotMatch(wide, /previous kept/);
+      const narrow = footer(stateOf(), "connected", 40, undefined, undefined, shown);
+      assert.match(narrow, /config uncertain/);
+      assert.doesNotMatch(narrow, /previous kept|config failed/);
+    }
+  });
+  it("is silent once applied and names pending or failed work compactly", () => {
+    assert.doesNotMatch(footer(stateOf(), "connected", 160, undefined, undefined, application("applied")), /config/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("preparing")), /config preparing/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("ready")), /config applies after current work/);
+    assert.match(footer(stateOf(), "connected", 160, undefined, undefined, application("failed")), /config failed · previous kept/);
+  });
 });

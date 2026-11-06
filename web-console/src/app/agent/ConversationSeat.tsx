@@ -1,38 +1,48 @@
+import { useToastNotice } from '../../locale/use-toast-notice';
+import { Toast } from '../../presentation/primitives/Toast';
+import { IconWarningOutline16 } from '../../presentation/primitives/icons';
+import { actionError } from '../../bindings/action-error';
 import { useTranslation } from '../../locale/react';
 import { useState } from 'react';
 import { UploadFailure } from '../../client/uploads';
-import { sameTarget, type AppServerClient } from '../../client/app-server';
+import type { AppServerClient } from '../../client/app-server';
+import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { useClientSelector, sameValue, transportSelection } from '../../client/selectors';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
-import type { UserInputBlock } from '../../../../protocol/app-server/v52';
+import type { UserInputBlock } from '../../../../protocol/app-server/v73';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { goalDock } from '../../bindings/composer-context';
-import { deriveSessionProductState, type SessionRecovery } from '../../bindings/session-product';
+import { deriveSessionProductState, type SessionRecovery, type SessionTransition } from '../../bindings/session-product';
 import { SessionStatus } from '../SessionStatus';
 import { ConversationComposer } from '../new-conversation/ConversationComposer';
 import { ConversationDocks, ConversationTotals } from './ConversationLive';
-import { ContextSeat } from './ContextSeat';
 import { Interactions } from './Interactions';
 import type { CommandId } from '../commands/registry';
 import type { ComposerDraft } from '../composer/draft';
 import { ComposerSeat } from './ComposerSeat';
+import { RecordedQuestionPanel, useQuestionPanels } from './QuestionPanels';
 
-export function ConversationStatus({ client, sessionId, recover }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void }) {
+export function ConversationStatus({ client, sessionId, recover, transition }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void; transition?: SessionTransition }) {
   const tx = useTranslation();
-  const product = useClientSelector(client, state => deriveSessionProductState(tx, state, state.views[sessionId]), sameValue);
+  const product = useClientSelector(client, state => deriveSessionProductState(tx, state, state.views[sessionId], sessionId, transition), sameValue);
+  // Physical connection feedback has one owner beside Settings. Session-owned
+  // uncertainty, storage failures and a lost attachment remain actionable here.
+  if (product.status === 'reconnect' && product.recovery?.action === 'connect'
+    || product.status === 'failure' && product.recovery?.action === 'connection-settings') return null;
   return <SessionStatus product={product} recover={recover}/>;
 }
 
 /** Execution admission belongs at the resident composer seat, never the shell. */
-export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, draftOwner, binding, current, executable, consumed, restored, preparePublication, onCommand }: {
+export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, draftOwner, binding, current, executable, intakeCommitted, transitioning = false, consumed, restored, preparePublication, onCommand }: {
   client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
   workspacePicked?: (id: string) => void;
-  draftOwner?: ComposerDraft; executable: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
+  draftOwner?: ComposerDraft; executable: boolean; intakeCommitted?: boolean; transitioning?: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
   restored?: { conversation: string; content: UserInputBlock[] }; preparePublication: () => ((id: string) => (() => boolean) | void);
   onCommand: (id: CommandId) => void;
 }) {
+  const panels = useQuestionPanels();
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
   const owner = JSON.stringify([state.generation, sessionId, binding]);
@@ -40,21 +50,21 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const uploadCurrent = () => current() && nativeUploadCurrent();
   const cancellation = view && executable && current() ? client.cancellationTarget(view.id) : undefined;
   const [sending, setSending] = useState<string>();
-  const [failure, setFailure] = useState<{ owner: string; message: string }>();
-  const error = failure?.owner === owner ? failure.message : undefined;
+  const [failure, setFailure] = useToastNotice(owner);
+  const error = failure?.text;
   const attached = state.connection === 'connected' && !!view && client.isAttachmentControlCurrent(view.id, view.attachmentObservation);
-  const disabled = !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
+  const disabled = transitioning || !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
-    <div hidden={view?.observationState === 'following' && !!view.snapshot?.pending_interactions?.length}>
-      <ConversationComposer draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
-        context={view && <><ContextSeat client={client} sessionId={view.id}/><ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/></>}
+    <div hidden={view?.observationState === 'following' && !!view.snapshot?.pending_interactions?.length || !!panels?.record}>
+      <ConversationComposer intakeCommitted={intakeCommitted} draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
+        context={view && <ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/>}
         active={view ? {
           initialContent: restored?.conversation === (view.nodeConversationId ?? view.target?.conversation_id ?? view.snapshot?.conversation_id) ? restored?.content : undefined,
           submissionTarget: view.target, submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
           lineageSwitchSafe: lineageSwitchSafe(view), hasGoal: !!goalDock(view.snapshot), onCommand,
           consumed, cancellationAvailable: !!cancellation, cancellationOnly: !attached && !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,
-          onCancel: () => { setFailure(undefined); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure({ owner, message: String(cause) })); },
+          onCancel: () => { setFailure(''); if (!cancellation || !current()) return; void client.cancelTurn(cancellation).catch(cause => setFailure(actionError(cause))); },
           onUpload: (files, operation) => {
             if (!uploadCurrent()) return Promise.reject(new UploadFailure('failed', 'Upload view replaced'));
             // The current gesture admits work. Once sent, its native result
@@ -64,7 +74,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
           onReconcile: async operation => { if (!uploadCurrent()) throw new Error('Upload view replaced'); const result = await client.uploadStatus(view.id, operation); if (!nativeUploadCurrent()) throw new Error('Upload view replaced'); return result; },
           onSend: async (text, receipts, delivery, acknowledged) => {
             if (!uploadCurrent()) return false;
-            setFailure(undefined); setSending(owner);
+            setFailure(''); setSending(owner);
             try {
               await client.send(view.id, text, receipts, delivery, acceptance => {
                 const native = client.getSnapshot().views[view.id];
@@ -77,10 +87,11 @@ export function ConversationSeat({ client, host, authority, associations, sessio
             finally { setSending(value => value === owner ? undefined : value); }
           },
         } : undefined}/>
-      {error && <p role="alert">{error}</p>}
+      {error && <Toast key={failure?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setFailure('')}/>}
       {view && <ConversationTotals client={client} sessionId={view.id}/>}
     </div>
-    {sessionId && <LiveInteractions key={owner} client={client} sessionId={sessionId}/>}
+    <div hidden={!!panels?.record}>{sessionId && <LiveInteractions key={owner} client={client} sessionId={sessionId}/>}</div>
+    <RecordedQuestionPanel/>
   </ComposerSeat>;
 }
 function composerFacts(view: ReturnType<AppServerClient['getSnapshot']>['views'][string] | undefined) {

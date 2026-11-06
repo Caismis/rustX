@@ -22,7 +22,7 @@ export async function convertOffice(bytes: Buffer, extension: 'docx' | 'pptx', s
   try {
     await writeFile(join(directory, `source.${extension}`), bytes, { mode: 0o600, flag: 'wx', signal });
     // Source admission has already rejected VBA, ActiveX, embedded packages,
-    // templates and every external relationship. Disable document macros too.
+    // templates and external resources. Inert hyperlinks are allowed. Disable document macros too.
     await writeFile(join(directory, 'registrymodifications.xcu'), '<oor:items xmlns:oor="http://openoffice.org/2001/registry"><item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item></oor:items>', { mode: 0o600, flag: 'wx', signal });
     signal.throwIfAborted();
     const result = await runOfficeSandbox(directory, ['/usr/bin/sh', '-ec',

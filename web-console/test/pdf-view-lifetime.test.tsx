@@ -2,7 +2,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 const boundary = vi.hoisted(() => ({ failures: [] as ((code: string) => void)[], dispose: vi.fn() }));
 vi.mock('../src/client/pdf-document', () => ({ PdfDocumentOwner: class {
-  document = new Promise<never>(() => {});
+  pageSizes = new Promise<never>(() => {});
   dispose = boundary.dispose;
   constructor(_bytes: Uint8Array, fail: (code: string) => void) { boundary.failures.push(fail); }
 } }));

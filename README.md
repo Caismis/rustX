@@ -108,6 +108,13 @@ Root authority. Root Native Tools use the explicit `agent.tools.builtin` whiteli
 MCP and Managed Python Tools use `agent.tools.sources`. Named Agents own independent
 complete Tool profiles.
 
+For MCP and Managed Python sources, `"all"` grants source-wide access to both
+ordinary Tools and advertised MCP Resources. Exact Tool-name arrays grant only
+those Tools. A negotiated, authorized Resources source automatically composes
+`list_mcp_resources`, `list_mcp_resource_templates`, and `read_mcp_resource` once
+per Agent, including when the source publishes no Tools. Resource contents enter
+context only through an explicit Tool call.
+
 Skill roots are `~/rustx/.agents/skills` and `<workspace>/.agents/skills`, with
 whole-package Workspace shadowing. Root and named Agents each select `skills` as
 `"all"`, an exact name array, or `[]`. This controls prompt visibility, not filesystem

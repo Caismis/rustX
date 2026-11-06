@@ -4,16 +4,28 @@ use super::AdmissionFaultOperation;
 use super::{
     Arc, ConversationStoreError, InboundSequence, MessageBlock, PublicationFrame,
     PublicationSettlement, PublicationStreamId, PublicationStreamStart, RuntimeEventEnvelope,
-    SqliteConversationStore, Transaction, TranscriptCommitReceipt, append_validation,
-    canonical_observation_batch, canonical_observation_receipt, clear_publication_staging, content,
-    ensure_publication_stream_tx, ensure_surface_head, load_pending_until, native_request,
-    observation_receipt, optional_display_layout, params, persist_event_tx_deferred,
-    persist_event_tx_with_requests, persist_publication_progress_tx, prepare_publication_frames_tx,
-    reading, request_outcome_is_durable, require_publication_stream,
-    require_started_request_with_validation, seq_to_i64, set_canonical_range, stage_frames_tx,
-    storage, validate_canonical_publication_event, validate_canonical_tool_proposals,
-    validate_publication_generation,
+    SqliteConversationStore, Transaction, TranscriptCommitReceipt, append_validation, content,
+    native_request, observation_receipt, optional_display_layout, params, reading, seq_to_i64,
+    storage,
 };
+use crate::durable::sqlite::canonical::canonical_observation_batch;
+use crate::durable::sqlite::canonical::canonical_observation_receipt;
+use crate::durable::sqlite::canonical::ledger::ensure_surface_head;
+use crate::durable::sqlite::canonical::set_canonical_range;
+use crate::durable::sqlite::inbox::load_pending_until;
+use crate::durable::sqlite::journal::persist_event_tx_deferred;
+use crate::durable::sqlite::journal::persist_event_tx_with_requests;
+use crate::durable::sqlite::publication::clear_publication_staging;
+use crate::durable::sqlite::publication::persist_publication_progress_tx;
+use crate::durable::sqlite::publication::prepare_publication_frames_tx;
+use crate::durable::sqlite::publication::proposal::validate_canonical_tool_proposals;
+use crate::durable::sqlite::publication::request_outcome_is_durable;
+use crate::durable::sqlite::publication::require_publication_stream;
+use crate::durable::sqlite::publication::stage_frames_tx;
+use crate::durable::sqlite::publication::validate_canonical_publication_event;
+use crate::durable::sqlite::publication::validate_publication_generation;
+use crate::durable::sqlite::request::snapshot::ensure_publication_stream_tx;
+use crate::durable::sqlite::request::snapshot::require_started_request_with_validation;
 use crate::durable::sqlite::statements::FixedStatements;
 impl SqliteConversationStore {
     pub(super) fn publication_terminal_tx(
@@ -113,7 +125,12 @@ impl SqliteConversationStore {
                 "UPDATE publication_streams SET terminal_sequence=?1 WHERE stream_id=?2",
                 params![seq_to_i64(terminal_sequence)?, stream_id.as_str()],
             )
-            .map_err(|error| storage(format!("commit publication terminal: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("commit publication terminal: {error}"),
+                )
+            })?;
         Ok(())
     }
 
@@ -126,7 +143,8 @@ impl SqliteConversationStore {
         message: &MessageBlock,
         event: RuntimeEventEnvelope,
         final_frames: &[PublicationFrame],
-    ) -> Result<(super::PersistedEvent, TranscriptCommitReceipt), ConversationStoreError> {
+    ) -> Result<(super::journal::PersistedEvent, TranscriptCommitReceipt), ConversationStoreError>
+    {
         let transaction = requests.transaction();
         let stream = require_publication_stream(transaction, stream_id)?;
         let (snapshot, _, completed_sequence) = require_started_request_with_validation(
@@ -173,7 +191,7 @@ impl SqliteConversationStore {
         ensure_surface_head(transaction)?;
 
         let mut publication_header = None;
-        let transcript_cursor = if self.conn.event_guard.can_prepare(transaction) {
+        let transcript_cursor = if self.conn.event_guard.can_prepare(transaction)? {
             validation.append_publication(transaction, message, &mut publication_header)?
         } else {
             validation.append(transaction, message, None)?
@@ -206,11 +224,11 @@ impl SqliteConversationStore {
             content::settle_canonical(transaction, stream_id, message, final_frames)?;
             let _ = optional_display_layout(transaction, || {
                 super::observation_trace::settle_fields(transaction, &persisted.event)
-            });
+            })?;
         }
         // Final raw bytes and T are now fixed. Reuse only this transaction's
         // successful pre-trim capture, retaining full repair after any failure.
-        super::rebind_canonical_display(transaction, message, publication_header)?;
+        super::publication::rebind_canonical_display(transaction, message, publication_header)?;
         // The canonical transition clears the lifecycle staging of the stream:
         // the Ledger is now the long-term authority and no transient frame
         // survives it.
@@ -227,7 +245,12 @@ impl SqliteConversationStore {
                     stream_id.as_str()
                 ],
             )
-            .map_err(|error| storage(format!("settle canonical publication proposals: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("settle canonical publication proposals: {error}"),
+                )
+            })?;
         if !persisted.facts.canonical_publication_prepared {
             transaction
                 .execute_cached(
@@ -237,7 +260,12 @@ impl SqliteConversationStore {
                         stream_id.as_str()
                     ],
                 )
-                .map_err(|error| storage(format!("settle canonical publication: {error}")))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("settle canonical publication: {error}"),
+                    )
+                })?;
         }
         let mut receipt = canonical_observation_receipt(
             transaction,
@@ -258,7 +286,7 @@ impl SqliteConversationStore {
         validation: &mut append_validation::Batch<'_>,
         watermark: InboundSequence,
         attempt_id: Option<crate::runtime::identity::AttemptId>,
-    ) -> Result<crate::durable::inbox::AdoptedBatch, ConversationStoreError> {
+    ) -> Result<crate::durable::AdoptedBatch, ConversationStoreError> {
         #[cfg(test)]
         if let Some(probe) = self
             .pending_adoption_transaction_probe
@@ -286,16 +314,21 @@ impl SqliteConversationStore {
                 "DELETE FROM pending_inbound WHERE sequence <= ?1",
                 [seq_to_i64(watermark.get())?],
             )
-            .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("adopt pending delete: {error}"),
+                )
+            })?;
         for item in &items {
             // The removed native pending row fences these derived bytes even
             // if cleanup fails; their deletion cannot refuse adoption.
             let _ = optional_display_layout(transaction, || {
                 content::clear_pending(transaction, &item.sequence.get().to_string())
-            });
+            })?;
         }
         if !items.is_empty() {
-            transaction.execute_cached("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
+            transaction.execute_cached("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         }
         let mut adoption = None;
         if !items.is_empty() {
@@ -339,7 +372,7 @@ impl SqliteConversationStore {
             None,
             Some((watermark.get(), items.len() as u64)),
         );
-        Ok(crate::durable::inbox::AdoptedBatch {
+        Ok(crate::durable::AdoptedBatch {
             pending_observation,
             canonical_receipts,
             read_cut,
@@ -353,14 +386,19 @@ impl SqliteConversationStore {
     #[allow(clippy::too_many_lines)] // One auditable native final-output transaction.
     pub(super) fn settle_model_turn_native(
         &self,
-        settlement: crate::durable::inbox::ModelTurnSettlement<'_>,
-    ) -> Result<crate::durable::inbox::CommittedModelTurn, ConversationStoreError> {
-        use crate::durable::inbox::{CommittedModelTurn, CommittedModelTurnBoundary};
+        settlement: crate::durable::ModelTurnSettlement<'_>,
+    ) -> Result<crate::durable::CommittedModelTurn, ConversationStoreError> {
+        use crate::durable::{CommittedModelTurn, CommittedModelTurnBoundary};
         let mut connection = self.lock()?;
         let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
         let transaction = connection
             .transaction_with_behavior(super::TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("model settlement transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("model settlement transaction: {error}"),
+                )
+            })?;
         let mut requests = native_request::Validation::new(&transaction);
         let stream =
             ensure_publication_stream_tx(&mut requests, &self.conversation_id, settlement.start)?;
@@ -477,7 +515,9 @@ impl SqliteConversationStore {
                     .query_row_cached("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
                         row.get(0)
                     })
-                    .map_err(|error| storage(error.to_string()))?;
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                    })?;
                 if pending {
                     return Err(ConversationStoreError::PublicationViolation(
                         "empty model boundary has pending inbound".into(),
@@ -523,9 +563,12 @@ impl SqliteConversationStore {
             terminal_facts.as_ref(),
         );
         super::process_death::reach("before:settle_model_turn");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("model settlement commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("model settlement commit: {error}"),
+            )
+        })?;
         validation.committed(&connection);
         super::process_death::reach("after:settle_model_turn");
         Ok(CommittedModelTurn {
@@ -545,10 +588,10 @@ impl SqliteConversationStore {
 fn install_model_settlement_observation(
     connection: &super::Connection,
     conversation: &super::ConversationId,
-    provider: &mut super::PersistedEvent,
+    provider: &mut super::journal::PersistedEvent,
     canonical: &mut RuntimeEventEnvelope,
     canonical_receipt: &mut TranscriptCommitReceipt,
-    mut boundary: Option<&mut crate::durable::inbox::CommittedModelTurnBoundary>,
+    mut boundary: Option<&mut crate::durable::CommittedModelTurnBoundary>,
     turn_facts: Option<&super::append_facts::Facts>,
     terminal_facts: Option<&super::append_facts::Facts>,
 ) {

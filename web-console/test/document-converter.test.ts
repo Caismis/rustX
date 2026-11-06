@@ -24,7 +24,7 @@ it('owns isolation arguments and retains temporary files until process-tree sett
   expect(exe).toBe('/usr/bin/systemd-run');
   expect(args.slice(args.indexOf('/usr/bin/env'), args.indexOf('/usr/bin/bwrap') + 1)).toEqual(['/usr/bin/env', '-i', '/usr/bin/bwrap']);
   child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve));
-  for (const required of ['--unshare-all', '--unshare-user', '--disable-userns', '--die-with-parent', '--new-session', '--clearenv', '--size', '67108864', '--property=MemoryMax=536870912', '--property=TasksMax=64', '--property=ExitType=cgroup', '--remount-ro', '--fsize=8388608']) expect(args).toContain(required);
+  for (const required of ['--unshare-all', '--unshare-user', '--disable-userns', '--die-with-parent', '--new-session', '--clearenv', '--size', '268435456', '--property=MemoryMax=536870912', '--property=TasksMax=64', '--property=ExitType=cgroup', '--remount-ro', '--fsize=104857600']) expect(args).toContain(required);
   expect(args).not.toContain('--share-net'); expect(Object.keys(options.env).every(key => ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].includes(key))).toBe(true);
   const registry = args.indexOf('/etc/libreoffice/registry');
   expect(args.slice(registry - 1, registry + 2)).toEqual(['--ro-bind-try', '/etc/libreoffice/registry', '/etc/libreoffice/registry']);
@@ -41,7 +41,7 @@ it('timeout kills and waits for close, while failed output never publishes', asy
   vi.useFakeTimers(); const { child, ready } = gate();
   const work = convertOffice(Buffer.from('input'), 'pptx', new AbortController().signal);
   const rejected = expect(work).rejects.toThrow('converter_timeout'); await ready; child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve));
-  vi.advanceTimersByTime(15000); expect(boundary.kill).toHaveBeenCalled();
+  vi.advanceTimersByTime(60000); expect(boundary.kill).toHaveBeenCalled();
   child.stdout.write('%PDF-late'); child.emit('close', 0); await rejected;
   expect(vi.getTimerCount()).toBe(0);
 });
@@ -71,7 +71,7 @@ it('oversized output cannot publish a PDF and waits for service closure', async 
   const { child, ready } = gate();
   const work = convertOffice(Buffer.from('input'), 'docx', new AbortController().signal);
   const result = expect(work).rejects.toThrow('too_large'); await ready;
-  child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve)); child.stdout.write(Buffer.alloc(4 * 1024 * 1024 + 1));
+  child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve)); child.stdout.write(Buffer.alloc(100 * 1024 * 1024 + 1));
   child.emit('close', 0); await result;
 });
 

@@ -38,7 +38,7 @@ impl Field {
         } else {
             preview
         };
-        let bytes = crate::runtime_client::checkpoint::bounded_bytes(&value, 16_384)
+        let bytes = crate::observation::bounded::bounded_bytes(&value, 16_384)
             .unwrap_or_else(|| b"null".to_vec());
         Ok((self.start, self.end, self.children, bytes))
     }
@@ -132,7 +132,7 @@ pub(super) struct Source {
 impl Source {
     pub(super) fn load(connection: &Connection, id: &str) -> Result<Self, ConversationStoreError> {
         let (kind,length):(String,u64)=connection.query_row("SELECT CASE WHEN typeof(source_kind)='text' AND length(CAST(source_kind AS BLOB))<=128 THEN source_kind END,end FROM state_observation_fields WHERE source_id=?1 AND path_json='[]' AND start=0",[id],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|e|storage(e.to_string()))?;
-        if length > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX {
+        if length > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
             return Err(storage("native state preview extent invalid"));
         }
         Ok(Self { kind, length })
@@ -148,13 +148,13 @@ impl Source {
         if start > end || end > self.length || end - start > 16_384 {
             return Err(storage("native state preview span invalid"));
         }
-        let bytes = super::super::content::range_bytes(
+        let bytes = crate::durable::sqlite::content::range_bytes(
             connection,
             (
                 &self.kind,
                 id,
                 0,
-                crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
+                crate::observation::content::ContentRepresentation::CanonicalJsonV1,
             ),
             start,
             end,
@@ -203,7 +203,7 @@ pub(in crate::durable::sqlite) fn verify_schema(
 ) -> Result<(), ConversationStoreError> {
     let actual: Option<String> = connection.query_row(
         "SELECT CASE WHEN typeof(sql)='text' AND octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name='state_observation_fields'",
-        [], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?.flatten();
+        [], |row| row.get(0)).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
     if actual.as_deref() != Some(FIELDS_SQL) {
         return Err(ConversationStoreError::IncompatibleSchema(
             "missing or invalid state preview table".into(),

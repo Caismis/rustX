@@ -22,7 +22,7 @@ pub struct PublicationFrameReceipt {
     pub unavailable: bool,
     pub stream_id: PublicationStreamId,
     pub sequence: u64,
-    pub content: Vec<crate::runtime_client::content::ContentRef>,
+    pub content: Vec<crate::observation::content::ContentRef>,
     pub suffix_bytes: Option<u64>,
     pub block_ordinal: Option<u64>,
     pub block_total: u64,

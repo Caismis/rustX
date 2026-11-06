@@ -106,7 +106,7 @@ pub(crate) fn load(user_root: &Path, workspace: Option<&Path>) -> McpCatalog {
                     for location in catalog.locations.values_mut() {
                         location.shadowed = Some(location.path.clone());
                         location.path.clone_from(&path);
-                        location.scope = super::configuration::settings::SourceScope::Workspace;
+                        location.scope = crate::runtime::resources::SourceScope::Workspace;
                     }
                 }
                 catalog.invalid_scopes.push(error);
@@ -119,9 +119,9 @@ pub(crate) fn load(user_root: &Path, workspace: Option<&Path>) -> McpCatalog {
                 id.clone(),
                 crate::runtime::resources::ResourceLocation {
                     scope: if user {
-                        super::configuration::settings::SourceScope::User
+                        crate::runtime::resources::SourceScope::User
                     } else {
-                        super::configuration::settings::SourceScope::Workspace
+                        crate::runtime::resources::SourceScope::Workspace
                     },
                     path: path.clone(),
                     shadowed,
@@ -141,14 +141,15 @@ pub(crate) fn load(user_root: &Path, workspace: Option<&Path>) -> McpCatalog {
             };
             let definition = definition.map(|mut definition| {
                 if let Some(cwd) = &mut definition.cwd {
-                    *cwd = super::configuration::absolute(&base, cwd);
+                    *cwd = super::configuration::capture::absolute(&base, cwd);
                 }
                 if let Some(command) = &mut definition.command
                     && command.contains('/')
                 {
-                    *command = super::configuration::absolute(&base, &PathBuf::from(&*command))
-                        .to_string_lossy()
-                        .into_owned();
+                    *command =
+                        super::configuration::capture::absolute(&base, &PathBuf::from(&*command))
+                            .to_string_lossy()
+                            .into_owned();
                 }
                 definition
             });

@@ -121,7 +121,8 @@ export class DockController {
    */
   private run(ops: readonly LayoutOp[]): boolean {
     if (ops.length === 0) return false
-    const settled = this.settle ? planSettle(replay(this.state, ops), this.mint, this.state.expanded ? this.makePaneTab : undefined) : []
+    const after = replay(this.state, ops)
+    const settled = this.settle ? planSettle(after, this.mint, after.expanded ? this.makePaneTab : undefined) : []
     this.sequencer.dispatchAll([...ops, ...settled])
     this.commit()
     return true

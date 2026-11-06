@@ -166,6 +166,8 @@ mod tests {
 
     fn tools() -> ValidatedTools {
         let request = ModelRequest {
+            response_schema: None,
+            response_byte_limit: None,
             continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
@@ -173,7 +175,7 @@ mod tests {
                 protocol: ModelProtocol::OpenAiChatCompletions,
                 max_output_tokens: 512,
                 request_params: crate::model::invocation::RequestParams::new(),
-                capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+                capabilities: crate::model::catalog::ModelCapabilities::text_only(),
                 compat: crate::model::catalog::ModelCompat::default(),
             },
             messages: crate::model::SelectedModelInput::default(),

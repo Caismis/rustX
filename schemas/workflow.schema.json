@@ -1,220 +1,124 @@
 {
   "$defs": {
-    "AgentStatusExtensionDocument": {
-      "additionalProperties": false,
-      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
-      "properties": {
-        "background": {
-          "$ref": "#/$defs/BackgroundStatusConfig",
-          "default": {
-            "enabled": true
-          },
-          "description": "The Background contributor configuration."
-        },
-        "enabled": {
-          "default": false,
-          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
-          "type": "boolean"
-        },
-        "time": {
-          "$ref": "#/$defs/TimeStatusConfig",
-          "default": {
-            "enabled": true
-          },
-          "description": "The Time contributor configuration."
-        }
-      },
-      "type": "object"
-    },
-    "AllTools": {
-      "enum": [
-        "all"
-      ],
-      "type": "string"
-    },
-    "BackgroundStatusConfig": {
-      "additionalProperties": false,
-      "description": "Configuration of the bounded Background status contributor.",
-      "properties": {
-        "enabled": {
-          "default": true,
-          "description": "Whether Background participates in an available Agent Status opportunity.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "ExactToolSelector": {
-      "description": "One exact executable identity, used by Workflow Tool leaves and allowlists.\nSource-wide Agent capability selection cannot be authored in this type.",
+    "WorkflowAgentOutput": {
+      "description": "The authored output contract of a Workflow Agent node, as Dify's Agent:\nthe final reply is the `text` variable, or a declared schema adds the\nreserved `workflow_output` terminal and its fields are the variables.",
       "oneOf": [
         {
           "additionalProperties": false,
+          "description": "The child's final reply is the result.",
           "properties": {
-            "name": {
-              "type": "string"
-            },
-            "origin": {
-              "const": "builtin",
+            "type": {
+              "const": "text",
               "type": "string"
             }
           },
           "required": [
-            "origin",
-            "name"
+            "type"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
+          "description": "The child commits one value matching this schema.",
           "properties": {
-            "name": {
+            "schema": true,
+            "type": {
+              "const": "json_schema",
               "type": "string"
-            },
-            "origin": {
-              "const": "source",
-              "type": "string"
-            },
-            "source_id": {
-              "$ref": "#/$defs/ToolSourceId"
             }
           },
           "required": [
-            "origin",
-            "source_id",
-            "name"
+            "type",
+            "schema"
           ],
           "type": "object"
         }
       ]
     },
-    "GoalExtensionDocument": {
+    "WorkflowAgentRoute": {
       "additionalProperties": false,
-      "description": "Authored opt-in Goal composition.",
+      "description": "One exit an Agent may choose, as Dify's Agent output route. The child\nsees every route's ID and description when it picks one.",
       "properties": {
-        "enabled": {
-          "default": false,
-          "type": "boolean"
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
         }
       },
-      "type": "object"
-    },
-    "NativeAgentExtensionSelection": {
-      "additionalProperties": false,
-      "description": "The **presence-aware** closed selection an invocation override expresses.\n\nComplete profiles and invocation selections share omission semantics:\nomitted members compose no extension. The outer invocation dimension is\npresence-aware: absent retains the named default; present replaces it.\nThis wire record preserves the invocation protocol's camelCase spelling\nand rejects explicit null members.\n\nThe record stays closed exactly like the authored document: an unknown\nextension name is rejected by `deny_unknown_fields`, so a misspelled or\nnot-yet-implemented extension fails deterministically instead of being\nsilently ignored.",
-      "properties": {
-        "agentStatus": {
-          "$ref": "#/$defs/AgentStatusExtensionDocument",
-          "description": "The requested Agent Status extension, when this selection composes it.\n\n`null` is not accepted: the field is either absent (not composed) or a\ncomplete authored configuration. Collapsing an explicit `null` into\n\"absent\" would give one wire spelling two meanings."
-        },
-        "goal": {
-          "$ref": "#/$defs/GoalExtensionDocument"
-        },
-        "todo": {
-          "$ref": "#/$defs/TodoExtensionDocument",
-          "description": "The requested Todo extension, when this selection composes it\n(Issue #259).\n\nAbsent means the child composes no Todo at all — no list authority, no\n`todo` Tool, no status contribution — never \"whatever the role\nauthored\". `null` is refused for the same reason `agentStatus` refuses\nit: one wire spelling may not carry two meanings."
-        }
-      },
-      "type": "object"
-    },
-    "SourceToolSelection": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AllTools"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
+      "required": [
+        "id",
+        "description"
       ],
-      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
-    },
-    "SubagentInvocationOverride": {
-      "additionalProperties": false,
-      "description": "One invocation-scoped replacement of selected child capability\ndimensions.\n\nThe same value is produced by model-generated `subagent` arguments and by\ntrusted static Workflow program data. The launch boundary determines\nauthority; both share this vocabulary and the `AgentProfile` resolver.",
-      "properties": {
-        "plugins": {
-          "$ref": "#/$defs/NativeAgentExtensionSelection",
-          "description": "The complete replacement Plugin composition, when this\ndimension is overridden. Absent uses the definition's composition."
-        },
-        "skills": {
-          "description": "The complete replacement Skill selection, when this dimension is\noverridden. Absent uses the definition's selection.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "tools": {
-          "$ref": "#/$defs/ToolSelectionDocument",
-          "description": "The complete replacement Tool selection, when this dimension is\noverridden. Absent uses the definition's selection."
-        }
-      },
       "type": "object"
     },
-    "SubagentName": {
-      "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
-      "type": "string"
-    },
-    "TimeStatusConfig": {
+    "WorkflowAggregateGroup": {
       "additionalProperties": false,
-      "description": "Configuration of the bounded Time status contributor.",
       "properties": {
-        "enabled": {
-          "default": true,
-          "description": "Whether Time participates in an available Agent Status opportunity.",
-          "type": "boolean"
+        "name": {
+          "type": "string"
         },
-        "timezone": {
-          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
-          "type": [
-            "string",
-            "null"
+        "output_type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowVarType"
+            },
+            {
+              "type": "null"
+            }
           ]
+        },
+        "variables": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
         }
       },
+      "required": [
+        "name",
+        "variables"
+      ],
       "type": "object"
     },
-    "TodoExtensionDocument": {
+    "WorkflowAssignment": {
       "additionalProperties": false,
-      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
+      "description": "One write of a Variable Assigner.",
       "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Whether this composition includes the Todo extension at all.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "ToolSelectionDocument": {
-      "additionalProperties": false,
-      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
-      "properties": {
-        "builtin": {
-          "default": [],
+        "operation": {
+          "$ref": "#/$defs/WorkflowWriteMode"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The operand; `clear`, `remove_first` and `remove_last` take none."
+        },
+        "variable": {
+          "description": "The written Loop variable: `[loop, label]`.",
           "items": {
             "type": "string"
           },
           "type": "array"
-        },
-        "sources": {
-          "additionalProperties": {
-            "$ref": "#/$defs/SourceToolSelection"
-          },
-          "default": {},
-          "type": "object"
         }
       },
+      "required": [
+        "variable",
+        "operation"
+      ],
       "type": "object"
-    },
-    "ToolSourceId": {
-      "description": "A configured MCP source or a canonical Managed Python package.\nNamespace parsing happens only at the authoring boundary; runtime dispatch\nmatches these variants, never display strings.",
-      "type": "string"
     },
     "WorkflowBlock": {
       "additionalProperties": false,
-      "description": "A fixed lexical graph shared by root, Parallel branches and Loop bodies.",
+      "description": "A fixed graph: the root, or a Loop or Iteration body. A body declares no\ninput or output: as in Dify, it reads the variables of the nodes around\nit, its container's variables and its own nodes.",
       "properties": {
         "edges": {
           "default": [],
@@ -224,11 +128,12 @@
           },
           "type": "array"
         },
-        "entry": {
-          "description": "The one explicit entry node.",
-          "type": "string"
-        },
         "input": {
+          "default": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
           "description": "The workflow input JSON Schema."
         },
         "nodes": {
@@ -237,35 +142,116 @@
           },
           "description": "Stable node definitions keyed by explicit node id.",
           "type": "object"
-        },
-        "output": {
-          "description": "The workflow output JSON Schema."
         }
       },
       "required": [
-        "input",
-        "output",
-        "entry",
         "nodes"
       ],
       "type": "object"
     },
-    "WorkflowBranch": {
+    "WorkflowBlockStep": {
       "additionalProperties": false,
-      "description": "One explicit input projection and fixed private Parallel block.",
+      "description": "Structured lexical address of a Loop or Iteration body.",
       "properties": {
-        "block": {
-          "$ref": "#/$defs/WorkflowBlock",
-          "description": "The child's private graph and contracts."
-        },
-        "input": {
-          "$ref": "#/$defs/WorkflowValue",
-          "description": "Evaluated in the parent scope and checked against the child input schema."
+        "node": {
+          "type": "string"
         }
       },
       "required": [
-        "input",
-        "block"
+        "node"
+      ],
+      "type": "object"
+    },
+    "WorkflowBranchCase": {
+      "additionalProperties": false,
+      "description": "A stable exit identity and its condition. The first matching case wins.",
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/WorkflowPredicate"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "condition"
+      ],
+      "type": "object"
+    },
+    "WorkflowClassifierClass": {
+      "additionalProperties": false,
+      "description": "A classifier's stable exit, display label and variable-aware topic.",
+      "properties": {
+        "description": {
+          "items": {
+            "$ref": "#/$defs/WorkflowValue"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "description"
+      ],
+      "type": "object"
+    },
+    "WorkflowCodeLanguage": {
+      "enum": [
+        "python3",
+        "javascript"
+      ],
+      "type": "string"
+    },
+    "WorkflowDimensions": {
+      "additionalProperties": false,
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": "number"
+        },
+        "width": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "WorkflowDisplay": {
+      "additionalProperties": false,
+      "description": "How people see the Workflow in the library and editor. Never part of the\nprogram: models only read the definition's own `description`.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "description": "An Iconify icon name, `<prefix>:<name>` (e.g. `lucide:workflow`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "The human name; the file id remains the native identity.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
       ],
       "type": "object"
     },
@@ -287,7 +273,7 @@
             }
           ],
           "default": null,
-          "description": "Required Branch/Loop outcome port. Ordinary nodes must omit it."
+          "description": "The Branch case, Agent route or fail port. Ordinary nodes omit it."
         },
         "to": {
           "description": "Destination node id.",
@@ -300,56 +286,757 @@
       ],
       "type": "object"
     },
-    "WorkflowNodeDefinition": {
-      "description": "One Workflow node in the authoring/domain layer.",
+    "WorkflowEditorMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "display": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDisplay"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nodes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowNodePresentation"
+          },
+          "type": "array"
+        },
+        "notes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowNote"
+          },
+          "type": "array"
+        },
+        "orders": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowFieldOrder"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "WorkflowFieldOrder": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/WorkflowOrderTarget"
+        }
+      },
+      "required": [
+        "target",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "WorkflowIterationErrorMode": {
+      "description": "How an Iteration treats a round that failed.",
+      "oneOf": [
+        {
+          "const": "terminated",
+          "description": "The Iteration fails.",
+          "type": "string"
+        },
+        {
+          "const": "continue_on_error",
+          "description": "The round contributes `null`.",
+          "type": "string"
+        },
+        {
+          "const": "remove_abnormal_output",
+          "description": "The round contributes nothing.",
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowListFilter": {
+      "additionalProperties": false,
+      "properties": {
+        "operator": {
+          "$ref": "#/$defs/WorkflowListOperator"
+        },
+        "path": {
+          "description": "Empty selects a primitive item; otherwise literal object field names.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "value": {
+          "$ref": "#/$defs/WorkflowValue"
+        }
+      },
+      "required": [
+        "path",
+        "operator",
+        "value"
+      ],
+      "type": "object"
+    },
+    "WorkflowListOperator": {
+      "enum": [
+        "equal",
+        "not_equal",
+        "contains",
+        "not_contains",
+        "starts_with",
+        "ends_with",
+        "greater",
+        "greater_equal",
+        "less",
+        "less_equal",
+        "empty",
+        "not_empty",
+        "in",
+        "not_in"
+      ],
+      "type": "string"
+    },
+    "WorkflowListSort": {
+      "additionalProperties": false,
+      "properties": {
+        "order": {
+          "$ref": "#/$defs/WorkflowSortOrder"
+        },
+        "path": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "order"
+      ],
+      "type": "object"
+    },
+    "WorkflowLoopVariable": {
+      "additionalProperties": false,
+      "description": "A Loop variable: Dify's `label`, `var_type` and constant or variable value.",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/WorkflowValue",
+          "description": "A literal, or a reference read once before the first round."
+        },
+        "var_type": {
+          "$ref": "#/$defs/WorkflowVarType"
+        }
+      },
+      "required": [
+        "label",
+        "var_type",
+        "value"
+      ],
+      "type": "object"
+    },
+    "WorkflowModelErrorStrategy": {
+      "description": "As Dify's error handling, for a call that failed or timed out after its\nretries. Cancellation, an unknown outcome and authority errors still stop\nthe run.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Repeat one fixed typed body until its committed result satisfies `until`.",
+          "description": "The run stops with the node's failure.",
           "properties": {
-            "body": {
-              "$ref": "#/$defs/WorkflowBlock"
-            },
-            "carry": {
-              "$ref": "#/$defs/WorkflowValue"
-            },
-            "input": {
-              "$ref": "#/$defs/WorkflowValue"
-            },
-            "max_iterations": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
             "type": {
-              "const": "loop",
+              "const": "stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The node succeeds with this `text` (and `structured_output`, which a\ndeclared schema requires), empty reasoning and zero usage.",
+          "properties": {
+            "structured_output": true,
+            "text": {
               "type": "string"
             },
-            "until": {
-              "$ref": "#/$defs/WorkflowPredicate"
+            "type": {
+              "const": "default_value",
+              "type": "string"
             }
           },
           "required": [
             "type",
-            "input",
-            "body",
-            "until",
-            "carry",
-            "max_iterations"
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The node leaves through its `fail` port with `error_type` and\n`error_message`; only nodes reached through that port see them.",
+          "properties": {
+            "type": {
+              "const": "fail_branch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowModelMessage": {
+      "additionalProperties": false,
+      "description": "One prompt message of a Model node. The first message is the system\nprompt and every later one a user or assistant turn. Its content is fixed\ntext (string literals) and explicit references, rendered in order: a\nstring value as itself, any other value as its JSON text.",
+      "properties": {
+        "content": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkflowValue"
+          },
+          "type": "array"
+        },
+        "role": {
+          "$ref": "#/$defs/WorkflowModelRole"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "type": "object"
+    },
+    "WorkflowModelOutput": {
+      "description": "The single authored output contract of a Workflow Model node.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Preserve the final model text as a string, including JSON-looking text.",
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Commit only the parsed, locally validated object.",
+          "properties": {
+            "schema": true,
+            "type": {
+              "const": "json_schema",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "schema"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowModelPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
           "properties": {
-            "context": {
+            "max_output_tokens": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_params": {
+              "additionalProperties": true,
+              "default": {},
+              "type": "object"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowModelRole": {
+      "description": "Who speaks a Model prompt message.",
+      "enum": [
+        "system",
+        "user",
+        "assistant"
+      ],
+      "type": "string"
+    },
+    "WorkflowNodeAddress": {
+      "additionalProperties": false,
+      "properties": {
+        "block": {
+          "items": {
+            "$ref": "#/$defs/WorkflowBlockStep"
+          },
+          "type": "array"
+        },
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "block",
+        "node"
+      ],
+      "type": "object"
+    },
+    "WorkflowNodeDefinition": {
+      "description": "One Workflow node in the authoring/domain layer.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The block's real Start node. Its input is the block input contract.",
+          "properties": {
+            "type": {
+              "const": "start",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Jinja-style text transformation with explicit lexical inputs.",
+          "properties": {
+            "template": {
+              "type": "string"
+            },
+            "type": {
+              "const": "template",
+              "type": "string"
+            },
+            "variables": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "variables",
+            "template"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Pure filter, stable sort and selection over an array.",
+          "properties": {
+            "extract": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowValue"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "filter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowListFilter"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "input": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "limit": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "sort": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowListSort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One tool-free classification Call with an exit per class.",
+          "properties": {
+            "classes": {
+              "items": {
+                "$ref": "#/$defs/WorkflowClassifierClass"
+              },
+              "type": "array"
+            },
+            "input": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "instruction": {
+              "default": [],
               "items": {
                 "$ref": "#/$defs/WorkflowValue"
               },
               "type": "array"
             },
-            "subject": {
-              "$ref": "#/$defs/WorkflowReviewSubject"
+            "model": {
+              "$ref": "#/$defs/WorkflowModelPolicy",
+              "default": {
+                "mode": "session"
+              }
+            },
+            "type": {
+              "const": "classifier",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "classes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A Python/JavaScript main function executed through workspace Bash.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "code_language": {
+              "$ref": "#/$defs/WorkflowCodeLanguage"
+            },
+            "on_error": {
+              "$ref": "#/$defs/WorkflowValueErrorStrategy",
+              "default": {
+                "type": "stop"
+              }
+            },
+            "outputs": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowVarType"
+              },
+              "type": "object"
+            },
+            "retry": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowRetry"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "code",
+              "type": "string"
+            },
+            "variables": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "code_language",
+            "variables",
+            "code",
+            "outputs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Select the first available source per output, optionally grouped.",
+          "properties": {
+            "grouped": {
+              "type": "boolean"
+            },
+            "groups": {
+              "items": {
+                "$ref": "#/$defs/WorkflowAggregateGroup"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "aggregate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "grouped",
+            "groups"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One tool-free logical Auxiliary Call using the invoking Attempt's authority.",
+          "properties": {
+            "messages": {
+              "description": "The prompt: a system message, then user and assistant turns.",
+              "items": {
+                "$ref": "#/$defs/WorkflowModelMessage"
+              },
+              "type": "array"
+            },
+            "model": {
+              "$ref": "#/$defs/WorkflowModelPolicy",
+              "default": {
+                "mode": "session"
+              }
+            },
+            "on_error": {
+              "$ref": "#/$defs/WorkflowModelErrorStrategy",
+              "description": "What a call that still failed does."
+            },
+            "output": {
+              "$ref": "#/$defs/WorkflowModelOutput"
+            },
+            "retry": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowRetry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Retry a failed call before its failure is handled."
+            },
+            "type": {
+              "const": "model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "messages",
+            "output"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "As Dify's Loop: run the body again and again, until its break\ncondition holds after a round, an Exit Loop node ran, or `loop_count`\nrounds are done. Its value is its loop variables.",
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/WorkflowBlock"
+            },
+            "break_condition": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowPredicate"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Checked before the first round and after every round."
+            },
+            "loop_count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "loop_variables": {
+              "description": "Variables the body reads and an Assigner node writes, under the\nLoop's own ID.",
+              "items": {
+                "$ref": "#/$defs/WorkflowLoopVariable"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "loop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "loop_count",
+            "body"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "As Dify's Iteration: run the body once for each item of an array,\nwhich the body reads as `item` and `index` under the Iteration's ID.\nIts value is `output`, the body's chosen value of every round.",
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/WorkflowBlock"
+            },
+            "error_handle_mode": {
+              "$ref": "#/$defs/WorkflowIterationErrorMode"
+            },
+            "flatten_output": {
+              "description": "Join the rounds' arrays into one array.",
+              "type": "boolean"
+            },
+            "is_parallel": {
+              "type": "boolean"
+            },
+            "iterator": {
+              "$ref": "#/$defs/WorkflowValue",
+              "description": "The array to iterate."
+            },
+            "output": {
+              "$ref": "#/$defs/WorkflowValue",
+              "description": "What each round contributes, read after the round."
+            },
+            "parallel_nums": {
+              "default": 10,
+              "description": "Rounds run at once in parallel mode.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "iteration",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "iterator",
+            "output",
+            "body"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "As Dify's Exit Loop: ends its Loop once this round settles.",
+          "properties": {
+            "type": {
+              "const": "loop_end",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "As Dify's Variable Assigner: writes variables of the Loop it is in.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/WorkflowAssignment"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "assigner",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "As Dify's Human Input: asks the person in the conversation which of\nits actions to take. Each action leaves through its own port, and\n`timeout` is taken when nobody answers within `timeout_ms`.",
+          "properties": {
+            "actions": {
+              "items": {
+                "$ref": "#/$defs/WorkflowReviewAction"
+              },
+              "type": "array"
+            },
+            "content": {
+              "description": "The Markdown shown to the person: fixed text and references, as\nan Agent's task.",
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "array"
+            },
+            "timeout_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
             },
             "type": {
               "const": "review",
@@ -358,8 +1045,9 @@
           },
           "required": [
             "type",
-            "subject",
-            "context"
+            "content",
+            "actions",
+            "timeout_ms"
           ],
           "type": "object"
         },
@@ -370,11 +1058,26 @@
             "arguments": {
               "$ref": "#/$defs/WorkflowValue"
             },
+            "on_error": {
+              "$ref": "#/$defs/WorkflowValueErrorStrategy",
+              "description": "What a call that still failed leaves behind."
+            },
             "result": {
               "$ref": "#/$defs/WorkflowToolResult"
             },
+            "retry": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowRetry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Call a failed Tool again before its failure is handled, as Dify's\ntool node does; each call is its own invocation."
+            },
             "selector": {
-              "$ref": "#/$defs/ExactToolSelector"
+              "$ref": "#/$defs/WorkflowToolSelector"
             },
             "type": {
               "const": "tool",
@@ -393,28 +1096,31 @@
           "additionalProperties": false,
           "description": "One execution of an admitted named Subagent profile.",
           "properties": {
-            "input": {
-              "additionalProperties": {
-                "$ref": "#/$defs/WorkflowValue"
-              },
-              "default": {},
-              "description": "Explicit input bindings from workflow-local values.",
-              "type": "object"
+            "on_error": {
+              "$ref": "#/$defs/WorkflowValueErrorStrategy",
+              "description": "What a failed or timed-out child run leaves behind. Agents are not\nretried: a workflow child writes the shared Session workspace\ndirectly, and termination must be proven before it is handled."
             },
             "output": {
-              "description": "The frozen `AgentRun` output contract."
-            },
-            "override": {
-              "$ref": "#/$defs/SubagentInvocationOverride",
-              "description": "The optional invocation-scoped capability override of this node\n(Issue #258).\n\nThis is **trusted static program data**: it is part of the\ncompiled Workflow, is validated against the Workflow's own\nadmitted generation, and is not reachable from model output, node\ninput values, or task text. It may therefore legitimately replace\nthe role's defaults with capabilities the invoking main model does\nnot itself hold — never with capabilities the generation does not\nauthorize."
+              "$ref": "#/$defs/WorkflowAgentOutput",
+              "description": "What the `AgentRun` returns: its final reply text, or a\nstructured value committed through `workflow_output`."
             },
             "profile": {
-              "$ref": "#/$defs/SubagentName",
-              "description": "The native named profile to resolve at `AgentRun` admission."
+              "description": "The native named profile to resolve at `AgentRun` admission.",
+              "type": "string"
+            },
+            "routes": {
+              "description": "As Dify's Agent output routes: the child picks one of these\nexits through its required `switch` value.",
+              "items": {
+                "$ref": "#/$defs/WorkflowAgentRoute"
+              },
+              "type": "array"
             },
             "task": {
-              "description": "The fixed task instruction for this `AgentRun`.",
-              "type": "string"
+              "description": "The task instruction for this `AgentRun`: fixed text and explicit\nreferences, as a Model message's content.",
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "array"
             },
             "type": {
               "const": "agent",
@@ -431,11 +1137,13 @@
         },
         {
           "additionalProperties": false,
-          "description": "Deterministic selection from one committed boolean value.",
+          "description": "Ordered IF / ELIF cases, followed by the false (ELSE) port.",
           "properties": {
-            "condition": {
-              "$ref": "#/$defs/WorkflowPredicate",
-              "description": "The sole boolean condition binding."
+            "cases": {
+              "items": {
+                "$ref": "#/$defs/WorkflowBranchCase"
+              },
+              "type": "array"
             },
             "type": {
               "const": "branch",
@@ -444,39 +1152,19 @@
           },
           "required": [
             "type",
-            "condition"
+            "cases"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
-          "description": "A finite keyed set of private lexical blocks.",
+          "description": "As Dify's End: the workflow's result, one field per output variable.\nIt is the last node; nothing follows it.",
           "properties": {
-            "branches": {
-              "additionalProperties": {
-                "$ref": "#/$defs/WorkflowBranch"
+            "outputs": {
+              "items": {
+                "$ref": "#/$defs/WorkflowReturnOutput"
               },
-              "description": "Branches are keyed by definition identity, not completion order.",
-              "type": "object"
-            },
-            "type": {
-              "const": "parallel",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "branches"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Constructs a value and completes exactly this owning block.",
-          "properties": {
-            "output": {
-              "$ref": "#/$defs/WorkflowValue",
-              "description": "The owning block's declared result."
+              "type": "array"
             },
             "type": {
               "const": "return",
@@ -485,7 +1173,155 @@
           },
           "required": [
             "type",
-            "output"
+            "outputs"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowNodePresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/WorkflowNodeAddress"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dimensions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowDimensions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Authored Loop container geometry, never measured DOM state."
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowPosition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "address"
+      ],
+      "type": "object"
+    },
+    "WorkflowNote": {
+      "additionalProperties": false,
+      "properties": {
+        "block": {
+          "items": {
+            "$ref": "#/$defs/WorkflowBlockStep"
+          },
+          "type": "array"
+        },
+        "dimensions": {
+          "$ref": "#/$defs/WorkflowDimensions"
+        },
+        "id": {
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/WorkflowPosition"
+        },
+        "text": {
+          "description": "As Dify, the note's Lexical editor state serialized as JSON.",
+          "type": "string"
+        },
+        "theme": {
+          "$ref": "#/$defs/WorkflowNoteTheme"
+        }
+      },
+      "required": [
+        "id",
+        "block",
+        "text",
+        "theme",
+        "position",
+        "dimensions"
+      ],
+      "type": "object"
+    },
+    "WorkflowNoteTheme": {
+      "enum": [
+        "blue",
+        "cyan",
+        "green",
+        "yellow",
+        "pink",
+        "violet"
+      ],
+      "type": "string"
+    },
+    "WorkflowOrderTarget": {
+      "description": "Presentation order targets a specific authored list. Schema `path` contains\nproperty names (not JSON pointers); missing/new fields append in key order.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "block": {
+              "items": {
+                "$ref": "#/$defs/WorkflowBlockStep"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "block_input",
+              "type": "string"
+            },
+            "path": {
+              "items": {
+                "$ref": "#/$defs/WorkflowSchemaStep"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "block",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "address": {
+              "$ref": "#/$defs/WorkflowNodeAddress"
+            },
+            "kind": {
+              "const": "node_output",
+              "type": "string"
+            },
+            "path": {
+              "items": {
+                "$ref": "#/$defs/WorkflowSchemaStep"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "address",
+            "path"
           ],
           "type": "object"
         }
@@ -497,16 +1333,30 @@
           "type": "boolean"
         },
         {
-          "enum": [
-            "true",
-            "false",
-            "satisfied",
-            "exhausted",
-            "next"
-          ],
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]+$",
           "type": "string"
         }
       ]
+    },
+    "WorkflowPosition": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
     },
     "WorkflowPredicate": {
       "description": "Typed predicates. Equality requires matching scalar types; no coercion.",
@@ -575,6 +1425,210 @@
         },
         {
           "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "greater",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "greater_equal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "less",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "less_equal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "String or typed-array containment, without coercion.",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "contains",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "not_contains",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "starts_with",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "ends_with",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Explicit emptiness of a JSON value, as Dify tests it.",
+          "properties": {
+            "type": {
+              "const": "empty",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "not_empty",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Boolean negation.",
           "properties": {
             "predicate": {
@@ -635,39 +1689,113 @@
         }
       ]
     },
-    "WorkflowReviewSubject": {
+    "WorkflowRetry": {
+      "additionalProperties": false,
+      "description": "As Dify's retry on failure: a failed or timed-out Model or Tool call is\nmade again, up to `max_retries` more times, `interval_ms` after the\nprevious one ended.",
+      "properties": {
+        "interval_ms": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_retries": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_retries",
+        "interval_ms"
+      ],
+      "type": "object"
+    },
+    "WorkflowReturnOutput": {
+      "additionalProperties": false,
+      "description": "As Dify's End output variable: a result field and the variable it reads.",
+      "properties": {
+        "value_selector": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "variable": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "variable",
+        "value_selector"
+      ],
+      "type": "object"
+    },
+    "WorkflowReviewAction": {
+      "additionalProperties": false,
+      "description": "One button the person may press, and the exit it takes.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    },
+    "WorkflowSchemaStep": {
+      "description": "An exact position in a schema, independent of value-reference semantics.",
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
-            "type": {
-              "const": "plan",
+            "kind": {
+              "const": "property",
               "type": "string"
             },
-            "value": {
-              "$ref": "#/$defs/WorkflowValue"
+            "name": {
+              "type": "string"
             }
           },
           "required": [
-            "type",
-            "value"
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "items",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
           ],
           "type": "object"
         }
       ]
     },
+    "WorkflowSortOrder": {
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "type": "string"
+    },
     "WorkflowToolResult": {
-      "description": "Select exactly one native content part, never provider text or log heuristics.",
+      "description": "What a Tool node commits, fixed by the Tool: its declared structured\nresult, or its text. Never provider text heuristics or a part index.",
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "The indexed part must be native structured JSON satisfying this schema.",
+          "description": "The result's one native structured JSON part, satisfying this schema.",
           "properties": {
-            "part": {
-              "format": "uint",
-              "minimum": 0,
-              "type": "integer"
-            },
             "schema": true,
             "type": {
               "const": "json",
@@ -676,28 +1804,63 @@
           },
           "required": [
             "type",
-            "part",
             "schema"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
-          "description": "The indexed part must be native text; retain it as a typed JSON string.",
+          "description": "`{text}`: the result's native text parts, joined by newlines.",
           "properties": {
-            "part": {
-              "format": "uint",
-              "minimum": 0,
-              "type": "integer"
-            },
             "type": {
               "const": "text",
               "type": "string"
             }
           },
           "required": [
-            "type",
-            "part"
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowToolSelector": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "builtin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "source",
+              "type": "string"
+            },
+            "source_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin",
+            "source_id",
+            "name"
           ],
           "type": "object"
         }
@@ -784,13 +1947,114 @@
             "items"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One string from fixed text and references, rendered as prompt parts\nare: a non-string referenced value is inserted as its JSON text.",
+          "properties": {
+            "parts": {
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "template",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "parts"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "WorkflowValueErrorStrategy": {
+      "description": "As Dify's error handling on its Agent and tool nodes, for a call that\nfailed or timed out once it is proven settled. Cancellation, an unknown\noutcome, unproven settlement and a refused start still stop the run.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The run stops with the node's failure.",
+          "properties": {
+            "type": {
+              "const": "stop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The node succeeds with this value, which satisfies the node's own\nvalue contract; a routed Agent leaves through its `switch`.",
+          "properties": {
+            "type": {
+              "const": "default_value",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The node leaves through its `fail` port with `error_type` and\n`error_message`; only nodes reached through that port see them.",
+          "properties": {
+            "type": {
+              "const": "fail_branch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowVarType": {
+      "description": "The value types of a Loop variable, as Dify offers them.",
+      "enum": [
+        "string",
+        "number",
+        "boolean",
+        "object",
+        "array[string]",
+        "array[number]",
+        "array[boolean]",
+        "array[object]"
+      ],
+      "type": "string"
+    },
+    "WorkflowWriteMode": {
+      "description": "Dify's write modes. `overwrite` writes a variable's value and `set` a\nconstant; both assign.",
+      "enum": [
+        "overwrite",
+        "clear",
+        "set",
+        "append",
+        "extend",
+        "remove_first",
+        "remove_last",
+        "increment",
+        "decrement",
+        "multiply",
+        "divide"
+      ],
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The canonical YAML/domain representation of one workflow.",
+  "description": "Complete authored source, with the executable fields at their native YAML\nlocations. Files without `editor` have deterministic derived presentation.",
   "properties": {
     "block": {
       "$ref": "#/$defs/WorkflowBlock",
@@ -799,6 +2063,16 @@
     "description": {
       "description": "The model-facing description of the workflow Tool.",
       "type": "string"
+    },
+    "editor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowEditorMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "timeout_ms": {
       "default": 600000,
@@ -812,6 +2086,6 @@
     "description",
     "block"
   ],
-  "title": "WorkflowDefinition",
+  "title": "WorkflowFileDocument",
   "type": "object"
 }

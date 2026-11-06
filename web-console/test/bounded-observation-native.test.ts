@@ -10,8 +10,10 @@ import { TempFixture } from '../../tui/test/support/temp-fixture.ts';
 import { ProviderEmulator } from '../../tui/test/support/provider-emulator.ts';
 import { AppServerHost } from '../../tui/src/app-server/host.ts';
 import type { AppServerSession } from '../../tui/src/app-server/session.ts';
-import { AppServerClient, RpcFailure, type Socket } from '../src/client/app-server';
-import type { AttachmentTarget, ContentRef, RuntimeClientCheckpoint } from '../../protocol/app-server/v52';
+import { AppServerClient } from '../src/client/app-server';
+import type { Socket } from '../src/client/contracts';
+import { RpcFailure } from '../src/client/errors';
+import type { AttachmentTarget, ContentRef, RuntimeClientCheckpoint } from '../../protocol/app-server/v73';
 
 /** Real native ownership and transport; every wait follows data or process exit. */
 it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bounded content over real connections', async () => {
@@ -53,7 +55,7 @@ it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bo
     const home=fixture.path('home'),cwd=fixture.path('workspace');mkdirSync(home,{recursive:true});mkdirSync(cwd,{recursive:true});
     const env: NodeJS.ProcessEnv={...process.env,HOME:home,RUSTX_467_FIXTURE_KEY:'fixture-only'};delete env.XDG_CONFIG_HOME;delete env.XDG_STATE_HOME;
     stage = 'native init';
-    const initialized=spawnSync(binary,['init','--template','openai-chat','--provider','fixture','--model-id','integration-model','--endpoint',provider.url(),'--credential-env','RUSTX_467_FIXTURE_KEY','--context-window','128000','--max-output','4096','--tool-calls','true','--reasoning','false','--compat','chat_reasoning_replay = "omit"'],{env,encoding:'utf8'});
+    const initialized=spawnSync(binary,['init','--template','openai-chat','--provider','fixture','--model-id','integration-model','--endpoint',provider.url(),'--credential-env','RUSTX_467_FIXTURE_KEY','--context-window','128000','--max-output','4096','--compat','chat_reasoning_replay = "omit"'],{env,encoding:'utf8'});
     expect(initialized.status,initialized.stderr).toBe(0);
     writeFileSync(join(cwd,'rustx.toml'),'[agent.tools]\nbuiltin = ["read"]\n');writeFileSync(fixture.path('token'),token+'\n');
     processOwner=spawn(binary,['app-server','--runtime-root',fixture.path('runtime'),'--listen','ws://127.0.0.1:0','--token-file',fixture.path('token')],{env,cwd,stdio:['pipe','pipe','pipe']});
@@ -68,6 +70,7 @@ it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bo
     expect(source.projection.inline?.session_models?.kind,JSON.stringify(source.projection)).toBe('available');
     stage = 'session create';
     const created=await terminal.createSession({cwd,model:{model:'fixture/integration-model',requestParams:{temperature:0.25}}});
+    await terminal.renameSession(created.session.id, 'Bounded observation fixture');
     observedSessionId = created.session.id; stage = 'terminal attach';
     const session=await terminal.attach(created.session.id,created.session.active_node); nativeSession = session;
     expect(session.observationPhase).toBe('following');
@@ -79,7 +82,7 @@ it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bo
     stage = 'provider execution gate'; await provider.awaitGate('observation-execution');
     const attempt=session.state.attempt!.attemptId,incarnation=session.target.runtime_incarnation;
     const conversation=session.state.conversationId;
-    async function reconstruct(ref:ContentRef,read:(offset:number)=>Promise<import('../../protocol/app-server/v52').ContentChunk>){const parts:Buffer[]=[];let offset=0;do{const chunk=await read(offset);const part=Buffer.from(chunk.data_base64,'base64');expect(part.length).toBeLessThanOrEqual(65536);expect(chunk.content_ref).toEqual(ref);expect(chunk.offset).toBe(offset);expect(chunk.end_offset).toBe(offset+part.length);parts.push(part);offset=chunk.end_offset;expect(chunk.next_offset??null).toBe(offset<ref.readable_end?offset:null);}while(offset<ref.readable_end);return Buffer.concat(parts);}
+    async function reconstruct(ref:ContentRef,read:(offset:number)=>Promise<import('../../protocol/app-server/v73').ContentChunk>){const parts:Buffer[]=[];let offset=0;do{const chunk=await read(offset);const part=Buffer.from(chunk.data_base64,'base64');expect(part.length).toBeLessThanOrEqual(65536);expect(chunk.content_ref).toEqual(ref);expect(chunk.offset).toBe(offset);expect(chunk.end_offset).toBe(offset+part.length);parts.push(part);offset=chunk.end_offset;expect(chunk.next_offset??null).toBe(offset<ref.readable_end?offset:null);}while(offset<ref.readable_end);return Buffer.concat(parts);}
     // Closing the physical observer leaves the gated native Attempt running.
     stage = 'first terminal disconnect'; terminal.client.close();await terminal.shutdown();terminal=undefined;
     expect(session.state.attempt?.phase.type).toBe('running');
@@ -108,9 +111,9 @@ it('T10 T11 disconnect preserves native execution and WebUI/TUI recover exact bo
       && reference.representation === 'utf8_text';
     const reference=view.checkpoint!.content.find(binding=>originalInput(binding.content_ref))!.content_ref;
     const current=()=>web.getSnapshot().views[created.session.id]?.target===view.target;
-    stage = 'web original content ranges'; expect(await reconstruct(reference,offset=>web.readContent(view.target!,undefined,reference,offset,current))).toEqual(bytes);
+    stage = 'web original content ranges'; expect(await reconstruct(reference,offset=>web.reads.readContent(view.target!,undefined,reference,offset,current))).toEqual(bytes);
     const execution=view.snapshot!.attempt!.phase;
-    stage = 'web forged-frontier refusal'; await expect(web.readContent(view.target!,undefined,{...reference,readable_end:reference.readable_end+1},0,current)).rejects.toBeInstanceOf(RpcFailure);
+    stage = 'web forged-frontier refusal'; await expect(web.reads.readContent(view.target!,undefined,{...reference,readable_end:reference.readable_end+1},0,current)).rejects.toBeInstanceOf(RpcFailure);
     expect(web.getSnapshot().views[created.session.id]!.snapshot!.attempt!.phase).toEqual(execution);
     stage = 'web explicit repair'; await web.refresh(created.session.id);view=web.getSnapshot().views[created.session.id]!;expect(view.observationState).toBe('following');expect(view.snapshot!.attempt!.phase).toEqual(execution);
     stage = 'original provider request count'; expect(await provider.requests()).toHaveLength(1);

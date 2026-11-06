@@ -1,11 +1,14 @@
 //! T08/T20: physical work is counted at the actual SQLite BLOB row handoff.
-use crate::durable::{ConversationStore, SqliteConversationStore};
+use crate::durable::SqliteConversationStore;
 use crate::message::content::TextBlock;
 use crate::message::types::{
     AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
 };
+use crate::observation::content::{ContentRepresentation, ContentSource};
 use crate::runtime::identity::{ConversationId, MessageId};
-use crate::runtime_client::content::{ContentRepresentation, ContentSource};
+use rustx::durable::{
+    CanonicalStore, InboxStore, JournalStore, ObservationStore, ProjectionStore, RequestStore,
+};
 #[test]
 fn t08_t15_native_schema_initializes_all_bounded_read_indexes_before_reopen() {
     let directory = tempfile::tempdir().unwrap();
@@ -68,8 +71,8 @@ fn t08_t20_content_range_reads_touch_at_most_two_finite_sqlite_rows() {
     let reference = store
         .content_descriptor(
             &ContentSource::CanonicalMessageBlock {
-                component: crate::runtime_client::content::CanonicalContentComponent::Payload,
-                locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                component: crate::observation::content::CanonicalContentComponent::Payload,
+                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                     message_id,
                 },
                 block_index: ContentBlockIndex::new(0),
@@ -170,7 +173,7 @@ fn t15_t20_message_and_transcript_headers_advance_without_source_body_reads() {
             matches!(
                 binding.content_ref.source,
                 ContentSource::CanonicalMessageBlock {
-                    component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+                    component: crate::observation::content::CanonicalContentComponent::Payload,
                     ..
                 }
             )
@@ -181,8 +184,7 @@ fn t15_t20_message_and_transcript_headers_advance_without_source_body_reads() {
         last.content.iter().any(|binding| matches!(
             binding.content_ref.source,
             ContentSource::CanonicalMessageBlock {
-                component:
-                    crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+                component: crate::observation::content::CanonicalContentComponent::MessageMetadata,
                 ..
             }
         )),
@@ -352,7 +354,7 @@ fn t08_t15_tool_result_headers_never_deserialize_historical_result_json() {
     assert_eq!(result.reference_id, "tool-result");
     assert!(matches!(
         result.display.as_ref().unwrap().item,
-        crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+        crate::observation::transcript::RuntimeClientTranscriptItem::Message {
             message: MessageBlock::Tool(_)
         }
     ));
@@ -364,7 +366,7 @@ fn t08_t15_tool_result_headers_never_deserialize_historical_result_json() {
     assert!(result.content.iter().any(|binding| matches!(
         binding.content_ref.source,
         ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
+            component: crate::observation::content::CanonicalContentComponent::MessageMetadata,
             ..
         }
     )));
@@ -568,11 +570,11 @@ fn t15_t20_journal_witness_and_statistics_use_bounded_native_evidence() {
         bytes.extend_from_slice(&chunk.bytes);
         offset = chunk.end_offset;
     }
-    let failure: crate::runtime_client::RuntimeClientAttemptFailure =
+    let failure: crate::observation::failure::RuntimeClientAttemptFailure =
         serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         failure,
-        crate::runtime_client::RuntimeClientAttemptFailure::Runtime {
+        crate::observation::failure::RuntimeClientAttemptFailure::Runtime {
             error: crate::runtime::RuntimeError::Internal {
                 message: "diagnostic".repeat(300_000)
             },
@@ -636,7 +638,7 @@ fn t15_t20_journal_witness_and_statistics_use_bounded_native_evidence() {
 
 #[test]
 fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
-    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    use crate::durable::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
     use crate::message::types::{InboundKind, UserContentBlock, UserSource};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pending-content.sqlite");
@@ -656,8 +658,8 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
         })
         .unwrap();
     let canonical = ContentSource::CanonicalMessageBlock {
-        component: crate::runtime_client::content::CanonicalContentComponent::Payload,
-        locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        component: crate::observation::content::CanonicalContentComponent::Payload,
+        locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: accepted.message_id.clone(),
         },
         block_index: ContentBlockIndex::new(0),
@@ -718,7 +720,7 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     );
     let edited = store.observation_read_cut().unwrap();
     let pending = store.transcript_header_page(&edited, None, 32).unwrap();
-    let crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+    let crate::observation::transcript::RuntimeClientTranscriptItem::Message {
         message: MessageBlock::User(user),
     } = &pending.headers[0].display.as_ref().unwrap().item
     else {
@@ -762,9 +764,9 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
 #[test]
 fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
     use crate::message::types::{ReasoningBlock, ToolCallOccurrenceRef, ToolMessageBlock};
+    use crate::observation::content::CanonicalContentComponent as Component;
     use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
     use crate::runtime::identity::{ArtifactId, ToolCallId, ToolId};
-    use crate::runtime_client::content::CanonicalContentComponent as Component;
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("metadata.sqlite");
@@ -829,7 +831,7 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
     let read = |message_id: MessageId, block: u32, component| {
         let source = ContentSource::CanonicalMessageBlock {
             component,
-            locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+            locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id,
             },
             block_index: ContentBlockIndex::new(block),
@@ -887,7 +889,7 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
             .content_descriptor(
                 &ContentSource::CanonicalMessageBlock {
                     component: Component::MessageMetadata,
-                    locator: crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                         message_id: result_id
                     },
                     block_index: ContentBlockIndex::new(1)
@@ -956,9 +958,9 @@ fn t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_mode
     );
     let giant = "model-λ🙂".repeat(300_000);
     let usage = ModelUsage {
-        input_tokens: 11,
-        output_tokens: 7,
-        total_tokens: 18,
+        input_tokens: Some(11),
+        output_tokens: Some(7),
+        total_tokens: Some(18),
         details: None,
     };
     let mut oracle = crate::durable::response::timing::TimingFold::default();
@@ -976,6 +978,9 @@ fn t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_mode
         store
             .commit_model_turn_start(&[], &snapshot, start)
             .unwrap();
+        let owner = crate::model::ModelRequestOwner::Agent {
+            identity: snapshot.identity.clone(),
+        };
         let request = snapshot.request_id;
         let turn = snapshot.identity.turn;
         oracle.start(request.clone());
@@ -988,6 +993,7 @@ fn t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_mode
         oracle.terminal(&request, Some(generation), Some(&usage));
         append(
             RuntimeEvent::ModelRequestCompleted {
+                owner,
                 request_id: request,
                 finish_reason: ModelFinishReason::Stop,
                 usage: Some(usage.clone()),
@@ -1013,7 +1019,7 @@ fn t08_t14_t15_native_attempt_summary_matches_timing_oracle_and_pages_giant_mode
     assert_eq!(summary.timing, expected);
     assert_eq!(summary.requests, 41);
     assert_eq!(summary.reports, 41);
-    assert_eq!(summary.usage.as_ref().unwrap().output_tokens, 287);
+    assert_eq!(summary.usage.as_ref().unwrap().output_tokens, Some(287));
     assert_eq!(summary.models_total, 41);
     assert!(
         summary.models.is_empty(),
@@ -1089,12 +1095,11 @@ fn timed_request_snapshot(
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
             request_params: crate::model::RequestParams::new(),
-            capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+            capabilities: crate::model::catalog::ModelCapabilities::text_only(),
             compat: crate::model::catalog::ModelCompat::default(),
         },
         64_000,
         None,
-        false,
         Vec::new(),
         crate::runtime::identity::CapabilityRevision::new(1),
         crate::context::ContextGeneration {
@@ -1173,6 +1178,8 @@ fn t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages() {
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                response_schema: None,
+                response_byte_limit: None,
                 images: snapshot.images.clone(),
                 invocation: snapshot.invocation.clone(),
                 messages: history.messages,
@@ -1534,7 +1541,7 @@ fn todo_source_messages(description: &str) -> Vec<MessageBlock> {
 #[test]
 fn t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable() {
     use crate::message::content::FileReference;
-    use crate::runtime_client::content::{
+    use crate::observation::content::{
         CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
     };
     use std::io::Write as _;
@@ -1700,7 +1707,7 @@ fn t08_t12_t19_binary_canonical_artifact_ranges_are_frozen_owned_and_restartable
 
 #[test]
 fn t08_t12_t15_t20_giant_canonical_identity_uses_finite_native_ledger_locator() {
-    use crate::runtime_client::content::{CanonicalContentComponent, CanonicalContentLocator};
+    use crate::observation::content::{CanonicalContentComponent, CanonicalContentLocator};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("giant-id.sqlite");
     let conversation = ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8c2");
@@ -1889,7 +1896,7 @@ fn t08_t15_t20_surface_boundary_pages_read_native_headers_without_surface_or_mes
             .is_err()
     );
     let locator =
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 73 };
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 73 };
     assert!(
         store
             .surface_boundary_message_id(SurfaceRevision::new(72), &locator)
@@ -1906,7 +1913,7 @@ fn t08_t15_t20_surface_boundary_pages_read_native_headers_without_surface_or_mes
 
 #[test]
 fn t08_t12_canonical_locator_namespaces_preserve_literal_ids_and_full_inline_id_budget() {
-    use crate::runtime_client::content::{CanonicalContentComponent, CanonicalContentLocator};
+    use crate::observation::content::{CanonicalContentComponent, CanonicalContentLocator};
     let conversation = ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8b9");
     let store = SqliteConversationStore::in_memory(conversation).unwrap();
     let exact_id = "i".repeat(256);
@@ -1960,7 +1967,7 @@ fn t08_t12_canonical_locator_namespaces_preserve_literal_ids_and_full_inline_id_
 
 #[test]
 fn t08_t14_t15_many_blocks_keep_original_metadata_and_advancing_frontiers() {
-    use crate::runtime_client::content::{CanonicalContentComponent, CanonicalContentLocator};
+    use crate::observation::content::{CanonicalContentComponent, CanonicalContentLocator};
     let store = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_601cccec-75c7-703d-af18-cdf2cb42a8c0",
     ))
@@ -1983,7 +1990,7 @@ fn t08_t14_t15_many_blocks_keep_original_metadata_and_advancing_frontiers() {
         .headers
         .remove(0);
     assert!(header.display.is_none());
-    assert!(crate::runtime_client::checkpoint::bounded_bytes(&header, 16384).is_some());
+    assert!(crate::observation::bounded::bounded_bytes(&header, 16384).is_some());
     let metadata = header
         .content
         .iter()
@@ -2023,7 +2030,7 @@ fn t08_t14_t15_many_blocks_keep_original_metadata_and_advancing_frontiers() {
 
 #[test]
 fn t08_t12_t15_t20_pending_sequence_reads_giant_identity_without_body_deserialization() {
-    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    use crate::durable::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
     use crate::message::types::{InboundKind, UserContentBlock, UserSource};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pending-giant-id.sqlite");
@@ -2083,9 +2090,9 @@ fn t08_t12_t15_t20_pending_sequence_reads_giant_identity_without_body_deserializ
 
 #[test]
 fn t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit() {
-    use crate::durable::inbox::InboundDraft;
+    use crate::durable::InboundDraft;
     use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
-    use crate::runtime_client::content::CanonicalContentLocator;
+    use crate::observation::content::CanonicalContentLocator;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("header-layout-failure.sqlite");
     let conversation = ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8d0");
@@ -2187,7 +2194,7 @@ fn t08_t14_t15_tool_observation_headers_preserve_c_j_distinctions_without_body_r
         )
         .unwrap();
     let locator =
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 1 };
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 1 };
     let assembled_cut = store.observation_read_cut().unwrap();
     assert_tool_not_executed(&store, &assembled_cut, &locator);
     let started = store
@@ -2298,7 +2305,7 @@ fn tool_observation_event(
 fn assert_tool_not_executed(
     store: &SqliteConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
 ) {
     let page = store.transcript_tool_headers(cut, locator, 0, 32).unwrap();
     assert_eq!(page.total, 1);
@@ -2309,7 +2316,7 @@ fn assert_tool_not_executed(
 fn assert_tool_committed_before_terminal(
     store: &SqliteConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
     started: u64,
 ) {
     let page = store.transcript_tool_headers(cut, locator, 0, 32).unwrap();
@@ -2324,7 +2331,7 @@ fn assert_tool_committed_before_terminal(
 
 #[test]
 fn t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch() {
-    use crate::runtime_client::content::{CanonicalContentComponent, CanonicalContentLocator};
+    use crate::observation::content::{CanonicalContentComponent, CanonicalContentLocator};
     let store = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_601cccec-75c7-703d-af18-cdf2cb42a8c9",
     ))
@@ -2403,7 +2410,7 @@ fn t08_t19_t20_canonical_json_indexes_wide_borrowed_values_with_finite_scratch()
 
 #[test]
 fn t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8() {
-    use crate::runtime_client::content::{CanonicalContentComponent, CanonicalContentLocator};
+    use crate::observation::content::{CanonicalContentComponent, CanonicalContentLocator};
     let store = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_601cccec-75c7-703d-af18-cdf2cb42a8c9",
     ))
@@ -2470,8 +2477,8 @@ fn t08_t19_t20_canonical_json_orders_unbounded_keys_by_original_utf8() {
 
 #[test]
 fn t08_t14_t19_tool_headers_keep_exact_raw_arguments_and_giant_identity_sources() {
-    use crate::durable::inbox::CanonicalRawToolArguments;
-    use crate::runtime_client::content::CanonicalContentLocator;
+    use crate::durable::CanonicalRawToolArguments;
+    use crate::observation::content::CanonicalContentLocator;
     let raw = " {\"n\":1.0,\"escaped\":\"\\u6c34\"} \n";
     let mut messages = todo_source_messages("unused");
     messages.truncate(1);
@@ -2526,7 +2533,7 @@ fn t08_t14_t19_tool_headers_keep_exact_raw_arguments_and_giant_identity_sources(
 #[test]
 fn t12_t14_t19_source_cut_provenance_rejects_old_journal_with_new_canonical_frontier() {
     use crate::events::types::RuntimeEvent;
-    use crate::runtime_client::content::CanonicalContentLocator;
+    use crate::observation::content::CanonicalContentLocator;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("source-cut.sqlite");
     let conversation = ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8c9");
@@ -2646,7 +2653,7 @@ fn assert_canonical_cut_dimensions(
 
 #[test]
 fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
-    use crate::durable::inbox::ConversationStoreError;
+    use crate::durable::ConversationStoreError;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("middle-descriptor.sqlite");
     let conversation = ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8ca");
@@ -2808,7 +2815,7 @@ fn t14_t19_complete_canonical_replacement_carries_earlier_native_effects() {
 fn assert_scalar_source_reads_ignore_original_bodies(
     store: &SqliteConversationStore,
     connection: &rusqlite::Connection,
-    expected: &crate::durable::inbox::CanonicalObservationBatch,
+    expected: &crate::durable::CanonicalObservationBatch,
 ) {
     connection.execute_batch(
         "CREATE TEMP TABLE native_body_backup AS SELECT position,message_json FROM message_ledger WHERE position IN(1,3); UPDATE message_ledger SET message_json='invalid JSON' WHERE position IN(1,3)",
@@ -2876,9 +2883,9 @@ fn assert_complete_canonical_index_plans(connection: &rusqlite::Connection) {
 }
 
 fn assert_global_canonical_scalars(
-    complete: &crate::durable::inbox::CanonicalObservationBatch,
-    first: &crate::durable::inbox::CanonicalObservationBatch,
-    todo: &crate::durable::inbox::NativeTodoObservation,
+    complete: &crate::durable::CanonicalObservationBatch,
+    first: &crate::durable::CanonicalObservationBatch,
+    todo: &crate::durable::NativeTodoObservation,
     time: chrono::DateTime<chrono::Utc>,
 ) {
     assert_eq!(complete.opening_preview, first.opening_preview);
@@ -2894,7 +2901,7 @@ fn assert_global_canonical_scalars(
 #[test]
 fn t08_t14_t19_response_decoration_keeps_one_frozen_native_journal_cut() {
     use crate::events::types::RuntimeEvent;
-    use crate::runtime_client::snapshot::ForegroundToolState;
+    use crate::observation::tool::ForegroundToolState;
     let directory = tempfile::tempdir().unwrap();
     let conversation = ConversationId::new("conv_601cccec-75c7-703d-af18-cdf2cb42a8f1");
     let store = SqliteConversationStore::open(
@@ -2938,7 +2945,7 @@ fn t08_t14_t19_response_decoration_keeps_one_frozen_native_journal_cut() {
     assert_eq!(after.ledger_through, before.ledger_through);
     assert_eq!(after.transcript_total, before.transcript_total);
     let read = |cut: &crate::durable::observation::ObservationReadCut| {
-        crate::runtime_client::snapshot::transcript_header_view(
+        crate::observation::transcript::transcript_header_view(
             store.transcript_header_page(cut, None, 32).unwrap(),
         )
     };

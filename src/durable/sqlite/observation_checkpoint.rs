@@ -3,7 +3,7 @@
 use super::{ConversationStoreError, Transaction};
 use crate::durable::observation::{CheckpointHead, ObservationReadCut};
 use crate::runtime::identity::ConversationId;
-use crate::runtime_client::{response, snapshot};
+use crate::runtime_client::response;
 
 pub(super) fn read(
     transaction: &Transaction<'_>,
@@ -16,7 +16,7 @@ pub(super) fn read(
     let validated = super::observation::ValidatedCut::new(transaction, conversation, cut)?;
     let (headers, mut row_proofs) =
         super::observation::transcript_validated(&validated, limit, response_owner)?;
-    let mut transcript = snapshot::transcript_header_view(headers);
+    let mut transcript = crate::observation::transcript::transcript_header_view(headers);
     // Keep the original validation/error order: transcript/cut, response, occupancy,
     // trace total, projection head. All subsequent reads retain this snapshot.
     response::validate_decoration_cut(&transcript, through)?;
@@ -49,7 +49,7 @@ pub(super) fn read(
         .collect::<Result<_, _>>()?;
     transcript.entries = transcript_rows
         .iter()
-        .map(crate::runtime_client::checkpoint::PreparedTranscriptRow::native_entry)
+        .map(crate::observation::transcript::PreparedTranscriptRow::native_entry)
         .collect::<Vec<_>>()
         .into();
     Ok(CheckpointHead {

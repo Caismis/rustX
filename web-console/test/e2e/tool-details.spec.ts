@@ -8,7 +8,7 @@ for (const theme of ['light', 'dark'] as const) test(`Harness tool details: inde
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   await page.goto(`${origin}/test/fixtures/tool-details.html`);
   await expect(page).toHaveTitle('rustX Tool details');
-  await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+  await page.evaluate(value => { document.body.toggleAttribute('data-ds-dark-theme', value === 'dark'); document.documentElement.style.colorScheme = value; }, theme);
   const call = page.locator('[data-tool-call-id="long-bash"]');
   const toggle = call.getByRole('button', { name: /^bash/ });
   await toggle.focus();

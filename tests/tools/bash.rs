@@ -62,8 +62,13 @@ fn json_content(result: &ToolExecutionResult) -> serde_json::Value {
 /// tool-output root (the `results/` directory; `tasks/` holds background
 /// live output, a deliberately separate lifecycle).
 fn spill_count(fixture: &crate::common::NativeFixture) -> usize {
-    std::fs::read_dir(fixture.runtime.tool_output().root().join("results"))
+    std::fs::read_dir(fixture.runtime.tool_output().root().unwrap())
         .expect("managed tool-output results root")
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-"))
+        })
         .count()
 }
 
@@ -497,7 +502,8 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
         )
         .expect("prepare");
     let outcome = registry
-        .commit_dispatch(prepared, &CancellationSignal::new())
+        .commit_dispatch_owned(prepared, &CancellationSignal::new())
+        .await
         .expect("dispatch commits");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         outcome
@@ -588,7 +594,8 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
         )
         .expect("prepare");
     let outcome = registry
-        .commit_dispatch(prepared, &CancellationSignal::new())
+        .commit_dispatch_owned(prepared, &CancellationSignal::new())
+        .await
         .expect("dispatch commits");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         outcome
@@ -729,7 +736,8 @@ async fn bash_large_output_spills_to_managed_output() {
     let full_output = full_output.as_str();
     assert!(std::path::Path::new(full_output).is_absolute());
     assert!(
-        std::path::Path::new(full_output).starts_with(fixture.runtime.tool_output().root()),
+        std::path::Path::new(full_output)
+            .starts_with(fixture.runtime.tool_output().root().unwrap()),
         "the spill lives in the managed tool-output root: {full_output}"
     );
     // The canonical result projection presents the locator plus the
@@ -808,7 +816,7 @@ async fn bash_large_output_spills_to_managed_output() {
         "grep",
         serde_json::json!({
             "pattern": "spill-boundary-marker",
-            "path": fixture.runtime.tool_output().root().to_str().expect("utf8"),
+            "path": fixture.runtime.tool_output().root().unwrap().to_str().expect("utf8"),
         }),
     )
     .await;
@@ -1372,7 +1380,8 @@ async fn model_selectable_bash_background_selection_dispatches_conversation_owne
         .expect("prepare background dispatch");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         background
-            .commit_dispatch(dispatch, &CancellationSignal::new())
+            .commit_dispatch_owned(dispatch, &CancellationSignal::new())
+            .await
             .expect("background dispatch commits")
     else {
         panic!("the background dispatch is accepted");
@@ -1540,7 +1549,8 @@ async fn background_cancel_at_native_gate() {
         .unwrap();
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         registry
-            .commit_dispatch(prepared, &CancellationSignal::new())
+            .commit_dispatch_owned(prepared, &CancellationSignal::new())
+            .await
             .unwrap()
     else {
         panic!("accepted")

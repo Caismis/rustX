@@ -46,14 +46,16 @@ import {
   type Notification,
   type SourceTarget,
 } from "../protocol/app-server.ts";
-import { olderSequence, retainSource, sourceKey, type SourceRepairObservation } from "../presentation/source-repairs.ts";
-import { AppServerClient } from "./client.ts";
+import type { SourceRepairObservation } from "../presentation/source-repairs.ts";
+import { laterRepairSequence, retainSourceRepair, sourceRepairDecision, sourceRepairKey } from "../../../protocol/app-server/source-repair.ts";
+import { AppServerClient, AppServerRequestError } from "./client.ts";
 import {
   AppServerChild,
   type AppServerChildOptions,
   type ChildExit,
 } from "./child-process.ts";
-import { AppServerSession, SESSION_PROJECTION_PAGE_LIMIT } from "./session.ts";
+import { AppServerSession } from "./session.ts";
+import { SESSION_PROJECTION_PAGE_LIMIT } from "./session-readers.ts";
 import { StdioTransport } from "./stdio-transport.ts";
 import {
   WebSocketTransport,
@@ -126,6 +128,7 @@ function sessionIdOf(notification: Notification): string | undefined {
     case "configuration/changed":
       return notification.params.application.scope;
     case "configuration/sourceRepairChanged":
+    case "schedule/changed":
       return undefined;
     case "session/ownershipRetired":
     case "session/summaryInvalidated":
@@ -144,6 +147,7 @@ export class AppServerHost {
   readonly ownership: ProcessOwnership;
   readonly #child: AppServerChild | undefined;
   readonly #sessions = new Map<string, AppServerSession>();
+  readonly #failedInitializations = new Set<string>();
   /**
    * The newest native repair observation of each configuration source this
    * connection observed, by source. Source-scoped and Session-independent:
@@ -151,10 +155,10 @@ export class AppServerHost {
    * still there to present. Notices and authoritative reads are ordered by
    * their native ledger sequence, never by arrival: an older one — a read
    * answered after a newer notice, or a notice produced before a fresher read
-   * — changes nothing. Finite (`retainSource`): the User and 64 Workspaces,
+   * — changes nothing. Finite (`retainSourceRepair`): the User and 64 Workspaces,
    * the least recently observed Workspace going first.
    */
-  readonly #sourceRepairs = new Map<string, SourceRepairObservation>();
+  #sourceRepairs = new Map<string, SourceRepairObservation>();
   /**
    * The highest native sequence at which this connection forgot a source.
    * Whatever a source absent from `#sourceRepairs` held was current at or
@@ -175,8 +179,8 @@ export class AppServerHost {
    */
   readonly #reads = new Set<{ key: string; forgotten: string }>();
   /** Workspaces whose ambiguous notice awaits its recovery read; one entry
-   * per source, finite (`retainSource`), read one at a time. */
-  readonly #recoveries = new Map<string, SourceTarget>();
+   * per source, finite (`retainSourceRepair`), read one at a time. */
+  #recoveries = new Map<string, SourceTarget>();
   #recovering = false;
   readonly #sourceRepairListeners = new Set<SourceRepairListener>();
   readonly #unknownModelSelections = new Set<string>();
@@ -319,7 +323,7 @@ export class AppServerHost {
    * snapshot it is.
    */
   async readSourceRepairs(target: SourceTarget = { kind: "user" }): Promise<SourceRepairRead> {
-    const read = target.kind === "workspace" ? { key: sourceKey(target), forgotten: "0" } : undefined;
+    const read = target.kind === "workspace" ? { key: sourceRepairKey(target), forgotten: "0" } : undefined;
     if (read !== undefined) this.#reads.add(read);
     try {
       const client = this.client;
@@ -351,29 +355,22 @@ export class AppServerHost {
    * again.
    */
   #observeSourceRepair(observation: SourceRepairObservation, forgotten?: string): void {
-    const key = sourceKey(observation.target);
-    const known = this.#sourceRepairs.get(key);
-    if (known !== undefined) {
-      if (olderSequence(observation.sequence, known.sequence)) return;
-      if (!olderSequence(known.sequence, observation.sequence)) {
-        if (observation.receipt?.id !== known.receipt?.id && forgotten === undefined) this.#recover(observation.target);
-        return;
-      }
-    } else if (key !== "user" && olderSequence(observation.sequence, forgotten ?? this.#forgottenThrough)) {
-      if (forgotten === undefined) this.#recover(observation.target);
-      return;
-    }
-    const evicted = retainSource(this.#sourceRepairs, key, observation);
+    const key = sourceRepairKey(observation.target);
+    const decision = sourceRepairDecision(this.#sourceRepairs.get(key), observation, forgotten, this.#forgottenThrough);
+    if (decision === "recover") this.#recover(observation.target);
+    if (decision !== "apply") return;
+    const { retained, forgotten: evicted } = retainSourceRepair(this.#sourceRepairs, key, observation);
+    this.#sourceRepairs = new Map(retained);
     if (evicted !== undefined) this.#forget(evicted);
     for (const listener of [...this.#sourceRepairListeners]) listener(observation);
   }
 
   /** Records that this connection no longer holds `evicted`'s source. */
   #forget({ target, sequence }: SourceRepairObservation): void {
-    if (olderSequence(this.#forgottenThrough, sequence)) this.#forgottenThrough = sequence;
-    const key = sourceKey(target);
+    this.#forgottenThrough = laterRepairSequence(this.#forgottenThrough, sequence);
+    const key = sourceRepairKey(target);
     for (const read of this.#reads) {
-      if (read.key === key && olderSequence(read.forgotten, sequence)) read.forgotten = sequence;
+      if (read.key === key) read.forgotten = laterRepairSequence(read.forgotten, sequence);
     }
   }
 
@@ -386,7 +383,7 @@ export class AppServerHost {
    * and nothing is read once the connection closed.
    */
   #recover(target: SourceTarget): void {
-    retainSource(this.#recoveries, sourceKey(target), target);
+    this.#recoveries = new Map(retainSourceRepair(this.#recoveries, sourceRepairKey(target), target).retained);
     if (this.#recovering) return;
     this.#recovering = true;
     void (async () => {
@@ -443,7 +440,14 @@ export class AppServerHost {
       if (nodeId === undefined || nodeId === existing.nodeId) return existing;
       throw new Error("use branch switching to open a different Session node");
     }
-    const session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections);
+    let session: AppServerSession;
+    try {
+      session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections);
+    } catch (error) {
+      if (error instanceof AppServerRequestError && error.kind !== 'outcome_unknown' && !this.#sessions.has(sessionId)) this.#failedInitializations.add(sessionId);
+      throw error;
+    }
+    this.#failedInitializations.delete(sessionId);
     this.#sessions.set(sessionId, session);
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
@@ -463,12 +467,15 @@ export class AppServerHost {
   }
 
   /** User-confirmed branch switch; the manager owns native retirement. */
-  async openNode(sessionId: SessionId, nodeId: SessionNodeId): Promise<AppServerSession> {
+  async openNode(sessionId: SessionId, nodeId: SessionNodeId, onSwitched?: () => void): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
       await existing.switchNode(nodeId);
       this.#sessions.delete(sessionId);
     }
+    // The confirmed target can accept submission intent while its successor
+    // attachment waits for native preparation. Unknown switches never get here.
+    onSwitched?.();
     return this.attach(sessionId, nodeId);
   }
 
@@ -521,6 +528,12 @@ export class AppServerHost {
     };
   }
 
+  async retryInitialization(sessionId: SessionId, nodeId: SessionNodeId): Promise<void> {
+    if (!this.#failedInitializations.has(sessionId)) return;
+    await this.client.call('session/retryInitialization', { session_id: sessionId, node_id: nodeId }, 'submission_intent_accepted');
+    this.#failedInitializations.delete(sessionId);
+  }
+
   async readSession(sessionId: SessionId): Promise<SessionSnapshot> {
     const read = await this.client.call(
       "session/read",
@@ -538,6 +551,11 @@ export class AppServerHost {
         "session_transition",
       ),
     );
+  }
+
+  /** First Send may arrive while an early attachment is still preparing. */
+  async submissionIntent(sessionId: SessionId, nodeId: SessionNodeId): Promise<void> {
+    await this.client.call('session/submissionIntent', { session_id: sessionId, node_id: nodeId }, 'submission_intent_accepted');
   }
 
   async renameSession(
@@ -574,7 +592,7 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: import("../../../protocol/app-server/v52.ts").CanonicalContentLocator,
+    boundary?: import("../../../protocol/app-server/v73.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
@@ -597,7 +615,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: import("../../../protocol/app-server/v52.ts").CanonicalContentLocator,
+    boundary: import("../../../protocol/app-server/v73.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
@@ -704,7 +722,7 @@ export class AppServerHost {
 
 async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor?: import('../../../protocol/app-server/v52.ts').EditorLocator | null;
+  editor?: import('../../../protocol/app-server/v73.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
 }): Promise<SessionTransition> {
   return {

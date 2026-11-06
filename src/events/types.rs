@@ -93,13 +93,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::message::types::ContributionEmission;
+use crate::model::auxiliary::{
+    AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryFingerprint,
+    AuxiliaryInputEvidence, AuxiliaryRequestEvidence,
+};
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::generation_evidence::GenerationEvidence;
+use crate::model::snapshot::ModelRequestOwner;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
-    AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
-    ToolCallId, ToolExecutionId, ToolId, TurnId,
+    AgentId, AttemptId, AuxiliaryCallId, ConversationId, EventId, InteractionId, MessageId,
+    RequestId, SubagentId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::subagent::SubagentName;
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
@@ -251,12 +256,16 @@ pub enum RuntimeEvent {
     /// A turn completed.
     TurnCompleted,
 
-    /// A model request was sent to an adapter.
+    /// Durable intent to execute a model request. This fact commits before
+    /// adapter invocation and does not prove the adapter was called.
     ModelRequestStarted {
-        /// The exact immutable Request Snapshot this start fact commits.
+        /// The owner of this physical request. For Agent requests, the primary
+        /// Request Snapshot remains the authority for request identity.
+        owner: ModelRequestOwner,
+        /// The exact immutable request identity this start fact commits.
         request_id: RequestId,
-        /// The model selected by the frozen invocation. This is a projection
-        /// convenience; the Request Snapshot remains the authority.
+        /// The model selected by the frozen invocation. For Agent requests,
+        /// this projection must agree with the primary Request Snapshot.
         model: String,
     },
     /// One semantic contribution emission became durable with its owning
@@ -284,6 +293,8 @@ pub enum RuntimeEvent {
     /// Assistant acceptance (C); each is a different fact and a crash between
     /// them must stay distinguishable.
     ModelRequestCompleted {
+        /// Exact owner repeated from the authoritative request-start fact.
+        owner: ModelRequestOwner,
         /// The exact provider request whose outcome this fact records.
         request_id: RequestId,
         /// Why the generation finished.
@@ -303,6 +314,8 @@ pub enum RuntimeEvent {
     },
     /// A model request failed with a normalized error.
     ModelRequestFailed {
+        /// Exact owner repeated from the authoritative request-start fact.
+        owner: ModelRequestOwner,
         /// The exact provider request that failed.
         request_id: RequestId,
         /// The normalized model error.
@@ -316,6 +329,38 @@ pub enum RuntimeEvent {
         /// producing anything keeps none.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         generation: Option<GenerationEvidence>,
+    },
+    /// Durable start of one bounded auxiliary Call.
+    ///
+    /// Call facts carry bounded consumer-defined attribution, explicit input authority, and
+    /// semantic/invocation fingerprints. They never carry prompt bytes,
+    /// generated output, credentials, budgets, or transport correlation.
+    AuxiliaryCallStarted {
+        call_id: AuxiliaryCallId,
+        purpose: AuxiliaryAttribution,
+        trigger: AuxiliaryAttribution,
+        business_source: AuxiliaryBusinessSource,
+        input: AuxiliaryInputEvidence,
+        semantic_input_fingerprint: AuxiliaryFingerprint,
+        invocation_fingerprint: AuxiliaryFingerprint,
+        selected_message_ids: Vec<MessageId>,
+    },
+    /// Committed with the preceding failed physical request. Delay is audit evidence;
+    /// the live owner retains the absolute monotonic eligibility time.
+    AuxiliaryRetryScheduled {
+        call_id: AuxiliaryCallId,
+        request_id: RequestId,
+        next_ordinal: u32,
+        delay_ms: u64,
+        request_evidence: AuxiliaryRequestEvidence,
+    },
+
+    /// Absorbing terminal of one auxiliary Call.
+    AuxiliaryCallSettled {
+        call_id: AuxiliaryCallId,
+        outcome: AuxiliaryCallOutcome,
+        /// Final request evidence, or absent for zero-request Call settlement.
+        request_evidence: Option<AuxiliaryRequestEvidence>,
     },
     /// A model request was scheduled for retry.
     ModelRetryScheduled {
@@ -695,7 +740,7 @@ pub enum RuntimeEvent {
     /// A native `WorkflowRun` began executing one immutable `WorkflowProgram`.
     WorkflowStarted {
         /// Outer model correlation; never internal execution authority.
-        tool_call_id: ToolCallId,
+        tool_call_id: Option<ToolCallId>,
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
@@ -732,6 +777,24 @@ pub enum RuntimeEvent {
     /// A node crossed the cancellation/count admission frontier.
     WorkflowNodeStarted {
         instance: crate::runtime::workflow::WorkflowNodeInstance,
+    },
+    /// Original input scope of one admitted node. Large bodies are explicitly omitted.
+    WorkflowNodeInputRecorded {
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+        kind: crate::runtime::workflow::read_model::WorkflowNodeKind,
+        value: Option<String>,
+    },
+    /// The actual node completion, never a reconstruction from the program.
+    WorkflowNodeOutputRecorded {
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+        value: Option<String>,
+    },
+    /// A node entered a native wait; this audit fact releases its read-model cut.
+    /// A reserved Auxiliary identity does not claim provider dispatch or settlement.
+    WorkflowNodeWaiting {
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+        reason: crate::runtime::workflow::read_model::WorkflowWait,
+        auxiliary_call_id: Option<AuxiliaryCallId>,
     },
     /// A node completed, failed or drained cancellation exactly once.
     WorkflowNodeSettled {
@@ -778,30 +841,6 @@ pub enum RuntimeEvent {
         port: WorkflowPort,
         /// The selected successor node identity.
         successor: String,
-    },
-    /// A Parallel node admitted its fixed keyed block set, before child work.
-    WorkflowParallelAdmitted {
-        /// The configured Workflow identity.
-        workflow_id: WorkflowId,
-        /// The bounded identity of this foreground invocation.
-        run_id: crate::runtime::workflow::WorkflowRunId,
-        /// The stable Parallel node identity.
-        node_id: crate::runtime::workflow::WorkflowNodeInstance,
-        /// Branch keys in definition order.
-        branches: Vec<String>,
-    },
-    /// All admitted children of a Parallel node reached native settlement.
-    WorkflowParallelSettled {
-        /// The configured Workflow identity.
-        workflow_id: WorkflowId,
-        /// The bounded identity of this foreground invocation.
-        run_id: crate::runtime::workflow::WorkflowRunId,
-        /// The stable Parallel node identity.
-        node_id: crate::runtime::workflow::WorkflowNodeInstance,
-        /// Successful branch keys in definition order.
-        succeeded: Vec<String>,
-        /// Failed branch keys in definition order.
-        failed: Vec<String>,
     },
     /// A `WorkflowRun` committed its one successful result.
     WorkflowCompleted {
@@ -869,9 +908,58 @@ pub enum RuntimeEvent {
         /// The bounded terminal settlement.
         settlement: InteractionSettlement,
     },
+    /// The Session's configuration changed: native committed a prepared
+    /// candidate at its safe boundary, between Attempts.
+    ///
+    /// This is a Session-level fact, owned by no Attempt and never canonical
+    /// conversation content. It records the actual commit, not preparation or
+    /// a source notification, and only when future work observes a change.
+    /// Which request first used the committed generation is that request's
+    /// own snapshot evidence, never inferred from this fact.
+    ConfigurationApplied {
+        /// The bounded semantic summary of what changed.
+        change: crate::runtime::configuration_commit::ConfigurationChange,
+    },
 }
 
 impl RuntimeEvent {
+    /// Returns the authoritative owner repeated by a model-request fact.
+    #[must_use]
+    pub fn model_request_owner(&self) -> Option<&ModelRequestOwner> {
+        match self {
+            Self::ModelRequestStarted { owner, .. }
+            | Self::ModelRequestCompleted { owner, .. }
+            | Self::ModelRequestFailed { owner, .. } => Some(owner),
+            _ => None,
+        }
+    }
+
+    /// Returns the explicit auxiliary Call named by a Call or request fact.
+    #[must_use]
+    pub fn auxiliary_call_id(&self) -> Option<&AuxiliaryCallId> {
+        match self {
+            Self::AuxiliaryCallStarted { call_id, .. }
+            | Self::AuxiliaryCallSettled { call_id, .. }
+            | Self::AuxiliaryRetryScheduled { call_id, .. } => Some(call_id),
+            Self::ModelRequestStarted { owner, .. }
+            | Self::ModelRequestCompleted { owner, .. }
+            | Self::ModelRequestFailed { owner, .. } => match owner {
+                ModelRequestOwner::Auxiliary { call_id, .. } => Some(call_id),
+                ModelRequestOwner::Agent { .. } => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Classifies an explicit auxiliary model-request fact.
+    #[must_use]
+    pub fn is_auxiliary_model_request(&self) -> bool {
+        matches!(
+            self.model_request_owner(),
+            Some(ModelRequestOwner::Auxiliary { .. })
+        )
+    }
+
     /// Returns this fact with request-owned generation timing evidence
     /// removed.
     ///
@@ -1096,6 +1184,137 @@ mod tests {
                 attempt_id: AttemptId::new("attempt-1"),
             },
         }
+    }
+
+    #[test]
+    fn request_started_round_trips_explicit_tagged_owners() {
+        use crate::model::{ModelRequestOwner, RequestIdentity};
+        use crate::runtime::identity::{AuxiliaryCallId, RequestId, TurnId};
+
+        let identity = RequestIdentity {
+            attempt_id: AttemptId::new("attempt-1"),
+            turn: TurnId::new("2"),
+            retry_number: 1,
+        };
+        let owners = [
+            (
+                ModelRequestOwner::Agent {
+                    identity: identity.clone(),
+                },
+                serde_json::json!({"type": "agent", "identity": {
+                    "attempt_id": "attempt-1", "turn": "2", "retry_number": 1
+                }}),
+            ),
+            (
+                ModelRequestOwner::Auxiliary {
+                    call_id: AuxiliaryCallId::new("aux_36524fd8-f674-7fc2-8125-06d01fee0e18"),
+                    ordinal: 2,
+                },
+                serde_json::json!({"type": "auxiliary", "call_id": "aux_36524fd8-f674-7fc2-8125-06d01fee0e18", "ordinal": 2}),
+            ),
+        ];
+        for (owner, expected) in owners {
+            let event = RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("physical-request"),
+                owner,
+                model: "model".into(),
+            };
+            let value = serde_json::to_value(&event).unwrap();
+            assert_eq!(value["owner"], expected);
+            assert_eq!(
+                serde_json::from_value::<RuntimeEvent>(value).unwrap(),
+                event
+            );
+        }
+    }
+
+    #[test]
+    fn request_started_rejects_missing_or_invalid_owner() {
+        let base = serde_json::json!({
+            "type": "model_request_started", "request_id": "request", "model": "model"
+        });
+        assert!(serde_json::from_value::<RuntimeEvent>(base.clone()).is_err());
+        for owner in [
+            serde_json::json!({"type": "unknown"}),
+            serde_json::json!({"identity": {"attempt_id": "attempt", "turn": "1", "retry_number": 0}}),
+            serde_json::json!({"type": "agent"}),
+            serde_json::json!({"type": "agent", "identity": {"attempt_id": "attempt", "turn": "1", "retry_number": 0, "extra": true}}),
+            serde_json::json!({"type": "agent", "identity": {"attempt_id": "attempt", "turn": "1", "retry_number": 0}, "extra": true}),
+            serde_json::json!({"type": "auxiliary", "call_id": "aux_36524fd8-f674-7fc2-8125-06d01fee0e18"}),
+            serde_json::json!({"type": "auxiliary", "call_id": "aux_36524fd8-f674-7fc2-8125-06d01fee0e18", "ordinal": 0, "extra": true}),
+        ] {
+            let mut value = base.clone();
+            value["owner"] = owner;
+            assert!(serde_json::from_value::<RuntimeEvent>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn request_terminal_owner_is_explicit_and_classifies_auxiliary_facts() {
+        use crate::model::auxiliary::AuxiliaryFingerprint;
+        use crate::model::{ModelRequestOwner, RequestIdentity};
+        use crate::runtime::identity::{AuxiliaryCallId, RequestId, TurnId};
+
+        let call_id = AuxiliaryCallId::new("aux_36524fd8-f674-7fc2-8125-06d01fee0e18");
+        let owner = ModelRequestOwner::Auxiliary {
+            call_id: call_id.clone(),
+            ordinal: 1,
+        };
+        let completed = RuntimeEvent::ModelRequestCompleted {
+            owner: owner.clone(),
+            request_id: RequestId::new("request"),
+            finish_reason: crate::model::ModelFinishReason::Stop,
+            usage: None,
+            generation: None,
+        };
+        assert_eq!(completed.model_request_owner(), Some(&owner));
+        assert_eq!(completed.auxiliary_call_id(), Some(&call_id));
+        assert!(completed.is_auxiliary_model_request());
+        let value = serde_json::to_value(&completed).unwrap();
+        assert_eq!(value["owner"]["type"], "auxiliary");
+        assert_eq!(value["owner"]["call_id"], call_id.as_str());
+        assert_eq!(
+            serde_json::from_value::<RuntimeEvent>(value).unwrap(),
+            completed
+        );
+
+        let agent = RuntimeEvent::ModelRequestFailed {
+            owner: ModelRequestOwner::Agent {
+                identity: RequestIdentity {
+                    attempt_id: AttemptId::new("attempt"),
+                    turn: TurnId::new("1"),
+                    retry_number: 0,
+                },
+            },
+            request_id: RequestId::new("agent-request"),
+            error: crate::model::error::ModelError::timeout(
+                crate::model::deadline::ModelTimeoutPhase::ResponseStart,
+            ),
+            usage: None,
+            generation: None,
+        };
+        assert!(!agent.is_auxiliary_model_request());
+        assert_eq!(agent.auxiliary_call_id(), None);
+
+        let fingerprint = AuxiliaryFingerprint::new("a".repeat(64)).unwrap();
+        let call_started = RuntimeEvent::AuxiliaryCallStarted {
+            call_id: call_id.clone(),
+            purpose: crate::model::AuxiliaryAttribution::new("summary").unwrap(),
+            trigger: crate::model::AuxiliaryAttribution::new("automatic").unwrap(),
+            business_source: crate::model::AuxiliaryBusinessSource::Independent,
+            input: crate::model::AuxiliaryInputEvidence::Temporary,
+            semantic_input_fingerprint: fingerprint.clone(),
+            invocation_fingerprint: fingerprint,
+            selected_message_ids: Vec::new(),
+        };
+        assert_eq!(call_started.auxiliary_call_id(), Some(&call_id));
+        assert_eq!(call_started.model_request_owner(), None);
+        assert!(!call_started.is_auxiliary_model_request());
+        assert_eq!(
+            serde_json::from_value::<RuntimeEvent>(serde_json::to_value(&call_started).unwrap())
+                .unwrap(),
+            call_started
+        );
     }
 
     /// The envelope round-trips with deterministic serialization.

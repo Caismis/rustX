@@ -1,21 +1,27 @@
 //! Native-transaction descriptor indexes with bounded physical observation reads.
+
+use crate::durable::sqlite::statements::FixedStatements;
+#[cfg(test)]
+use index::record_descriptor_work;
+#[cfg(test)]
+pub(super) use index::{descriptor_work, take_publication_capture_work};
+use rusqlite::Transaction;
+#[cfg(test)]
+pub(super) mod tests;
+
+pub(super) mod index;
+mod store;
 use super::{
-    Connection, ConversationStoreError, OptionalExtension, Transaction, nonnegative, params,
-    seq_to_i64, storage,
+    Connection, ConversationStoreError, OptionalExtension, nonnegative, params, seq_to_i64, storage,
 };
 use crate::durable::observation::{
-    HEADER_ENCODED_MAX, HEADER_PAGE_MAX, MessageBlockHeader, MessageHeader, MessageHeaderPage,
-    ObservationReadCut, TranscriptHeader, TranscriptHeaderPage,
+    HEADER_ENCODED_MAX, HEADER_PAGE_MAX, MessageHeader, MessageHeaderPage, ObservationReadCut,
+    TranscriptHeader, TranscriptHeaderPage,
 };
-use crate::durable::sqlite::statements::FixedStatements;
 use crate::message::types::{ContextKind, InboundKind, MessageBlock};
+use crate::observation::bounded::bounded_bytes;
+use crate::observation::transcript::RuntimeClientTranscriptEntry;
 use crate::runtime::identity::ConversationId;
-use crate::runtime_client::checkpoint::{Capture, ContentBinding, bounded_bytes};
-use crate::runtime_client::snapshot::RuntimeClientTranscriptEntry;
-
-#[cfg(test)]
-#[path = "observation_source_read_tests.rs"]
-mod source_read_tests;
 
 pub(super) fn cut(
     connection: &Connection,
@@ -27,16 +33,10 @@ pub(super) fn cut(
         transcript_total: read.transcript_total,
         surface_revision: read.surface_revision,
         read,
-        inherited_through: super::inherited_transcript_through(connection)?,
+        inherited_through: super::canonical::transcript::inherited_transcript_through(connection)?,
     })
 }
-pub(super) fn validate(
-    connection: &Connection,
-    conversation: &ConversationId,
-    expected: &ObservationReadCut,
-) -> Result<(), ConversationStoreError> {
-    validate_actual(connection, conversation, expected).map(|_| ())
-}
+
 fn validate_actual(
     connection: &Connection,
     conversation: &ConversationId,
@@ -69,53 +69,13 @@ pub(super) struct ValidatedCut<'read, 'connection> {
     changes: u64,
     states: (rusqlite::TransactionState, rusqlite::TransactionState),
 }
-impl<'read, 'connection> ValidatedCut<'read, 'connection> {
-    pub(super) fn new(
-        transaction: &'read Transaction<'connection>,
-        conversation: &ConversationId,
-        expected: &'read ObservationReadCut,
-    ) -> Result<Self, ConversationStoreError> {
-        let actual = validate_actual(transaction, conversation, expected)?;
-        Ok(Self {
-            transaction,
-            expected,
-            actual,
-            changes: transaction.total_changes(),
-            states: Self::states(transaction)?,
-        })
-    }
-    fn states(
-        connection: &Connection,
-    ) -> Result<(rusqlite::TransactionState, rusqlite::TransactionState), ConversationStoreError>
-    {
-        Ok((
-            connection
-                .transaction_state(Some("main"))
-                .map_err(|error| storage(error.to_string()))?,
-            connection
-                .transaction_state(Some("temp"))
-                .map_err(|error| storage(error.to_string()))?,
-        ))
-    }
-    pub(super) fn connection(&self) -> Result<&Connection, ConversationStoreError> {
-        let states = Self::states(self.transaction)?;
-        if self.transaction.is_autocommit()
-            || self.transaction.total_changes() != self.changes
-            || states.0 != self.states.0
-            || (states.1 != self.states.1
-                && !(self.states.1 == rusqlite::TransactionState::None
-                    && states.1 == rusqlite::TransactionState::Read))
-        {
-            return Err(storage("validated observation transaction changed"));
-        }
-        Ok(self.transaction)
-    }
-    pub(super) fn expected(&self) -> &ObservationReadCut {
-        self.expected
-    }
-    pub(super) fn actual(&self) -> &ObservationReadCut {
-        &self.actual
-    }
+
+pub(super) fn validate(
+    connection: &Connection,
+    conversation: &ConversationId,
+    expected: &ObservationReadCut,
+) -> Result<(), ConversationStoreError> {
+    validate_actual(connection, conversation, expected).map(|_| ())
 }
 fn validate_canonical_provenance(
     connection: &Connection,
@@ -124,9 +84,9 @@ fn validate_canonical_provenance(
     if expected.ledger_through == 0 {
         return Ok(());
     }
-    let (journal,transcript): (Option<u64>,Option<u64>)=connection.prepare_cached("SELECT h.journal_position,l.native_transcript FROM message_ledger l LEFT JOIN observation_headers h ON h.ledger_position=l.position WHERE l.position=?1").map_err(|error|storage(error.to_string()))?.query_row([expected.ledger_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(||storage("native canonical source position missing"))?;
+    let (journal,transcript): (Option<u64>,Option<u64>)=connection.prepare_cached("SELECT h.journal_position,l.native_transcript FROM message_ledger l LEFT JOIN observation_headers h ON h.ledger_position=l.position WHERE l.position=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([expected.ledger_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(||storage("native canonical source position missing"))?;
     let journal = journal.ok_or_else(|| storage("native canonical cut provenance unavailable"))?;
-    let append:Option<u64>=connection.prepare_cached("SELECT first_append_revision FROM message_ledger INDEXED BY message_ledger_append_position_idx WHERE first_append_revision IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1").map_err(|error|storage(error.to_string()))?.query_row([expected.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let append:Option<u64>=connection.prepare_cached("SELECT first_append_revision FROM message_ledger INDEXED BY message_ledger_append_position_idx WHERE first_append_revision IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([expected.ledger_through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if journal > expected.read.journal
         || transcript.is_some_and(|position| position > expected.read.transcript)
         || append.is_some_and(|revision| revision > expected.surface_revision.get())
@@ -176,718 +136,20 @@ fn identity(connection: &Connection) -> Result<ConversationId, ConversationStore
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     ConversationId::parse(id).map_err(storage)
 }
 fn message_locator(
     message_id: &crate::runtime::identity::MessageId,
     position: u64,
-) -> crate::runtime_client::content::CanonicalContentLocator {
+) -> crate::observation::content::CanonicalContentLocator {
     if message_id.as_str().len() <= 256 {
-        crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        crate::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: message_id.clone(),
         }
     } else {
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
     }
-}
-fn append_message_metadata(
-    connection: &Connection,
-    conversation: &ConversationId,
-    message: &MessageBlock,
-    count: usize,
-    position: Option<u64>,
-    semantic_fits: bool,
-    capture: &mut Capture,
-) -> Result<bool, ConversationStoreError> {
-    let mut metadata_deferred = false;
-    if let Some(position) = position {
-        let source = crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
-            locator: message_locator(message.id(), position),
-            block_index: crate::message::types::ContentBlockIndex::new(0),
-        };
-        if let Some(reference) = super::content::descriptor(
-            connection,
-            conversation,
-            &source,
-            crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
-        )? {
-            metadata_deferred = !semantic_fits || reference.readable_end > 1024;
-            capture.content.push(
-                crate::runtime_client::checkpoint::ContentBinding {
-                    source_path: None,
-                    path: vec!["display".into()],
-                    content_ref: reference,
-                    deferred: metadata_deferred,
-                }
-                .into(),
-            );
-        }
-    }
-    if let Some(position) = position {
-        for index in 0..count.min(HEADER_PAGE_MAX) {
-            let binary_source =
-                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-                    component: crate::runtime_client::content::CanonicalContentComponent::Payload,
-                    locator: message_locator(message.id(), position),
-                    block_index: crate::message::types::ContentBlockIndex::new(
-                        u32::try_from(index).map_err(|_| storage("block index"))?,
-                    ),
-                };
-            if let Some(reference) = super::content::descriptor(
-                connection,
-                conversation,
-                &binary_source,
-                crate::runtime_client::content::ContentRepresentation::BinaryBytes,
-            )? {
-                let mut path = vec!["display".into()];
-                if matches!(message, MessageBlock::Tool(_)) {
-                    path.push("result".into());
-                }
-                path.extend(["content".into(), index.to_string(), "binary".into()]);
-                capture.content.push(
-                    crate::runtime_client::checkpoint::ContentBinding {
-                        source_path: None,
-                        path,
-                        content_ref: reference,
-                        deferred: true,
-                    }
-                    .into(),
-                );
-            }
-            let source = crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-                component: crate::runtime_client::content::CanonicalContentComponent::BlockMetadata,
-                locator: message_locator(message.id(), position),
-                block_index: crate::message::types::ContentBlockIndex::new(
-                    u32::try_from(index).map_err(|_| storage("canonical block index exhausted"))?,
-                ),
-            };
-            if let Some(reference) = super::content::descriptor(
-                connection,
-                conversation,
-                &source,
-                crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
-            )? && reference.readable_end > 1024
-            {
-                metadata_deferred = true;
-                let mut path = vec!["display".into()];
-                if matches!(message, MessageBlock::Tool(_)) {
-                    path.push("result".into());
-                }
-                path.extend(["content".into(), index.to_string()]);
-                capture.content.push(
-                    crate::runtime_client::checkpoint::ContentBinding {
-                        source_path: None,
-                        path,
-                        content_ref: reference,
-                        deferred: true,
-                    }
-                    .into(),
-                );
-            }
-        }
-    }
-
-    Ok(metadata_deferred)
-}
-fn message_source_label(message: &MessageBlock) -> Option<String> {
-    match message {
-        MessageBlock::User(user) => Some(
-            match user.source {
-                crate::message::types::UserSource::Human => "human",
-                crate::message::types::UserSource::Agent { .. } => "agent",
-                crate::message::types::UserSource::Fleet => "fleet",
-                crate::message::types::UserSource::ExternalSystem => "external_system",
-                crate::message::types::UserSource::Runtime => "runtime",
-                crate::message::types::UserSource::Extension { .. } => "certified_extension",
-            }
-            .into(),
-        ),
-        _ => None,
-    }
-}
-fn tool_call_count(message: &MessageBlock) -> u64 {
-    match message {
-        MessageBlock::Assistant(value) => value
-            .content
-            .iter()
-            .filter(|block| {
-                matches!(
-                    block,
-                    crate::message::types::AssistantContentBlock::ToolCall(_)
-                )
-            })
-            .count() as u64,
-        _ => 0,
-    }
-}
-/// A single publication's finite pre-trim draft. It never outlives the
-/// canonical transaction and is admitted only without custom SQL triggers.
-/// Keep the pre-trim value: shorter final raw bindings can restore a display
-/// that the original canonical representation could not fit.
-#[derive(Debug)]
-pub(super) struct PublicationHeader {
-    header: MessageHeader,
-    captured_bindings: usize,
-}
-
-pub(super) fn index_message(
-    connection: &Connection,
-    message: &MessageBlock,
-    position: Option<u64>,
-) -> Result<(), ConversationStoreError> {
-    index_message_capture(connection, message, position, false).map(|_| ())
-}
-
-pub(super) fn index_publication_message(
-    connection: &Connection,
-    message: &MessageBlock,
-    position: u64,
-) -> Result<Option<PublicationHeader>, ConversationStoreError> {
-    index_message_capture(connection, message, Some(position), true)
-}
-
-#[allow(clippy::too_many_lines)] // One native descriptor with its original bounded admission.
-fn index_message_capture(
-    connection: &Connection,
-    message: &MessageBlock,
-    position: Option<u64>,
-    retain_publication: bool,
-) -> Result<Option<PublicationHeader>, ConversationStoreError> {
-    #[cfg(test)]
-    PUBLICATION_CAPTURE_WORK.with(|work| {
-        let (messages, blocks, reused) = work.get();
-        work.set((messages + 1, blocks, reused));
-    });
-    if position.is_some() {
-        index_blocks(connection, message)?;
-    }
-    let conversation = identity(connection)?;
-    let (role, kind, count) = kind(message);
-    let mut capture = Capture::new(1);
-    // A descriptor must never change a native semantic family when growing
-    // metadata cannot fit. Keep its exact kind/identity and mark it deferred.
-    let semantic_fits = match message {
-        MessageBlock::User(value) => {
-            bounded_bytes(&value.kind, 1024).is_some()
-                && bounded_bytes(&value.source, 1024).is_some()
-        }
-        _ => true,
-    };
-    let display = (semantic_fits && message.id().as_str().len() <= 256)
-        .then(|| capture.message(message, &conversation, &["display".into()]));
-    if display.is_none() && count > 0 {
-        capture.frontier("display/content", count as u64, 0, Some(0));
-    }
-    if let Some(position) = position {
-        for frontier in &mut capture.collections {
-            if frontier.domain == "display/content" {
-                frontier.domain = format!("messages.ledger:{position}.blocks");
-            }
-        }
-    }
-    let payload_deferred = !capture.content.is_empty();
-    if position.is_some() {
-        canonical_bindings(connection, &conversation, &mut capture)?;
-    } else {
-        // Pending inbound is not canonical content; no locator may claim otherwise.
-        capture.content.clear();
-    }
-    let captured_bindings = capture.content.len();
-    let metadata_deferred = append_message_metadata(
-        connection,
-        &conversation,
-        message,
-        count,
-        position,
-        semantic_fits,
-        &mut capture,
-    )?;
-    let deferred = !semantic_fits
-        || payload_deferred
-        || metadata_deferred
-        || message.id().as_str().len() > 256;
-    let mut header = MessageHeader {
-        deliveries: if let (Some(position),MessageBlock::Tool(tool))=(position,message) {
-            (tool.result.status==crate::tools::types::ToolExecutionStatus::Success).then(||super::observation_delivery::head(connection,position,0,8)).transpose()?
-        }else{None},
-        tool_calls: Vec::new(),
-        transcript_cursor: connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|storage(error.to_string()))?.map(crate::durable::TranscriptCursor::new),
-        identity: (message.id().as_str().len() <= 256).then(|| message.id().clone()),
-        locator: position.map(|position| {
-            crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position }
-        }),
-        ledger_position: position,
-        role: role.into(),
-        source_label: message_source_label(message),
-        human_activity_at: match message {
-            MessageBlock::User(user)
-                if user.kind == InboundKind::Message
-                    && matches!(user.source, crate::message::types::UserSource::Human) =>
-            {
-                user.timestamp
-            }
-            _ => None,
-        },
-        opening_preview: match message {
-            MessageBlock::User(user) if user.kind == InboundKind::Message => {
-                crate::local_runtime::session::preview_of(user)
-            }
-            _ => None,
-        },
-        has_text_preview: has_text_preview(message),
-        opening_prompt: matches!(message,MessageBlock::User(value) if value.kind==InboundKind::Message && matches!(value.source,crate::message::types::UserSource::Human|crate::message::types::UserSource::Agent {..}) && value.content.iter().any(|block|matches!(block,crate::message::types::UserContentBlock::Text(text) if text.text.split_whitespace().next().is_some()))),
-        kind: kind.into(),
-        block_count: count as u64,
-        tool_call_count: tool_call_count(message),
-        display: (message.id().as_str().len() <= 256)
-            .then_some(display)
-            .flatten(),
-        content: capture.content.into_iter().map(crate::runtime_client::checkpoint::MetadataFragment::into_owned).collect(),
-        collections: capture.collections,
-        deferred,
-    };
-    if let Some(head) = &header.deliveries {
-        header
-            .collections
-            .push(crate::runtime_client::delivery::frontier(head));
-    }
-    let (bytes, prepared) = if retain_publication {
-        if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
-            // The common path encodes once and moves its exact admitted draft.
-            (
-                bytes,
-                Some(PublicationHeader {
-                    header,
-                    captured_bindings,
-                }),
-            )
-        } else {
-            // Only a head that needs trimming retains a bounded pre-trim copy.
-            // This private limit never narrows the public header admission.
-            let prepared = (crate::runtime_client::preflight::bounded_fit(&header, 128 * 1024)
-                == Some(true))
-            .then(|| PublicationHeader {
-                header: header.clone(),
-                captured_bindings,
-            });
-            (message_header_bytes(&mut header)?, prepared)
-        }
-    } else {
-        (message_header_bytes(&mut header)?, None)
-    };
-    connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|storage(error.to_string()))?;
-    index_tool_result(connection, message, position)?;
-    Ok(prepared)
-}
-fn index_tool_result(
-    connection: &Connection,
-    message: &MessageBlock,
-    position: Option<u64>,
-) -> Result<(), ConversationStoreError> {
-    if let MessageBlock::Tool(tool) = message {
-        let result = super::observation_tools::result_header(&tool.result);
-        let bytes = bounded_bytes(&result, HEADER_ENCODED_MAX)
-            .ok_or_else(|| storage("native Tool result summary exceeds header budget"))?;
-        connection
-            .execute(
-                "UPDATE observation_headers SET tool_result_json=?2 WHERE ledger_position=?1",
-                params![position, bytes],
-            )
-            .map_err(|error| storage(error.to_string()))?;
-    }
-    Ok(())
-}
-fn message_header_bytes(header: &mut MessageHeader) -> Result<Vec<u8>, ConversationStoreError> {
-    loop {
-        if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
-            return Ok(bytes);
-        }
-        header.deferred = true;
-        if header.display.take().is_some() {
-            for binding in &mut header.content {
-                if matches!(&binding.content_ref.source,crate::runtime_client::content::ContentSource::CanonicalMessageBlock{component:crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,..}) { binding.deferred=true; }
-            }
-            continue;
-        }
-        if let Some(head) = header.deliveries.as_mut() {
-            if head.items.iter().any(|item| item.file.is_some()) {
-                for item in &mut head.items {
-                    item.file = None;
-                    item.metadata_deferred = true;
-                }
-                continue;
-            }
-            if let Some(item) = head.items.pop() {
-                head.next_offset = Some(item.index);
-                if let Some(frontier) = header
-                    .collections
-                    .iter_mut()
-                    .find(|frontier| frontier.domain == head.domain)
-                {
-                    *frontier = crate::runtime_client::delivery::frontier(head);
-                }
-                continue;
-            }
-        }
-        let old = header.content.len();
-        header.content.retain(|binding| {
-            matches!(
-                &binding.content_ref.source,
-                crate::runtime_client::content::ContentSource::CanonicalMessageBlock {
-                    component:
-                        crate::runtime_client::content::CanonicalContentComponent::MessageMetadata,
-                    ..
-                }
-            )
-        });
-        if header.content.len() != old {
-            continue;
-        }
-        if let Some(position) = header.ledger_position {
-            let blocks = format!("messages.ledger:{position}.blocks");
-            let tools = format!("messages.ledger:{position}.tools");
-            let mut essential = vec![
-                crate::runtime_client::checkpoint::CollectionFrontier {
-                    domain: blocks,
-                    revision: 1,
-                    total: header.block_count,
-                    loaded: 0,
-                    next_offset: (header.block_count > 0).then_some(0),
-                },
-                crate::runtime_client::checkpoint::CollectionFrontier {
-                    domain: tools,
-                    revision: 1,
-                    total: header.tool_call_count,
-                    loaded: 0,
-                    next_offset: (header.tool_call_count > 0).then_some(0),
-                },
-            ];
-            if let Some(head) = &header.deliveries {
-                essential.push(crate::runtime_client::delivery::frontier(head));
-            }
-            if header.collections != essential {
-                header.collections = essential;
-                continue;
-            }
-        }
-        return Err(storage(
-            "native message identity exceeds finite descriptor budget",
-        ));
-    }
-}
-fn entry_header(
-    connection: &Connection,
-    kind: &str,
-    id: &str,
-    entry: &RuntimeClientTranscriptEntry,
-) -> Result<TranscriptHeader, ConversationStoreError> {
-    let conversation = identity(connection)?;
-    let mut capture = Capture::new(1);
-    let display = capture.transcript_entry(entry, &conversation, &["display".into()]);
-    if let crate::runtime_client::snapshot::RuntimeClientTranscriptItem::PublicationAudit {
-        audit,
-    } = &entry.item
-    {
-        for (index, block) in audit.content.iter().take(HEADER_PAGE_MAX).enumerate() {
-            if let crate::publication::PublicationAuditBlock::ProposedToolCall {
-                block_index,
-                name,
-                ..
-            } = block
-                && name.len() > 1024
-            {
-                let source=crate::runtime_client::content::ContentSource::DurableTranscriptAudit {component:crate::runtime_client::content::PublicationContentComponent::BlockMetadata,stream_id:audit.stream_id.clone(),message_id:audit.message_id.clone(),attempt_id:audit.attempt_id.clone(),turn_id:audit.turn_id.clone(),publication_request_id:audit.request_id.clone(),block_index:*block_index};
-                if let Some(reference) = super::content::descriptor(
-                    connection,
-                    &conversation,
-                    &source,
-                    crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
-                )? {
-                    capture.content.push(
-                        crate::runtime_client::checkpoint::ContentBinding {
-                            source_path: None,
-                            path: vec![
-                                "display".into(),
-                                "item".into(),
-                                "audit".into(),
-                                "content".into(),
-                                index.to_string(),
-                            ],
-                            content_ref: reference,
-                            deferred: true,
-                        }
-                        .into(),
-                    );
-                }
-            }
-        }
-    }
-    let deferred = display.is_none() || !capture.content.is_empty();
-    let header = TranscriptHeader {
-        tool_calls: Vec::new(),
-        publication_settlement: None,
-        cursor: entry.cursor.into(),
-        reference_kind: kind.into(),
-        reference_id: if id.len() <= 256 {
-            id.into()
-        } else {
-            format!("transcript:{}", entry.cursor.get())
-        },
-        message: None,
-        display,
-        content: capture
-            .content
-            .into_iter()
-            .map(crate::runtime_client::checkpoint::MetadataFragment::into_owned)
-            .collect(),
-        collections: capture.collections,
-        deferred,
-    };
-    Ok(header)
-}
-fn store_transcript_header(
-    connection: &Connection,
-    kind: &str,
-    id: &str,
-    header: TranscriptHeader,
-) -> Result<(), ConversationStoreError> {
-    let bytes = transcript_header_bytes(header)?;
-    let journal: u64 = if matches!(kind, "attempt_terminal" | "interaction_event") {
-        connection
-            .query_row(
-                "SELECT sequence FROM events WHERE event_id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?
-    } else {
-        0
-    };
-    store_transcript_bytes(connection, kind, id, journal, &bytes)
-}
-fn transcript_header_bytes(
-    mut header: TranscriptHeader,
-) -> Result<Vec<u8>, ConversationStoreError> {
-    loop {
-        if let Some(bytes) = bounded_bytes(&header, HEADER_ENCODED_MAX) {
-            return Ok(bytes);
-        }
-        header.deferred = true;
-        if header.display.take().is_some() {
-            continue;
-        }
-        if header.content.pop().is_some() {
-            continue;
-        }
-        if header.collections.pop().is_some() {
-            continue;
-        }
-        return Err(storage(
-            "native transcript identity exceeds finite descriptor budget",
-        ));
-    }
-}
-fn store_transcript_bytes(
-    connection: &Connection,
-    kind: &str,
-    id: &str,
-    journal: u64,
-    bytes: &[u8],
-) -> Result<(), ConversationStoreError> {
-    connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,journal_position,header_json,transcript_position) VALUES(?1,?2,NULL,?3,?4,(SELECT position FROM transcript_order WHERE reference_kind=?1 AND reference_id=?2)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET journal_position=excluded.journal_position,header_json=excluded.header_json",params![kind,id,journal,bytes]).map_err(|error|storage(error.to_string()))?;
-    Ok(())
-}
-pub(super) fn index_native_event(
-    transaction: &Transaction<'_>,
-    kind: &str,
-    event: &crate::events::types::RuntimeEventEnvelope,
-    cursor: crate::durable::TranscriptCursor,
-) -> Result<(), ConversationStoreError> {
-    let header = if kind == "attempt_terminal" {
-        let cut = cut(transaction, &event.conversation_id)?;
-        let process = super::observation_members::process_view(
-            transaction,
-            &cut,
-            super::observation_members::at_sequence(transaction, event.sequence)?,
-            Some(cursor),
-        )?
-        .ok_or_else(|| storage("native terminal process unavailable"))?;
-        terminal_header(kind, event, cursor, process)
-    } else {
-        other_native_header(transaction, kind, event, cursor)?
-    };
-    store_transcript_header(transaction, kind, event.event_id.as_str(), header)
-}
-
-/// The trigger-free append builder already allocated the native T seat and
-/// prepared this exact event's member/execution domains in its savepoint.
-/// No historical read uses this entry point or substitutes pending evidence.
-pub(super) fn index_pending_native_event(
-    transaction: &Transaction<'_>,
-    kind: &str,
-    event: &crate::events::types::RuntimeEventEnvelope,
-    cursor: crate::durable::TranscriptCursor,
-    members: Option<
-        &super::append_facts::Captured<crate::durable::observation::AttemptMemberCounts>,
-    >,
-    execution: Option<&super::observation_execution::Captured>,
-) -> Result<(), ConversationStoreError> {
-    let header = if kind == "attempt_terminal" {
-        // Keep the actual metadata/counter validation. process_view uses only
-        // this cut's T frontier, already advanced by native seat allocation.
-        let cut = cut(transaction, &event.conversation_id)?;
-        let counts = members.ok_or_else(|| storage("native member header unavailable"))?;
-        let process = super::observation_members::pending_process_view(
-            &cut,
-            counts.value.clone(),
-            cursor,
-            event.sequence,
-            execution,
-        )?
-        .ok_or_else(|| storage("native terminal process unavailable"))?;
-        terminal_header(kind, event, cursor, process)
-    } else {
-        other_native_header(transaction, kind, event, cursor)?
-    };
-    let bytes = transcript_header_bytes(header)?;
-    store_transcript_bytes(
-        transaction,
-        kind,
-        event.event_id.as_str(),
-        event.sequence,
-        &bytes,
-    )
-}
-fn terminal_header(
-    kind: &str,
-    event: &crate::events::types::RuntimeEventEnvelope,
-    cursor: crate::durable::TranscriptCursor,
-    process: crate::runtime_client::response::TurnProcessView,
-) -> TranscriptHeader {
-    TranscriptHeader {
-        tool_calls: Vec::new(),
-        publication_settlement: None,
-        cursor,
-        reference_kind: kind.into(),
-        reference_id: if event.event_id.as_str().len() <= 256 {
-            event.event_id.to_string()
-        } else {
-            format!("transcript:{}", cursor.get())
-        },
-        message: None,
-        display: Some(
-            crate::runtime_client::snapshot::RuntimeClientTranscriptEntry {
-                cursor: crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(
-                    cursor.get(),
-                ),
-                item:
-                    crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal {
-                        turn: process,
-                    },
-                tool_calls: Vec::new(),
-                turn_process: None,
-                completed_response: None,
-                response_pending: false,
-            },
-        ),
-        content: Vec::new(),
-        collections: Vec::new(),
-        deferred: false,
-    }
-}
-fn other_native_header(
-    connection: &Connection,
-    kind: &str,
-    event: &crate::events::types::RuntimeEventEnvelope,
-    cursor: crate::durable::TranscriptCursor,
-) -> Result<TranscriptHeader, ConversationStoreError> {
-    let Some(event_copy) =
-        crate::runtime_client::checkpoint::bounded_clone(event, HEADER_ENCODED_MAX)
-    else {
-        return Ok(TranscriptHeader {
-            tool_calls: Vec::new(),
-            publication_settlement: None,
-            cursor,
-            reference_kind: kind.into(),
-            reference_id: if event.event_id.as_str().len() <= 256 {
-                event.event_id.to_string()
-            } else {
-                format!("transcript:{}", cursor.get())
-            },
-            message: None,
-            display: None,
-            content: Vec::new(),
-            collections: Vec::new(),
-            deferred: true,
-        });
-    };
-    let item = match &event.event {
-        crate::events::types::RuntimeEvent::InteractionRequested { .. } => {
-            crate::durable::TranscriptItem::InteractionRequested { event: event_copy }
-        }
-        crate::events::types::RuntimeEvent::InteractionSettled { .. } => {
-            crate::durable::TranscriptItem::InteractionSettled { event: event_copy }
-        }
-        _ => crate::durable::TranscriptItem::AttemptTerminal { event: event_copy },
-    };
-    item_header(connection, kind, event.event_id.as_str(), item, cursor)
-}
-pub(super) fn index_item(
-    transaction: &Transaction<'_>,
-    kind: &str,
-    id: &str,
-    item: crate::durable::TranscriptItem,
-    cursor: crate::durable::TranscriptCursor,
-) -> Result<(), ConversationStoreError> {
-    if kind == "inherited_turn" {
-        let ordinal = id
-            .parse::<u64>()
-            .map_err(|_| storage("invalid original turn ordinal"))?;
-        let conversation: String = transaction
-            .query_row_cached(
-                "SELECT conversation_id FROM rustx_store WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(error.to_string()))?;
-        let cut = cut(transaction, &ConversationId::new(conversation))?;
-        let process =
-            super::observation_members::inherited_process(transaction, &cut, ordinal, cursor)?
-                .ok_or_else(|| storage("inherited terminal process unavailable"))?;
-        return store_transcript_header(transaction,kind,id,TranscriptHeader {
-            tool_calls:Vec::new(),publication_settlement:None,cursor,reference_kind:kind.into(),reference_id:id.into(),message:None,
-            display:Some(crate::runtime_client::snapshot::RuntimeClientTranscriptEntry { cursor:crate::runtime_client::snapshot::RuntimeClientTranscriptCursor::new(cursor.get()), item:crate::runtime_client::snapshot::RuntimeClientTranscriptItem::AttemptTerminal{turn:process}, tool_calls:Vec::new(),turn_process:None,completed_response:None,response_pending:false }),
-            content:Vec::new(),collections:Vec::new(),deferred:false,
-        });
-    }
-    let header = item_header(transaction, kind, id, item, cursor)?;
-    store_transcript_header(transaction, kind, id, header)
-}
-fn item_header(
-    connection: &Connection,
-    kind: &str,
-    id: &str,
-    item: crate::durable::TranscriptItem,
-    cursor: crate::durable::TranscriptCursor,
-) -> Result<TranscriptHeader, ConversationStoreError> {
-    let page = crate::durable::TranscriptPage {
-        inherited_through: crate::durable::TranscriptCursor::new(0),
-        entries: vec![crate::durable::TranscriptEntry {
-            cursor,
-            item,
-            tool_calls: Vec::new(),
-        }],
-        next_cursor: None,
-    };
-    let view = crate::runtime_client::snapshot::transcript_page_view(page).map_err(storage)?;
-    let entry = view
-        .entries
-        .into_iter()
-        .next()
-        .ok_or_else(|| storage("native transcript descriptor absent"))?;
-    entry_header(connection, kind, id, &entry)
 }
 fn limit(limit: usize) -> Result<usize, ConversationStoreError> {
     if limit == 0 || limit > HEADER_PAGE_MAX {
@@ -911,7 +173,7 @@ pub(super) fn enrich_message_header(
         .as_ref()
         .ok_or_else(|| storage("native Tool descriptor locator unavailable"))?;
     let page = super::observation_tools::page(connection, conversation, cut, locator, 0, 32)?;
-    crate::runtime_client::tool_observation::enrich_message(header, &page)
+    crate::observation::tool::enrich_message(header, &page)
         .map_err(|error| storage(format!("{error:?}")))
 }
 
@@ -932,13 +194,13 @@ pub(super) fn messages(
             "message header offset beyond native frontier".into(),
         ));
     }
-    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_headers h WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_headers h WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![seq_to_i64(offset)?, seq_to_i64(total)?, limit],
             |row| row.get::<_, Vec<u8>>(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
     for row in rows {
         let bytes = row.map_err(|error| storage(error.to_string()))?;
@@ -971,17 +233,6 @@ pub(super) fn messages(
         next_offset: (next < total).then_some(next),
     })
 }
-pub(super) fn transcript(
-    connection: &Connection,
-    conversation: &ConversationId,
-    at: &ObservationReadCut,
-    before: Option<crate::durable::TranscriptCursor>,
-    requested: usize,
-) -> Result<TranscriptHeaderPage, ConversationStoreError> {
-    validate(connection, conversation, at)?;
-    transcript_at(connection, conversation, at, before, requested, None)
-}
-
 /// Exact source identity retained after ordinary descriptor and Tool validation.
 /// Tool bytes come from their existing bounded encoding, never a second pass.
 pub(super) const TRANSCRIPT_ROW_PROOF_BYTES: usize = 786_432;
@@ -1002,9 +253,10 @@ pub(super) struct TranscriptRowProof {
 /// the prepared row; retaining another decoded message would duplicate it.
 pub(super) struct TranscriptDescriptor {
     header: TranscriptHeader,
-    tool_locator: Option<crate::runtime_client::content::CanonicalContentLocator>,
+    tool_locator: Option<crate::observation::content::CanonicalContentLocator>,
     retained_bytes: usize,
 }
+
 pub(super) struct TranscriptDescriptorSource<'a> {
     pub cursor: u64,
     pub kind: &'a str,
@@ -1012,46 +264,6 @@ pub(super) struct TranscriptDescriptorSource<'a> {
     pub ledger: Option<u64>,
     pub journal: u64,
     pub bytes: &'a [u8],
-}
-impl PartialEq for TranscriptRowProof {
-    fn eq(&self, other: &Self) -> bool {
-        self.matches_descriptor(&TranscriptDescriptorSource {
-            cursor: other.cursor,
-            kind: &other.kind,
-            identity: &other.identity,
-            ledger: other.ledger,
-            journal: other.journal,
-            bytes: &other.bytes,
-        }) && self.tools == other.tools
-            && self.admitted_tools == other.admitted_tools
-    }
-}
-impl Eq for TranscriptRowProof {}
-impl TranscriptRowProof {
-    pub(super) fn matches_descriptor(&self, source: &TranscriptDescriptorSource<'_>) -> bool {
-        self.cursor == source.cursor
-            && self.kind == source.kind
-            && self.identity == source.identity
-            && self.ledger == source.ledger
-            && self.journal == source.journal
-            && self.bytes == source.bytes
-    }
-    pub(super) fn descriptor(&self) -> std::sync::Arc<TranscriptDescriptor> {
-        self.descriptor.clone()
-    }
-    pub(super) fn cursor(&self) -> u64 {
-        self.cursor
-    }
-    pub(super) fn retained_bytes(&self) -> usize {
-        self.bytes.len()
-            + self.descriptor.retained_bytes
-            + self.kind.len()
-            + self.identity.len()
-            + self
-                .tools
-                .as_ref()
-                .map_or(0, super::observation_tools::PageProof::retained_bytes)
-    }
 }
 
 pub(super) fn transcript_validated(
@@ -1089,7 +301,7 @@ fn transcript_at(
         at.read.transcript.saturating_add(1),
         crate::durable::TranscriptCursor::get,
     );
-    let mut statement=connection.prepare_cached("SELECT t.position,t.reference_kind,CASE WHEN t.reference_kind='message' THEN COALESCE(json_extract(h.header_json,'$.identity'),'ledger:'||h.ledger_position) ELSE COALESCE(json_extract(h.header_json,'$.reference_id'),'transcript:'||t.position) END,h.header_json,h.ledger_position,h.journal_position FROM transcript_order t LEFT JOIN observation_headers h ON h.transcript_position=t.position AND h.reference_kind=t.reference_kind WHERE t.position<?1 AND t.position<=?2 ORDER BY t.position DESC LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT t.position,t.reference_kind,CASE WHEN t.reference_kind='message' THEN COALESCE(json_extract(h.header_json,'$.identity'),'ledger:'||h.ledger_position) ELSE COALESCE(json_extract(h.header_json,'$.reference_id'),'transcript:'||t.position) END,h.header_json,h.ledger_position,h.journal_position FROM transcript_order t LEFT JOIN observation_headers h ON h.transcript_position=t.position AND h.reference_kind=t.reference_kind WHERE t.position<?1 AND t.position<=?2 ORDER BY t.position DESC LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -1108,7 +320,7 @@ fn transcript_at(
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
     let mut retained_proof_bytes = 0;
     let mut more = false;
@@ -1251,14 +463,25 @@ fn transcript_at(
         next_cursor,
     })
 }
+
+pub(super) fn transcript(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ObservationReadCut,
+    before: Option<crate::durable::TranscriptCursor>,
+    requested: usize,
+) -> Result<TranscriptHeaderPage, ConversationStoreError> {
+    validate(connection, conversation, at)?;
+    transcript_at(connection, conversation, at, before, requested, None)
+}
 fn enrich_transcript_tools(
     header: &mut TranscriptHeader,
     tools: &crate::durable::observation::NativeToolObservationPage,
 ) -> Result<(), ConversationStoreError> {
     if header.message.is_some() {
-        crate::runtime_client::tool_observation::enrich_transcript_header(header, tools)
+        crate::observation::tool::enrich_transcript_header(header, tools)
     } else {
-        crate::runtime_client::tool_observation::enrich_loaded_transcript_header(header, tools)
+        crate::observation::tool::enrich_loaded_transcript_header(header, tools)
     }
     .map_err(|error| storage(format!("{error:?}")))
 }
@@ -1285,7 +508,7 @@ fn transcript_message_header(
             message: None,
             display: Some(RuntimeClientTranscriptEntry {
                 cursor: cursor.into(),
-                item: crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message {
+                item: crate::observation::transcript::RuntimeClientTranscriptItem::Message {
                     message: display_message,
                 },
                 turn_process: None,
@@ -1314,13 +537,17 @@ fn transcript_message_header(
 }
 
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    super::verify_unique_columns(connection, "observation_headers", &["transcript_position"])?;
-    super::verify_unique_columns(
+    super::schema::shape::verify_unique_columns(
+        connection,
+        "observation_headers",
+        &["transcript_position"],
+    )?;
+    crate::durable::sqlite::schema::shape::verify_unique_columns(
         connection,
         "observation_block_headers",
         &["message_id", "block_index"],
     )?;
-    super::verify_unique_columns(
+    super::schema::shape::verify_unique_columns(
         connection,
         "observation_headers",
         &["reference_kind", "reference_id"],
@@ -1331,28 +558,21 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let blocks: String = connection
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE type='table' AND name='observation_block_headers'",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
-    // Compact database pages keep medium BLOB headers local in rowid leaves.
-    let clustered: bool = connection
-        .query_row(
-            "SELECT wr FROM pragma_table_list WHERE schema='main' AND name='observation_block_headers' AND type='table'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?; // Compact database pages keep medium BLOB headers local in rowid leaves.
+    let clustered : bool = connection . query_row ( "SELECT wr FROM pragma_table_list WHERE schema='main' AND name='observation_block_headers' AND type='table'" , [ ] , | row | row . get ( 0 ) , ) . map_err ( | error | crate::durable::sqlite::sqlite_error(&error, error . to_string ( ) ) ) ? ;
     if !blocks.contains("CHECK(length(header_json)<=16384)") || clustered {
         return Err(ConversationStoreError::IncompatibleSchema(
             "invalid finite native observation metadata layout".into(),
         ));
     }
-    super::verify_unique_columns(
+    super::schema::shape::verify_unique_columns(
         connection,
         "observation_block_headers",
         &["ledger_position", "block_index"],
@@ -1363,8 +583,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
-    // ROWID indirection and metadata-first layout keep numeric header reads
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?; // ROWID indirection and metadata-first layout keep numeric header reads
     // independent of enormous retained original identity keys.
     if !sql.contains("CHECK(length(header_json)<=16384)")
         || sql.contains("WITHOUT ROWID")
@@ -1381,7 +600,7 @@ pub(super) fn message(
     connection: &Connection,
     message_id: &crate::runtime::identity::MessageId,
 ) -> Result<Option<MessageHeader>, ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT h.header_json FROM message_ledger m JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=m.message_id WHERE m.message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT h.header_json FROM message_ledger m JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=m.message_id WHERE m.message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     bytes
         .map(|bytes| {
             if bytes.len() > HEADER_ENCODED_MAX {
@@ -1391,25 +610,6 @@ pub(super) fn message(
         })
         .transpose()
 }
-fn block(
-    connection: &Connection,
-    message: &MessageBlock,
-    index: usize,
-    kind: &str,
-    body: &impl serde::Serialize,
-    field: &[&str],
-) -> Result<(), ConversationStoreError> {
-    #[cfg(test)]
-    PUBLICATION_CAPTURE_WORK.with(|work| {
-        let (messages, blocks, reused) = work.get();
-        work.set((messages, blocks + 1, reused));
-    });
-    let value = bounded_bytes(body, 1024)
-        .map(|bytes| serde_json::from_slice(&bytes).expect("native canonical block encoding"));
-    let bytes = block_bytes(connection, message, index, kind, value, field)?;
-    connection.execute_cached("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),index,bytes]).map_err(|error|storage(error.to_string()))?;
-    Ok(())
-}
 fn block_bytes(
     connection: &Connection,
     message: &MessageBlock,
@@ -1418,23 +618,23 @@ fn block_bytes(
     value: Option<serde_json::Value>,
     field: &[&str],
 ) -> Result<Vec<u8>, ConversationStoreError> {
-    use crate::runtime_client::content::{ContentRepresentation as Rep, ContentSource};
+    use crate::observation::content::{ContentRepresentation as Rep, ContentSource};
     let conversation = identity(connection)?;
     let block_index = crate::message::types::ContentBlockIndex::new(
         u32::try_from(index).map_err(|_| storage("canonical block index exhausted"))?,
     );
     #[cfg(test)]
-    super::content::record_canonical_lookup();
+    crate::durable::sqlite::content::record_canonical_lookup();
     let position = connection
         .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.id().as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let locator = message_locator(message.id(), position);
     let source = ContentSource::CanonicalMessageBlock {
-        component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+        component: crate::observation::content::CanonicalContentComponent::Payload,
         locator: locator.clone(),
         block_index,
     };
@@ -1445,7 +645,7 @@ fn block_bytes(
         Rep::CanonicalJsonV1,
         Rep::BinaryBytes,
     ] {
-        if let Some(reference) = super::content::canonical_descriptor_at_position(
+        if let Some(reference) = crate::durable::sqlite::content::canonical_descriptor_at_position(
             connection,
             &conversation,
             &source,
@@ -1458,7 +658,7 @@ fn block_bytes(
             } else {
                 path.extend(field.iter().map(|value| (*value).into()));
             }
-            content.push(crate::runtime_client::checkpoint::ContentBinding {
+            content.push(crate::observation::cut::ContentBinding {
                 source_path: None,
                 path,
                 content_ref: reference,
@@ -1468,18 +668,18 @@ fn block_bytes(
     }
     if value.is_none() {
         let metadata_source = ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::BlockMetadata,
+            component: crate::observation::content::CanonicalContentComponent::BlockMetadata,
             locator,
             block_index,
         };
-        if let Some(reference) = super::content::canonical_descriptor_at_position(
+        if let Some(reference) = crate::durable::sqlite::content::canonical_descriptor_at_position(
             connection,
             &conversation,
             &metadata_source,
             Rep::CanonicalJsonV1,
             position,
         )? {
-            content.push(crate::runtime_client::checkpoint::ContentBinding {
+            content.push(crate::observation::cut::ContentBinding {
                 source_path: None,
                 path: vec!["value".into()],
                 content_ref: reference,
@@ -1497,48 +697,24 @@ fn block_bytes(
     bounded_bytes(&header, HEADER_ENCODED_MAX)
         .ok_or_else(|| storage("canonical block identity exceeds finite descriptor budget"))
 }
-fn index_blocks(
+
+fn block(
     connection: &Connection,
     message: &MessageBlock,
+    index: usize,
+    kind: &str,
+    body: &impl serde::Serialize,
+    field: &[&str],
 ) -> Result<(), ConversationStoreError> {
-    use crate::message::types::{AssistantContentBlock as Assistant, UserContentBlock as User};
-    use crate::tools::types::ToolResultContent as Tool;
-    match message {
-        MessageBlock::User(value) => {
-            for (index, value) in value.content.iter().enumerate() {
-                let (kind, field): (&str, &[&str]) = match value {
-                    User::Text(_) => ("text", &["text"]),
-                    User::Image(_) => ("image", &[]),
-                    User::File(_) => ("file", &[]),
-                    User::UploadedFile(_) => ("uploaded_file", &[]),
-                };
-                block(connection, message, index, kind, value, field)?;
-            }
-        }
-        MessageBlock::Assistant(value) => {
-            for (index, value) in value.content.iter().enumerate() {
-                let (kind, field): (&str, &[&str]) = match value {
-                    Assistant::Text(_) => ("text", &["text"]),
-                    Assistant::Reasoning(_) => ("reasoning", &["text"]),
-                    Assistant::Refusal(_) => ("refusal", &["text"]),
-                    Assistant::ToolCall(_) => ("tool_call", &["arguments"]),
-                    Assistant::Image(_) => ("image", &[]),
-                };
-                block(connection, message, index, kind, value, field)?;
-            }
-        }
-        MessageBlock::Tool(value) => {
-            for (index, value) in value.result.content.iter().enumerate() {
-                let (kind, field): (&str, &[&str]) = match value {
-                    Tool::Text(_) => ("text", &["text"]),
-                    Tool::Json { .. } => ("json", &["value"]),
-                    Tool::Image(_) => ("image", &[]),
-                    Tool::File(_) => ("file", &[]),
-                };
-                block(connection, message, index, kind, value, field)?;
-            }
-        }
-    }
+    #[cfg(test)]
+    PUBLICATION_CAPTURE_WORK.with(|work| {
+        let (messages, blocks, reused) = work.get();
+        work.set((messages, blocks + 1, reused));
+    });
+    let value = bounded_bytes(body, 1024)
+        .map(|bytes| serde_json::from_slice(&bytes).expect("native canonical block encoding"));
+    let bytes = block_bytes(connection, message, index, kind, value, field)?;
+    connection.execute_cached("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),index,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 pub(super) fn blocks(
@@ -1553,7 +729,7 @@ pub(super) fn blocks(
         connection,
         conversation,
         at,
-        &crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        &crate::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: message_id.clone(),
         },
         offset,
@@ -1565,19 +741,19 @@ pub(super) fn blocks_by_locator(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     requested: usize,
 ) -> Result<crate::durable::observation::MessageBlockHeaderPage, ConversationStoreError> {
     validate(connection, conversation, at)?;
     let limit = limit(requested)?;
-    let position = super::content::canonical_position(connection, locator)?;
+    let position = crate::durable::sqlite::content::canonical_position(connection, locator)?;
     if position > at.ledger_through {
         return Err(ConversationStoreError::InvalidReference(
             "canonical block source beyond captured cut".into(),
         ));
     }
-    let bytes:Vec<u8>=connection.query_row("SELECT h.header_json FROM observation_headers h WHERE h.reference_kind='message' AND h.ledger_position=?1",[position],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT h.header_json FROM observation_headers h WHERE h.reference_kind='message' AND h.ledger_position=?1",[position],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical observation header"));
     }
@@ -1588,12 +764,12 @@ pub(super) fn blocks_by_locator(
             "canonical block offset beyond captured source".into(),
         ));
     }
-    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_block_headers h WHERE h.ledger_position=?1 AND h.block_index>=?2 ORDER BY h.block_index LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_block_headers h WHERE h.ledger_position=?1 AND h.block_index>=?2 ORDER BY h.block_index LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(params![position, seq_to_i64(offset)?, limit], |row| {
             row.get::<_, Vec<u8>>(0)
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
     for row in rows {
         let bytes = row.map_err(|error| storage(error.to_string()))?;
@@ -1611,7 +787,7 @@ pub(super) fn blocks_by_locator(
     Ok(crate::durable::observation::MessageBlockHeaderPage {
         cut: at.clone(),
         message_id: header.identity,
-        locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position,
         },
         total: header.block_count,
@@ -1619,6 +795,137 @@ pub(super) fn blocks_by_locator(
         headers,
         next_offset: (next < header.block_count).then_some(next),
     })
+}
+
+pub(super) fn latest_events(
+    connection: &Connection,
+    through: u64,
+    kinds: &[String],
+    attempt: Option<&crate::runtime::identity::AttemptId>,
+    requested: usize,
+) -> Result<Vec<crate::durable::observation::ObservationEventHeader>, ConversationStoreError> {
+    let limit = limit(requested)?;
+    if kinds.len() > 16
+        || kinds.iter().any(|kind| kind.len() > 128)
+        || kinds
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != kinds.len()
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "observation event family budget exceeded".into(),
+        ));
+    }
+    // A bounded merge over indexed family heads: at most 16 initial seeks
+    // plus 31 advancing seeks, never a full-Journal sort or body scan.
+    let mut heads = Vec::new();
+    for kind in kinds {
+        if let Some(header) = latest_event(connection, through, None, kind, attempt)? {
+            heads.push(header);
+        }
+    }
+    let mut result = Vec::new();
+    while !heads.is_empty() && result.len() < limit {
+        let index = heads
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, header)| header.sequence)
+            .map(|(index, _)| index)
+            .expect("nonempty finite family heads");
+        let header = heads.swap_remove(index);
+        if result.len() + 1 < limit
+            && let Some(next) = latest_event(
+                connection,
+                through,
+                Some(header.sequence),
+                &header.event_kind,
+                attempt,
+            )?
+        {
+            heads.push(next);
+        }
+        result.push(header);
+    }
+    result.reverse();
+    Ok(result)
+}
+fn latest_event(
+    connection: &Connection,
+    through: u64,
+    before: Option<u64>,
+    kind: &str,
+    attempt: Option<&crate::runtime::identity::AttemptId>,
+) -> Result<Option<crate::durable::observation::ObservationEventHeader>, ConversationStoreError> {
+    let bound = before.map(seq_to_i64).transpose()?.unwrap_or(i64::MAX);
+    let (sql, parameters) = if let Some(attempt) = attempt {
+        (
+            "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1",
+            vec![
+                rusqlite::types::Value::Text(attempt.to_string()),
+                rusqlite::types::Value::Text(kind.into()),
+                rusqlite::types::Value::Integer(seq_to_i64(through)?),
+                rusqlite::types::Value::Integer(bound),
+            ],
+        )
+    } else {
+        (
+            "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')=?1 AND sequence<=?2 AND sequence<?3 ORDER BY sequence DESC LIMIT 1",
+            vec![
+                rusqlite::types::Value::Text(kind.into()),
+                rusqlite::types::Value::Integer(seq_to_i64(through)?),
+                rusqlite::types::Value::Integer(bound),
+            ],
+        )
+    };
+    let row = connection
+        .query_row(sql, rusqlite::params_from_iter(parameters), |row| {
+            Ok((
+                row.get::<_, u64>(0)?,
+                row.get::<_, Option<Vec<u8>>>(1)?,
+                row.get::<_, Option<Vec<u8>>>(2)?,
+            ))
+        })
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    row.map(|(sequence, bytes, witness)| {
+        let witness = witness
+            .map(|bytes| {
+                serde_json::from_slice::<crate::durable::observation::ObservationEventWitness>(
+                    &bytes,
+                )
+                .map_err(|error| storage(error.to_string()))
+            })
+            .transpose()?;
+        if bytes
+            .as_ref()
+            .is_some_and(|bytes| bytes.len() > HEADER_ENCODED_MAX)
+        {
+            return Err(storage("oversized native Journal header"));
+        }
+        let display = bytes
+            .map(|bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())))
+            .transpose()?;
+        Ok(crate::durable::observation::ObservationEventHeader {
+            sequence,
+            event_id: witness
+                .as_ref()
+                .and_then(|witness| witness.event_id.clone()),
+            event_kind: kind.into(),
+            attempt_id: witness
+                .as_ref()
+                .and_then(|witness| witness.attempt_id.clone()),
+            turn_id: witness.as_ref().and_then(|witness| witness.turn_id.clone()),
+            owner: witness.as_ref().and_then(|witness| witness.owner),
+            auxiliary_call_id: witness
+                .as_ref()
+                .and_then(|witness| witness.auxiliary_call_id.clone()),
+            deferred: display.is_none(),
+            witness,
+            display,
+        })
+    })
+    .transpose()
 }
 
 pub(super) fn tools(
@@ -1633,7 +940,7 @@ pub(super) fn tools(
         connection,
         conversation,
         at,
-        &crate::runtime_client::content::CanonicalContentLocator::ByMessageId {
+        &crate::observation::content::CanonicalContentLocator::ByMessageId {
             message_id: message_id.clone(),
         },
         offset,
@@ -1647,7 +954,7 @@ fn tool_owner(
     position: u64,
     offset: u64,
 ) -> Result<MessageHeader, ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical Tool owner header"));
     }
@@ -1666,21 +973,9 @@ fn tool_owner(
     Ok(assistant)
 }
 
-pub(super) fn tools_by_locator(
-    connection: &Connection,
-    conversation: &ConversationId,
-    at: &ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
-    offset: u64,
-    requested: usize,
-) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
-    validate(connection, conversation, at)?;
-    tools_by_locator_at(connection, at, locator, offset, requested)
-}
-
 pub(super) fn tools_by_locator_validated(
     validated: &ValidatedCut<'_, '_>,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     requested: usize,
 ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
@@ -1696,19 +991,19 @@ pub(super) fn tools_by_locator_validated(
 fn tools_by_locator_at(
     connection: &Connection,
     at: &ObservationReadCut,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    locator: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     requested: usize,
 ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
     let limit = limit(requested)?;
-    let position = super::content::canonical_position(connection, locator)?;
+    let position = crate::durable::sqlite::content::canonical_position(connection, locator)?;
     if position > at.ledger_through {
         return Err(ConversationStoreError::InvalidReference(
             "canonical Tool source beyond captured cut".into(),
         ));
     }
     let assistant = tool_owner(connection, at, position, offset)?;
-    let mut statement=connection.prepare_cached("SELECT c.block_index,c.observation_call_id,c.observation_tool_id,b.header_json,h.header_json FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN observation_block_headers b ON b.ledger_position=c.observation_ledger AND b.block_index=c.block_index LEFT JOIN observation_headers h ON h.ledger_position=c.result_ledger_position AND h.transcript_position<=?5 AND h.ledger_position<=?3 AND h.journal_position<=?6 WHERE c.observation_ledger=?1 AND c.block_index>=?2 ORDER BY c.block_index LIMIT ?4").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT c.block_index,c.observation_call_id,c.observation_tool_id,b.header_json,h.header_json FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN observation_block_headers b ON b.ledger_position=c.observation_ledger AND b.block_index=c.block_index LEFT JOIN observation_headers h ON h.ledger_position=c.result_ledger_position AND h.transcript_position<=?5 AND h.ledger_position<=?3 AND h.journal_position<=?6 WHERE c.observation_ledger=?1 AND c.block_index>=?2 ORDER BY c.block_index LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -1729,7 +1024,7 @@ fn tools_by_locator_at(
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
     let mut more = false;
     let mut remaining = 786_432usize - 1024;
@@ -1780,7 +1075,7 @@ fn tools_by_locator_at(
     Ok(crate::durable::observation::ToolAssociationHeaderPage {
         cut: at.clone(),
         message_id: assistant.identity,
-        locator: crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition {
+        locator: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
             position,
         },
         total: assistant.tool_call_count,
@@ -1788,6 +1083,18 @@ fn tools_by_locator_at(
         headers,
         next_offset,
     })
+}
+
+pub(super) fn tools_by_locator(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ObservationReadCut,
+    locator: &crate::observation::content::CanonicalContentLocator,
+    offset: u64,
+    requested: usize,
+) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
+    validate(connection, conversation, at)?;
+    tools_by_locator_at(connection, at, locator, offset, requested)
 }
 
 pub(super) fn window(
@@ -1839,7 +1146,7 @@ pub(super) fn window(
                 [seq_to_i64(first.cursor.get())?],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         page.next_cursor = older.then_some(first.cursor);
     }
     let newer_cursor = if let Some(last) = page.headers.last() {
@@ -1852,7 +1159,7 @@ pub(super) fn window(
                 ],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         newer.then_some(last.cursor)
     } else {
         None
@@ -1879,7 +1186,7 @@ pub(super) fn pending_page(
         return Err(ConversationStoreError::ObservationCutExpired);
     }
     let total = at.pending_total;
-    let mut statement=connection.prepare_cached("SELECT p.sequence,p.revision,p.observation_header,p.observation_transcript FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2 ORDER BY p.sequence LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT p.sequence,p.revision,p.observation_header,p.observation_transcript FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2 ORDER BY p.sequence LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![after.unwrap_or(0), at.pending_through, page_limit],
@@ -1892,7 +1199,7 @@ pub(super) fn pending_page(
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::with_capacity(page_limit);
     for row in rows {
         let (sequence, revision, bytes, transcript_cursor) =
@@ -1910,7 +1217,7 @@ pub(super) fn pending_page(
         });
     }
     let next_sequence = if let Some(last) = headers.last() {
-        let more:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2)",params![last.sequence,at.pending_through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let more:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2)",params![last.sequence,at.pending_through],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         more.then_some(last.sequence)
     } else {
         None
@@ -1930,7 +1237,7 @@ pub(super) fn pending_value(
     offset: u64,
     max_bytes: u32,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    use crate::runtime_client::content::{CONTENT_READ_MAX_BYTES, CONTENT_SAFE_INTEGER_MAX};
+    use crate::observation::content::{CONTENT_READ_MAX_BYTES, CONTENT_SAFE_INTEGER_MAX};
     if offset > CONTENT_SAFE_INTEGER_MAX
         || sequence > CONTENT_SAFE_INTEGER_MAX
         || max_bytes == 0
@@ -1942,7 +1249,7 @@ pub(super) fn pending_value(
     if !at.reconstructible_from(&actual) {
         return Err(ConversationStoreError::ObservationCutExpired);
     }
-    let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=CAST(p.sequence AS TEXT) AND f.block_index=0 AND f.representation='j' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=CAST(p.sequence AS TEXT) AND f.block_index=0 AND f.representation='j' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let (revision, readable_end) = retained
         .ok_or_else(|| ConversationStoreError::InvalidReference("pending source expired".into()))?;
     if offset > readable_end {
@@ -1952,7 +1259,7 @@ pub(super) fn pending_value(
         .checked_add(u64::from(max_bytes))
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(readable_end);
-    let bytes = super::content::pending_range_bytes(
+    let bytes = crate::durable::sqlite::content::pending_range_bytes(
         connection,
         sequence,
         revision
@@ -1978,7 +1285,7 @@ pub(super) fn tool_occurrence(
     cut: &ObservationReadCut,
 ) -> Result<Option<crate::message::types::ToolCallOccurrenceRef>, ConversationStoreError> {
     validate(connection, conversation, cut)?;
-    let value: Option<(String,u32)> = connection.query_row("SELECT c.assistant_message_id,c.block_index FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_scope_idx CROSS JOIN message_ledger l ON l.message_id=c.assistant_message_id WHERE c.attempt_id=?1 AND c.call_id=?2 AND c.commit_sequence<=?3 AND l.position<=?4 ORDER BY c.commit_sequence DESC LIMIT 1",params![attempt.as_str(),call.as_str(),seq_to_i64(cut.read.journal)?,seq_to_i64(cut.ledger_through)?],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let value: Option<(String,u32)> = connection.query_row("SELECT c.assistant_message_id,c.block_index FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_scope_idx CROSS JOIN message_ledger l ON l.message_id=c.assistant_message_id WHERE c.attempt_id=?1 AND c.call_id=?2 AND c.commit_sequence<=?3 AND l.position<=?4 ORDER BY c.commit_sequence DESC LIMIT 1",params![attempt.as_str(),call.as_str(),seq_to_i64(cut.read.journal)?,seq_to_i64(cut.ledger_through)?],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(value.map(|(message, index)| {
         crate::message::types::ToolCallOccurrenceRef::new(
             crate::runtime::identity::MessageId::new(message),
@@ -1999,7 +1306,7 @@ pub(super) fn tool_occurrence_receipt(
         | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
         | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => tool_call_id,
         RuntimeEvent::ToolMessageCommitted { message_id, .. } => {
-            let value:Option<(u64,u32,u64)>=connection.query_row("SELECT observation_ledger,block_index,observation_tool_ordinal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1)",[message_id.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|error|storage(error.to_string()))?;
+            let value:Option<(u64,u32,u64)>=connection.query_row("SELECT observation_ledger,block_index,observation_tool_ordinal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1)",[message_id.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             return Ok(value.map(|(ledger_position, index, tool_ordinal)| {
                 crate::events::types::ToolObservationOccurrence {
                     tool_ordinal,
@@ -2017,7 +1324,7 @@ pub(super) fn tool_occurrence_receipt(
         "SELECT l.position,c.block_index,c.observation_tool_ordinal FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_scope_idx CROSS JOIN message_ledger l ON l.message_id=c.assistant_message_id WHERE c.attempt_id=?1 AND c.call_id=?2 AND c.commit_sequence<=?3 ORDER BY c.commit_sequence DESC LIMIT 1",
         params![attempt.as_str(), call.as_str(), seq_to_i64(event.sequence)?],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    ).optional().map_err(|error| storage(error.to_string()))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(value.map(|(ledger_position, index, tool_ordinal)| {
         crate::events::types::ToolObservationOccurrence {
             tool_ordinal,
@@ -2041,23 +1348,23 @@ pub(super) fn surface_boundaries(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if through.get() > actual {
         return Err(ConversationStoreError::InvalidReference(
             "Surface boundary revision is newer than native head".into(),
         ));
     }
-    let hole:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM message_ledger INDEXED BY message_ledger_boundary_holes_idx WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL AND first_append_revision<=?1)",[through.get()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let hole:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM message_ledger INDEXED BY message_ledger_boundary_holes_idx WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL AND first_append_revision<=?1)",[through.get()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if hole {
         return Err(storage("native Surface boundary source layout incomplete"));
     }
-    let total:u64=connection.query_row("SELECT COALESCE((SELECT ordinal+1 FROM surface_observation_boundaries WHERE surface_revision<=?1 ORDER BY surface_revision DESC LIMIT 1),0)",[seq_to_i64(through.get())?],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let total:u64=connection.query_row("SELECT COALESCE((SELECT ordinal+1 FROM surface_observation_boundaries WHERE surface_revision<=?1 ORDER BY surface_revision DESC LIMIT 1),0)",[seq_to_i64(through.get())?],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if offset > total {
         return Err(ConversationStoreError::InvalidReference(
             "Surface boundary offset beyond native frontier".into(),
         ));
     }
-    let mut statement=connection.prepare("SELECT b.surface_revision,h.header_json,b.ordinal FROM surface_observation_boundaries b CROSS JOIN observation_headers h ON h.ledger_position=b.ledger_position WHERE b.ordinal>=?1 AND b.ordinal<?2 AND h.reference_kind='message' ORDER BY b.ordinal LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare("SELECT b.surface_revision,h.header_json,b.ordinal FROM surface_observation_boundaries b CROSS JOIN observation_headers h ON h.ledger_position=b.ledger_position WHERE b.ordinal>=?1 AND b.ordinal<?2 AND h.reference_kind='message' ORDER BY b.ordinal LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(params![offset, total, limit], |row| {
             Ok((
@@ -2066,7 +1373,7 @@ pub(super) fn surface_boundaries(
                 row.get::<_, u64>(2)?,
             ))
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut boundaries = Vec::new();
     for row in rows {
         let (revision, bytes, ordinal) = row.map_err(|error| storage(error.to_string()))?;
@@ -2095,97 +1402,17 @@ pub(super) fn surface_boundaries(
     })
 }
 
-/// Same native pending transaction stores a finite read header ahead of the original body.
-pub(super) fn index_pending_header(
-    connection: &Connection,
-    sequence: u64,
-    id: &crate::runtime::identity::MessageId,
-    transcript: Option<u64>,
-) -> Result<(), ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
-    if bytes.len() > HEADER_ENCODED_MAX {
-        return Err(storage("pending source header exceeds bound"));
-    }
-    connection.execute_cached("UPDATE pending_inbound SET observation_header=?1,observation_transcript=COALESCE(?2,observation_transcript) WHERE sequence=?3",params![bytes,transcript,sequence]).map_err(|error|storage(error.to_string()))?;
-    Ok(())
-}
-
-pub(super) fn index_audit(
-    connection: &Connection,
-    audit: &crate::publication::PublicationAudit,
-    cursor: crate::durable::TranscriptCursor,
-) -> Result<(), ConversationStoreError> {
-    let conversation = identity(connection)?;
-    let mut capture = Capture::new(1);
-    let display = capture
-        .audit(audit, &conversation, &["display".into()])
-        .map(|audit| RuntimeClientTranscriptEntry {
-            response_pending: false,
-            cursor: cursor.into(),
-            tool_calls: Vec::new(),
-            turn_process: None,
-            completed_response: None,
-            item: crate::runtime_client::snapshot::RuntimeClientTranscriptItem::PublicationAudit {
-                audit,
-            },
-        });
-    audit_metadata_bindings(connection, audit, &conversation, &mut capture)?;
-    for frontier in &mut capture.collections {
-        frontier.domain = format!("transcript.entries.{}.item.audit.content", cursor.get());
-        frontier.revision = cursor.get();
-    }
-    let deferred = display.is_none()
-        || !capture.content.is_empty()
-        || capture
-            .collections
-            .iter()
-            .any(|collection| collection.loaded < collection.total);
-    index_audit_blocks(connection, audit, &conversation, cursor)?;
-    let header = TranscriptHeader {
-        tool_calls: Vec::new(),
-        publication_settlement: Some(
-            crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord {
-                settlement: audit_summary(audit).into(),
-                transcript_cursor: cursor.into(),
-                read_cut: cut(connection, &conversation)?,
-            },
-        ),
-        cursor,
-        reference_kind: "publication_audit".into(),
-        reference_id: if audit.stream_id.as_str().len() <= 256 {
-            audit.stream_id.as_str().into()
-        } else {
-            format!("transcript:{}", cursor.get())
-        },
-        message: None,
-        display,
-        content: capture
-            .content
-            .into_iter()
-            .map(crate::runtime_client::checkpoint::MetadataFragment::into_owned)
-            .collect(),
-        collections: capture.collections,
-        deferred,
-    };
-    store_transcript_header(
-        connection,
-        "publication_audit",
-        audit.stream_id.as_str(),
-        header,
-    )
-}
-
 /// Reads native audit positions first, so absent derived evidence cannot silently shrink the head.
 pub(super) fn publication_settlement_head(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ObservationReadCut,
 ) -> Result<
-    Vec<crate::runtime_client::snapshot::RuntimeClientPublicationSettlementRecord>,
+    Vec<crate::observation::transcript::RuntimeClientPublicationSettlementRecord>,
     ConversationStoreError,
 > {
     validate(connection, conversation, at)?;
-    let mut statement = connection.prepare_cached("SELECT t.position,h.header_json,h.journal_position FROM transcript_order t INDEXED BY transcript_order_audit_position_idx LEFT JOIN observation_headers h ON h.reference_kind=t.reference_kind AND h.reference_id=t.reference_id WHERE t.reference_kind='publication_audit' AND t.position<=?1 ORDER BY t.position DESC LIMIT 32").map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection.prepare_cached("SELECT t.position,h.header_json,h.journal_position FROM transcript_order t INDEXED BY transcript_order_audit_position_idx LEFT JOIN observation_headers h ON h.reference_kind=t.reference_kind AND h.reference_id=t.reference_id WHERE t.reference_kind='publication_audit' AND t.position<=?1 ORDER BY t.position DESC LIMIT 32").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map([seq_to_i64(at.read.transcript)?], |row| {
             Ok((
@@ -2194,7 +1421,7 @@ pub(super) fn publication_settlement_head(
                 row.get::<_, Option<u64>>(2)?,
             ))
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut records = Vec::with_capacity(HEADER_PAGE_MAX);
     for row in rows {
         let (position, bytes, journal) = row.map_err(|error| storage(error.to_string()))?;
@@ -2229,7 +1456,7 @@ pub(super) fn audit_blocks(
     if transcript > at.read.transcript {
         return Err(storage("audit position exceeds native cut"));
     }
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE transcript_position=?1 AND reference_kind='publication_audit' AND journal_position<=?2",params![transcript,at.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE transcript_position=?1 AND reference_kind='publication_audit' AND journal_position<=?2",params![transcript,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let header: TranscriptHeader =
         serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
     let total = header
@@ -2240,12 +1467,12 @@ pub(super) fn audit_blocks(
     if offset > total {
         return Err(storage("audit block offset exceeds source"));
     }
-    let mut statement=connection.prepare_cached("SELECT header_json FROM audit_observation_blocks WHERE transcript_position=?1 AND ordinal>=?2 ORDER BY ordinal LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT header_json FROM audit_observation_blocks WHERE transcript_position=?1 AND ordinal>=?2 ORDER BY ordinal LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(params![transcript, offset, limit], |row| {
             row.get::<_, Vec<u8>>(0)
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let headers = rows
         .map(|row| {
             let bytes = row.map_err(|error| storage(error.to_string()))?;
@@ -2267,8 +1494,8 @@ pub(super) fn audit_blocks(
 
 pub(super) fn audit_summary(
     audit: &crate::publication::PublicationAudit,
-) -> crate::durable::inbox::PublicationAuditSummary {
-    crate::durable::inbox::PublicationAuditSummary {
+) -> crate::durable::PublicationAuditSummary {
+    crate::durable::PublicationAuditSummary {
         stream_id: (audit.stream_id.as_str().len() <= 256).then(|| audit.stream_id.clone()),
         message_id: (audit.message_id.as_str().len() <= 256).then(|| audit.message_id.clone()),
         attempt_id: (audit.attempt_id.as_str().len() <= 256).then(|| audit.attempt_id.clone()),
@@ -2280,197 +1507,106 @@ pub(super) fn audit_summary(
     }
 }
 
-fn audit_metadata_bindings(
-    connection: &Connection,
-    audit: &crate::publication::PublicationAudit,
-    conversation: &ConversationId,
-    capture: &mut Capture,
-) -> Result<(), ConversationStoreError> {
-    for (index, block) in audit.content.iter().take(HEADER_PAGE_MAX).enumerate() {
-        if let crate::publication::PublicationAuditBlock::ProposedToolCall {
-            block_index,
-            name,
-            call_id,
-            tool_id,
-            ..
-        } = block
-            && (name.len() > 1024 || call_id.as_str().len() > 256 || tool_id.as_str().len() > 256)
-        {
-            let source = crate::runtime_client::content::ContentSource::DurableTranscriptAudit {
-                component:
-                    crate::runtime_client::content::PublicationContentComponent::BlockMetadata,
-                stream_id: audit.stream_id.clone(),
-                message_id: audit.message_id.clone(),
-                attempt_id: audit.attempt_id.clone(),
-                turn_id: audit.turn_id.clone(),
-                publication_request_id: audit.request_id.clone(),
-                block_index: *block_index,
-            };
-            if let Some(reference) = super::content::descriptor(
-                connection,
-                conversation,
-                &source,
-                crate::runtime_client::content::ContentRepresentation::CanonicalJsonV1,
-            )? {
-                capture.content.push(
-                    crate::runtime_client::checkpoint::ContentBinding {
-                        source_path: None,
-                        path: vec![
-                            "display".into(),
-                            "item".into(),
-                            "audit".into(),
-                            "content".into(),
-                            index.to_string(),
-                        ],
-                        content_ref: reference,
-                        deferred: true,
-                    }
-                    .into(),
-                );
-            }
-        }
+impl<'read, 'connection> ValidatedCut<'read, 'connection> {
+    pub(super) fn new(
+        transaction: &'read Transaction<'connection>,
+        conversation: &ConversationId,
+        expected: &'read ObservationReadCut,
+    ) -> Result<Self, ConversationStoreError> {
+        let actual = validate_actual(transaction, conversation, expected)?;
+        Ok(Self {
+            transaction,
+            expected,
+            actual,
+            changes: transaction.total_changes(),
+            states: Self::states(transaction)?,
+        })
     }
-    Ok(())
+    fn states(
+        connection: &Connection,
+    ) -> Result<(rusqlite::TransactionState, rusqlite::TransactionState), ConversationStoreError>
+    {
+        Ok((
+            connection
+                .transaction_state(Some("main"))
+                .map_err(|error| storage(error.to_string()))?,
+            connection
+                .transaction_state(Some("temp"))
+                .map_err(|error| storage(error.to_string()))?,
+        ))
+    }
+    pub(super) fn connection(&self) -> Result<&Connection, ConversationStoreError> {
+        let states = Self::states(self.transaction)?;
+        if self.transaction.is_autocommit()
+            || self.transaction.total_changes() != self.changes
+            || states.0 != self.states.0
+            || (states.1 != self.states.1
+                && !(self.states.1 == rusqlite::TransactionState::None
+                    && states.1 == rusqlite::TransactionState::Read))
+        {
+            return Err(storage("validated observation transaction changed"));
+        }
+        Ok(self.transaction)
+    }
+    pub(super) fn expected(&self) -> &ObservationReadCut {
+        self.expected
+    }
+    pub(super) fn actual(&self) -> &ObservationReadCut {
+        &self.actual
+    }
 }
 
-fn index_audit_blocks(
-    connection: &Connection,
-    audit: &crate::publication::PublicationAudit,
-    conversation: &ConversationId,
-    cursor: crate::durable::TranscriptCursor,
-) -> Result<(), ConversationStoreError> {
-    for (ordinal, block) in audit.content.iter().enumerate() {
-        use crate::publication::PublicationAuditBlock as Block;
-        use crate::runtime_client::content::{
-            ContentRepresentation as Rep, ContentSource, PublicationContentComponent as Component,
-        };
-        let (block_index, kind, representation, field) = match block {
-            Block::Text { block_index, .. } => (*block_index, "text", Rep::Utf8Text, "text"),
-            Block::Reasoning { block_index, .. } => {
-                (*block_index, "reasoning", Rep::Utf8Text, "text")
-            }
-            Block::Refusal { block_index, .. } => (*block_index, "refusal", Rep::Utf8Text, "text"),
-            Block::ProposedToolCall { block_index, .. } => (
-                *block_index,
-                "proposed_tool_call",
-                Rep::RawJsonUtf8,
-                "arguments",
-            ),
-        };
-        let source = |component| ContentSource::DurableTranscriptAudit {
-            component,
-            stream_id: audit.stream_id.clone(),
-            message_id: audit.message_id.clone(),
-            attempt_id: audit.attempt_id.clone(),
-            turn_id: audit.turn_id.clone(),
-            publication_request_id: audit.request_id.clone(),
-            block_index,
-        };
-        let value = crate::runtime_client::checkpoint::bounded_item_bytes(block, 1024)
-            .and_then(|_| crate::runtime_client::checkpoint::structural_value(block));
-        let deferred = value.is_none();
-        let mut content = Vec::new();
-        if deferred {
-            if let Some(reference) = super::content::descriptor(
-                connection,
-                conversation,
-                &source(Component::Payload),
-                representation,
-            )? {
-                content.push(ContentBinding {
-                    source_path: None,
-                    path: vec![field.into()],
-                    content_ref: reference,
-                    deferred: true,
-                });
-            }
-            if let Some(reference) = super::content::descriptor(
-                connection,
-                conversation,
-                &source(Component::BlockMetadata),
-                Rep::CanonicalJsonV1,
-            )? {
-                content.push(ContentBinding {
-                    source_path: None,
-                    path: Vec::new(),
-                    content_ref: reference,
-                    deferred: true,
-                });
-            }
-        }
-        let row = MessageBlockHeader {
-            block_index,
-            kind: kind.into(),
-            value,
-            content,
-            deferred,
-        };
-        let bytes = bounded_bytes(&row, HEADER_ENCODED_MAX)
-            .ok_or_else(|| storage("audit block descriptor exceeds native bound"))?;
-        connection
-            .execute(
-                "INSERT INTO audit_observation_blocks VALUES(?1,?2,?3)",
-                params![cursor.get(), ordinal as u64, bytes],
-            )
-            .map_err(|error| storage(error.to_string()))?;
+impl PartialEq for TranscriptRowProof {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches_descriptor(&TranscriptDescriptorSource {
+            cursor: other.cursor,
+            kind: &other.kind,
+            identity: &other.identity,
+            ledger: other.ledger,
+            journal: other.journal,
+            bytes: &other.bytes,
+        }) && self.tools == other.tools
+            && self.admitted_tools == other.admitted_tools
     }
-    Ok(())
 }
 
-fn canonical_bindings(
-    connection: &Connection,
-    conversation: &ConversationId,
-    capture: &mut Capture,
-) -> Result<(), ConversationStoreError> {
-    for binding in &mut capture.content {
-        let raw = if binding
-            .path
-            .last()
-            .is_some_and(|field| field == "arguments")
-        {
-            super::content::descriptor(
-                connection,
-                conversation,
-                &binding.content_ref.source,
-                crate::runtime_client::content::ContentRepresentation::RawJsonUtf8,
-            )?
-        } else {
-            None
-        };
-        if let Some(reference) = raw.or(super::content::descriptor(
-            connection,
-            conversation,
-            &binding.content_ref.source,
-            binding.content_ref.representation,
-        )?) {
-            *binding = binding.resolve(&reference);
-        } else {
-            return Err(storage("canonical descriptor missing native byte index"));
-        }
+impl TranscriptRowProof {
+    pub(super) fn matches_descriptor(&self, source: &TranscriptDescriptorSource<'_>) -> bool {
+        self.cursor == source.cursor
+            && self.kind == source.kind
+            && self.identity == source.identity
+            && self.ledger == source.ledger
+            && self.journal == source.journal
+            && self.bytes == source.bytes
     }
-    Ok(())
+    pub(super) fn descriptor(&self) -> std::sync::Arc<TranscriptDescriptor> {
+        self.descriptor.clone()
+    }
+    pub(super) fn cursor(&self) -> u64 {
+        self.cursor
+    }
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.bytes.len()
+            + self.descriptor.retained_bytes
+            + self.kind.len()
+            + self.identity.len()
+            + self
+                .tools
+                .as_ref()
+                .map_or(0, super::observation_tools::PageProof::retained_bytes)
+    }
 }
+
+#[cfg(test)]
+#[path = "observation_source_read_tests.rs"]
+mod source_read_tests;
 
 mod publication_header;
-#[cfg(test)]
-thread_local! { static PUBLICATION_CAPTURE_WORK: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) }; }
-#[cfg(test)]
-pub(super) fn take_publication_capture_work() -> (usize, usize, usize) {
-    PUBLICATION_CAPTURE_WORK.with(|work| work.replace((0, 0, 0)))
-}
+
+pub(super) use index::{
+    PublicationHeader, index_message, index_publication_message, message_header_bytes,
+};
+pub(super) use store::response_identity_fields;
 
 #[cfg(test)]
-thread_local! {
-    static DESCRIPTOR_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
-}
-#[cfg(test)]
-fn record_descriptor_work(hit: bool) {
-    DESCRIPTOR_WORK.with(|work| {
-        let (decodes, hits) = work.get();
-        work.set((decodes + usize::from(!hit), hits + usize::from(hit)));
-    });
-}
-#[cfg(test)]
-pub(super) fn descriptor_work() -> (usize, usize) {
-    DESCRIPTOR_WORK.with(|work| work.replace((0, 0)))
-}
+thread_local! { static PUBLICATION_CAPTURE_WORK: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0,0,0)) }; }

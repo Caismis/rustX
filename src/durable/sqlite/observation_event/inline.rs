@@ -87,10 +87,10 @@ impl Source {
         // never becomes an unbuilt-cache miss or selects the segmented reader.
         let row: Option<StoredNative> = connection
             .prepare_cached("SELECT CASE WHEN typeof(observation_source)='blob' AND length(observation_source) BETWEEN 33 AND 16385 THEN observation_source END,CASE WHEN typeof(event_json)='text' AND octet_length(event_json) BETWEEN 1 AND 16384 THEN CAST(event_json AS BLOB) END FROM events WHERE sequence=?1")
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
             .query_row([sequence], |row| Ok((row.get(0)?, row.get(1)?)))
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         match row {
             Some((Some(record), Some(native))) => match record.split_first() {
                 Some((0, digest)) if digest.len() == 32 && native.len() <= MAX_NATIVE_BYTES => {
@@ -180,7 +180,7 @@ impl Source {
                         && let FieldPreview::Inline(value) = preview
                     {
                         bytes = Some(
-                            crate::runtime_client::checkpoint::bounded_bytes(value, MAX_BYTES)
+                            crate::observation::bounded::bounded_bytes(value, MAX_BYTES)
                                 .unwrap_or_else(|| b"null".to_vec()),
                         );
                     }
@@ -239,7 +239,7 @@ impl Source {
                     let FieldPreview::Inline(value) = preview else {
                         return Err("inline event preview unavailable");
                     };
-                    let bytes = crate::runtime_client::checkpoint::bounded_bytes(value, MAX_BYTES)
+                    let bytes = crate::observation::bounded::bounded_bytes(value, MAX_BYTES)
                         .unwrap_or_else(|| b"null".to_vec());
                     let value = match serde_json::from_slice(&bytes) {
                         Ok(value) => value,
@@ -275,7 +275,7 @@ impl Source {
                 },
             )
             .map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
-        while crate::runtime_client::checkpoint::bounded_bytes(&fields, 524_288).is_none() {
+        while crate::observation::bounded::bounded_bytes(&fields, 524_288).is_none() {
             if fields.len() <= 1 {
                 return Err(storage("native field descriptor cannot fit bounded page"));
             }
@@ -344,6 +344,13 @@ mod native_budget_tests {
             RuntimeEvent::TurnStarted,
             RuntimeEvent::TurnCompleted,
             RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: attempt.clone(),
+                        turn: TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("request"),
                 model: "model\n水".into(),
             },
@@ -360,12 +367,19 @@ mod native_budget_tests {
                 },
             },
             RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: crate::model::RequestIdentity {
+                        attempt_id: attempt.clone(),
+                        turn: TurnId::new("1"),
+                        retry_number: 0,
+                    },
+                },
                 request_id: RequestId::new("request"),
                 finish_reason: crate::model::ModelFinishReason::Stop,
                 usage: Some(crate::model::ModelUsage {
-                    input_tokens: u64::MAX,
-                    output_tokens: u64::MAX,
-                    total_tokens: u64::MAX,
+                    input_tokens: Some(u64::MAX),
+                    output_tokens: Some(u64::MAX),
+                    total_tokens: Some(u64::MAX),
                     details: Some(crate::model::types::UsageDetails {
                         reasoning_tokens: Some(u64::MAX),
                         cached_input_tokens: Some(u64::MAX),

@@ -38,9 +38,9 @@
 //! where the gate registration exposes the exact cancellation signal the
 //! gated step runs under.
 
+use crate::durable::JournalStore;
 use std::sync::Arc;
 
-use crate::durable::ConversationStore;
 use crate::events::types::RuntimeEvent;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AgentId, ConversationId};
@@ -194,6 +194,7 @@ impl Lab {
                 title: "Explore task".into(),
                 execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                 resolved: ResolvedSubagentSpec {
+                    resource_sources: std::collections::BTreeSet::new(),
                     environment: Vec::new(),
                     generation: crate::runtime::identity::RuntimeResourceRevision::new(1),
                     skill_roots: Vec::new(),

@@ -294,6 +294,14 @@ const REQUEST_PARAMS: [&str; 2] = ["request_params", "requestParams"];
 /// [`crate::model::invocation::exact_json_number`]); free-form JSON elsewhere,
 /// even under a key of the same name, keeps its own semantics.
 pub(super) fn request_params_numbers_are_exact(json: &str) -> bool {
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let schema = SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(super::protocol::Request)).expect("Rust schema")
+    });
+    request_params_numbers_are_exact_in(json, schema)
+}
+
+fn request_params_numbers_are_exact_in(json: &str, schema: &Value) -> bool {
     enum Frame {
         /// The byte span of the current key token, quotes included.
         Object {
@@ -304,10 +312,6 @@ pub(super) fn request_params_numbers_are_exact(json: &str) -> bool {
             index: usize,
         },
     }
-    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    let schema = SCHEMA.get_or_init(|| {
-        serde_json::to_value(schemars::schema_for!(super::protocol::Request)).expect("Rust schema")
-    });
     let bytes = json.as_bytes();
     let mut stack = Vec::new();
     let mut at = 0;
@@ -440,8 +444,8 @@ pub(super) fn bounded_envelope<T: Envelope>(value: &T) -> impl Serialize + '_ {
     struct Wire<'a, T>(&'a T);
     impl<T: Envelope> Serialize for Wire<'_, T> {
         fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            let schema = crate::runtime_client::structural_json::root::<T>();
-            crate::runtime_client::structural_json::serialize_wire(
+            let schema = crate::observation::structural_json::root::<T>();
+            crate::observation::structural_json::serialize_wire(
                 &Native(self.0),
                 &schema,
                 serializer,
@@ -456,6 +460,75 @@ thread_local! { static NATIVE_PASSES: std::cell::Cell<usize> = const { std::cell
 #[cfg(test)]
 pub(super) fn take_native_passes() -> usize {
     NATIVE_PASSES.with(|passes| passes.replace(0))
+}
+fn workflow_document_schema() -> &'static Value {
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(
+            crate::workflow_file::WorkflowFileDocument
+        ))
+        .expect("Workflow schema")
+    })
+}
+
+/// Content references carry the same numeric domains and duplicate-field rules
+/// as ordinary DTOs, without requiring the content to fit a control record.
+pub(crate) fn workflow_document_to_bytes(
+    document: &crate::workflow_file::WorkflowFileDocument,
+) -> Result<Vec<u8>, String> {
+    document.validate().map_err(|error| error.reason)?;
+    let mut value = serde_json::to_value(document).map_err(|error| error.to_string())?;
+    let schema = workflow_document_schema();
+    convert(&mut value, schema, schema, true)?;
+    let mut output = crate::bounded_file::LimitedWriter::new(
+        Vec::new(),
+        super::workflow_documents::MAX_TRANSFER_BYTES,
+    );
+    serde_json::to_writer(&mut output, &value).map_err(|error| error.to_string())?;
+    Ok(output.inner)
+}
+
+pub(crate) fn workflow_document_from_json(
+    json: &str,
+) -> Result<crate::workflow_file::WorkflowFileDocument, String> {
+    let StrictValue(mut value) = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let schema = workflow_document_schema();
+    if !request_params_numbers_are_exact_in(json, schema) {
+        return Err("Workflow request parameter number is not binary64-exact".into());
+    }
+    convert(&mut value, schema, schema, false)?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+/// Reports use the same schema-directed numeric codec, outside control frames.
+/// The JSON writer goes directly to native scratch, without a whole byte buffer.
+pub(crate) fn write_workflow_check_report(
+    report: &crate::local_runtime::workflow_authoring::WorkflowCheckReport,
+    writer: impl std::io::Write,
+) -> Result<(), String> {
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let schema = SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(
+            crate::local_runtime::workflow_authoring::WorkflowCheckReport
+        ))
+        .expect("Workflow report schema")
+    });
+    let mut value = serde_json::to_value(report).map_err(|error| error.to_string())?;
+    convert(&mut value, schema, schema, true)?;
+    serde_json::to_writer(writer, &value).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+pub(crate) fn workflow_check_report_from_json(
+    json: &str,
+) -> Result<crate::local_runtime::workflow_authoring::WorkflowCheckReport, String> {
+    let StrictValue(mut value) = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let schema = serde_json::to_value(schemars::schema_for!(
+        crate::local_runtime::workflow_authoring::WorkflowCheckReport
+    ))
+    .map_err(|error| error.to_string())?;
+    convert(&mut value, &schema, &schema, false)?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 macro_rules! envelope {
@@ -523,10 +596,16 @@ pub(super) fn protocol_schema() -> Value {
     // DomainPage.value carries bounded display DTOs without an unbounded RPC
     // result variant. Export their Rust-owned shapes for generated consumers.
     let mut generator = schemars::SchemaGenerator::default();
-    let _ = generator.subschema_for::<crate::runtime_client::trace::TraceDetail>();
+    let _ = generator.subschema_for::<crate::workflow_file::WorkflowFileDocument>();
+    let _ = generator.subschema_for::<crate::observation::trace::TraceDetail>();
     let _ = generator.subschema_for::<crate::runtime_client::trace::TraceInspectionHead>();
+    let _ = generator.subschema_for::<crate::durable::observation::WorkflowTraceNode>();
     let _ = generator.subschema_for::<crate::runtime_client::RuntimeClientModelName>();
     let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
+    // Assign envelope-owned names first; the chunked report shares domain type names.
+    let _ = generator.root_schema_for::<super::protocol::ProtocolMessage>();
+    let _ =
+        generator.subschema_for::<crate::local_runtime::workflow_authoring::WorkflowCheckReport>();
     schema(
         serde_json::to_value(generator.into_root_schema_for::<super::protocol::ProtocolMessage>())
             .expect("Rust schema"),
@@ -545,7 +624,8 @@ mod tests {
         let mut value = serde_json::json!({
             "target": {"session_id": "ses_00000000-0000-7000-8000-000000000001", "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
                 "runtime_incarnation": "1", "attachment_id": "a"},
-            "source": {"kind": "session_file", "locator": {"type":"by_message_id","message_id":"m"}, "delivery_index": 0}, "roots": ["/workspace"]
+            "source": {"kind": "session_file", "locator": {"type":"by_message_id","message_id":"m"}, "delivery_index": 0}, "roots": ["/workspace"],
+            "read": {"kind":"bytes","max_bytes":33_554_432}
         });
         let read: FileRead = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(serde_json::to_value(&read).unwrap(), value);
@@ -651,7 +731,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v52.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v73.ts"),
         )
         .unwrap();
         for domain in [
@@ -791,9 +871,9 @@ mod tests {
             "Model",
             "Profile",
             "ModelLayer",
-            "SummaryAuthoring",
+            "AuxiliaryModelAuthoring",
             "SessionModelConfig",
-            "SummaryModelPolicy",
+            "AuxiliaryModelPolicy",
         ] {
             assert!(owners.contains(owner), "{owner} is not covered: {owners:?}");
         }
@@ -827,18 +907,16 @@ mod tests {
             revision: EXACT,
             ..Default::default()
         });
-        native_round_trip(
-            &crate::runtime_client::snapshot::RuntimeClientCompactionView {
-                generation: EXACT,
-                checkpoint_id: crate::runtime::identity::CheckpointId::new("summary"),
-                activation_id: crate::context::checkpoint::ProjectionActivationId(EXACT),
-                tokens_before: crate::runtime::types::TokenMeasurement {
-                    input_tokens: 100,
-                    source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
-                },
-                estimated_tokens_after: 50,
+        native_round_trip(&crate::observation::head::RuntimeClientCompactionView {
+            generation: EXACT,
+            checkpoint_id: crate::runtime::identity::CheckpointId::new("summary"),
+            activation_id: crate::context::checkpoint::ProjectionActivationId(EXACT),
+            tokens_before: crate::runtime::types::TokenMeasurement {
+                input_tokens: 100,
+                source: crate::runtime::types::TokenMeasurementSource::ProviderReported,
             },
-        );
+            estimated_tokens_after: 50,
+        });
         native_round_trip(&crate::tools::todo::TodoSnapshot {
             next_id: EXACT + 1,
             tasks: vec![crate::tools::todo::TodoTask {

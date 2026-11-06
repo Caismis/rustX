@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { WorkbenchCall } from '../WorkbenchFiles';
+import type { DocumentDependencies } from './dependencies';
+import { validateRaster } from '../../../client/raster';
+import { useTranslation } from '../../../locale/react';
+import { documentFailure } from '../documents/errors';
 /** Resolve a document-relative reference without admitting a new workspace root. */
 export function relativeDocumentPath(document: string, reference: string): string | undefined {
   if (!reference || /^(?:[a-z][a-z0-9+.-]*:|\/|#)/i.test(reference)) return undefined;
@@ -13,16 +16,17 @@ export function relativeDocumentPath(document: string, reference: string): strin
   }
   return parts.join('/') || undefined;
 }
-export function WorkspaceImage({path,alt,call}: {path:string;alt:string;call:WorkbenchCall}) {
-  const [url,setUrl]=useState('');
+export function WorkspaceImage({path,alt,dependencies}: {path:string;alt:string;dependencies:DocumentDependencies}) {
+  const tx = useTranslation(), [url,setUrl]=useState(''), [error, setError] = useState<unknown>();
   useEffect(()=>{
     const abort=new AbortController();let owned:string|undefined;
-    void call({kind:'bytes',path},abort.signal).then(result=>{
-      if(abort.signal.aborted||!result.base64)return;
-      const bytes=Uint8Array.from(atob(result.base64),c=>c.charCodeAt(0));
-      owned=URL.createObjectURL(new Blob([bytes],{type:path.toLowerCase().endsWith('.svg')?'image/svg+xml':`image/${path.split('.').at(-1)}`}));setUrl(owned);
-    },()=>{});
+    setUrl(''); setError(undefined);
+    void dependencies.read(path,abort.signal).then(result=>{
+      if(abort.signal.aborted)return;
+      validateRaster(result.data);
+      owned=URL.createObjectURL(new Blob([result.data],{type:`image/${path.split('.').at(-1)}`}));setUrl(owned);
+    }).catch(error=>{if(!abort.signal.aborted)setError(error);});
     return()=>{abort.abort();if(owned)URL.revokeObjectURL(owned);};
-  },[path,call]);
-  return url?<img src={url} alt={alt} style={{maxWidth:'100%'}}/>:<span>{alt}</span>;
+  },[path,dependencies]);
+  return url?<img src={url} alt={alt} style={{maxWidth:'100%'}}/>:<span>{alt}{error !== undefined && <span role="alert">: {tx(`artifacts:document.${documentFailure(error)}`)}</span>}</span>;
 }

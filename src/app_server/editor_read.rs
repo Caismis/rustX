@@ -1,17 +1,13 @@
 //! Bounded editor recovery from an immutable fork origin. The source canonical
 //! message remains the byte authority; destination uploads own their receipts.
 use super::{
-    connection::{client_error, domain},
     protocol::{ErrorData, MethodResult, RpcError},
+    rpc_error::{client_error, domain},
 };
-use crate::{
-    durable::ConversationStore,
-    local_runtime::{
-        session::{LineageSide, SessionId, SessionNodeId},
-        session_controller::SessionController,
-    },
-    runtime_client::content::{ContentChunk, ContentRepresentation, ContentSource},
-};
+use crate::durable::ObservationStore;
+use crate::local_runtime::session::{LineageSide, SessionId, SessionNodeId};
+use crate::local_runtime::session_controller::SessionController;
+use crate::observation::content::{ContentChunk, ContentRepresentation, ContentSource};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -62,15 +58,15 @@ pub(super) async fn read(
     max_bytes: u32,
 ) -> Result<MethodResult, RpcError> {
     if max_bytes == 0
-        || max_bytes > crate::runtime_client::content::CONTENT_READ_MAX_BYTES
-        || offset > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX
+        || max_bytes > crate::observation::content::CONTENT_READ_MAX_BYTES
+        || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX
     {
         return Err(domain(ErrorData::InvalidParams));
     }
     let (destination, origin) = sessions
         .acquire_read_origin(&requested.session_id, &requested.node_id)
         .await
-        .map_err(super::connection::session_error)?;
+        .map_err(super::rpc_error::session_error)?;
     if origin.side != LineageSide::Before
         || origin.source_session != requested.source_session
         || origin.source_node != requested.source_node
@@ -81,14 +77,14 @@ pub(super) async fn read(
     let source_locator = origin.source_locator;
     if !matches!(
         source_locator,
-        crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { .. }
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { .. }
     ) {
         return Err(domain(ErrorData::InvalidParams));
     }
     let source = sessions
         .acquire_read(&requested.source_session, Some(&requested.source_node))
         .await
-        .map_err(super::connection::session_error)?;
+        .map_err(super::rpc_error::session_error)?;
     let _destination = destination;
     let (mut page, upload_block) = tokio::task::spawn_blocking(move || {
         let store = crate::durable::SqliteConversationStore::open_existing(
@@ -99,7 +95,7 @@ pub(super) async fn read(
         .with_lifecycle(source.allocation);
         let index = crate::message::types::ContentBlockIndex::new(block_index);
         let content_source = ContentSource::CanonicalMessageBlock {
-            component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+            component: crate::observation::content::CanonicalContentComponent::Payload,
             locator: source_locator.clone(),
             block_index: index,
         };
@@ -147,22 +143,22 @@ pub(super) async fn read(
                 .lock()
                 .await
                 .editor_upload_receipt(&page.locator.session_id, &block)
-                .map_err(super::connection::session_error)?,
+                .map_err(super::rpc_error::session_error)?,
         );
     }
     Ok(MethodResult::EditorPage { page })
 }
 
 fn next_block(
-    store: &dyn crate::durable::ConversationStore,
-    locator: &crate::runtime_client::content::CanonicalContentLocator,
+    store: &dyn crate::durable::ObservationStore,
+    locator: &crate::observation::content::CanonicalContentLocator,
     block_index: u32,
 ) -> Result<Option<u32>, crate::runtime_client::RuntimeClientError> {
     let Some(index) = block_index.checked_add(1) else {
         return Ok(None);
     };
     let source = ContentSource::CanonicalMessageBlock {
-        component: crate::runtime_client::content::CanonicalContentComponent::Payload,
+        component: crate::observation::content::CanonicalContentComponent::Payload,
         locator: locator.clone(),
         block_index: crate::message::types::ContentBlockIndex::new(index),
     };
@@ -182,7 +178,7 @@ fn next_block(
 }
 
 fn read_upload(
-    store: &dyn crate::durable::ConversationStore,
+    store: &dyn crate::durable::ObservationStore,
     content_source: &ContentSource,
 ) -> Result<crate::message::types::UserContentBlock, crate::runtime_client::types::RuntimeClientError>
 {
@@ -194,7 +190,7 @@ fn read_upload(
                 message: "editor block unavailable".into(),
             },
         )?;
-    if reference.readable_end > u64::from(crate::runtime_client::content::CONTENT_READ_MAX_BYTES) {
+    if reference.readable_end > u64::from(crate::observation::content::CONTENT_READ_MAX_BYTES) {
         return Err(
             crate::runtime_client::types::RuntimeClientError::ObservationUnavailable {
                 message: "editor upload descriptor exceeds bounded read".into(),
@@ -205,7 +201,7 @@ fn read_upload(
         .content_read(
             &reference,
             0,
-            crate::runtime_client::content::CONTENT_READ_MAX_BYTES,
+            crate::observation::content::CONTENT_READ_MAX_BYTES,
         )
         .map_err(store_error)?;
     let bytes = base64::engine::general_purpose::STANDARD

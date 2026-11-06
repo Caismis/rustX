@@ -5,11 +5,20 @@ import { useState } from 'react';
 import { AgentComposer } from '../../src/app/agent/AgentComposer';
 import { composerPreferences } from '../../src/app/composer/preferences';
 import { createRoot } from 'react-dom/client';
-import { RpcFailure } from '../../src/client/app-server';
+import { RpcFailure } from '../../src/client/errors';
 import { App } from '../../src/app/App';
 import { Server, interaction, snapshot, projectionHead, endpoint } from '../fixture';
 import { traceRecord } from '../trace-fixture';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v52';
+import { deferredReplyFixture } from './deferred-reply';
+import { turnDeliveriesFixture } from './turn-deliveries';
+import { workspaceChangesFixture } from './workspace-changes';
+import { workflowCatalogFixture } from './workflow-catalog';
+import { chatFlowFixture } from './chat-flow';
+import { workflowRunsFixture } from './workflow-runs';
+import { chatSpacingFixture } from './chat-spacing';
+import { workflowReviewHistoryFixture } from './workflow-review-history';
+import { questionHistoryFixture } from './question-history';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v73';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -32,9 +41,9 @@ if (mode === 'desktop') {
 }
 
 server.handlers.set('session/effectiveConfiguration', () => { throw new RpcFailure({ code: -32000, message: 'Appearance fixture' }); });
-const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true };
-const model: SessionModelView = { configured: { model: 'native/coder' }, effective: { model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, reasoningEnabled: true, profile: 'deliberate', capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } };
-const catalog: CatalogModelView[] = [{ model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'deliberate', reasoningEnabled: true }, { id: 'brief', reasoningEnabled: true }], defaultProfile: 'deliberate', credentialSource: { type: 'literal' } }];
+const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
+const model: SessionModelView = { configured: { model: 'native/coder' }, effective: { model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, profile: 'deliberate', capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } };
+const catalog: CatalogModelView[] = [{ model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'deliberate' }, { id: 'brief' }], defaultProfile: 'deliberate', credentialSource: { type: 'literal' } }];
 const source: SourceSettings = { prospective_approval_mode: 'full_access', absent_resource_revision: 'absent', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {}, user: { path: '/home/rustx.toml', revision: 'user', authored: {} }, workspace: { path: '/workspace/A/rustx.toml', revision: 'workspace', authored: {} }, user_resource_root: '/home/.agents', workspace_resource_root: '/workspace/A/.agents', runtime_root: '/runtime', user_mcp: { path: '/home/.agents/mcp.toml', revision: 'missing' }, workspace_mcp: { path: '/workspace/A/.agents/mcp.toml', revision: 'missing' }, agents: [], repair_sequence: '0' };
 server.handlers.set('session/model', () => (domainReceipt('model',[model])));
 server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: catalog }).models??[])));
@@ -75,6 +84,27 @@ if (mode === 'questionnaire') {
 if (mode === 'compaction') {
  s.attempt = null;
  s.context = { compaction_count: 1, compaction_in_progress: false, projection_head: projectionHead('## 已完成的工作\n\n保留 fork 前的历史预览，并整理上下文摘要的显示。\n\n- 历史仍由原生会话数据提供\n- Continue with the original conversation context.') };
+ const records = [s.context.projection_head!];
+ server.handlers.set('session/projections', () => ({ type: 'projections', page: { records, next_activation: null } }));
+ let turn = 1;
+ window.compactionFixture = {
+  async reply() {
+   const next = structuredClone(server.snapshots.get('A')!);
+   turn++;
+   const prompt = { role: 'user' as const, source: 'human' as const, id: `prompt-${turn}`, content: [{ type: 'text' as const, text: `Continue after checkpoint ${turn - 1}` }] };
+   const answer = { role: 'assistant' as const, id: `reply-${turn}`, content: [{ type: 'text' as const, text: `New reply ${turn}` }] };
+   next.messages.push(prompt, answer);
+   next.transcript.entries!.push(...[prompt, answer].map((message, index) => ({ cursor: String((turn - 1) * 2 + index + 1), item: { type: 'message' as const, message } })));
+   await server.update('A', next);
+  },
+  async compact() {
+   const next = structuredClone(server.snapshots.get('A')!);
+   const head = { ...projectionHead('Second preserved summary.'), checkpoint_id: 'checkpoint-2', activation_id: '2', transcript_anchor: next.transcript.entries!.at(-1)!.cursor };
+   records.push(head);
+   next.context = { ...next.context!, compaction_count: 2, projection_head: head };
+   await server.update('A', next);
+  },
+ };
 }
 if (mode === 'fork') {
  s.attempt = null;
@@ -102,6 +132,15 @@ if (mode === 'retry-active' || mode === 'retry-settled') {
   s.messages[1] = recovered; s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: recovered } };
  }
 }
+if (mode === 'deferred-reply') deferredReplyFixture(server, s);
+if (mode === 'turn-deliveries') turnDeliveriesFixture(server, s);
+if (mode === 'workspace-changes') workspaceChangesFixture(server, s);
+if (mode === 'workflow-catalog') workflowCatalogFixture(server, s);
+if (mode === 'chat-flow') chatFlowFixture(server, s);
+if (mode === 'chat-spacing') chatSpacingFixture(server, s, new URLSearchParams(location.search).get('case'));
+if (mode === 'review-history') workflowReviewHistoryFixture(server, s);
+if (mode === 'question-history') questionHistoryFixture(server, s);
+if (mode === 'composer' && new URLSearchParams(location.search).has('workflow-runs')) workflowRunsFixture(server, s);
 server.snapshots.set('A', s);
 await server.attached('A');
 localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
@@ -110,7 +149,15 @@ createRoot(document.getElementById('root')!).render(mode === 'restored' ? <Resto
 // Browser-only controls for deterministic composer projection/transport tests.
 // No fixture code enters the production bundle.
 if (mode === 'composer') {
+  let uploadStart = 0;
     window.composerFixture = {
+    holdUploads: () => { uploadStart = server.requests.length; server.held.add('session/uploadStatus'); },
+    settleUploads: state => {
+      server.held.delete('session/uploadStatus');
+      if (state !== 'ready') for (const key of server.uploads.keys()) server.uploads.set(key, { state });
+      for (const { request, socket } of server.requests.slice(uploadStart)) if (request.method === 'session/uploadStatus') server.reply(request, socket);
+    },
+    uploads: () => server.requests.filter(row => row.request.method === 'session/uploadPrepare').length,
     running: async value => { const next = structuredClone(server.snapshots.get('A')!); next.attempt = value ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null; await server.update('A', next); },
     docks: async value => {
       const next = structuredClone(server.snapshots.get('A')!);
@@ -120,6 +167,12 @@ if (mode === 'composer') {
       await server.update('A', next);
     },
     holdCancellation: () => { server.held.add('turn/cancel'); },
+    holdSubmission: () => { server.held.add('turn/start'); server.held.add('turn/steer'); },
+    acknowledgeSubmission: () => {
+      const row = server.requests.filter(({ request }) => request.method === 'turn/start' || request.method === 'turn/steer').at(-1);
+      if (!row) throw new Error('No submission requested');
+      server.held.delete('turn/start'); server.held.delete('turn/steer'); server.reply(row.request, row.socket);
+    },
     // Stands in for the General Settings row, which owns this preference.
     busyEnter: value => composerPreferences().setBusyEnter(value),
     cancellations: () => server.requests.flatMap(row => row.request.method === 'turn/cancel' ? [row.request.params.target] : []),
@@ -135,7 +188,8 @@ if (mode === 'composer') {
   };
 }
 declare global {
-  interface Window { composerFixture: { running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v52').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+ interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; holdSubmission(): void; acknowledgeSubmission(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v73').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

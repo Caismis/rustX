@@ -353,9 +353,9 @@ mod tests {
         assert_eq!(
             ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
-                    input_tokens: 1,
-                    output_tokens: 1,
-                    total_tokens: 2,
+                    input_tokens: Some(1),
+                    output_tokens: Some(1),
+                    total_tokens: Some(2),
                     details: None,
                 },
             })),
@@ -400,9 +400,9 @@ mod tests {
         deadline.observe(
             &ModelStreamItem::Event(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
-                    input_tokens: 1,
-                    output_tokens: 1,
-                    total_tokens: 2,
+                    input_tokens: Some(1),
+                    output_tokens: Some(1),
+                    total_tokens: Some(2),
                     details: None,
                 },
             }),
@@ -424,9 +424,9 @@ mod tests {
         deadline.observe(
             &ModelStreamItem::Event(ModelEvent::UsageUpdate {
                 usage: ModelUsage {
-                    input_tokens: 2,
-                    output_tokens: 2,
-                    total_tokens: 4,
+                    input_tokens: Some(2),
+                    output_tokens: Some(2),
+                    total_tokens: Some(4),
                     details: None,
                 },
             }),

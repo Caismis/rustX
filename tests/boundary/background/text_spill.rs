@@ -140,7 +140,13 @@ async fn dispatch_big_background_bash(
     };
     assert!(std::path::Path::new(&advertised).is_absolute());
     assert!(
-        advertised.ends_with(&format!("tasks/{execution_id}.output")),
+        advertised.ends_with(".output")
+            && std::path::Path::new(&advertised)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("e-"),
         "{advertised}"
     );
     assert!(
@@ -220,15 +226,18 @@ async fn oversized_background_bash_publishes_a_text_only_terminal_inbound() {
         "settlement reuses the dispatch-time live-output locator: no second file for the same payload"
     );
     assert!(
-        std::path::Path::new(full_output).starts_with(fixture.runtime.tool_output().root()),
+        std::path::Path::new(full_output)
+            .starts_with(fixture.runtime.tool_output().root().unwrap()),
         "the output lives in the managed tool-output root: {full_output}"
     );
     // A very large background output is exactly one file: no duplicate
     // result spill was created for the same payload.
     assert!(
-        std::fs::read_dir(fixture.runtime.tool_output().root().join("results"))
+        std::fs::read_dir(fixture.runtime.tool_output().root().unwrap())
             .expect("results dir")
-            .next()
+            .find(|entry| entry
+                .as_ref()
+                .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("r-")))
             .is_none(),
         "background execution output never becomes a second result spill"
     );
@@ -569,7 +578,13 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
     let execution_id: rustx::runtime::identity::ToolExecutionId =
         serde_json::from_value(accepted["job_id"].clone()).unwrap();
     assert!(
-        output_path.ends_with(&format!("tasks/{execution_id}.output")),
+        output_path.ends_with(".output")
+            && std::path::Path::new(&output_path)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("e-"),
         "{output_path}"
     );
     assert!(

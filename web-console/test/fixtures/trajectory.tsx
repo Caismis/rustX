@@ -1,9 +1,12 @@
+import { nativeTraceFixture } from '../native-trace-fixture';
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Trajectory } from '../../src/app/trajectory/Trajectory';
+import { workflowTraceFixture } from '../workflow-trace-fixture';
+import { workflowTraceRefreshFixture } from './workflow-trace-refresh';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v52';
+import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v73';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -37,6 +40,24 @@ const records = [
   traceRecord(13, { kind: 'workflow', request: null, location: {}, preview: text('Release checklist run') }),
 ];
 const params = new URLSearchParams(location.search);
+const workflowRefresh = params.has('workflow-refresh') ? workflowTraceRefreshFixture() : undefined;
+if (workflowRefresh) window.workflowTraceRefresh = workflowRefresh.controls;
+const agentInteractions = params.has('agent-interactions');
+const agentCall = traceTool(30, { tool: { ...traceTool(30).tool!, name: 'subagent', tool_id: 'tool-subagent', arguments: text('{"agent":"explore","task":"Review the parser"}') }, preview: text('Started background agent parser-review') });
+const agentRecords = [
+  records[0]!, agentCall,
+  ...['running', 'completed', 'cancelled', 'failed'].map((state, n) => traceRecord(n + 31, {
+    kind: 'subagent', request: null, agent_id: 'parser-review', activation_id: `activation-${n}`, state: state as TraceRecord['state'],
+    location: n % 2 ? {} : { attempt_id: 'lifecycle-only-turn', step_id: 'audit' }, preview: text('Internal Agent activation audit'),
+  })),
+  traceRecord(35, { kind: 'context', request: null, agent_id: 'parser-review', preview: text('Agent parser-review sent a message: parser review completed.') }),
+];
+const backgroundJobs = params.has('background-jobs');
+const backgroundRecords = [
+  traceTool(20),
+  traceRecord(21, { kind: 'background', request: null, native_id: 'job-launched', originating_tool_call_id: 'call-20', state: 'outcome_unknown', preview: null }),
+  traceTool(22, { tool: { ...traceTool(22).tool!, tool_id: 'tool-job_wait', name: 'job_wait' } }),
+];
 const long = params.has('long'); const threshold = params.has('threshold');
 const renumber = params.has('renumber');
 const structure = params.has('structure'); const toolFirst = params.has('tool');
@@ -68,14 +89,15 @@ const retainedRecords = [
   traceRecord(4, { kind: 'user', request: null, location: {}, preview: text('Second input') }),
   traceRecord(5, { kind: 'assistant', request: null, location: { attempt_id: 'attempt-b', step_id: '1' }, preview: text('Second response') }),
 ];
-const snapshot = { records: retainedInputs ? retainedRecords : stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: 'older' };
+const snapshot = { records: agentInteractions ? agentRecords : backgroundJobs ? backgroundRecords : retainedInputs ? retainedRecords : stepLess ? stepLessRecords().slice(1) : ordered ? orderedRecords : chrome ? chromeRecords : params.has('ledger') ? semanticLedgerRecords() : mixedRecords ?? (long || threshold ? Array.from({ length: long ? 480 : 90 }, (_, n) => toolFirst && n === 0 ? traceTool(100) : request(n + 100, !threshold && n % 7 === 0 ? 'changed' : 'unchanged', 'unchanged')) : params.has('structural-search') ? structuralSearchRecords() : records), next_cursor: agentInteractions ? null : 'older' };
 function Fixture() {
-  const [cache, setCache] = useState(() => replaceTrace(snapshot));
+  const [cache, setCache] = useState(() => workflowRefresh?.cache ?? (params.has('workflows') ? workflowTraceFixture().cache : replaceTrace(snapshot)));
   const [reads, setReads] = useState(0); const [pages, setPages] = useState(0);
   return <main style={{ height: '100dvh', display: 'flex', flexDirection: 'column' }}>
-    <header style={{ padding: '8px 12px', display: 'flex', gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11 }}><strong>rustX / Workspace review</strong>
+    <header style={{ padding: '8px 12px', display: 'flex', flexWrap: workflowRefresh ? 'wrap' : undefined, gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 11 }}><strong>rustX / Workspace review</strong>
       <button onClick={() => setCache(current => refreshTrace(current, { records: [...current.page.records, traceRecord(Number(current.page.records.at(-1)!.id.split(':')[1]) + 1)], next_cursor: current.page.next_cursor }))}>Append</button>
       <button onClick={() => setCache(current => ({ ...current, page: { ...current.page, records: current.page.records.map(record => ({ ...record, preview: text('Lifecycle updated') })) } }))}>Update</button>
+      {workflowRefresh && <button onClick={() => setCache(current => workflowRefresh.refresh(current))}>Refresh workflow snapshot</button>}
       {retainedInputs && <button onClick={() => setCache(current => refreshTrace(current, { records: [retainedRecords.at(-1)!] }, [0, 3].map((index, i) => {
         const record = retainedRecords[index]!;
         return { id: record.id, location: { attempt_id: i ? 'attempt-b' : 'attempt-a', step_id: null }, state: record.state, timing: record.timing, fields: [], collections: [], attachments: [], truncated: false };
@@ -89,15 +111,39 @@ function Fixture() {
         setCache(current => {
           const n = Number(id.split(':')[1]); const record = current.page.records.find(record => record.id === id)!;
           const detail = record.kind === 'tool' ? toolDetail(n) : record.kind === 'request' ? requestDetail(n) : requestDetail(n, { kind: record.kind, request: null, messages: [] });
+          if (backgroundJobs && n === 20) detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-launched', state: 'starting', tool: 'bash', output_path: '/workspace/output.txt' }, truncated: false } }];
+          if (backgroundJobs && n === 22) {
+            detail.tool!.name = 'job_wait'; detail.tool!.tool_id = 'tool-job_wait';
+            detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-launched', tool: 'bash', state: 'outcome_unknown', result: { status: { type: 'outcome_unknown', detail: 'External result was not proven' } } }, truncated: false } }];
+          }
           if (detail.request) {
             detail.request.messages.push(...(record.request?.context_additions ?? []).map(context => { if (context.message_id == null) throw new Error('Finite fixture Context needs its original inline identity.'); return { role: 'user' as const, message_id: context.message_id, provenance_source:null, provenance: {type:'original' as const,conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',content_digest:'fixture-digest',locator:null,message_id_source:null,source:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',message_id:context.message_id,content_digest:'fixture-digest'}}, source: 'runtime', blocks: [{ type: 'text' as const, text: text(`Full content: ${context.preview?.text}`) }], truncated: false }; }));
             if (record.request?.system_prompt.state === 'previous_unavailable') { detail.request.predecessor = { availability: 'unavailable', request_id: 'previous-request' }; detail.request.previous_system_prompt = null; }
             if (n === 3) { detail.request.predecessor = { availability: 'not_applicable' }; detail.request.previous_system_prompt = null; }
             if (n === 11) { detail.request.effective_system_prompt.truncated = true; detail.request.previous_system_prompt!.truncated = true; }
           }
-          if (detail.tool) {
+          if (detail.tool && !backgroundJobs) {
             detail.tool.source!.text = text('git diff --stat');
             detail.tool.result!.blocks = [{ type: 'json', value: { value: { files: 3, insertions: 28 }, truncated: false } }, { type: 'text', text: text('Review complete.') }];
+          }
+          if (agentInteractions && detail.tool) {
+            detail.tool.name = record.tool!.name; detail.tool.tool_id = record.tool!.tool_id!;
+            detail.tool.arguments = { value: JSON.parse(record.tool!.arguments!.text), truncated: false };
+            detail.tool.source = null;
+            detail.tool.result!.blocks = [{ type: 'json', value: { value: { agent_id: 'parser-review', activation_id: 'activation-0', state: 'active' }, truncated: false } }];
+          }
+          if (params.has('parity')) {
+            if (record.kind === 'assistant') detail.messages = [{ message_id: record.message_id!, role: 'assistant', truncated: false, blocks: [
+              {type:'reasoning',text:text('I will **inspect the working tree**, then check the implementation.\n\nThis keeps the review focused.')},
+              {type:'text',text:text('I’ll inspect the **working tree**.\n\n- Read the changes\n- Run the relevant checks')},
+              {type:'tool_call',call_id:'call-5',tool_id:'tool-bash',name:'bash',arguments:{value:{command:'git diff --stat'},truncated:false}},
+            ] }];
+            if (record.kind === 'user') detail.messages = [{message_id:'original-user',role:'user',truncated:false,blocks:[{type:'text',text:record.preview!}]}];
+            if (detail.tool?.source && detail.tool.arguments) detail.tool.arguments.value={command:detail.tool.source.text.text};
+            if (params.has('native') && ['request','tool','assistant','user','context'].includes(record.kind)) {
+              const native=nativeTraceFixture(record,detail);
+              return completeTraceDetail(current,id,current.epoch,undefined,undefined,undefined,undefined,native.page,native.reader);
+            }
           }
           return completeTraceDetail(current, id, current.epoch, detail);
         });

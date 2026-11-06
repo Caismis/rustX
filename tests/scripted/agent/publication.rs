@@ -21,6 +21,7 @@
 //! audit consolidation — lives in `tests/durable/publication.rs`.
 
 use super::super::{common, support};
+use rustx::durable::PublicationStore;
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -473,7 +473,7 @@ impl SeekableObservationSource {
         {
             use std::io::Write as _;
             let mut writer = std::io::BufWriter::with_capacity(65_536, &mut layout);
-            crate::runtime_client::structural_json::to_writer(&mut writer, value)
+            crate::observation::structural_json::to_writer(&mut writer, value)
                 .map_err(|_| "native observation source encoding unavailable")?;
             writer
                 .flush()
@@ -1023,7 +1023,7 @@ impl SeekableObservationSource {
         )?;
         let value = serde_json::from_slice(&bytes)
             .map_err(|_| ObservationReadError::Unavailable("native value unavailable"))?;
-        Ok(crate::runtime_client::checkpoint::bounded_json_value(
+        Ok(crate::observation::bounded::bounded_json_value(
             &value, ITEM_BYTES,
         ))
     }
@@ -1071,7 +1071,7 @@ impl SeekableObservationSource {
                     .map_err(|_| {
                         ObservationReadError::Unavailable("native page value unavailable")
                     })?;
-                    crate::runtime_client::checkpoint::bounded_json_value(&value, ITEM_BYTES)
+                    crate::observation::bounded::bounded_json_value(&value, ITEM_BYTES)
                 } else {
                     None
                 };
@@ -1609,7 +1609,7 @@ mod tests {
         assert!(source.layout.small_index.is_some());
         assert!(source.layout.written > 4096);
         let mut expected = Vec::new();
-        crate::runtime_client::structural_json::to_writer(&mut expected, &fixture).unwrap();
+        crate::observation::structural_json::to_writer(&mut expected, &fixture).unwrap();
         let mut copied = Vec::new();
         assert_eq!(
             source.copy_original_bytes_to(&mut copied).unwrap(),
@@ -1763,7 +1763,7 @@ mod tests {
         };
         let source = SeekableObservationSource::new(&value).unwrap();
         let mut expected_bytes = Vec::new();
-        crate::runtime_client::structural_json::to_writer(&mut expected_bytes, &value).unwrap();
+        crate::observation::structural_json::to_writer(&mut expected_bytes, &value).unwrap();
         assert_eq!(original_layout_bytes(&source), expected_bytes);
         let is_captured = |path: &[String]| {
             path.len() == 2 && path[0] == "messages" && path[1].parse::<u64>().is_ok()
@@ -1870,7 +1870,7 @@ mod tests {
         );
         assert!(writes.0 > 500);
         let mut original = Vec::new();
-        crate::runtime_client::structural_json::to_writer(&mut original, &value).unwrap();
+        crate::observation::structural_json::to_writer(&mut original, &value).unwrap();
         assert_eq!(original_layout_bytes(&source), original);
         let connection = source.layout.reader_connection().unwrap();
         let mut statement = connection

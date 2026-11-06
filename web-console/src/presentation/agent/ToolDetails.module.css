@@ -1,0 +1,39 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned ToolDetails.module.css; see PROVENANCE.md. */
+.root {
+  margin: 4px 0 4px 4px;
+  border: .5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-markdown-code-block);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xs-13);
+  overflow: hidden;
+}
+.list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.item, .empty { margin: 0; padding: 10px 14px; }
+.item + .item { border-top: .5px solid var(--dsw-alias-border-l2); }
+.caption { padding: 10px 14px 6px; color: var(--dsw-alias-label-caption); font-size: 12px; }
+.heading { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.text, .link { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.status { flex: none; align-self: flex-start; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 18px; font-size: 16px; line-height: 18px; }
+.pending { box-sizing: border-box; width: 10px; height: 10px; border: 1px solid var(--dsw-alias-label-tertiary); border-radius: 2px; }
+.heading:has(.statusText) .text { flex-basis: 12em; }
+.statusText { margin-inline-start: auto; color: var(--dsw-alias-label-caption); font-size: 12px; white-space: nowrap; }
+.item[data-deleted] .text { color: var(--dsw-alias-label-tertiary); text-decoration: line-through; }
+.badge { flex: none; display: inline-flex; align-items: center; gap: 5px; color: var(--dsw-alias-label-caption); font-size: 12px; }
+.badge::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.badge[data-tone='info'] { color: var(--dsw-alias-state-business-primary); }
+.badge[data-tone='success'] { color: var(--dsw-alias-state-success-primary); }
+.badge[data-tone='warning'] { color: var(--dsw-alias-state-warn-primary); }
+.badge[data-tone='error'] { color: var(--dsw-alias-state-error-primary); }
+.subtitle { margin-top: 3px; color: var(--dsw-alias-label-tertiary); font-size: 12px; overflow-wrap: anywhere; }
+.description { margin: 6px 0; color: var(--dsw-alias-label-caption); white-space: pre-wrap; overflow-wrap: anywhere; }
+.fields { margin: 0; }
+.heading + .fields { margin-top: 6px; }
+.field { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: 12px; }
+.field + .field { margin-top: 4px; }
+.field dt { color: var(--dsw-alias-label-caption); }
+.field dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.item > .code { margin: 8px 0 0; max-width: 100%; max-height: 240px; overflow: auto; font-size: 13px; }
+.link { padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.link:hover { text-decoration: underline; }
+.link:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-alias-state-business-primary); outline-offset: 3px; }

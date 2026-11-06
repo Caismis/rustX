@@ -1,8 +1,10 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import type { AttachmentTarget } from '../../../protocol/app-server/v73';
+import type { wireProbe } from './wire-probe';
 export async function closeSessionView(page: Page, id: string) {
-  await page.locator(`button[data-session-id="${id}"]`).hover();
-  await page.locator(`button[data-session-actions="${id}"]`).click();
-  await page.getByRole('menuitem', { name: /^Close .+ view$/ }).click();
+  await page.getByRole('button', { name: 'View options', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Close view', exact: true }).hover();
+  await page.locator(`[role="menuitem"][data-menu-item-id="close:${id}"]`).click();
 }
 export async function closeSettings(page: Page) {
   const close = page.getByRole('button', { name: 'Close Settings', exact: true });
@@ -82,27 +84,45 @@ export async function choose(scope: Locator, label: string, option: string) {
  * (Use global default) is an ordinary dialog; a real deletion is an alert
  * dialog. Both are titled by the question they ask. */
 export async function confirmSettingsAction(page: Page, label: string) {
-  await page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('button', { name: label, exact: true }).click();
+  await page.getByRole('button', { name: label, exact: true }).click();
   const dialog = page.getByRole(label.startsWith('Use global default') ? 'dialog' : 'alertdialog', { name: /\?$/ });
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: label, exact: true }).click();
   await expect(dialog).toHaveCount(0);
 }
-export async function connectRemote(page: Page, endpoint: string, token: string) {
+export async function connectRemote(page: Page, endpoint: string, token: string, deliveryToken?: string) {
   await openConnectionSettings(page);
-  await page.getByLabel('Connection mode').selectOption('remote');
-  await page.getByLabel('WebSocket endpoint').fill(endpoint);
-  await page.getByLabel('Transport token').fill(token);
+  // Re-entering an unchanged value still dispatches a DOM change event. The
+  // connection owner may then start restoration before the explicit Connect
+  // gesture, whose replacement would retire that just-dispatched Attach.
+  const mode = page.getByLabel('Connection mode');
+  if (await mode.inputValue() !== 'remote') await mode.selectOption('remote');
+  const address = page.getByLabel('WebSocket endpoint');
+  const currentAddress = await address.inputValue();
+  let sameAddress = currentAddress === endpoint;
+  try { sameAddress ||= new URL(currentAddress).href === new URL(endpoint).href; } catch { /* An unconfigured field needs the authored endpoint. */ }
+  if (!sameAddress) await address.fill(endpoint);
+  const secret = page.getByLabel('Transport token');
+  if (await secret.inputValue() !== token) await secret.fill(token);
+  if (deliveryToken) {
+    const access = page.getByLabel('Delivery Access token (optional, enables side questions)');
+    if (await access.inputValue() !== deliveryToken) await access.fill(deliveryToken);
+  }
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('.connection-status')).toHaveText('Connected');
   await closeSettings(page);
 }
-export async function showInspector(page: Page) {
-  const panel = page.getByRole('complementary', { name: 'Developer inspector' });
-  if (!await panel.isVisible()) await page.getByRole('button', { name: 'Toggle Inspector' }).click();
-  await expect(panel).toBeVisible();
-  const details = panel.getByText('Complete native runtime facts', { exact: true });
-  if (!await panel.getByLabel('Native diagnostic JSON').isVisible()) await details.click();
+export async function selectedSessionId(page: Page) {
+  return (await page.locator('button[data-session-id][aria-current="page"]').getAttribute('data-session-id'))!;
+}
+
+export async function selectedTarget(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>): Promise<AttachmentTarget> {
+  const id = await selectedSessionId(page);
+  return wire.attachedTarget(id);
+}
+
+export async function selectedCheckpoint(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>) {
+  return (await wire.read('session/checkpoint', await selectedTarget(page, wire))).checkpoint;
 }
 
 export async function sessionTree(page: Page) {
@@ -110,22 +130,26 @@ export async function sessionTree(page: Page) {
   await page.getByRole('menuitem', { name: 'Session tree', exact: true }).click();
 }
 
-export async function expectSettled(page: Page) {
-  await showInspector(page);
-  await expect.poll(async () => JSON.parse(await page.getByLabel('Native diagnostic JSON').innerText()).attempt?.phase.type).toBe('settled');
+export async function expectSettled(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>) {
+  await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.attempt?.phase.type).toBe('settled');
 }
 
 /** Native fixture setup for scenarios that begin with an existing empty Session.
  * Creation UX is exercised separately by convergence.spec.ts. This performs the
  * real native create and normal catalog refresh and attachment, without a browser-only ID. */
-export async function openEmptySession(page: Page, fixture: { endpoint: string; token: string; workspaceHost: { host: import('../../src/workspaces/host').ProductHostWorkspaces } }, label: string) {
+export async function openEmptySession(page: Page, fixture: { endpoint: string; token: string; automaticTitles?: boolean; workspaceHost: { host: import('../../src/workspaces/host').ProductHostWorkspaces } }, label: string) {
   const { AppServerHost } = await import('../../../tui/src/app-server/host');
   const catalog = await fixture.workspaceHost.host.listWorkspaces();
   const workspace = catalog.workspaces.find(row => row.displayName === label);
   if (!workspace) throw new Error(`Fixture Workspace unavailable: ${label}`);
   const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
   let id: string;
-  try { id = (await remote.createSession(await fixture.workspaceHost.host.resolveWorkspace(workspace.id, fixture.endpoint))).session.id; }
+  try {
+    id = (await remote.createSession(await fixture.workspaceHost.host.resolveWorkspace(workspace.id, fixture.endpoint))).session.id;
+    // These scenarios test primary execution; a saved native label suppresses
+    // independent automatic Title work without hiding any provider request.
+    if (!fixture.automaticTitles) await remote.renameSession(id, 'New session');
+  }
   finally { await remote.shutdown(); }
   await closeSettings(page);
   const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
@@ -140,7 +164,10 @@ export async function openEmptySession(page: Page, fixture: { endpoint: string; 
     await expect(page.locator('main')).not.toHaveAttribute('inert', '');
     await expand.click(); // Inspect the selected row after the navigation dismissed its overlay.
   }
-  await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+  // Native fixture selection includes reading the Workspace's authored files.
+  // Await its completion within the test deadline; a 16 MiB Workflow does
+  // not impose the presentation assertions' default five-second load budget.
+  await page.locator('#session-view[data-shell-route="session"]').waitFor({ state: 'visible' });
   await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
   await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
   await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
@@ -150,7 +177,7 @@ export async function openEmptySession(page: Page, fixture: { endpoint: string; 
 
 /** Reach advanced model authoring through the landing page disclosures. */
 export async function expandModelAuthoring(page: Page) {
-  for (const name of ['New Provider', 'Default model for new Sessions']) {
+  for (const name of ['Default model for new Sessions']) {
     const toggle = page.getByRole('button', { name, exact: true, expanded: false });
     if (await toggle.isVisible()) await toggle.click();
   }

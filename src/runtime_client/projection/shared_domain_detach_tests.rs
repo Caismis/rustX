@@ -1,5 +1,5 @@
 use crate::runtime_client::projection::{ReadDomainValues, update_stored_tool_slots};
-use crate::runtime_client::snapshot::{RuntimeClientTranscriptEntry, RuntimeClientTranscriptItem};
+use crate::observation::transcript::{RuntimeClientTranscriptEntry, RuntimeClientTranscriptItem};
 
 #[test]
 fn stored_tool_update_detaches_only_matching_domains_and_keeps_old_seed() {
@@ -159,7 +159,7 @@ fn read_domain_envelope_update_keeps_exact_empty_domain_owners() {
 fn read_domain_mixed_update_keeps_signed_zero_and_json_order_changes() {
     let (mut projection, _) = initialized_source_projection();
     projection.snapshot.transcript.statistics =
-        Some(crate::runtime_client::response::ConversationStatistics {
+        Some(crate::observation::statistics::ConversationStatistics {
             timing: Some(crate::durable::response::ConversationTiming {
                 output_tokens_per_second: Some(0.0),
                 ..Default::default()
@@ -168,7 +168,7 @@ fn read_domain_mixed_update_keeps_signed_zero_and_json_order_changes() {
         })
         .into();
     projection.snapshot.transcript.deferred_entries =
-        vec![crate::runtime_client::checkpoint::CheckpointPageItem {
+        vec![crate::observation::cut::CheckpointPageItem {
             body_complete: None,
             key: None,
             offset: 1,
@@ -197,7 +197,7 @@ fn read_domain_mixed_update_keeps_signed_zero_and_json_order_changes() {
     );
     let expected = serde_json::to_vec(&read.transcript).unwrap();
     read.occupancy = Some(
-        crate::runtime_client::occupancy::RuntimeClientContextOccupancy {
+        crate::observation::occupancy::RuntimeClientContextOccupancy {
             estimated: true,
             input_tokens: 1,
             context_window_tokens: 10,
@@ -249,7 +249,7 @@ fn descriptor_heads_share_unchanged_rows_and_keep_exact_old_versions() {
     let original = projection.snapshot.message_descriptors.owned();
     let original_wire = serde_json::to_vec(&original).unwrap();
     let mut added = original[0].as_ref().clone();
-    added.locator = crate::runtime_client::content::CanonicalContentLocator::ByLedgerPosition { position: 999 };
+    added.locator = crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position: 999 };
     let added = Arc::new(added);
     projection.install_canonical_descriptor(Arc::clone(&added));
     let appended = projection.snapshot.message_descriptors.owned();
@@ -264,7 +264,7 @@ fn descriptor_heads_share_unchanged_rows_and_keep_exact_old_versions() {
     assert!(Arc::ptr_eq(appended.back().unwrap(), refined.back().unwrap()));
     assert_eq!(serde_json::to_vec(&original).unwrap(), original_wire);
     assert_eq!(serde_json::to_vec(&appended).unwrap(), frozen_wire);
-    let public: Vec<crate::runtime_client::snapshot::RuntimeClientMessageDescriptor> =
+    let public: Vec<crate::observation::transcript::RuntimeClientMessageDescriptor> =
         serde_json::from_slice(&frozen_wire).unwrap();
     assert_eq!(public, appended.iter().map(|row| row.as_ref().clone()).collect::<Vec<_>>());
     assert_eq!(serde_json::to_vec(&public).unwrap(), frozen_wire);
@@ -307,7 +307,7 @@ fn transcript_replay_pages_share_immutable_arrays_and_detach_on_mutation() {
     assert!(later.collections.same_owner(&page.collections));
     assert!(later.deferred_entries.same_owner(&page.deferred_entries));
     assert_eq!(serde_json::to_vec(&page).unwrap(), wire);
-    let decoded: crate::runtime_client::snapshot::RuntimeClientTranscriptPage = serde_json::from_slice(&wire).unwrap();
+    let decoded: crate::observation::transcript::RuntimeClientTranscriptPage = serde_json::from_slice(&wire).unwrap();
     assert_eq!(serde_json::to_vec(&decoded).unwrap(), wire);
     let installed: crate::runtime_client::projection::shared_snapshot::SharedTranscript = page.clone().into();
     assert!(installed.entries.same_owner(&page.entries));

@@ -13,16 +13,55 @@ A run has configured Workflow identity, SHA-256 of its admitted definition,
 the admitted resource revision, conversation/attempt/invocation identity, and
 outer ToolCallId. Replacing a definition does not relabel an admitted program.
 Instances contain concrete block paths and invocation vectors; Loop iterations
-append a fresh one-based component and Parallel branches have distinct static
-paths. There is no authoritative current-node slot. All seven node kinds and
-block instances share the same executor boundaries. Pending rows mean not yet
-admitted, including unselected successors; they do not promise future work.
+append a fresh one-based component. Concurrent siblings have distinct native
+node identities. There is no authoritative current-node slot. All eight node kinds and
+block instances share the same executor boundaries. A node row is appended only
+after its native cancellation/budget admission succeeds. Unselected successors
+and nodes cancelled before admission have no row. The instance vector retains
+native start order across blocks, concurrent siblings and concrete Loop iterations;
+later wait/terminal updates do not move rows. The WebUI presents node rows in
+that order rather than regrouping them by definition block. Nested rows retain
+their block path and invocation identity. The visible node count counts retained
+admitted nodes, while step, Agent and Model Call budget consumption remain
+separate measures.
 
-Node waits distinguish Tool, Agent, capacity, workspace, Questionnaire,
+Node waits distinguish Tool, Agent, Model, capacity, Questionnaire,
 Approval, Review and settlement. Native ToolInvocationId and child references
 preserve owner correlation. Interaction references are correlated from the
 existing native coordinator projection under the client lock. The root HITL
-queue is the only response surface. Child inspection remains read-only.
+queue is the only response surface. Child inspection remains read-only. Admitted
+Agent nodes with a retained child identity remain navigable after success,
+failure, or cancellation, including when first opened after settlement or reopened
+from the list. Publication abandonment projects inspection as unavailable for
+live work and uses retained history; it does not claim successful settlement or
+clear the native durability/physical-containment obligations.
+
+The WebUI header lists these finite Workflow children alongside ordinary Agent
+entries, without inserting them into the durable Agent roster. Membership comes
+from retained native Agent-node activation identities, never from the cache of
+opened inspection views. The header and Workflow panel share one hydration of
+the root Workflow cut, including nodes beyond its finite display header. Opening,
+closing or reopening an inspector does not add or remove catalog members.
+Repeated loop nodes count distinct child activations; duplicate references count
+once. Waiting, failure and cancellation use the native node state. Each catalog
+row names its Workflow and explicitly identifies its read-only record. A partial
+or retired native cut produces a lower-bound count with an explanatory notice;
+an empty retained set is not presented as proof that no children ran. Selecting
+a row resolves its exact native child header on demand. It does not prefetch all
+child conversations, create durable Agent owners or admit follow-up controls.
+
+Each admitted Model visit may retain its bounded `auxiliary_call_id`, linking
+the exact node instance to the existing Call/Request audit. This association
+contains no prompt, credentials, generated output or child Agent control.
+Entering admission wait and reserving a Model Call each emit a bounded native
+`WorkflowNodeWaiting` audit fact through the existing journal publication
+boundary. A held provider response therefore leaves `Waiting(Model)` and its
+CallId visible in confirmed client cuts; a fourth branch exposes its admission
+wait while the three earlier providers remain held. Repeated admission wakes
+do not emit duplicate wait facts. Failed observability appends withhold their
+source revisions until later confirmed Workflow progress, preserving the
+publication frontier. A reserved CallId does not claim Auxiliary dispatch or
+settlement.
 
 Execution completed is not a business acceptance. Structured check `passed`
 facts, Review decisions and Loop satisfied/exhausted exits are shown separately.
@@ -74,7 +113,7 @@ replacement converge without a client-side Workflow interpreter.
 | Runtime Client replay | configured event count (default 4096); Workflow payloads additionally capped at 16 MiB |
 | Program block nesting | existing maximum 8 |
 
-Finished rows retire first, then pending rows, then other rows if necessary to
+Finished rows retire first, then other rows if necessary to
 honor byte/count bounds. omitted_instances records omissions explicitly. Old
 terminal run records retire before active records; omitted_runs records run
 omissions. Records contain no WorkflowRun, future, waiter, cancellation token,
@@ -153,7 +192,7 @@ complementary expired-cut path; `native_observation_lag_does_not_change_loop_req
 runs 100 real native check iterations without consuming observations and
 checks exact starts, exhaustion, truncation and canonical isolation.
 
-The existing Parallel child tests now assert simultaneous concrete child rows
+The concurrent child tests now assert simultaneous concrete child rows
 and observe draining before releasing staged child cancellation settlement.
 The nested Loop and Review tests inspect native concrete iterations and the
 recorded Review decision. Separate identity
@@ -168,3 +207,14 @@ test covers native execution through correlation/rendering, live reconnect,
 and reopening the same durable Session in a fresh process without new requests
 or restored Workflow ownership. Existing child-inspector and root HITL suites
 remain the response-routing and inspection-isolation contracts.
+
+
+## Authoring views and execution facts
+
+The [visual authoring scene](workflow-visual-editor.md) projects synthetic Start
+anchors, private branch lanes and Markdown notes beside native nodes. These view
+IDs, collapse state and authored positions never become execution events or run
+nodes. The run projection continues to consume the existing native lifecycle and
+value owners; saving or organizing a file does not start a run or alter a frozen
+admitted program. A Return shown inside a container completes only its owning
+Block, and Loop exhaustion retains its existing ordinary exit meaning.

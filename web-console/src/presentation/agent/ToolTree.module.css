@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Derived from pinned Harness; see PROVENANCE.md. */
 .callRow {
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-sm);
 }
 
 .subCalls {

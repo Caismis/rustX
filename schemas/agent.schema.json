@@ -66,6 +66,58 @@
       ],
       "type": "string"
     },
+    "AuxiliaryModelAuthoring": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                }
+              ]
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                }
+              ]
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -92,6 +144,20 @@
     "ModelLayer": {
       "additionalProperties": false,
       "properties": {
+        "btw_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            }
+          ]
+        },
+        "classification_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            }
+          ]
+        },
         "max_output_tokens": {
           "anyOf": [
             {
@@ -124,7 +190,14 @@
         "summary_model": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SummaryAuthoring"
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+            }
+          ]
+        },
+        "title_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryModelAuthoring"
             }
           ]
         }
@@ -168,7 +241,7 @@
       ]
     },
     "ModelProfileId": {
-      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's declared reasoning state, output default, and\n`request_params`.",
+      "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's output default and\n`request_params`.",
       "type": "string"
     },
     "ModelRef": {
@@ -225,63 +298,11 @@
           "type": "array"
         }
       ],
-      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
+      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted. `All`\ngrants source-wide Tools and negotiated Resources; `Exact` grants only\nthe named ordinary Tools and never source-wide Resources access."
     },
     "SubagentName": {
       "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
       "type": "string"
-    },
-    "SummaryAuthoring": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "mode": {
-              "const": "session",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "max_output_tokens": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelOutput"
-                }
-              ]
-            },
-            "mode": {
-              "const": "explicit",
-              "type": "string"
-            },
-            "model": {
-              "$ref": "#/$defs/ModelRef"
-            },
-            "profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                }
-              ]
-            },
-            "request_params": {
-              "$ref": "#/$defs/RequestParamsJson",
-              "default": "{}"
-            }
-          },
-          "required": [
-            "mode",
-            "model"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "TimeStatusConfig": {
       "additionalProperties": false,

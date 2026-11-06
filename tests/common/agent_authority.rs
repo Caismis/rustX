@@ -27,6 +27,7 @@ pub(crate) fn admit_agent(
         let authority = rustx::runtime::subagent::DurableAgentAuthority {
             title: "Explore task".into(),
             resolved: rustx::runtime::subagent::ResolvedSubagentSpec {
+                resource_sources: std::collections::BTreeSet::new(),
                 environment: Vec::new(),
                 generation: rustx::runtime::identity::RuntimeResourceRevision::new(1),
                 skill_roots: Vec::new(),
@@ -82,10 +83,9 @@ fn frozen_model(model: ModelRef) -> FrozenModelSpec {
             model_max_output_tokens: 512,
             max_output_tokens: 512,
             profile: None,
-            reasoning_enabled: false,
             request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, false),
-            declared_capabilities: ModelCapabilities::text_only(true, false),
+            capabilities: ModelCapabilities::text_only(),
+            declared_capabilities: ModelCapabilities::text_only(),
             compat: ModelCompat::default(),
         },
         summary: FrozenSummaryModel::Session,

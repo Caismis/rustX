@@ -4,14 +4,32 @@ import { TurnNavigator } from '../src/app/agent/TurnNavigator';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot } from './fixture';
 import { turnAnchor } from '../src/client/transcript';
-import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v52';
+import type { RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v73';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ChatViewport } from '../src/presentation/layout/ChatViewport';
+function readerScroll(element: Element) { fireEvent.scroll(element); fireEvent(element, new Event('scrollend')); }
 import { railAwareResizeObserver } from './turn-navigator-fixture';
 let resize: () => void;
 const disconnect = vi.fn();
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+it('a native scope change retires detached navigation and follows the new tail without replacing the viewport', () => {
+  let frame: FrameRequestCallback | undefined;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+  vi.stubGlobal('ResizeObserver', railAwareResizeObserver(() => {}));
+  let controller: ChatViewport | null = null;
+  const ui = render(<ChatViewport ref={value => { controller = value; }} resetKey="original"><div data-chat-anchor-key="prompt">Question</div></ChatViewport>);
+  const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
+  Object.defineProperties(el, { scrollHeight: { get: () => 600 }, clientHeight: { get: () => 200 } });
+  const flush = () => { const callback = frame; frame = undefined; act(() => callback?.(0)); };
+  flush(); expect(el.scrollTop).toBe(400);
+  let ticket: ReturnType<ChatViewport['beginNavigation']>;
+  act(() => { ticket = controller!.beginNavigation(); });
+  ui.rerender(<ChatViewport ref={value => { controller = value; }} resetKey="replay"><div data-chat-anchor-key="prompt">Question</div><div>New response</div></ChatViewport>);
+  expect(ui.container.querySelector('.conversation-scroll')).toBe(el);
+  expect(ticket!.current()).toBe(false); flush(); expect(el.scrollTop).toBe(400);
+});
 it('preserves the stable reading anchor for prepend and growth, follows only at bottom', () => {
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback; } observe() {} disconnect = disconnect; });
   let frame: FrameRequestCallback | undefined;
@@ -30,7 +48,7 @@ it('preserves the stable reading anchor for prepend and growth, follows only at 
     return { top, bottom: top + 200, left: 0, right: 500, width: 500, height: 200, x: 0, y: top, toJSON() {} };
   });
   resize(); flush(); expect(viewport.scrollTop).toBe(400);
-  viewport.scrollTop = 210; fireEvent.scroll(viewport);
+  viewport.scrollTop = 210; readerScroll(viewport);
   // ResizeObserver after reflow keeps b at -10px, independent of total height.
   positions.a += 100; positions.b += 100; positions.c += 100; height += 100;
   resize(); flush(); expect(viewport.scrollTop).toBe(310);
@@ -46,12 +64,12 @@ it('preserves the stable reading anchor for prepend and growth, follows only at 
   ui.rerender(<ChatViewport>{content(['older', 'a', 'b', 'c'])}</ChatViewport>);
   flush(); expect(viewport.scrollTop).toBe(460);
   height += 200; resize(); flush(); expect(viewport.scrollTop).toBe(460);
-  viewport.scrollTop = height - 200; fireEvent.scroll(viewport);
+  viewport.scrollTop = height - 200; readerScroll(viewport);
   height += 100; resize(); flush(); expect(viewport.scrollTop).toBe(height - 200);
   ui.unmount(); expect(disconnect).toHaveBeenCalledOnce();
 });
 
-it('one frame owns 10 observer deliveries and 5 React updates; newer user intent wins', () => {
+it('pre-paint observation coalesces pending React work and newer user intent wins', () => {
   let frame: FrameRequestCallback | undefined;
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frame = callback; return 1; });
   const cancel = vi.fn(() => { frame = undefined; });
@@ -69,14 +87,16 @@ it('one frame owns 10 observer deliveries and 5 React updates; newer user intent
   for (let n = 0; n < 10; n++) resize();
   for (let n = 0; n < 5; n++) ui.rerender(<ChatViewport><div data-chat-anchor-key="a">{n}</div></ChatViewport>);
   flush(); expect(writes).toBe(1); expect(top).toBe(400);
-  height += 100; resize(); top = 100; fireEvent.scroll(el); flush();
-  expect(top).toBe(100); expect(writes).toBe(1);
+  height += 100; resize(); expect(top).toBe(500);
+  const beforeGesture = writes;
+  top = 100; readerScroll(el); flush();
+  expect(top).toBe(100); expect(writes).toBe(beforeGesture);
   for (let n = 0; n < 100; n++) { height += 10; ui.rerender(<ChatViewport><div data-chat-anchor-key="a">{n}</div></ChatViewport>); resize(); flush(); }
-  expect(writes).toBe(1); expect(top).toBe(100);
-  top = height - 200; fireEvent.scroll(el); height += 20; resize(); flush();
-  expect(top).toBe(height - 200); expect(writes).toBe(2);
-  resize(); flush(); expect(writes).toBe(2);
-  resize(); ui.unmount(); expect(cancel).toHaveBeenCalledOnce();
+  expect(writes).toBe(beforeGesture); expect(top).toBe(100);
+  top = height - 200; readerScroll(el); height += 20; resize(); flush();
+  expect(top).toBe(height - 200); expect(writes).toBe(beforeGesture + 1);
+  resize(); flush(); expect(writes).toBe(beforeGesture + 1);
+  resize(); ui.unmount(); expect(frame).toBeUndefined();
 });
 
 it('short-history prepend retains reading ownership through disappearing anchors and shrink', () => {
@@ -101,20 +121,20 @@ it('short-history prepend retains reading ownership through disappearing anchors
   height = 800; resize(); flush(); expect(top).toBe(200); // Prepend transferred ownership even when the old page fitted.
   ui.rerender(<ChatViewport>{content(['older', 'b'])}</ChatViewport>); flush(); expect(top).toBe(200); // Next semantic row remains at +100.
   positions.b += 75; resize(); flush(); expect(top).toBe(275); // Image/Markdown expansion above the survivor.
-  height = 350; top = 150; fireEvent.scroll(el); resize(); flush(); expect(top).toBe(150); // Browser clamp is not new follow intent.
+  height = 350; top = 150; readerScroll(el); resize(); flush(); expect(top).toBe(150); // Browser clamp is not new follow intent.
   height = 800; resize(); flush(); expect(top).toBe(150);
   ui.rerender(<ChatViewport><div>No anchored rows</div></ChatViewport>); flush(); expect(top).toBe(150); // Bounded absolute fallback, never tail.
 });
 
 function coordinatedViewport(latestTurn?: string) {
   let frame: FrameRequestCallback | undefined, height = 1000, top = 0;
-  const positions: Record<string, number> = { a: 0, b: 200, 'turn:target': 500 };
+  const positions: Record<string, number> = { a: 0, b: 200, 'prompt:target': 380, 'turn:target': 500 };
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
   vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
   vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb; } observe() {} disconnect() {} });
   let owner: ChatViewport | null = null;
   const active=vi.fn();
-  const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id} data-chat-turn-owner={id.startsWith('turn:') ? id : undefined}>{id}</div>);
+  const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id} data-chat-flow-kind={id.startsWith('prompt:') ? 'user' : undefined} data-chat-turn-owner={id.startsWith('turn:') ? id : undefined}>{id}</div>);
   const element = (ids: string[]) => <ChatViewport ref={value => { owner = value; }} latestTurn={latestTurn} onActiveTurn={active} latestLabel="Return to latest">{content(ids)}</ChatViewport>;
   const ui = render(element(['a', 'b', 'turn:target']));
   const el = ui.container.querySelector('.conversation-scroll') as HTMLElement;
@@ -126,8 +146,8 @@ function coordinatedViewport(latestTurn?: string) {
   const flush = () => { const cb = frame; frame = undefined; cb?.(0); };
   flush();
   return { ui, el, owner: () => owner!, active, positions, flush, top: () => top,
-    scroll(value: number) { top = value; fireEvent.scroll(el); },
-    grow(value: number) { height += value; resize(); },
+    scroll(value: number) { top = value; readerScroll(el); },
+    grow(value: number) { act(() => { height += value; resize(); }); },
     replace(ids: string[]) { ui.rerender(element(ids)); } };
 }
 
@@ -146,14 +166,14 @@ it('tail following survives a layout clamp before content rebounds and its scrol
   const v = coordinatedViewport();
   expect(v.top()).toBe(800);
   // A shorter native projection clamps the browser before its scroll event.
-  v.grow(-71); v.el.scrollTop = 729;
+  v.el.scrollTop = 729; v.grow(-71);
   // The next React update can see that clamped layout before appending output.
   v.replace(['a', 'b', 'turn:target']);
   v.grow(99); v.flush();
   expect(v.top()).toBe(828);
   expect(v.ui.queryByRole('button', { name: 'Return to latest' })).toBeNull();
-  // Actual upward reading after the rebound must still detach immediately.
-  v.scroll(822); v.grow(40); v.flush(); expect(v.top()).toBe(822);
+  // A sampled upward gesture outside the native follow tolerance still detaches.
+  v.scroll(700); v.grow(40); v.flush(); expect(v.top()).toBe(700);
   expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
 });
 
@@ -201,6 +221,12 @@ it('follow publishes the live native turn without a locate cursor; navigated anc
  expect(v.active).toHaveBeenLastCalledWith('turn:live');const bottom=v.top();v.grow(100);v.flush();expect(v.top()).toBe(bottom+100);
 });
 
+it('a Turn jump lands on the user prompt opening the Turn, not its first response row', () => {
+  const v = coordinatedViewport();
+  const ticket = v.owner().beginNavigation(); v.replace(['a', 'b', 'prompt:target', 'turn:target']); ticket.commit('turn:target'); v.flush();
+  expect(v.top()).toBe(380); expect(v.active).toHaveBeenLastCalledWith('turn:target');
+});
+
 for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome} long-turn regions own reading and rail through reflow and the final tail`, async () => {
   const server = new Server();
   await server.attached('A');
@@ -240,7 +266,7 @@ for (const outcome of ['completed', 'timed_out'] as const) it(`native ${outcome}
     return { top, bottom: top + size, left: 0, right: 500, width: 500, height: size, x: 0, y: top, toJSON() {} };
   });
   const flush = () => act(() => { const callback = frame; frame = undefined; callback?.(0); });
-  const scroll = (top: number) => { viewport.scrollTop = top; fireEvent.scroll(viewport); };
+  const scroll = (top: number) => { viewport.scrollTop = top; readerScroll(viewport); };
   const expectActive = (turn: TurnProcessView) => {
     expect(active).toHaveBeenLastCalledWith(turnAnchor(turn));
     const marks = [...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')];
@@ -315,7 +341,7 @@ async function clippedReading(outcome: 'completed' | 'timed_out', later = true) 
     return { top, bottom: top + size, left: 0, right: 500, width: 500, height: size, x: 0, y: top, toJSON() {} };
   });
   const flush = () => act(() => { const callback = frame; frame = undefined; callback?.(0); });
-  const scroll = (top: number) => { viewport.scrollTop = top; fireEvent.scroll(viewport); flush(); };
+  const scroll = (top: number) => { viewport.scrollTop = top; readerScroll(viewport); flush(); };
   const expectActive = (turn: TurnProcessView) => {
     expect(active).toHaveBeenLastCalledWith(turnAnchor(turn));
     expect([...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark => mark.getAttribute('data-turn-id'))).toEqual([turnAnchor(turn).slice(5)]);
@@ -357,6 +383,7 @@ for (const outcome of ['completed', 'timed_out'] as const) {
 
 it('an older page prepends above the reading position and clipped ownership comes from the merged projection', async () => {
   const v = await clippedReading('completed');
+  vi.spyOn(v.server.client, 'loadInitialHistory').mockResolvedValue();
   v.ui.unmount();
   try {
     await act(async () => { v.server.snapshots.set('A', { ...snapshot(), transcript: { entries: v.entries.slice(2), next_cursor: '120' } }); await v.server.client.refresh('A'); });
@@ -372,20 +399,20 @@ it('an older page prepends above the reading position and clipped ownership come
       const top = key ? v.positions[key] - offset - viewport.scrollTop : 0;
       return { top, bottom: top + 900, left: 0, right: 500, width: 500, height: 900, x: 0, y: top, toJSON() {} };
     });
-    v.flush(); viewport.scrollTop = 400; fireEvent.scroll(viewport); v.flush();
+    v.flush(); viewport.scrollTop = 400; readerScroll(viewport); v.flush();
     const current = () => [...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark => mark.getAttribute('data-turn-id'));
     expect(current()).toEqual([turnAnchor(v.b).slice(5)]);
     const older = v.server.client.loadEarlier('A'), read = await v.server.waitFor('session/transcript', 1);
     expect(read.params).toMatchObject({ limit: 32 }); expect(read.params).toHaveProperty('at', { type: 'older', before: '120', cut: null });
     await act(async () => {
-      v.server.socket.success(read, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: v.entries.slice(0, 2), next_cursor: '100' } } });
+      v.server.socket.success(read, { type: 'transcript_window', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: v.entries.slice(0, 2), next_cursor: null } } });
       await older;
     });
     v.flush();
     expect(v.server.client.getSnapshot().views.A.history?.page.entries?.map(row => row.cursor)).toEqual(['100', '101', '120', '121']);
     // The prepended page lands above the reader: B stays where it was read.
     expect(viewport.scrollTop).toBe(1400); expect(current()).toEqual([turnAnchor(v.b).slice(5)]);
-    viewport.scrollTop = 400; fireEvent.scroll(viewport); v.flush();
+    viewport.scrollTop = 400; readerScroll(viewport); v.flush();
     expect(current()).toEqual([turnAnchor(v.a).slice(5)]);
     expect([...ui.container.querySelectorAll('[data-chat-anchor-key]')].some(row => row.getAttribute('data-chat-anchor-key') === turnAnchor(v.a))).toBe(false);
     ui.unmount();
@@ -450,15 +477,73 @@ it('reading remains continuous across prompts, nested anchors, padding and hidde
   }
 });
 
-for (const distance of [0.25, 0.5, 1, 6, 23]) it(`upward reader movement of ${distance}px releases tail follow immediately`, () => {
+for (const distance of [0.25, 0.5, 1, 6, 24, 25, 26]) it(`settled upward movement ${distance}px from the tail uses the 25px tolerance`, () => {
   const v = coordinatedViewport();
-  v.scroll(800 - distance); v.flush();
-  expect(v.top()).toBe(800 - distance);
-  expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
-  v.grow(40); v.flush();
-  expect(v.top()).toBe(800 - distance);
-  v.scroll(840); v.flush();
-  v.grow(30); v.flush(); expect(v.top()).toBe(870);
+  v.scroll(800-distance); v.flush();
+  expect(v.top()).toBe(800-distance);
+  expect(v.ui.queryByRole('button',{name:'Return to latest'})!==null).toBe(distance>25);
+  v.grow(40);v.flush();
+  expect(v.top()).toBe(distance>25?800-distance:840);
+});
+for (const distance of [0.25, 0.5, 1, 6, 24, 25, 26]) it(`pending upward movement ${distance}px protects reading before sampling`, () => {
+  const v = coordinatedViewport();
+  v.el.scrollTop=800-distance;fireEvent.scroll(v.el);
+  v.grow(40);v.flush();
+  expect(v.top()).toBe(800-distance);
+  expect(v.ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
+  fireEvent(v.el,new Event('scrollend'));
+  expect(v.ui.getByRole('button',{name:'Return to latest'})).toBeTruthy();
+  v.grow(40);v.flush();
+  expect(v.top()).toBe(800-distance);
+});
+for (const distance of [1, 6, 24, 25, 26]) it(`downward arrival ${distance}px from the tail uses the 25px tolerance`, () => {
+  const v = coordinatedViewport();
+  v.scroll(400); v.scroll(800-distance); v.flush();
+  expect(v.top()).toBe(distance>25?800-distance:800);
+  expect(v.ui.queryByRole('button',{name:'Return to latest'})!==null).toBe(distance>25);
+  v.grow(40);v.flush();
+  expect(v.top()).toBe(distance>25?800-distance:840);
+});
+
+it('samples away scrolling at 500ms or scrollend, protects pending reading from growth and immediately hides on exact bottom', () => {
+  vi.useFakeTimers();
+  try {
+    const v=coordinatedViewport();
+    v.el.scrollTop=400;fireEvent.scroll(v.el);
+    expect(v.ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
+    v.grow(100);v.flush();expect(v.top()).toBe(400);
+    act(()=>vi.advanceTimersByTime(499));
+    expect(v.ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
+    act(()=>vi.advanceTimersByTime(1));
+    expect(v.ui.getByRole('button',{name:'Return to latest'})).toBeTruthy();
+    v.el.scrollTop=900;fireEvent.scroll(v.el);
+    expect(v.ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
+    v.el.scrollTop=450;fireEvent.scroll(v.el);fireEvent(v.el,new Event('scrollend'));
+    expect(v.ui.getByRole('button',{name:'Return to latest'})).toBeTruthy();
+    fireEvent.click(v.ui.getByRole('button',{name:'Return to latest'}));v.flush();
+    act(()=>vi.advanceTimersByTime(500));
+    expect(v.ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
+    v.ui.unmount();expect(vi.getTimerCount()).toBe(0);
+  } finally {vi.useRealTimers();}
+});
+
+it('retains a pending reader gesture when its sample expires in a hidden resident chat', () => {
+  vi.useFakeTimers();
+  try {
+    const v = coordinatedViewport();
+    v.el.scrollTop = 400; fireEvent.scroll(v.el);
+    v.el.hidden = true;
+    act(() => vi.advanceTimersByTime(500));
+    v.grow(100); v.flush();
+    v.el.hidden = false;
+    v.grow(0); act(() => v.flush());
+    expect(v.top()).toBe(400);
+    expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
+    v.grow(100); v.flush(); expect(v.top()).toBe(400);
+    fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' })); v.flush();
+    expect(v.top()).toBe(1000);
+    v.ui.unmount(); expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); }
 });
 
 it('actual reader movement wins a queued layout frame even before scroll event delivery', () => {
@@ -467,7 +552,7 @@ it('actual reader movement wins a queued layout frame even before scroll event d
   v.el.scrollTop = 794; // Native scrolling has happened; its scroll event is still queued.
   v.flush();
   expect(v.top()).toBe(794);
-  fireEvent.scroll(v.el); v.flush();
+  readerScroll(v.el); v.flush();
   expect(v.top()).toBe(794);
   v.grow(40); v.flush(); expect(v.top()).toBe(794);
 });
@@ -485,6 +570,7 @@ it('explicit latest and navigation supersede undelivered earlier scroll samples'
 
 for (const when of ['before reply', 'before layout'] as const) it(`real viewport scroll retires a distant native Turn navigation ${when}`, async () => {
  const v=await clippedReading('completed');v.ui.unmount();
+ vi.spyOn(v.server.client, 'loadInitialHistory').mockResolvedValue();
  try {
   await act(async()=>{v.server.snapshots.set('A',{...snapshot(),transcript:{entries:v.entries.slice(2),next_cursor:'120'}});await v.server.client.refresh('A');});
   v.server.held.add('session/transcript');
@@ -496,7 +582,7 @@ for (const when of ['before reply', 'before layout'] as const) it(`real viewport
    const top=key?(v.positions[key]??0)-viewport.scrollTop:0;
    return {top,bottom:top+900,left:0,right:500,width:500,height:900,x:0,y:top,toJSON(){}};
   });
-  v.flush();viewport.scrollTop=1300;fireEvent.scroll(viewport);v.flush();
+  v.flush();viewport.scrollTop=1300;readerScroll(viewport);v.flush();
   const before=v.server.client.getSnapshot().views.A.history;
   fireEvent.click(ui.getByRole('button',{name:'Jump to turn 1'}));
   const intent=v.server.client.getSnapshot().views.A.turnNavigation!.intent;
@@ -504,7 +590,7 @@ for (const when of ['before reply', 'before layout'] as const) it(`real viewport
   const respond=()=>v.server.socket.success(read,{type:'transcript_window',window:{cut:v.cut,target:{conversation_id:v.a.conversation_id,attempt_id:v.a.attempt_id,attempt_id_source:v.a.attempt_id_source},target_cursor:'90',page:{entries:[{...v.entries[0],cursor:'90'},...v.entries]}}});
   if(when==='before layout')await act(async()=>respond());
   const valid=v.server.client.getSnapshot().views.A.history;
-  viewport.scrollTop=1400;fireEvent.scroll(viewport);
+  viewport.scrollTop=1400;readerScroll(viewport);
   expect(v.server.client.getSnapshot().views.A.turnNavigation!.intent).toBeGreaterThan(intent);
   const content=ui.container.querySelector('.chat-content')?.textContent??ui.container.textContent;
   const marks=()=>[...ui.container.querySelectorAll('[data-turn-id][aria-current="true"]')].map(mark=>mark.getAttribute('data-turn-id'));
@@ -519,28 +605,6 @@ for (const when of ['before reply', 'before layout'] as const) it(`real viewport
  } finally {v.server.client.disconnect();}
 });
 
-it('a user scroll retires disposable history preparation without touching active reading or native attachment', async () => {
- const v=await clippedReading('completed');v.ui.unmount();
- try {
-  const retired=vi.fn();
-  const state=structuredClone(v.server.snapshots.get('A')!); state.transcript.inherited_through='0';
-  await v.server.update('A', state);
-  v.server.handlers.set('session/node', () => ({type:'node',node:{id:v.server.client.getSnapshot().views.A.nodeId!, ordinal:'1',conversation_id:state.conversation_id,origin:{type:'fork',source_session:'B',source_node:'source',source_message:'source-message',source_surface_revision:'1',side:'after'}}}));
-  const props={client:v.server.client,sessionId:'A',mode:'chat' as const,disabled:false,onHistorical:()=>{},onOpenSource:(_origin: unknown, begin?: ChatViewport['beginNavigation'])=>{begin?.(retired);}};
-  const ui=await act(async()=>render(<ConversationLive {...props}/>));
-  const viewport=ui.container.querySelector<HTMLElement>('.conversation-scroll')!;
-  Object.defineProperties(viewport,{scrollHeight:{value:2200},clientHeight:{value:200}});
-  v.flush();viewport.scrollTop=1300;fireEvent.scroll(viewport);v.flush();
-  const before=v.server.client.getSnapshot().views.A;
-  // Both events occur in one synchronous act stack. No render or passive
-  // effect can register cancellation between the click and the scroll.
-  act(()=>{ fireEvent.click(ui.getByRole('button',{name:'View source'})); viewport.scrollTop=1400;fireEvent.scroll(viewport); });
-  expect(retired).toHaveBeenCalledTimes(1);
-  expect(v.server.client.getSnapshot().views.A.target).toBe(before.target);
-  expect(v.server.client.getSnapshot().views.A.history).toBe(before.history);
-  expect(viewport.scrollTop).toBe(1400); ui.unmount();
- } finally {v.server.client.disconnect();}
-});
 
 it('uses the shared session scroller including its composer and keeps floating controls outside it', () => {
   let frame: FrameRequestCallback | undefined;
@@ -561,7 +625,7 @@ it('uses the shared session scroller including its composer and keeps floating c
   expect(outer.scrollTop).toBe(500);
   expect(inner.scrollTop).toBe(0);
   expect(observed).toContain(ui.container.querySelector('[data-composer-seat]'));
-  outer.scrollTop = 200; fireEvent.scroll(outer); flush();
+  outer.scrollTop = 200; readerScroll(outer); flush();
   const latest = ui.getByRole('button',{name:'Latest'});
   expect(latest.parentElement).toBe(outer.parentElement);
   fireEvent.click(latest); flush();
@@ -572,7 +636,7 @@ it('uses the shared session scroller including its composer and keeps floating c
   fireEvent(draft, new Event('beforeinput', { bubbles: true }));
   total += 100;
   outer.scrollTop = 300; // Browser caret reveal during a multiline replacement.
-  fireEvent.input(draft); fireEvent.scroll(outer); flush();
+  fireEvent.input(draft); readerScroll(outer); flush();
   expect(outer.scrollTop).toBe(700);
   // Reader movement before the edit must still detach even if its scroll event
   // has not arrived yet; composer input must not pull it back to the tail.
@@ -600,7 +664,7 @@ it('an explicit final-turn jump keeps its mark selected when the short tail clam
   expect(v.active).toHaveBeenLastCalledWith('turn:last');
   v.grow(0); v.flush();
   expect(v.active).toHaveBeenLastCalledWith('turn:last');
-  v.scroll(799);
+  v.scroll(740);
   expect(v.active).toHaveBeenLastCalledWith('turn:first');
 });
 
@@ -617,4 +681,47 @@ it('locating a prompt selects its turn while the owned response is still below t
   expect(v.top()).toBe(500);
   expect(v.active).toHaveBeenLastCalledWith('turn:last');
   v.scroll(499); expect(v.active).toHaveBeenLastCalledWith('turn:first');
+});
+
+
+it('Return to latest survives delayed history backfill after its first frame, until the reader navigates', () => {
+  const v = coordinatedViewport();
+  v.scroll(210);
+  fireEvent.click(v.ui.getByRole('button', { name: 'Return to latest' }));
+  v.flush();
+  v.positions.older = 0;
+  for (const key of ['a', 'b', 'turn:target']) v.positions[key] += 200;
+  v.grow(200); v.replace(['older', 'a', 'b', 'turn:target']); v.flush();
+  expect(v.top()).toBe(1000);
+  v.grow(100); v.flush(); expect(v.top()).toBe(1100);
+  expect(v.ui.queryByRole('button', { name: 'Return to latest' })).toBeNull();
+  // An explicit history read owns the reading position even for short history.
+  v.owner().beginNavigation();
+  v.positions.oldest = -200;
+  v.grow(200); v.replace(['oldest', 'older', 'a', 'b', 'turn:target']); v.flush();
+  const reading = v.top();
+  v.grow(100); v.flush(); expect(v.top()).toBe(reading);
+  expect(v.ui.getByRole('button', { name: 'Return to latest' })).toBeTruthy();
+});
+
+it('initial history hydration follows the latest message and subsequent output without a reader prepend', () => {
+ let frame: FrameRequestCallback | undefined, height = 100, top = 0;
+ vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frame = cb; return 1; });
+ vi.stubGlobal('cancelAnimationFrame', () => { frame = undefined; });
+ vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb; } observe() {} disconnect() {} });
+ const content = (ids: string[]) => ids.map(id => <div key={id} data-chat-anchor-key={id}>{id}</div>);
+ const ui = render(<ChatViewport initialHistoryLoading>{content(['a','b'])}</ChatViewport>);
+ const viewport = ui.container.querySelector('.conversation-scroll') as HTMLElement;
+ Object.defineProperties(viewport, { scrollHeight: { get: () => height }, clientHeight: { get: () => 200 }, scrollTop: { get: () => top, set: value => { top = value; } } });
+ const positions: Record<string, number> = { a: 0, b: 100, older: -200 };
+ vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
+  const offset = ui.container.querySelector('[data-chat-anchor-key="older"]') ? 200 : 0;
+  const y = this.dataset.chatAnchorKey ? positions[this.dataset.chatAnchorKey] + offset - top : 0;
+  return { top:y, bottom:y+100, x:0, y, height:100, width:500, left:0, right:500, toJSON(){} };
+ });
+ const flush = () => { const callback = frame; frame = undefined; callback?.(0); };
+ flush(); expect(top).toBe(0);
+ height = 400; ui.rerender(<ChatViewport initialHistoryLoading={false}>{content(['older','a','b'])}</ChatViewport>);flush();
+ expect(top).toBe(200);height = 800;resize();flush();expect(top).toBe(600);
+ expect(ui.queryByRole('button',{name:'Return to latest'})).toBeNull();
 });

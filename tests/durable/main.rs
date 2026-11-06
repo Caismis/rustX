@@ -96,6 +96,7 @@ fn checkpoint(
                 base_frontier: history.cut.ledger,
                 items,
                 summary_metadata: None,
+                summary_generation: None,
             },
             owner: store.projection_owner(None).unwrap(),
             tokens_before: rustx::runtime::TokenMeasurement {
@@ -121,6 +122,8 @@ fn freeze_request(
         .freeze_input(
             store.conversation_id(),
             &rustx::model::ModelRequest {
+                response_schema: None,
+                response_byte_limit: None,
                 messages: history.messages.clone(),
                 images: rustx::model::images::ResolvedImages::new(),
                 invocation: snapshot.invocation.clone(),

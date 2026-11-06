@@ -1,7 +1,7 @@
 //! Typed values retained only for the native append that encoded them.
 //! Reuse is authorized by exact bytes read from the current transaction; a
 //! changed cell goes through its ordinary decoder, never an earlier read cut.
-use super::{Connection, ConversationStoreError, storage};
+use super::{Connection, ConversationStoreError};
 
 pub(super) struct Captured<T> {
     pub(super) bytes: Vec<u8>,
@@ -162,7 +162,7 @@ pub(super) fn aggregates(
                 [&trace, &statistics, &member_bytes, &anchor, &event.sequence];
             statement.execute(&values[..])
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(prepared.statistics)
 }
 

@@ -1,9 +1,12 @@
 //! The fixed admission boundary before an attempt prepares its first turn.
+#[cfg(test)]
+use super::storage;
 
 use super::{
     ConversationStoreError, RuntimeEvent, RuntimeEventEnvelope, SqliteConversationStore,
-    TransactionBehavior, observation_receipt, persist_event_tx_deferred, process_death, storage,
+    TransactionBehavior, observation_receipt, process_death,
 };
+use crate::durable::sqlite::journal::persist_event_tx_deferred;
 
 pub(super) fn commit(
     store: &SqliteConversationStore,
@@ -29,7 +32,12 @@ pub(super) fn commit(
     let mut connection = store.lock()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| storage(format!("attempt and first turn transaction: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("attempt and first turn transaction: {error}"),
+            )
+        })?;
     #[cfg(test)]
     if SqliteConversationStore::consume(&store.fail_event_remaining) {
         return Err(storage("fault injected: event commit"));
@@ -57,9 +65,12 @@ pub(super) fn commit(
     );
     attempt.event.observation.clone_from(&receipt);
     turn.event.observation = receipt;
-    transaction
-        .commit()
-        .map_err(|error| storage(format!("attempt and first turn commit: {error}")))?;
+    transaction.commit().map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("attempt and first turn commit: {error}"),
+        )
+    })?;
     // Both old after-event hooks describe committed native evidence. A death
     // at either hook sees the complete pair, never a half-admitted attempt.
     process_death::reach_event("after:event", &attempt.event.event);

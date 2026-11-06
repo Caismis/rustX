@@ -27,9 +27,10 @@
 //! its typed failure for the same id, one that overlaps it waits for it and is
 //! ordered after it, and accepted bytes are never retracted.
 use super::{
-    connection::{Route, client_error, domain, host_error, manager_error},
+    connection::Route,
     host::AppServerHost,
     protocol::{ErrorData, MethodResult, RequestId, Response, RpcError},
+    rpc_error::{client_error, domain, host_error, manager_error},
 };
 use crate::tools::session_files::SessionFileReadFailure as FileFailure;
 use base64::Engine;
@@ -59,6 +60,11 @@ pub(crate) enum Access {
     Bytes,
     /// The verified absolute path and leaf identity; no bytes.
     Location,
+    /// Private preview transport carries native bytes rather than an RPC string.
+    Preview {
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        options: crate::tools::session_files::preview::ReadOptions,
+    },
 }
 
 pub(crate) fn check(authorization: &CancellationToken) -> io::Result<()> {
@@ -82,7 +88,7 @@ pub(crate) fn unauthorized() -> RpcError {
 /// A selected read coordinate is independent of the native present authoring limit.
 fn validate_index(index: usize) -> Result<(), RpcError> {
     let index = u64::try_from(index).map_err(|_| domain(ErrorData::InvalidParams))?;
-    if index > crate::runtime_client::content::CONTENT_SAFE_INTEGER_MAX {
+    if index > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
         return Err(domain(ErrorData::InvalidParams));
     }
     Ok(())
@@ -94,12 +100,55 @@ fn validate_index(index: usize) -> Result<(), RpcError> {
 pub(super) async fn request(
     host: AppServerHost,
     route: Arc<Route>,
-    locator: crate::runtime_client::content::CanonicalContentLocator,
+    locator: crate::observation::content::CanonicalContentLocator,
     delivery_index: usize,
     roots: Roots,
     access: Access,
     authorization: CancellationToken,
 ) -> Result<MethodResult, RpcError> {
+    let result = request_data(
+        host,
+        route,
+        locator,
+        delivery_index,
+        roots,
+        access,
+        authorization,
+    )
+    .await?;
+    Ok(match result.content {
+        Resolved::Bytes(bytes) => MethodResult::SessionFileBytes {
+            file: result.file,
+            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+        },
+        Resolved::Location(location) => MethodResult::SessionFileLocation {
+            file: result.file,
+            path: location.path.into_os_string().into_string().map_err(|_| {
+                domain(ErrorData::SessionFileRead {
+                    reason: FileFailure::Unavailable,
+                })
+            })?,
+            device: location.device.to_string(),
+            inode: location.inode.to_string(),
+        },
+        Resolved::Preview(_) => return Err(domain(ErrorData::InvalidParams)),
+    })
+}
+
+pub(super) struct DeliveryReadResult {
+    pub file: crate::tools::session_files::SessionFileReference,
+    pub content: Resolved,
+}
+
+pub(super) async fn request_data(
+    host: AppServerHost,
+    route: Arc<Route>,
+    locator: crate::observation::content::CanonicalContentLocator,
+    delivery_index: usize,
+    roots: Roots,
+    access: Access,
+    authorization: CancellationToken,
+) -> Result<DeliveryReadResult, RpcError> {
     check_rpc(&authorization)?;
     validate_index(delivery_index)?;
     let client = route.client.clone();
@@ -174,12 +223,12 @@ async fn resolve(
     route: &Arc<Route>,
     authority: &Arc<crate::runtime_client::host::ClientInner>,
     sessions: crate::local_runtime::session_controller::SessionController,
-    locator: crate::runtime_client::content::CanonicalContentLocator,
+    locator: crate::observation::content::CanonicalContentLocator,
     delivery_index: usize,
     roots: Roots,
     access: Access,
     authorization: CancellationToken,
-) -> Result<MethodResult, RpcError> {
+) -> Result<DeliveryReadResult, RpcError> {
     check_rpc(&authorization)?;
     #[cfg(test)]
     {
@@ -203,6 +252,7 @@ async fn resolve(
     route.attachment.read_authority().map_err(client_error)?;
     let agent_id = match &access {
         Access::AgentBytes(id) | Access::AgentLocation(id) => Some(id.clone()),
+        Access::Preview { agent_id, .. } => agent_id.clone(),
         _ => None,
     };
     let child_workspace = agent_id
@@ -295,6 +345,11 @@ async fn resolve(
             Access::Location | Access::AgentLocation(_) => Resolved::Location(
                 crate::tools::session_files::locate_authorized(&root, &reference, authorized)?,
             ),
+            Access::Preview { options, .. } => {
+                Resolved::Preview(crate::tools::session_files::preview::read_authorized(
+                    &root, &reference, &options, authorized,
+                )?)
+            }
         };
         authorized()?;
         Ok::<_, std::io::Error>(resolved)
@@ -304,27 +359,16 @@ async fn resolve(
     .map_err(|error| failed(crate::tools::session_files::read_failure(&error)))?;
     route.attachment.read_authority().map_err(client_error)?;
     check_rpc(&authorization)?;
-    Ok(match resolved {
-        Resolved::Bytes(bytes) => MethodResult::SessionFileBytes {
-            file,
-            data: base64::engine::general_purpose::STANDARD.encode(bytes),
-        },
-        Resolved::Location(location) => MethodResult::SessionFileLocation {
-            file,
-            path: location
-                .path
-                .into_os_string()
-                .into_string()
-                .map_err(|_| failed(FileFailure::Unavailable))?,
-            device: location.device.to_string(),
-            inode: location.inode.to_string(),
-        },
+    Ok(DeliveryReadResult {
+        file,
+        content: resolved,
     })
 }
 
-enum Resolved {
+pub(super) enum Resolved {
     Bytes(Vec<u8>),
     Location(crate::tools::session_files::SessionFileLocation),
+    Preview(crate::tools::session_files::preview::PreviewRead),
 }
 
 /// Orders every revocation of delivery authority against every publication.
@@ -347,6 +391,7 @@ enum Resolved {
 #[derive(Default)]
 pub(crate) struct Revocations {
     order: RwLock<()>,
+    changed: tokio::sync::watch::Sender<u64>,
     /// How many revocations found a publication in progress and waited.
     #[cfg(test)]
     pub(crate) waited: tokio::sync::watch::Sender<usize>,
@@ -366,10 +411,16 @@ impl Revocations {
             self.waited.send_modify(|waited| *waited += 1);
         }
         let _exclusive = self.order.write().expect("delivery revocations");
-        revoke()
+        let result = revoke();
+        self.changed
+            .send_modify(|version| *version = version.wrapping_add(1));
+        result
+    }
+    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changed.subscribe()
     }
 
-    fn publish<T>(&self, publish: impl FnOnce() -> T) -> T {
+    pub(crate) fn publish<T>(&self, publish: impl FnOnce() -> T) -> T {
         let _shared = self.order.read().expect("delivery revocations");
         publish()
     }
@@ -463,6 +514,8 @@ impl Operations {
         }
         table.insert(key(id), operation.clone());
         Some(Publication {
+            auxiliary_copy: Mutex::new(None),
+            may_have_committed: false,
             operations: self.clone(),
             id: id.clone(),
             operation,
@@ -511,6 +564,8 @@ impl Operations {
 /// returns). Dropping it unsettled publishes nothing and unregisters the
 /// request.
 pub(super) struct Publication {
+    may_have_committed: bool,
+    auxiliary_copy: Mutex<Option<crate::runtime::auxiliary::delivery::ResultCopy>>,
     operations: Arc<Operations>,
     id: RequestId,
     operation: Arc<Operation>,
@@ -520,6 +575,21 @@ pub(super) struct Publication {
 }
 
 impl Publication {
+    /// Publication refusal cannot turn an admitted mutation into non-admission.
+    /// This also protects an already uncertain response from a later cancellation.
+    pub(super) fn preserve_outcome(&mut self, may_have_committed: bool) {
+        self.may_have_committed = may_have_committed;
+    }
+
+    pub(super) fn retain_auxiliary_copy(
+        &self,
+        copy: Option<crate::runtime::auxiliary::delivery::ResultCopy>,
+    ) {
+        *self
+            .auxiliary_copy
+            .lock()
+            .expect("auxiliary physical response") = copy;
+    }
     /// The request's cancellation token, passed to every native fence.
     pub(super) fn token(&self) -> CancellationToken {
         self.operation.token.clone()
@@ -540,7 +610,7 @@ impl Publication {
     /// lock and the shared side of [`Revocations`] held, so neither can
     /// change before the caller's acceptance.
     fn decide(&self, state: State, success: bool) -> Result<(), RpcError> {
-        match state {
+        let decision = match state {
             State::Cancelled => Err(domain(ErrorData::DeliveryCancelled)),
             State::Settled | State::Running if !success => Ok(()),
             State::Settled | State::Running => check_rpc(&self.authority).and_then(|()| {
@@ -550,7 +620,14 @@ impl Publication {
                     .map(|_| ())
                     .map_err(client_error)
             }),
-        }
+        };
+        decision.map_err(|error| {
+            if self.may_have_committed {
+                domain(ErrorData::OutcomeUnknown)
+            } else {
+                error
+            }
+        })
     }
 
     /// Commits a typed response for the in-process caller, whose return is
@@ -565,7 +642,7 @@ impl Publication {
         });
         match decision {
             Ok(()) => response,
-            Err(error) => super::connection::failure(Some(self.id.clone()), error),
+            Err(error) => super::rpc_error::failure(Some(self.id.clone()), error),
         }
     }
 
@@ -590,7 +667,7 @@ impl Publication {
             let replacement = match self.decide(*state, success) {
                 Ok(()) => None,
                 Err(error) => Some(super::transport::serialize_record(
-                    &super::connection::failure(Some(self.id.clone()), error),
+                    &super::rpc_error::failure(Some(self.id.clone()), error),
                 )?),
             };
             let accepted = ready!(accept(replacement.as_deref().unwrap_or(record)));

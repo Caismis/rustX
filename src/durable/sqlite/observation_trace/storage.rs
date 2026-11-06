@@ -4,10 +4,13 @@ use crate::durable::sqlite::observation_codec as codec;
 type Record = (
     u64,
     chrono::DateTime<chrono::Utc>,
-    crate::durable::observation::TraceFactKind,
+    (
+        crate::durable::observation::TraceFactKind,
+        Option<crate::durable::observation::RequestOwnerKind>,
+    ),
     Option<u64>,
-    crate::runtime_client::trace::TraceLocation,
-    Vec<crate::runtime_client::trace::TraceFieldSource>,
+    crate::observation::trace::TraceLocation,
+    Vec<crate::observation::trace::TraceFieldSource>,
     crate::durable::observation::TraceFactData,
     Option<crate::durable::observation::TraceBootstrapFact>,
     Option<bool>,
@@ -19,7 +22,7 @@ pub(super) fn encode(value: &TraceFactHeader) -> Result<Vec<u8>, ConversationSto
         &(
             value.sequence,
             &value.timestamp,
-            &value.kind,
+            (&value.kind, &value.owner),
             value.owner_anchor,
             &value.location,
             &value.fields,
@@ -35,7 +38,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<TraceFactHeader, ConversationStoreE
     let (
         sequence,
         timestamp,
-        kind,
+        (kind, owner),
         owner_anchor,
         location,
         fields,
@@ -47,6 +50,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<TraceFactHeader, ConversationStoreE
         sequence,
         timestamp,
         kind,
+        owner,
         owner_anchor,
         location,
         fields,

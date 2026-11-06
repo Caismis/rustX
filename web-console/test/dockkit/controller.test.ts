@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { DockController } from '../../src/presentation/dockkit/engine/controller.ts'
 import { dockPaneCount, FLOAT_DEFAULT_SIZE } from '../../src/presentation/dockkit/engine/constraints.ts'
-import { SEED_CONTENT_ID, childAt, firstTab, seededController } from './fixtures.client.ts'
+import { SEED_CONTENT_ID, childAt, firstTab, seedTab, seededController } from './fixtures.client.ts'
 import { dockPaneIds, findTabPane, getPane, getSplit } from '../../src/presentation/dockkit/engine/tree.ts'
 import type { LayoutState, PaneId } from '../../src/presentation/dockkit/contract/types.ts'
 
@@ -25,6 +25,19 @@ function expanded(): { controller: DockController; paneId: PaneId } {
 }
 
 describe('expand', () => {
+  it('seeds an emptied collapsed surface on expansion and records the seed in the same intent', () => {
+    const controller = new DockController({ makeInitialTab: seedTab, makePaneTab: seedTab, settle: true })
+    controller.closeTab(Object.values(controller.getSnapshot().state.tabs)[0]!.id)
+    expect(Object.values(controller.getSnapshot().state.tabs)).toHaveLength(0)
+    controller.setExpanded(true)
+    expect(Object.values(controller.getSnapshot().state.tabs)).toHaveLength(1)
+    controller.undo()
+    expect(controller.getSnapshot().state.expanded).toBe(false)
+    expect(Object.values(controller.getSnapshot().state.tabs)).toHaveLength(0)
+    controller.redo()
+    expect(controller.getSnapshot().state.expanded).toBe(true)
+    expect(Object.values(controller.getSnapshot().state.tabs)).toHaveLength(1)
+  })
   it('starts collapsed with a guide tab already seated', () => {
     const controller = seededController()
     const snapshot = controller.getSnapshot()

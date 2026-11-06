@@ -1,14 +1,20 @@
 import { test, expect } from '@playwright/test';
-import { copyFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { unzipSync, zipSync } from 'fflate';
+import { fileResponse } from '../../src/workspaces/file-response';
+import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
-import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openEmptySession, choose } from './shell-actions';
+import { routeWorkspaceHost, type WorkspaceHostResponse } from './workspace-host';
+import { connectRemote, openEmptySession, choose, expectSettled } from './shell-actions';
+import { wireProbe } from './wire-probe';
 
 test('real authorized advanced documents, isolated hostile HTML and original downloads', async ({ page }, info) => {
   const fixture = await startDogfood('web_advanced_documents'); let passed = false;
+  const wire = await wireProbe(page);
   const names = ['sample.pdf', 'sample.docx', 'sample.pptx', 'sample.xlsx', 'benign.html', 'hostile.html', 'malformed.pdf', 'encrypted.pdf'];
+  const documentResponses = new Map<string, WorkspaceHostResponse>();
   let documentFonts: number | undefined;
   const external: string[] = [], errors: string[] = [], popups: string[] = [];
   page.on('request', request => { if (request.url().includes('rustx-preview.invalid')) external.push(request.url()); });
@@ -35,31 +41,28 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     const index=names.indexOf(name);
     // Admission headers are not physical derivation settlement. Observe the
     // original operation's complete terminal body before the DOM render budget.
-    const original=office?page.waitForResponse(response=>response.request().method()==='POST'
-      &&response.url().endsWith('/product-host/file-read')&&response.request().postDataJSON()?.read?.delivery_index===index):undefined;
     const derivation=office?page.waitForResponse(response=>response.request().method()==='POST'
       &&response.url().endsWith('/product-host/document-preview')&&response.request().postDataJSON()?.request?.source?.delivery_index===index):undefined;
     await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await expect(panel).toBeVisible();
-    if(original&&derivation){
-      const sourceResponse=await original,sourceRequest=sourceResponse.request().postDataJSON();
-      expect(sourceRequest.operationId).toMatch(/^[a-f0-9-]{36}$/);
-      expect(sourceResponse.headers()['x-rustx-file-operation']).toBe(sourceRequest.operationId);
-      const source=await sourceResponse.json();
-      expect(source.ok).toBe(true);
+    if(derivation){
       const response=await derivation,request=response.request().postDataJSON();
       expect(request.operationId).toMatch(/^[a-f0-9-]{36}$/);
       expect(response.headers()['x-rustx-document-operation']).toBe(request.operationId);
-      expect(request.scope).toEqual(sourceRequest.scope);
-      expect(request.request.target).toEqual(sourceRequest.read.target);
-      expect(request.request.source).toEqual({kind:'session_file',locator:sourceRequest.read.locator,delivery_index:index});
+      expect(request.request.source).toMatchObject({kind:'session_file',delivery_index:index});
       expect(request.request.extension).toBe(name.split('.').at(-1));
-      expect(request.request.digest).toBe(createHash('sha256').update(readFileSync(join(fixture.workspaceA,name))).digest('hex'));
-      const terminal=await response.json();
+      expect(request.request).not.toHaveProperty('digest');
+      const buffered=documentResponses.get(request.operationId);
+      expect(buffered).toBeDefined();
+      expect(buffered!.status).toBe(response.status());
+      expect(buffered!.headers['x-rustx-document-operation']).toBe(request.operationId);
+      expect(buffered!.headers['content-type']).toBe(response.headers()['content-type']);
+      const terminal:any=await fileResponse(new Response(Uint8Array.from(buffered!.body),{status:buffered!.status,headers:buffered!.headers}),FILE_PREVIEW_LIMITS.convertedPdfBytes);
       expect(terminal.ok).toBe(true);
-      expect(terminal.value.digest).toBe(request.request.digest);
-      expect(terminal.value.file).toEqual(source.value.file);
+      expect(terminal.value.digest).toBe(createHash('sha256').update(readFileSync(join(fixture.workspaceA,name))).digest('hex'));
       expect(terminal.value.file.name).toBe(name);
       expect(terminal.value.preview.kind).toBe('pdf');
+      expect(terminal.value.preview.data).toBeInstanceOf(Uint8Array);
+      documentResponses.delete(request.operationId);
     }
   };
   const close = async () => {
@@ -70,32 +73,58 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
   };
   try {
     for (const name of names) copyFileSync(new URL(`../fixtures/documents/${name}`, import.meta.url), join(fixture.workspaceA, name));
-    await routeWorkspaceHost(page, fixture); await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    const officeParts=unzipSync(readFileSync(join(fixture.workspaceA,'sample.docx')));
+    officeParts['word/media/preview-padding.dat']=new Uint8Array(600*1024);
+    writeFileSync(join(fixture.workspaceA,'sample.docx'),zipSync(officeParts,{level:0}));
+    await routeWorkspaceHost(page, fixture, undefined, (request, response) => {
+      if (request.method() === 'POST' && request.url().endsWith('/product-host/document-preview')) documentResponses.set(request.postDataJSON().operationId, response);
+    });
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Preview advanced files');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByText('Documents delivered.', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
+    await expect(page.locator('[data-turn-deliveries] [data-delivery-card]')).toHaveCount(4);
+    // Delivery cards belong to a settled Turn. A separate live response must
+    // not replace them or disturb a document opened from that original Turn.
+    await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Keep document previews active');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('document-stream');
+    await expect(page.getByText('Document preview remains active.', { exact: true })).toBeVisible();
     await page.evaluate(() => document.fonts.ready); documentFonts = await page.evaluate(() => document.fonts.size);
-    await open('sample.pdf'); await expect(panel.locator('.textLayer')).toContainText('page 1');
+    await open('sample.pdf'); await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     const viewport = page.locator('[data-conversation-scroll]').first();
-    await viewport.hover(); await page.mouse.wheel(0, -600);
+    await viewport.hover();
+    // Opening an earlier delivery can already reveal the top of the history.
+    // Establish a scrollable bottom first, then detach with a real user gesture
+    // covering the measured distance rather than assuming a fixed page height.
+    await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+    await page.mouse.wheel(0, await viewport.evaluate(el => el.scrollHeight));
+    await expect.poll(() => viewport.evaluate(el => Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop))).toBeLessThan(1);
+    const distanceToTop = await viewport.evaluate(el => el.scrollTop);
+    expect(distanceToTop).toBeGreaterThan(0);
+    await page.mouse.wheel(0, -distanceToTop);
     await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBe(0);
-    // The live tool activity folds at settlement; the original user message is the reading anchor.
+    await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
+    // The original user message remains the reading anchor during live growth.
     const readingCard = page.getByRole('article', { name: 'Your message', exact: true }).getByText('Preview advanced files', { exact: true });
+    await expect(readingCard).toBeInViewport({ ratio: 1 });
     const streamingPosition = await readingCard.evaluate(el => el.getBoundingClientRect().top);
     await fixture.release('document-stream');
-    await expect(page.getByText('Documents delivered. Streaming continues.', { exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
+    await expect(page.getByText('Document preview remains active. Streaming continues.', { exact: true })).toBeVisible();
+    await expectSettled(page, wire);
     expect(await readingCard.evaluate(el => el.getBoundingClientRect().top)).toBeCloseTo(streamingPosition, 0);
-    await expect(panel.locator('.textLayer')).toContainText('page 1');
+    await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-light.png') });
     await info.attach('pdf-light', { path: info.outputPath('pdf-light.png'), contentType: 'image/png' }); await close();
     const modelRequests = (await fixture.control('requests')).requests.length;
     for (const name of names) {
       await open(name);
       if (name === 'sample.xlsx') {
-        await expect(panel.getByRole('cell', { name: '99', exact: true })).toBeVisible();
-        await expect(panel.getByRole('cell', { name: 'A1+B1', exact: true })).toBeVisible();
-        await panel.getByLabel('Sheet', { exact: true }).selectOption('1'); await expect(panel.getByText('Stored text only')).toBeVisible();
+        await expect(panel.locator('[data-excel-preview] .fortune-sheet-container')).toBeVisible();
+        await panel.getByText('第二页', { exact: true }).click();
+        await expect(panel.getByText('第二页', { exact: true })).toBeVisible();
       } else if (name.endsWith('.html')) {
         await expect(panel.getByTitle('Isolated HTML preview')).toHaveAttribute('sandbox', '');
         const frame = panel.frameLocator('iframe'); await expect(frame.getByRole('heading')).toBeVisible();
@@ -121,14 +150,20 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       } else if (name === 'encrypted.pdf') {
         await expect(panel.getByRole('alert')).toContainText('Password-protected');
       } else {
-        await expect(panel.locator('.textLayer')).toContainText('rustX');
+        await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('rustX');
         await expect(panel.getByRole('status')).toHaveCount(0);
         if (name === 'sample.pdf') {
-          await panel.getByRole('button', { name: 'Next', exact: true }).click();
-          await expect(panel.locator('.textLayer')).toContainText('page 2');
-          await panel.getByLabel('Zoom', { exact: true }).selectOption('1.5');
+          await panel.locator('[data-pdf-page="2"]').scrollIntoViewIfNeeded();
+          await expect(panel.locator('[data-pdf-page="2"] .textLayer')).toContainText('page 2');
+          const frame = panel.locator('[data-document-zoom-frame]');
+          const box = (await frame.boundingBox())!; await page.mouse.move(box.x + box.width / 2, box.y + box.height - 20);
+          await panel.getByRole('button', { name: 'Zoom', exact: true }).click();
+          await page.getByRole('menuitem', { name: '150%', exact: true }).click();
+          await panel.locator('[data-pdf-page="2"]').scrollIntoViewIfNeeded();
+          await expect(panel.locator('[data-pdf-page="2"] canvas')).toHaveJSProperty('width', 1224);
+          await expect(panel.locator('[data-pdf-page="2"] .textLayer')).toContainText('page 2');
           await expect(panel.getByRole('status')).toHaveCount(0);
-          const selected = await panel.locator('.textLayer').evaluate(element => {
+          const selected = await panel.locator('[data-pdf-page="2"] .textLayer').evaluate(element => {
             const selection = window.getSelection()!, range = document.createRange(); range.selectNodeContents(element); selection.removeAllRanges(); selection.addRange(range); return selection.toString();
           });
           expect(selected).toContain('page 2');
@@ -150,7 +185,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       await page.getByRole('button', { name: 'Preview sample.pdf in sidebar', exact: true }).focus();
       const scroll = await page.locator('[data-conversation-scroll]').first().evaluate(el => el.scrollTop);
       await page.keyboard.press('Enter');
-      await expect(panel.locator('.textLayer')).toContainText('page 1');
+      await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
       if (width === 390) await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-narrow.png') });
       await close();
       // Worker/URL cleanup can complete while AppFrame's existing grid-track
@@ -164,21 +199,23 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await open('sample.pdf'); await expect(panel.getByRole('alert')).toContainText('PDF worker failed');
     await page.unroute('**/pdf.worker*.mjs');
     await panel.getByRole('button', { name: 'Retry preview', exact: true }).click();
-    await expect(panel.locator('.textLayer')).toContainText('page 1'); await close();
+    await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1'); await close();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
     await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
-    await open('sample.pdf'); await expect(panel.locator('.textLayer')).toContainText('page 1');
+    await open('sample.pdf'); await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-dark.png') });
     await info.attach('pdf-dark', { path: info.outputPath('pdf-dark.png'), contentType: 'image/png' }); await close();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
     await page.getByRole('button', { name: '关闭设置', exact: true }).click();
     await expandDeliveries(); await page.getByRole('button', { name: '在侧边栏预览 sample.xlsx', exact: true }).click();
-    await expect(page.getByRole('columnheader', { name: '公式（未计算）' })).toBeVisible();
+    await expect(page.locator('[data-excel-preview] .fortune-sheet-container')).toBeVisible();
     await page.screenshot({ animations: 'disabled', path: info.outputPath('workbook-chinese.png') });
     await info.attach('workbook-chinese', { path: info.outputPath('workbook-chinese.png'), contentType: 'image/png' });
     expect((await fixture.control('requests')).requests.length).toBe(modelRequests);
+    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(2);
+    expect(wire.requests.filter(request => request.method === 'turn/cancel')).toHaveLength(0);
     expect(external).toEqual([]); expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } finally { await page.close(); await fixture.stop(passed); }
 });

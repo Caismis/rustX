@@ -5,7 +5,7 @@
 //! so unrelated failures cannot turn a bounded check into a historical scan.
 //! VIRTUAL columns add no row payload and cannot be altered independently of the
 //! required flags and optional evidence they describe.
-use super::{Connection, ConversationStoreError, OptionalExtension, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension};
 
 const COLUMNS: &[(&str, &str)] = &[
     (
@@ -35,9 +35,9 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     for &(name, definition) in COLUMNS {
-        let virtual_integer: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name=?1 AND type='INTEGER' AND hidden=2)", [name], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+        let virtual_integer: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name=?1 AND type='INTEGER' AND hidden=2)", [name], |row| row.get(0)).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if !virtual_integer || !events.contains(definition) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "invalid derived event hole column {name}"
@@ -52,7 +52,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if actual.as_deref() != Some(definition) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "invalid derived event hole index {name}"

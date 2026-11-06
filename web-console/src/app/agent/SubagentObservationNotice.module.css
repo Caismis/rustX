@@ -1,0 +1,11 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from ConnectionIndicator.module.css; see PROVENANCE.md. */
+.root { width: 100%; margin-bottom: 6px; padding: 0 var(--dsh-composer-side-clearance); box-sizing: border-box; }
+.row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; max-width: var(--dsh-composer-card-max-width); margin: 0 auto; }
+.indicator { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-label) 20%, transparent); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-state-warn-tertiary); color: var(--dsw-alias-state-warn-label); font: inherit; font-size: 12px; font-weight: 500; line-height: 18px; text-align: left; cursor: pointer; }
+.indicator:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-warn-tertiary), var(--dsw-alias-state-warn-primary) 6%); }
+.indicator:disabled { cursor: default; }
+.icon { display: grid; place-items: center; flex: none; width: 14px; height: 14px; }
+.details { min-width: 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+.details summary { cursor: pointer; }
+.details[open] { flex-basis: 100%; }
+.details pre { max-height: 140px; margin: 6px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: var(--dsw-font-markdown-code-block-small); }

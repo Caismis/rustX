@@ -56,10 +56,10 @@ impl Display {
     }
     fn descriptor(
         &mut self,
-        descriptor: &rustx::runtime_client::snapshot::RuntimeClientMessageDescriptor,
+        descriptor: &rustx::observation::transcript::RuntimeClientMessageDescriptor,
         attachment: &RuntimeAttachment,
     ) {
-        use rustx::runtime_client::content::{
+        use rustx::observation::content::{
             CanonicalContentComponent, ContentRepresentation, ContentSource,
         };
         if descriptor.role != "assistant" {
@@ -218,7 +218,7 @@ impl Display {
 
 fn read_content(
     attachment: &RuntimeAttachment,
-    reference: &rustx::runtime_client::content::ContentRef,
+    reference: &rustx::observation::content::ContentRef,
     mut offset: u64,
 ) -> Vec<u8> {
     use base64::Engine as _;
@@ -265,20 +265,20 @@ fn verify_ordered_messages(actual: &[serde_json::Value], expected: &[MessageBloc
 
 fn hydrate_display_value(
     mut value: serde_json::Value,
-    bindings: &[rustx::runtime_client::checkpoint::ContentBinding],
+    bindings: &[rustx::observation::cut::ContentBinding],
     attachment: &RuntimeAttachment,
 ) -> serde_json::Value {
     for binding in bindings.iter().filter(|binding| binding.deferred) {
         let bytes = read_content(attachment, &binding.content_ref, 0);
         let full = match binding.content_ref.representation {
-            rustx::runtime_client::content::ContentRepresentation::Utf8Text => {
+            rustx::observation::content::ContentRepresentation::Utf8Text => {
                 serde_json::Value::String(String::from_utf8(bytes).unwrap())
             }
-            rustx::runtime_client::content::ContentRepresentation::CanonicalJsonV1
-            | rustx::runtime_client::content::ContentRepresentation::RawJsonUtf8 => {
+            rustx::observation::content::ContentRepresentation::CanonicalJsonV1
+            | rustx::observation::content::ContentRepresentation::RawJsonUtf8 => {
                 serde_json::from_slice(&bytes).unwrap()
             }
-            rustx::runtime_client::content::ContentRepresentation::BinaryBytes => {
+            rustx::observation::content::ContentRepresentation::BinaryBytes => {
                 panic!("binary payload is outside these text/tool fixtures")
             }
         };

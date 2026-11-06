@@ -152,6 +152,15 @@ impl CapabilitySnapshot {
         }
     }
 
+    /// This generation with another effective Tool environment.
+    #[cfg(test)]
+    pub(crate) fn with_effective_environment(&self, environment: ToolEnvironment) -> Self {
+        Self {
+            effective_environment: environment,
+            ..self.clone()
+        }
+    }
+
     /// The configured MCP server bindings of this immutable generation.
     #[must_use]
     pub fn mcp_servers(&self) -> &McpServerBindings {
@@ -186,6 +195,15 @@ impl CapabilitySnapshot {
     #[must_use]
     pub fn available_tools(&self) -> &AvailableToolCatalog {
         &self.available_tools
+    }
+
+    /// Validated Resources capability facts available to independent profile
+    /// selection. The resolved profile carries this Agent's actual entitlement.
+    #[must_use]
+    pub fn resource_sources(
+        &self,
+    ) -> &std::collections::BTreeSet<crate::capabilities::ToolSourceId> {
+        self.available_tools.resource_sources()
     }
 
     /// The immutable Skill snapshot/catalog.
@@ -269,6 +287,12 @@ impl CapabilitySnapshot {
                         Some(crate::tools::python::python_server_id(&package))
                     }
                 })
+                .chain(
+                    self.resolved_profile
+                        .iter()
+                        .flat_map(|profile| &profile.resource_sources)
+                        .map(crate::tools::mcp::source_server_id),
+                )
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .map(|server_id| crate::protocol::manifest::McpBinding { server_id })

@@ -1,6 +1,9 @@
 //! Scope pruning must preserve nullable tool occurrence identity and history cuts.
 use super::*;
 use crate::durable::presentation::{FactQuery, FactScope};
+use crate::durable::sqlite::schema::shape::verify_schema_shape;
+use crate::durable::sqlite::schema::{PRESENTATION_INDEXES, presentation_statements};
+use crate::events::EVENT_SCHEMA_VERSION;
 
 #[test]
 fn partial_tool_scope_keeps_null_owners_order_and_historical_cut() {
@@ -71,7 +74,14 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
                 .unwrap();
             assert_eq!(
                 partial,
-                !matches!(*name, "events_kind_idx" | "events_attempt_kind_idx"),
+                !matches!(
+                    *name,
+                    "events_kind_idx"
+                        | "events_attempt_kind_idx"
+                        | "events_primary_request_kind_idx"
+                        | "events_workflow_node_run_kind_idx"
+                        | "events_workflow_node_instance_kind_idx"
+                ),
                 "{name}"
             );
         }
@@ -94,7 +104,11 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
                     |row| row.get(0),
                 )
                 .unwrap();
-            let unfiltered = original.split(" WHERE ").next().unwrap();
+            let unfiltered = if original.contains(" WHERE ") {
+                original.split(" WHERE ").next().unwrap().to_owned()
+            } else {
+                original.replace("$.event.run_id.origin.type", "$.event.run_id.invalid_owner")
+            };
             connection
                 .execute_batch(&format!(
                     "SAVEPOINT invalid; DROP INDEX {name}; {unfiltered};"
@@ -203,7 +217,11 @@ fn primary_and_unique_keys_replace_duplicate_btrees_for_bounded_seeks() {
     }
     // This composite key still backs the inherited membership foreign key;
     // a UNIQUE(message_id) key alone cannot replace its exact column pair.
-    super::verify_unique_columns(&connection, "message_ledger", &["position", "message_id"])
-        .unwrap();
+    crate::durable::sqlite::schema::shape::verify_unique_columns(
+        &connection,
+        "message_ledger",
+        &["position", "message_id"],
+    )
+    .unwrap();
     super::observation::verify_schema(&connection).unwrap();
 }

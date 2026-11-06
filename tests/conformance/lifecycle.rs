@@ -19,6 +19,7 @@
 //!   semantic composition (Test H).
 
 use crate::launch_fixture::LaunchFixture;
+use rustx::durable::CanonicalStore;
 use std::sync::Arc;
 
 use crate::common::provider_emulator::ProviderEmulator;
@@ -53,9 +54,6 @@ request_params = '{"temperature":0.3}'
 [models."local/composed-model".capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
-tool_calls = true
-reasoning = false
-
 [models."local/composed-model".compat]
 chat_reasoning_replay = "omit"
 "#;
@@ -285,7 +283,7 @@ fn emulator_models_json(emulator: &ProviderEmulator) -> String {
         "models": { format!("emulator/{CHAT_MODEL}"): {
             "provider": "emulator", "id": CHAT_MODEL, "protocol": "openai_chat_completions",
             "context_window": 128_000, "max_output_tokens": 1024,
-            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"], "tool_calls": true, "reasoning": true},
+            "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]},
             "compat": {"chat_reasoning_replay": "omit"}
         } }
     })).unwrap()
@@ -422,7 +420,7 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
 /// complete provider-backed ordinary turn, over an aliased product root.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn active_session_a_executes_while_historical_b_preflight_retains_authority() {
-    use rustx::durable::{ConversationStore, SqliteConversationStore};
+    use rustx::durable::SqliteConversationStore;
     use rustx::local_runtime::session_deletion::DeletionTargetSnapshot;
     use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
     let Some(emulator) = ProviderEmulator::start("openai_chat_streamed_turn").await else {

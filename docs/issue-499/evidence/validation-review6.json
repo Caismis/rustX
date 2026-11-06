@@ -1,0 +1,389 @@
+{
+  "schema": "issue-499-shell-navigation-owner-followup-v1",
+  "previous_head": "bfaca081c56cd17287379d431bc3fbaa1dac7f31",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "source": {
+    "native_sha256": "ac3d1c568596d75dc6cc6982f6a4ed23d8097bac0cec08db711e7b4147244bf8",
+    "native_inputs": 1012,
+    "followup_anchor": "bfaca081c56cd17287379d431bc3fbaa1dac7f31",
+    "followup_inputs": [
+      {
+        "path": "web-console/src/app/navigation/machine.ts",
+        "sha256": "c7c268a07c47bc948c3c102dba9a8fe65b01c9c0424ee3b0898f79139cba6825"
+      },
+      {
+        "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+        "sha256": "9ae1619a7e4f948c36ac179c4df2c16c7182dab4ed39729e57d14b9c3567f2da"
+      },
+      {
+        "path": "web-console/test/e2e/shell.spec.ts",
+        "sha256": "f9b6b2b168b5eff767eae893a8d82e9ecc6bf6350c2370f63cc775c578a28517"
+      },
+      {
+        "path": "web-console/test/navigation-ownership.test.ts",
+        "sha256": "bdc4cfe6936d59f50d29e8623b92aef7172368b338454c985bc03a7f13b8ebb4"
+      }
+    ],
+    "followup_sha256": "22db9a75023fc0729c6030f53006b588c12c32a698941c9e36db2bbbc1282344",
+    "cumulative_repair": {
+      "anchor": "5a86a5631019ea0c7c16e12ed07bd92aa3869198",
+      "inputs": 60,
+      "sha256": "32d5e3abd163415b638cc49e5801ffe30e00e9b3aaa28cad2533d2c470ccfc20"
+    },
+    "cumulative_followup": {
+      "anchor": "d2a5aff54e9e82df1680ad4887f6824cdb556976",
+      "inputs": 28,
+      "sha256": "ade51f2c274019f903c0b188a7d743a8325b7274aea26728eb6b7ee2d51fec94"
+    },
+    "recipe": "sort POSIX paths, then SHA256(path+NUL+ASCII SHA256(file)+LF); full inventories reconstruct from immutable review5 maps overwritten/extended by these four exact inputs"
+  },
+  "contract": {
+    "native": "Default15000ms absolute first accepted native submission wait, no pre-submission owner clock, four source permits, live validation and physical settlement unchanged. No new Native/TUI/protocol source change in this follow-up.",
+    "web": "A selected cold Session, including cold History Return, owns its attachment/publication continuation independently from sidebar or Settings viewport interest. Closing an unrelated viewport withdraws only that exact Pending gesture's later viewport-close interest; it does not cancel the selected target. Unselected History/Fork preparation retains its old cancellation. Explicit cancellation, a newer destination and authority retirement retain their owners. Selection/viewport actions never synthesize submission intent."
+  },
+  "independent_review": {
+    "file": "independentreview6.md",
+    "sha256": "80eb8a8f4bcf711246385d1f9d1da4affb506bc88b5e4bd2488506f212d2717d",
+    "scope": "Independent source review, separate from execution and complete final browser/current-head FULL CI verification."
+  },
+  "completed_checks": [
+    {
+      "id": "review6-web-full2",
+      "receipt": {
+        "command": "pnpm --dir web-console test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T11:26:21.746900+00:00",
+        "finished_at": "2026-10-24T11:27:00.672090+00:00",
+        "elapsed_seconds": 38.92519480199553,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "c696cc65035f8f3ac7faefe0d167f9a48ccaf4f41b181baef2892cc6430e8f97"
+      },
+      "scope": "Serial complete Web/Host unit invocation on unchanged final four-input follow-up:3272passed/0failed/4platform-skipped;213files passed and1platform-skipped. Includes the new viewport/navigation ownership cases; no modules/suites skipped to replace the failed setup invocation."
+    },
+    {
+      "id": "review6-typecheck-final",
+      "receipt": {
+        "command": "pnpm --dir web-console typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T11:26:33.183892+00:00",
+        "finished_at": "2026-10-24T11:27:02.633903+00:00",
+        "elapsed_seconds": 29.449996593990363,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "scope": "Final Web TypeScript inputs and acceptance fixtures; no typecheck failure suppressed."
+    },
+    {
+      "id": "review6-i18n",
+      "receipt": {
+        "command": "pnpm --dir web-console check:i18n",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T11:26:33.199474+00:00",
+        "finished_at": "2026-10-24T11:26:36.104726+00:00",
+        "elapsed_seconds": 2.9052547629689798,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b"
+      },
+      "scope": "Final Web presentation copy ownership check."
+    },
+    {
+      "id": "review6-provenance",
+      "receipt": {
+        "command": "pnpm --dir web-console check:provenance",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T11:26:33.192338+00:00",
+        "finished_at": "2026-10-24T11:26:35.848268+00:00",
+        "elapsed_seconds": 2.6559299580403604,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2"
+      },
+      "scope": "Final311source records and287production notices verified; this follow-up does not change the existing provenance inventory."
+    },
+    {
+      "id": "review6-browser-focused-final",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e shell.spec.ts mcp-cold-navigation.spec.ts --grep 'sidebar attachment ownership:|stale retained attachment|Settings supersedes sidebar intent:|first-Send publication|selecting cold MCP B'",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T11:27:41.243310+00:00",
+        "finished_at": "2026-10-24T11:28:52.504775+00:00",
+        "elapsed_seconds": 71.26146513299318,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "227dba801c508c16cc3d8bfbe616e66f9133b2d6235dea5ceb20bf090cc620e0"
+      },
+      "scope": "Exact final25-case canonical browser subset:4real Native MCP cases at1440/390,3transport-controlled390drawer/Settings publication cases,9sidebar owner cases,1stale-retained-target case and8Settings supersession/refusal cases. This passing command is separate from the failed23/2 invocation and pending complete415suite."
+    }
+  ],
+  "inherited_unchanged_source_checks": [
+    {
+      "id": "review5-cargo-full",
+      "prior_record": "validation-review5.json",
+      "result": {
+        "exit_code": 0,
+        "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+        "started_at": "2026-10-24T10:28:50.879794+00:00",
+        "finished_at": "2026-10-24T10:42:07.530751+00:00",
+        "log_sha256": "5078fbde270b55e4eff5379d75c2ca40150a51fa293d0450fc1d3f791ee35e11"
+      },
+      "scope": "Native ac3d1c is byte-identical:5475/0/16 across20targets, including all5Delivery and9compaction cases. This is inherited exact-Native execution evidence, not a new command or current-head CI verdict."
+    },
+    {
+      "id": "review5-tui-full",
+      "prior_record": "validation-review5.json",
+      "result": {
+        "exit_code": 0,
+        "command": "pnpm --dir tui test",
+        "started_at": "2026-10-24T10:15:04.390413+00:00",
+        "finished_at": "2026-10-24T10:15:40.566930+00:00",
+        "log_sha256": "31402a6c116981208c993d6eb80acd587cb273b1e5b2d82606021e38b3ba65ec"
+      },
+      "scope": "TUI/protocol/native executable inputs did not change in the four Web-file follow-up:1209/0/1platform skip. This is inherited source-scoped evidence, not a new current-head invocation."
+    },
+    {
+      "id": "review5-compaction-postcommit",
+      "prior_record": "validation-review5.json",
+      "result": {
+        "exit_code": 0,
+        "command": "cargo test --lib --all-features local_runtime::session_runtime_manager::tests::compaction_ownership -- --test-threads=4",
+        "started_at": "2026-10-24T10:51:03.073562+00:00",
+        "finished_at": "2026-10-24T10:51:05.860174+00:00",
+        "log_sha256": "3805b9a1e0594172d850fbf6b584e288e0ed9ac400944cfe928f4b1033b88540"
+      },
+      "scope": "Exact unchanged Native ac3d1c post-commit9a0compaction subset9/0. Preserve original receipt/time/log hash."
+    },
+    {
+      "id": "review5-protocol-check-postcommit",
+      "prior_record": "validation-review5.json",
+      "result": {
+        "exit_code": 0,
+        "command": "pnpm --dir protocol/app-server check",
+        "started_at": "2026-10-24T10:49:19.693523+00:00",
+        "finished_at": "2026-10-24T10:49:21.499624+00:00",
+        "log_sha256": "34669ea5161bdbf8e187e78130a2593f691d9d3f4ff65d2e0aea59468e6e55d2"
+      },
+      "scope": "Protocol/generator/artifact inputs are unchanged; the original9a0postcommit drift check passed. New-head CI must independently establish its final generated-protocol verdict."
+    }
+  ],
+  "historical_failed_invocations": [
+    {
+      "id": "review5-browser-full",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T10:49:18.530956+00:00",
+        "finished_at": "2026-10-24T11:17:24.309193+00:00",
+        "elapsed_seconds": 1685.7782411519438,
+        "exit_code": 1,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "abc4862ca36f1bd1e77d89fea84b85a52098d5e1a9b7e4449e61444ed9200ff0"
+      },
+      "scope": "Complete preceding executable-source invocation:392passed,18failed,exit1. Nine sidebar ownership, one stale-retained-target and eight Settings cases still assumed pre-ACK navigation stayed on A. These failures are preserved; they are not described as415 current passes. Separately, the controlled390px red case below established a concrete production publication-owner hole."
+    },
+    {
+      "id": "review6-shell-dismiss-red",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e shell.spec.ts --grep 'closing the narrow sidebar preserves cold C first-Send publication and its next input'",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T11:17:54.453830+00:00",
+        "finished_at": "2026-10-24T11:18:16.659225+00:00",
+        "elapsed_seconds": 22.205397751997225,
+        "exit_code": 1,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "5455b864d35e74e295da7864c4127f0c2421c715e0708564e2ec2177803aad55"
+      },
+      "scope": "Controlled390px real-browser production-client shell fixture with transport/native replies controlled. C intent and its first turn/start dispatched after Attach, while closing the drawer had retired the navigation publication owner and route stayed session-draft. The input ACK was held: this proves dispatch-stage route publication failure, not acknowledged acceptance or a real Native/provider request. Trace/error/screenshot retain that exact cut."
+    }
+  ],
+  "superseded_failed_invocations": [
+    {
+      "id": "review6-web-full",
+      "receipt": {
+        "command": "pnpm --dir web-console test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T11:20:17.980516+00:00",
+        "finished_at": "2026-10-24T11:20:58.267936+00:00",
+        "elapsed_seconds": 40.28742067998974,
+        "exit_code": 1,
+        "log_sha256": "2ab963a30921048db62ac6122143ecb2a213b0f677c75725f13706e9c72aa77b"
+      },
+      "scope": "Initial concurrent Web unit run exited1:207files passed,6suites failed before collection,1platform skip;3214tests passed and4platform skips. Native pty.node/workspace_fs.node were unavailable during imports while the browser build was also rebuilding them. This is observed native-module load failure, not passing correctness coverage; a separately recorded serial rebuilt rerun passed all suites; none was skipped to replace this failed invocation."
+    },
+    {
+      "id": "review6-browser-focused",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e shell.spec.ts mcp-cold-navigation.spec.ts --grep 'sidebar attachment ownership:|stale retained attachment|Settings supersedes sidebar intent:|first-Send publication|selecting cold MCP B'",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T11:20:44.903589+00:00",
+        "finished_at": "2026-10-24T11:25:57.026692+00:00",
+        "elapsed_seconds": 312.12308631499764,
+        "exit_code": 1,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "fe90c5b293e7b023ce8085650673e0f654e68826c8d759819bd705341194acc0"
+      },
+      "scope": "Focused25-case browser command exited1:23passed,2failed. Both Settings refusal fixtures correctly refused C's attachment and disabled its editor, but the tests attempted to fill that disabled editor rather than assert refusal/no implicit intent. Positive sidebar/Settings retention and actual1440/390MCP cases passed within this failed invocation. This is neither25/0aggregate success nor evidence of a new production refusal defect; corrected explicit disabled/error/zero-intent assertions are verified by the separately recorded final25/0 invocation, which does not change this failed result."
+    }
+  ],
+  "retained_failure_artifacts": {
+    "historical_full": {
+      "manifest_sha256": "6ad2f55ae9138d81e8088193a8b5abe02e7bf9dae133f257666d423af7ccd1cb",
+      "trace_count": 18,
+      "files": {
+        "shell-a-stale-retained-att-629c8-on-before-narrow-navigation/trace.zip": "dfd15ef86cb6911cdfa36e69869cc3d48f83e5c8c9957c917cbaf39a9c0fe507",
+        "shell-a-stale-retained-att-629c8-on-before-narrow-navigation/test-failed-1.png": "fb750b79a948a21cb22db8fed879ca471d40ee7788c958d8a2de29c96f91937d",
+        "shell-a-stale-retained-att-629c8-on-before-narrow-navigation/error-context.md": "bdf42ea47b59853e4ee8c3ac47dec262012b08983258ce963724af9b59d7bf59",
+        "shell-sidebar-attachment-ownership-breakpoint/trace.zip": "37e1a950ab53d2485553a36d01d9a1629a8ea5029af4b188037be79d8a51a1de",
+        "shell-sidebar-attachment-ownership-breakpoint/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-sidebar-attachment-ownership-breakpoint/error-context.md": "745928ff51a2c7b5b5237de6911daddc8029f3e4725904af59f5bc8f37603141",
+        "shell-sidebar-attachment-ownership-escape/trace.zip": "a2143948e411eb7239d5083784df75f93465fa338c35b4fc6de142b335cbeb7e",
+        "shell-sidebar-attachment-ownership-escape/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-sidebar-attachment-ownership-escape/error-context.md": "69ca5b4642010d6a43a06660056b88ef4b6deff058077cb82daa81027a0fffb9",
+        "shell-Settings-supersedes-sidebar-intent-desktop-global/trace.zip": "137d46984f73319e868a447871d30d7c4188d240d00b2a898060970053dca2ff",
+        "shell-Settings-supersedes-sidebar-intent-desktop-global/test-failed-1.png": "d59d844b81a6923cd3434423ead84268ee71f8129a58c51b4e426f9e89a0829c",
+        "shell-Settings-supersedes-sidebar-intent-desktop-global/error-context.md": "3123da827bb82ea3f266dc328f7227606b010392fec5427527bf2b7b66e2cfa4",
+        "shell-Settings-supersedes-sidebar-intent-workspace/trace.zip": "400f1ee28a624e23468a57f830e13f54c3e128b747325e01cd71520052e3ce64",
+        "shell-Settings-supersedes-sidebar-intent-workspace/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-Settings-supersedes-sidebar-intent-workspace/error-context.md": "d8b504a9270146cb7c98187bf29eca77b15b83f93e4bb135858aff24d5c7ee20",
+        "shell-Settings-supersedes-sidebar-intent-workspace-refusal/trace.zip": "2fdd6262302c8ee6a1c011e436eabb3cde456ba06d8e7014219b60278c4ec973",
+        "shell-Settings-supersedes-sidebar-intent-workspace-refusal/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-Settings-supersedes-sidebar-intent-workspace-refusal/error-context.md": "5472f5007f64a9acd2e1b8251dd155c75bf96d56987992434b51c95927759e5b",
+        "shell-sidebar-attachment-ownership-failed/trace.zip": "f9162fe07b064d435f9147a14dd74dbffe10e7f3240a7e427f6b737a474535e6",
+        "shell-sidebar-attachment-ownership-failed/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-sidebar-attachment-ownership-failed/error-context.md": "266158e78f67923504a045d163e21810562c4ae99f865ad93fa9d8898f9044d2",
+        "shell-sidebar-attachment-ownership-success/trace.zip": "2815eda0f3fe3a1dac8e5763316c1ccbd2451351c70cebd7e7bc5d2f8c1cd8f7",
+        "shell-sidebar-attachment-ownership-success/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-sidebar-attachment-ownership-success/error-context.md": "0ec979abfc4c08dd681d9c8b6a3528e4894e408db040a08422920c1250cbf74c",
+        "shell-Settings-supersedes-sidebar-intent-desktop-workspace/trace.zip": "dc7627ea75554ef9cd4eb9c23d14f08382b5312ba5171b99aabdb7deefcf859a",
+        "shell-Settings-supersedes-sidebar-intent-desktop-workspace/test-failed-1.png": "d59d844b81a6923cd3434423ead84268ee71f8129a58c51b4e426f9e89a0829c",
+        "shell-Settings-supersedes-sidebar-intent-desktop-workspace/error-context.md": "3a71db36a8bd481702ffbcc98624f9a09fc41a88b95cb06e86866867fdbca459",
+        "shell-Settings-supersedes-sidebar-intent-global/trace.zip": "ddd1327fcec9b492007ae86cd68e27cfdb2accf32950b75e8c331ce5342b590f",
+        "shell-Settings-supersedes-sidebar-intent-global/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-Settings-supersedes-sidebar-intent-global/error-context.md": "de6a9776663e6c1e5cb6cb975c14c1188fc03cade75623c8aba4e78314a273f2",
+        "shell-Settings-supersedes-sidebar-intent-global-refusal/trace.zip": "9407649f160c1f6986412fb6d5cd1cd22e5bb5b1970f191e3a151c4d562f4538",
+        "shell-Settings-supersedes-sidebar-intent-global-refusal/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-Settings-supersedes-sidebar-intent-global-refusal/error-context.md": "b42aca19b29586df77ecf861fe33c2c3f5ba9ef79859901354923c0799500d67",
+        "shell-sidebar-attachment-ownership-desktop/trace.zip": "213a209cd2d91e38fe450d8337daad46e9684e6adc2012f49bdedb764835ca92",
+        "shell-sidebar-attachment-ownership-desktop/test-failed-1.png": "d59d844b81a6923cd3434423ead84268ee71f8129a58c51b4e426f9e89a0829c",
+        "shell-sidebar-attachment-ownership-desktop/error-context.md": "20339e8de52a6950f88579e4df6b5c88622872bf4131126cedfc2a4fef3d9264",
+        "shell-sidebar-attachment-ownership-toggle/trace.zip": "775f93fa1d538d6b7b67b873390d8cfe4627ec2cbfcca0f1fa815a7ddaf5bf0f",
+        "shell-sidebar-attachment-ownership-toggle/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-sidebar-attachment-ownership-toggle/error-context.md": "461cf60350920f0073156030f6d8766b6f701bd07ca3f516dec966bb5962b564",
+        "shell-sidebar-attachment-ownership-newer/trace.zip": "f7003f79296105af8ab0794025f0d6ae5dbf4bd1d84d35f8d5f2886c110d5e24",
+        "shell-sidebar-attachment-ownership-newer/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-sidebar-attachment-ownership-newer/error-context.md": "425f52169592346662296b3ce6f94173125f5b2f99372bddb6aa0ef2404d4afb",
+        "shell-sidebar-attachment-ownership-backdrop/trace.zip": "1aed64d2a3c39aebbd70a1fb7180e350dc2dd4e4c89646816fb581d99527ae78",
+        "shell-sidebar-attachment-ownership-backdrop/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-sidebar-attachment-ownership-backdrop/error-context.md": "4318e09100fa33c78503010af8369a7be0a4e75da666112767fda58a3ea47a99",
+        "shell-sidebar-attachment-ownership-replacement/trace.zip": "c307bfdaca5cf7aa61a271902c268f950755b10a356bc20a236335e190e523f7",
+        "shell-sidebar-attachment-ownership-replacement/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-sidebar-attachment-ownership-replacement/error-context.md": "60e08ebf0ddb8c2c599e1b4894612771bdd94c0f5d460ae0c2e455dafc3a8112",
+        "shell-Settings-supersedes-sidebar-intent-competing-global/trace.zip": "4e34b1e3f8ecb94061cdeb3e4cfd57aadc395ef1296637eb31cc6a80a2ffcc74",
+        "shell-Settings-supersedes-sidebar-intent-competing-global/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-Settings-supersedes-sidebar-intent-competing-global/error-context.md": "baf1c20c33d93b6a20e0867b79ac8b8e4c032933a6c94f9ae23197279aa9ef74",
+        "shell-Settings-supersedes-sidebar-intent-competing-workspace/trace.zip": "90b82f1701fac5d5096a564786dc74c1f00ecb6eababd5245b2465edb6696187",
+        "shell-Settings-supersedes-sidebar-intent-competing-workspace/test-failed-1.png": "4e560bd8781c651b1cf71299bc0efe757e0995b634306965cfa64bf7e1551ffb",
+        "shell-Settings-supersedes-sidebar-intent-competing-workspace/error-context.md": "e51e328dd199b84bb8f4dd12583e98aff60f9975b97872e84cfbe9b6ba1d5330"
+      }
+    },
+    "controlled_red": {
+      "manifest_sha256": "40759755dd6c98f7a1d1fec9eed3a3c3010cd51059df3764ae6d59c3a0e5c15d",
+      "scope": "Controlled390px original production: exactC intent+firstturn dispatch before missing formal-route publication; firstturn ACK not yet released",
+      "files": [
+        {
+          "path": "/tmp/issue499/review6-shell-dismiss-red-artifacts/trace.zip",
+          "sha256": "ed64688ea6d48d45df0333e0cfe88761a8299f25475e14892ddb073c4aa316cf"
+        },
+        {
+          "path": "/tmp/issue499/review6-shell-dismiss-red-artifacts/test-failed-1.png",
+          "sha256": "f92fa9421210ae1620f2c8606808822e0812ee323ba09e55c63dd3af693b9015"
+        },
+        {
+          "path": "/tmp/issue499/review6-shell-dismiss-red-artifacts/error-context.md",
+          "sha256": "f5caf3bd63e68c754f37a5576b1bc17412cecac9111f7e627416f87e6efcf278"
+        }
+      ]
+    }
+  },
+  "prior_checkpoint_sha256": {
+    "baseline-manifest.json": "ecaa33019a6a50fd02a7a2b98beaeb517b5e64e1daafc3eafab30b71df18c681",
+    "baseline-model-startup.json": "c1f78e3982caa7916bbd5a1c9597ff18a1b010016b53e33cc9ebbbeaff5edea6",
+    "baseline-source-preparation.json": "6fed4c601f0597b3881a996eb34e6373eff626d6695e0357ddbf3b56d8aacc96",
+    "baseline-startup.json": "ae4a818719e3f00d676ab2b9941059b97f87b0382a82375d11f21e1321f7cbda",
+    "head-manifest.json": "48d9900e8c864f7d4aed13ae411e55479a7556d28de61bfa00e41db96ce5a82b",
+    "head-model-startup.json": "928364ab52b1780a08c5783ffa5199732b6ed696e02b199df6076a02862be075",
+    "head-source-preparation.json": "3e7e58b4aa15f10257b86babec52c6ee966718d7d1137fa6f11c51be71d2e715",
+    "head-startup.json": "1023426f9feaf277da61e0981a1a954184b19f3ad8801f4084978ef7c49cf26d",
+    "independentreview4.md": "771ebbf0782e193f082f6dba8d4b2d64fef6efc7e46eb36e08d5712a7412ebec",
+    "independentreview5.md": "85fcd21f4ba937e3d38700e7ea2f1c4428007c478856d7225c6c9e45e3d13b4f",
+    "mcp-startup-1440.png": "993931cec638a29c0de5919e9c304ecab53e9c15c6abf4d505be3f54b7a0cdfc",
+    "mcp-startup-390.png": "4ce692e83424e3f32ae4b2bfc80704d611565b7a0fa171eeb5cebe0467be39a0",
+    "measurement-revision.json": "5e598319cb049e719ded7dba3d2acbfcdc0930b00c3cbabd6b6cff78923d0054",
+    "ownership-settlement-validation.json": "88757cef96303d6d0e08dfd2b2cd529de4a1d7cbdb543c89ab1a9340d38af53d",
+    "readiness-ownership-validation.json": "b851cd8c28b8b2bb071b379765c99e2bd631f47446ff3292acd6a2bb98c53ab3",
+    "review-fix-validation.json": "278474307516943a023d5fc6b3ea09f7779226b6f242525329f2f77f169790be",
+    "submission-live-baseline-adapter.json": "8e850ff628cb7c919de171969588c63ca2e217c27d40a9a59d7f3dc1b61d236b",
+    "submission-live-baseline.json": "0c45b372e2d0110225b4614ee215a6564b9de1375a6f56b806e85d3495db9ad8",
+    "submission-live-current.json": "96debdb6fb3abd627b20773f5f00dca5ed1a9cff346edbec0e0f3f44f021f3a1",
+    "submission-live-independent-review.md": "c526535c732c49e7eecdbbdcf39723d87e8c723a1b303ff8e4c50a9a88c61505",
+    "submission-live-manifest.json": "b2fd3cbd7b6fe207d7fd11f08a2b7e1ecaeecf96cf42b79a506b19feb7d87aa7",
+    "submission-live-review2-current.json": "e502c37e9f7493e882fd7bbd8a8b9abd15c3d0a436de8254aa22da3618348029",
+    "submission-live-review2-independent-review.md": "e71ea3aa67e35470fb26cc70d976b52059289505283feda3fd2a9e2e2d40e2fc",
+    "submission-live-review2-manifest.json": "597a25a4f48d81f536780a3ae024acdb0f6823f201724109cab420d3c1b123a9",
+    "submission-live-review3-current.json": "03bdf903a3bb60f740960e13eb2563e3c867c553e93e767f160fe17877b5ce2a",
+    "submission-live-review3-independent-review.md": "9e547d732123142deadc4038298193826aaabc26461f8744602257ccf9e1225f",
+    "submission-live-review3-manifest.json": "58c153fb3af095e262dbb4290fa8281be9d28128d9b2a98fac94216c98cc2505",
+    "submission-live-review4-current.json": "e096a82ccc8c045374da1b86f05c84608f684855b4971d0b294059a50afab9e8",
+    "submission-live-review4-manifest.json": "3affeb7704e3b40fcfc6f54da6daba57c46845099f9ccdceca64a33cf6153f73",
+    "submission-live-review5-current.json": "f5c1c8a01448846b136f6a70f349e9073aa9dab32fa571cb421fb10ee6fbe15c",
+    "submission-live-review5-manifest.json": "c2aaf9f983617c27e1d4b589639ab0d3b6dd8dc741133617232f0f9b6df33eab",
+    "validation-redesign.json": "017026bf07dc5d0226312aa404eabba6161a69742a6e9782e579c52c7f594974",
+    "validation-review2.json": "ee2a29b811aceb0867bc1fe4a44fe9ca978cb64b395de5c21886b739c3b45178",
+    "validation-review3.json": "291e943bc5a24414170307a380d28ef1dca132106d2a13af17b56c41780172e4",
+    "validation-review4.json": "2e4a44f3eec7e6bdebc9c986fa12a5e56df3c46e117e82874a3c8282d47223d5",
+    "validation-review5.json": "9c57eee3f559b7bb98873a9792057067e74d8492d6e6987df7b2c6a30d65f43b",
+    "validation-tui-ci-repair.json": "6edfbf0b10059b7887b18ec87e2a326715d1721ab212c388f8003a412f322785",
+    "validation.json": "7dcc657506832c9dace475bdeb4e849fd76ab8ad5bbfb735a8b867cd2348e561",
+    "warm-seed-synchronization.json": "b3c5ce6e024ab19f4a8fdc376be9cbe5d67039d567df93564a4746d9a8ba6a70"
+  },
+  "unchanged_native_evidence": {
+    "manifest": "submission-live-review5-manifest.json",
+    "manifest_sha256": "c2aaf9f983617c27e1d4b589639ab0d3b6dd8dc741133617232f0f9b6df33eab",
+    "measurement": "submission-live-review5-current.json",
+    "measurement_sha256": "f5c1c8a01448846b136f6a70f349e9073aa9dab32fa571cb421fb10ee6fbe15c",
+    "scope": "These measurements retain identical Native ac3d1c source inputs and the same workload. They do not measure Web navigation or stand in for current415browser/CI verification."
+  },
+  "pending": [
+    "Exact final415-case canonical pinned-container browser acceptance",
+    "Current final head/base/merge FULL CI and Merge verification"
+  ],
+  "rule": "A failed complete command remains failed even if many individual cases pass. No historical source approval or old-head CI verdict verifies changed Web ownership. Original receipts/log hashes and all review5 evidence remain unchanged.",
+  "live_verification_record": "https://github.com/Caismis/rustX/pull/503",
+  "recorded_at": "2026-10-24T11:31:38.028192+00:00"
+}

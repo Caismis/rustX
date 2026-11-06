@@ -1,0 +1,98 @@
+import { encodeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import clsx from 'clsx';
+import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v73';
+import { useTranslation } from '../../../../locale/react';
+import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
+import { nodePresentation } from '../../document/geometry';
+import { nodeField } from '../../document/fields';
+import { blockAt, nodeAt, startOf, type BlockPath, type WorkflowDocument } from '../../document/model';
+import type { WorkflowScopePort } from '../../port';
+import { IconBlock, IconEntry, KindIcon, nodeIconKind } from '../icons';
+import type { Selection } from './selection';
+import { BlockForm } from './forms/BlockForm';
+import { NodePanel } from './panels/NodePanel';
+import { DraftTextField } from './forms/fields';
+import { readInspectorWidth, writeInspectorWidth } from './view-store';
+import css from './Editor.module.css';
+
+type Edit = (apply: (document: WorkflowDocument) => WorkflowDocument, coalesce?: string, array?: ArrayEdit) => void;
+
+/** A single Settings surface; specialized panels own node semantics and the
+ * editor machine owns all deferred text, history and save state. */
+export function Inspector({ document, block, selection, onSelect, edit, navigate, vocabulary, rejection, port, focus }: {
+  document: WorkflowDocument; block: BlockPath; selection: NonNullable<Selection>; onSelect: (selection: Selection) => void;
+  edit: Edit; navigate: (block: BlockPath) => void; vocabulary?: WorkflowVocabulary;
+  rejection?: string; port: WorkflowScopePort;
+  focus?: { address?: FieldAddress; field?: string; epoch: number };
+}) {
+  const tx = useTranslation(), path = 'path' in selection ? selection.path ?? block : block;
+  const root = useRef<HTMLElement>(null);
+  const selectionKey = JSON.stringify(selection);
+  useEffect(() => {
+    if (!focus || !root.current) return;
+    const controls = [...root.current.querySelectorAll<HTMLElement>('[data-workflow-field]')];
+    const exact = focus.address && encodeField(focus.address);
+    const control = exact ? controls.find(control => control.dataset.workflowField === exact) : controls.find(control => {
+      try {
+        const tuple = JSON.parse(control.dataset.workflowField!);
+        const path = tuple[0] === 'workflow' ? [tuple[1]] : tuple[2];
+        return Array.isArray(path) && path.length && focus.field?.startsWith(String(typeof path[0] === 'object' ? path[0].key : path[0]));
+      } catch { return false; }
+    });
+    if (!control) return;
+    for (let parent = control.parentElement; parent && parent !== root.current; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
+    control.scrollIntoView?.({ block: 'nearest' }); control.focus({ preventScroll: true });
+  }, [focus, selectionKey]);
+  const owner = blockAt(document, path), node = selection.kind === 'node' && owner ? nodeAt(owner, selection.id) : undefined;
+  const [width, setWidth] = useState(readInspectorWidth), [resizing, setResizing] = useState(false);
+  const resize = useRef({ x: 0, width });
+  const changeWidth = (value: number) => { const next = Math.max(320, Math.min(640, value)); setWidth(next); writeInspectorWidth(next); };
+  useEffect(() => {
+    if (!resizing) return;
+    const move = (event: PointerEvent) => changeWidth(resize.current.width + resize.current.x - event.clientX);
+    const stop = () => setResizing(false);
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop, { once: true });
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
+  }, [resizing]);
+  let head: ReactNode, body: ReactNode, description: ReactNode;
+  if (selection.kind === 'node' && node && owner) {
+    const id = selection.id, metadata = nodePresentation(document, path, id);
+    head = <div className={css.inspectTitle}>
+      <span className={clsx(css.nodeIcon, css[`kind_${node.type}`])}><KindIcon kind={nodeIconKind(node)} size={17} /></span>
+      <span className={css.nodeText}><DraftTextField compact label={tx('workflows:panel.title')} placeholder={tx('workflows:panel.title-placeholder')} value={metadata?.title || id} address={{ ...nodeField(path, id, ['title']), domain: { kind: 'node_presentation' } }} /></span>
+    </div>;
+    description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={metadata?.description ?? ''} multiline address={{ ...nodeField(path, id, ['description']), domain: { kind: 'node_presentation' } }} />;
+    // As Dify: duplicate and delete live on the canvas menu, not the panel.
+    body = <NodePanel document={document} block={path} id={id} port={port} vocabulary={vocabulary} edit={edit} navigate={navigate} onSelect={onSelect} />;
+  } else {
+    const startId = owner && startOf(owner), entry = selection.kind === 'start' && startId ? nodePresentation(document, path, startId) : undefined;
+    const startTitle = tx(path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title');
+    const entryField = (field: 'title' | 'description'): FieldAddress => ({ block: path, node: startId, path: [field], role: 'value', domain: { kind: 'node_presentation' } });
+    head = selection.kind === 'start'
+      // As a node: the title is an inline heading that reverts to its default when cleared.
+      ? <div className={css.inspectTitle}><span className={clsx(css.nodeIcon, css.startIcon)}><IconEntry size={17} /></span><span className={css.nodeText}>
+        <DraftTextField compact label={tx('workflows:panel.title')} placeholder={startTitle} value={entry?.title || startTitle} address={entryField('title')} /></span></div>
+      : <div className={css.inspectTitle}><span className={css.nodeIcon}><IconBlock size={17} /></span><span className={css.nodeText}><span className={css.nodeTitle}>{tx(path.length ? 'workflows:inspector.block-title' : 'workflows:inspector.workflow-title')}</span></span></div>;
+    if (selection.kind === 'start') description = <DraftTextField bare label={tx('workflows:panel.description')} placeholder={tx('workflows:panel.description-placeholder')} value={entry?.description ?? ''} multiline address={entryField('description')} />;
+    // As Dify's Loop and Iteration Start: a body has no input of its own; it
+    // reads the variables around it.
+    body = owner && (path.length ? <p className={css.note}>{tx('workflows:inspector.body-start')}</p>
+      : <BlockForm document={document} block={path} edit={edit} onSelect={onSelect} tools={vocabulary?.builtin_tools ?? []} start={selection.kind === 'start'} />);
+  }
+  return <aside ref={root} className={css.inspector} style={{ '--inspector-width': `${width}px` } as CSSProperties} aria-label={tx('workflows:inspector.label')} onWheel={event => event.stopPropagation()}
+    onKeyDown={event => { if (event.key === 'Escape' && !event.nativeEvent.isComposing && !event.isDefaultPrevented() && !(event.target as Element).closest('textarea, input, select, [contenteditable="true"], [role="dialog"], [role="listbox"]')) { event.stopPropagation(); onSelect(undefined); } }}>
+    <div className={css.inspectorResize} role="separator" aria-label={tx('workflows:panel.resize')} aria-orientation="vertical" aria-valuemin={320} aria-valuemax={640} aria-valuenow={width} tabIndex={0}
+      onPointerDown={event => { event.preventDefault(); resize.current = { x: event.clientX, width }; setResizing(true); }}
+      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); changeWidth(width + (event.key === 'ArrowLeft' ? 20 : -20)); } }} />
+    {/* As Dify's node panel: the description sits under the title, in the header. */}
+    <header className={css.inspectHead}>
+      <div className={css.inspectHeadRow}>{head}<button type="button" className={css.iconButton} aria-label={tx('workflows:inspector.close')} onClick={() => onSelect(undefined)}><IconCloseOutline16 /></button></div>
+      {description && <div className={css.inspectDescription} key={selection.kind === 'node' ? `node:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>{description}</div>}
+    </header>
+    {(selection.kind === 'start' || selection.kind === 'node' && node?.type !== 'branch') && <div className={css.inspectTabs}><span>{tx('workflows:branch.settings')}</span></div>}
+    <div data-workflow-inspector-body className={clsx(css.inspectBody, 'nowheel')} key={selection.kind === 'node' || selection.kind === 'note' ? `${selection.kind}:${JSON.stringify(path)}:${selection.id}` : `${selection.kind}:${JSON.stringify(path)}`}>
+      {rejection && <p role="alert" className={css.hintError}>{rejection}</p>}{body}
+    </div>
+  </aside>;
+}

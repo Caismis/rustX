@@ -1,7 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 import { useId, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import clsx from 'clsx'
-import { IconChevronDownOutline14 } from './icons/index.tsx'
+import { IconChevronDownOutline14, IconChevronUpOutline14 } from './icons/index.tsx'
+import { TextShimmer } from './TextShimmer'
 import css from './DisclosureRow.module.css'
 
 /** Shared 24px disclosure chrome for compact flow rows. */
@@ -11,6 +12,8 @@ export interface DisclosureRowProps {
   open: boolean
   expandable: boolean
   onToggle: () => void
+  /** Animate only header text while its owning operation is running. */
+  running?: boolean
   /** Makes the complete title row the disclosure target. */
   expandOnRowClick?: boolean | undefined
   /** Replaces the collapsed icon with a chevron while the row is hovered. */
@@ -21,6 +24,9 @@ export interface DisclosureRowProps {
   children?: ReactNode
   className?: string | undefined
   rowClassName?: string | undefined
+  /** Header text sizing and shared base/shimmer layout, beside the leading icon. */
+  contentClassName?: string | undefined
+  contentLayoutClassName?: string | undefined
   leadingClassName?: string | undefined
   chevronClassName?: string | undefined
   titleClassName?: string | undefined
@@ -37,6 +43,7 @@ export function DisclosureRow({
   open,
   expandable,
   onToggle,
+  running = false,
   expandOnRowClick = false,
   previewChevron = expandable,
   keepContentWhenOpen = false,
@@ -44,6 +51,8 @@ export function DisclosureRow({
   children,
   className,
   rowClassName,
+  contentClassName,
+  contentLayoutClassName,
   leadingClassName,
   chevronClassName,
   titleClassName,
@@ -68,11 +77,12 @@ export function DisclosureRow({
     )
     : icon
   const leading = open
-    ? <IconChevronDownOutline14 className={chevronClassName} />
+    ? <IconChevronUpOutline14 className={chevronClassName} />
     : collapsedLeading
 
   return (
     <div className={clsx(css.root, className)} data-open={open || undefined}>
+      <div className={css.header} data-disclosure-header>
       <div
         className={clsx(css.row, rowClassName)}
         data-disclosure-row
@@ -100,8 +110,11 @@ export function DisclosureRow({
             {leading}
           </span>
         )}
-        <span className={clsx(css.title, titleClassName)}>{title}</span>
+        <TextShimmer active={running} className={clsx(css.content, contentClassName)} contentClassName={contentLayoutClassName}>
+        <TextShimmer className={clsx(css.title, titleClassName)}>{title}</TextShimmer>
         {(keepContentWhenOpen || !open) && collapsedContent}
+        </TextShimmer>
+      </div>
       </div>
       <div id={contentId} hidden={!open}>{open && children}</div>
     </div>

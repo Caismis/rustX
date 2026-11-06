@@ -1,6 +1,7 @@
 //! Atomic ordinary model output; mailbox and publication keep their own owners.
-use super::{AgentExecution, CanonicalCommitError, MessageBlock, RuntimeEvent};
-use crate::durable::inbox::{ConversationStoreError, ModelTurnBoundary, ModelTurnSettlement};
+use super::terminal::CanonicalCommitError;
+use super::{AgentExecution, MessageBlock, RuntimeEvent};
+use crate::durable::{ConversationStoreError, ModelTurnBoundary, ModelTurnSettlement};
 
 impl AgentExecution<'_> {
     pub(super) fn commit_model_output(
@@ -33,7 +34,7 @@ impl AgentExecution<'_> {
             if let Some(batch) = &batch {
                 for item in batch.items() {
                     self.conversation
-                        .prepare_commit(&crate::durable::inbox::canonical_block(item.message()))?;
+                        .prepare_commit(&crate::durable::canonical_block(item.message()))?;
                 }
             }
             Some(ModelTurnBoundary {

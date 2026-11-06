@@ -18,26 +18,26 @@
 }
 
 .cubeRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
   gap: 8px;
-  flex-wrap: wrap;
 }
 
 /* Appearance cube (figma '.Selector Cube' 276x82, pad 20/32, centered
  * icon-over-label column, gap 4); flexed down from the figma width so all
- * three sit on one row in the 800 panel, wrapping when narrower. */
+ * three share one row, including the narrower Settings content column. */
 .themeCube {
   box-sizing: border-box;
-  flex: 1 1 180px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 20px 32px;
+  padding: 20px 8px;
   border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 20px; /* Harness --dsw-radius-xl. */
+  border-radius: var(--dsw-radius-xl);
   background: transparent;
   font: inherit;
   font-size: 14px;

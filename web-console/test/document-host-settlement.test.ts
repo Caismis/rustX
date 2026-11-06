@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { createHash } from 'node:crypto';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -20,12 +19,12 @@ it.each(['cgroup', 'input cleanup'] as const)('%s failure: Host capacity spans c
   const host = new LocalWorkspaceHost({ endpoint: 'ws://127.0.0.1:1234/', transportToken: 'browser', productHostToken: 'private', metadataFile: join(directory, 'workspaces.json'), picker: true, roots: [{ id: 'a', cwd: directory, displayName: 'A' }] });
   const entered = gate(), closed = gate(), cleaning = gate(), cleaned = gate();
   const bytes = readFileSync(new URL('./fixtures/documents/sample.docx', import.meta.url));
-  boundary.read.mockResolvedValue({ data: bytes.toString('base64') });
+  boundary.read.mockResolvedValue({ data: Uint8Array.from(bytes) });
   boundary.sandbox.mockImplementationOnce(async () => { entered.release(); await closed.promise; return Buffer.from('%PDF-late'); }).mockResolvedValue(Buffer.from('%PDF-next'));
   boundary.cleanup.mockImplementationOnce(async () => { cleaning.release(); await cleaned.promise; });
   try {
     const scope = await host.listWorkspaces();
-    const request = { target: { session_id: 's', conversation_id: 'c', runtime_incarnation: '1', attachment_id: 'a' }, source: { kind: 'artifact' as const, artifact_id: 'artifact_1' }, extension: 'docx' as const, digest: createHash('sha256').update(bytes).digest('hex') };
+    const request = { target: { session_id: 's', conversation_id: 'c', runtime_incarnation: '1', attachment_id: 'a' }, source: { kind: 'artifact' as const, artifact_id: 'artifact_1' }, extension: 'docx' as const };
     const controller = new AbortController();
     const work = host.previewDocument(scope, request, controller.signal), rejected = expect(work).rejects.toThrow();
     await entered.promise; controller.abort();
@@ -33,7 +32,7 @@ it.each(['cgroup', 'input cleanup'] as const)('%s failure: Host capacity spans c
     closed.release(); await cleaning.promise;
     await expect(host.previewDocument(scope, request)).rejects.toThrow('capacity');
     cleaned.release(); await rejected;
-    expect((await host.previewDocument(scope, request)).preview).toEqual({ kind: 'pdf', data: Buffer.from('%PDF-next').toString('base64') });
+    expect((await host.previewDocument(scope, request)).preview).toEqual({ kind: 'pdf', data: new TextEncoder().encode('%PDF-next') });
     expect(boundary.sandbox).toHaveBeenCalledTimes(2);
     if (failure === 'cgroup') boundary.sandbox.mockRejectedValueOnce(new OfficeSettlementError());
     else boundary.cleanup.mockRejectedValueOnce(new Error('input cleanup denied'));

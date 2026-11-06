@@ -62,7 +62,7 @@ what a screenshot happens to show.
 | --- | --- | --- |
 | Multi-Session and residency | `console.spec.ts`: A parked while B executes, TUI controller handoff, close/open beyond the 32-attachment capacity, disconnect/reload, explicit unload/cold reopen, durable identity/cwd/history, no duplicate side effect | `tests/scripted/app_server/{protocol,residency_policy,transports}.rs`: operation/idle/attach winners, manual-clock idle eviction, connection ownership; `client.test.ts` generation fencing and exact release |
 | Chat / Markdown / history | `chat.spec.ts`: 34 durable turns cross the bootstrap page, prepend anchor geometry, streamed/settled rich text, reconnect, managed image decode/lightbox | `transcript.test.ts`: 512-entry/8-MiB finite window, stale pages and concurrent live refresh; Markdown incremental/code-settlement tests prove bounded current-document retention and canonical settlement; `scroll.test.tsx` measures stable anchors |
-| Harness shell | `shell.spec.ts`: ten checked-in deterministic light/dark, desktop/rail, Workspace/search/status, Settings, right-panel and mobile references; real typed client fixture | `shell.test.tsx`: columns, collapse/toggle, theme/Settings/Inspector without RPCs, pending status priority, native paging; existing native ownership and reconnect tests retained |
+| Harness shell | `shell.spec.ts`: ten checked-in deterministic light/dark, desktop/rail, Workspace/search/status, Settings, right-panel and mobile references; real typed client fixture | `shell.test.tsx`: columns, collapse/toggle, theme/Settings without RPCs, pending status priority, native paging; existing native ownership and reconnect tests retained |
 | Session-owned uploads | `uploads.spec.ts`: text + PNG, filesystem bytes, exact absolute model paths/XML-before-body, real native bash file IO, browser Fork, source delete before destination execution, reload, deletion of each owned root; no `artifact/read` request | `src/local_runtime/session/uploads/tests.rs`: commit/copy/publication/deletion gates, restart recovery, historical cwd roots, failed cleanup; `src/model/uploads.rs` exact escaping/order; protocol receipt admission and refusal of manufactured canonical metadata |
 | Trace / Trajectory | `chat.spec.ts`, `workflow.spec.ts`: live/historical paging, model/Tool/result, exact native trace identity, running unavailable timing, Workflow/child, reload | Native Trace projection tests and `protocol::trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts`; `trace-cache.test.ts` 512-entry/4-MiB bound, lifecycle repair, contiguous rebase; `trajectory.test.tsx` bounded virtual DOM, native ordering, selection |
 | Todo / Goal / Queue | `composer.spec.ts`: empty→active Todo, fixed seat order, running Goal, exact pending edit/remove, post-claim disabled draft, paused state/revision through reload | `composer-context.test.tsx`: absent/empty/current distinctions, stale Goal CAS without retry; native Goal tests, durable inbound mutation/adoption transactions and `protocol::exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts` |
@@ -222,7 +222,7 @@ references cover idle empty/draft, running Stop/Queue, attachments and the conte
 stack in both themes at 1440px and 390px. Shell/Settings baselines also include the
 changed composer behind their overlays; no shell or Settings redesign is implied.
 
-## WEB-12 product / Inspector boundary
+## WEB-12 product / diagnostics boundary
 
 `session-surface.test.tsx` proves Sidebar-only selection, background work across
 focus changes, finite view capacity and explicit close/release, native-only naming
@@ -256,13 +256,13 @@ proves bulk close only releases observed controllers and leaves running work int
 `session-product.test.tsx` covers deterministic status priority, idle silence,
 accepted versus unaccepted inbound, cancellation request versus settlement,
 attachment recovery, durability and uncertain outcomes. It proves exact native
-identity/phase/revision evidence remains in Inspector, Inspector navigation and
-local log controls send no native operations, and lost cancellation is not replayed.
+identity/phase/revision evidence remains in the native client, developer controls
+are absent, and lost cancellation is not replayed.
 Existing client/runtime tests remain authoritative for attachment and residency.
 
 Browser tests no longer synchronize through `.attempt-status`, permanent lifecycle
 buttons or attachment suffixes. They use canonical resulting messages, product
-readiness, actual wire responses, native diagnostics, or explicit Inspector reads.
+readiness, actual wire responses, native diagnostics, or explicit native checkpoint reads.
 Advanced unload is tested through its disclosed dialog; controller handoff uses
 close/open and exact native detach acknowledgements. Shell references now include
 idle, queued, stopping, reconnect and uncertainty, alongside desktop light/dark,

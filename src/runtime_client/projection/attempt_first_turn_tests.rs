@@ -1,4 +1,3 @@
-use crate::durable::ConversationStore;
 use crate::durable::observation::NativeObservationTransition;
 
 #[test]

@@ -1,11 +1,11 @@
 //! Read evidence for deferred execution diagnostics at a published native J cut.
 use super::RuntimeClientCursor;
-use super::checkpoint::{
-    CheckpointPage, CheckpointPageItem, CheckpointReadCut, CheckpointValueChunk,
-    CheckpointValueRepresentation,
-};
 use super::types::RuntimeClientError;
 use crate::durable::ConversationStore;
+use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
+use crate::runtime_client::checkpoint::{
+    CheckpointPage, CheckpointValueChunk, CheckpointValueRepresentation,
+};
 
 pub(crate) fn selection(domain: &str) -> Option<(u64, Vec<String>)> {
     let tail = domain.strip_prefix("journal.")?;
@@ -34,6 +34,11 @@ fn authorize(
         .ok_or(RuntimeClientError::ReadCutExpired)?;
     let normalized_failure = path == ["normalized_failure"] && event_kind == "attempt_failed";
     let finish_reason = path == ["event", "finish_reason"] && event_kind == "attempt_completed";
+    let workflow_io = path == ["event", "value"]
+        && matches!(
+            event_kind.as_str(),
+            "workflow_node_input_recorded" | "workflow_node_output_recorded"
+        );
     let tool_field = path.len() >= 2
         && path[0] == "event"
         && matches!(path[1].as_str(), "result" | "error")
@@ -53,7 +58,7 @@ fn authorize(
                 | "attempt_timed_out"
                 | "attempt_limit_exceeded"
         );
-    if normalized_failure || finish_reason || tool_field || attempt_identity {
+    if normalized_failure || finish_reason || tool_field || attempt_identity || workflow_io {
         return Ok(());
     }
     let trace_field = if let Some(kind) =
@@ -74,7 +79,7 @@ fn authorize(
                 },
             )
             .map_err(RuntimeClientError::observation_store_error)?;
-        facts.iter().any(|fact|fact.sequence==sequence && (fact.fields.iter().chain(fact.location.step_id_source.iter()).any(|field|matches!(field,super::trace::TraceFieldSource::Value{domain,item_offset:0,path:selected,..} if domain==&format!("journal.{sequence}") && selected==path))))
+        facts.iter().any(|fact|fact.sequence==sequence && (fact.fields.iter().chain(fact.location.step_id_source.iter()).any(|field|matches!(field,crate::observation::trace::TraceFieldSource::Value{domain,item_offset:0,path:selected,..} if domain==&format!("journal.{sequence}") && selected==path))))
     } else {
         false
     };

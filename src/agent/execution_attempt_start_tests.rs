@@ -8,7 +8,7 @@ async fn first_turn_admission_preserves_precancel_and_committed_observer_order()
         let tool_runtime = tool_runtime_with_store(
             "conv_36524fd8-f674-7fc2-8125-06d01fee0e18", Some(store.clone()),
         );
-        let (_dir, _coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let (lease, _coordinator) = capability_lease(ToolRegistry::new(), &tool_runtime).await.into_lease_and_coordinator();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         if precancel { cancellation.cancel(); }
         let observer = RecordingObserver {
@@ -56,7 +56,7 @@ async fn first_turn_admission_failure_never_publishes_a_partial_start_or_calls_p
         let tool_runtime = tool_runtime_with_store(
             "conv_36524fd8-f674-7fc2-8125-06d01fee0e18", Some(store.clone()),
         );
-        let (_dir, _coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let (lease, _coordinator) = capability_lease(ToolRegistry::new(), &tool_runtime).await.into_lease_and_coordinator();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let observer = RecordingObserver::default();
         let mut execution = AgentExecution::new(

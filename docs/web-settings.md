@@ -13,8 +13,8 @@ Native confirmation establishes success; rejected or uncertain mutations do not
 optimistically rewrite either authority. Recovery rereads native state without
 replaying the mutation. Profile changes preserve independent Session overrides
 and Summary Model policy; choosing another Model resets only primary selection
-overrides. The focused Session's context-adoption control retains its separate
-native eligibility rules.
+overrides. Saved context and capability changes commit natively at the Session's
+safe boundary; no browser control confirms them.
 
 Global Settings edits User definitions with no Session required. Workspace Settings
 opens the exact registered Workspace through Product Host authorization without
@@ -25,7 +25,7 @@ exact authorized Workspace. There is no ordinary `Configuration owner` selector;
 a Session focus change never retargets an open editor, and a revoked or
 unregistered Workspace is fenced (its draft and error are retained) rather than
 redirected to User or another Workspace. Resolved source previews are read-only and are
-not the Session's adopted binding. The actual User pathname is displayed separately
+not the Session's committed binding. The actual User pathname is displayed separately
 from fixed `~/rustx/.agents`.
 
 Settings is organized by product task into exactly six primary pages:
@@ -73,6 +73,13 @@ Provider and Model edits address independent identities. Workspace
 replacement edits complete objects. Native Tools use an explicit checkbox whitelist;
 MCP, Python and Skill selections have all/exact/none controls. Skill guidance explains
 prompt visibility and displays absolute collection roots. Plugins default off.
+
+The Model capability editor contains one **Native JSON Schema output** checkbox
+(`json_schema_output`), defaulting to false. Its declaration means native API schema
+enforcement verified for the selected model, endpoint, protocol and usable Profiles.
+It follows the same whole-Model replacement and User/Workspace precedence as other
+capabilities. Enabling it does not change ordinary Agent, Title or Summary requests.
+
 Named-Agent editing writes the complete resource profile, including its independent
 Tools/Skills/Plugins, delegation lists, model inheritance and timeout. There is no
 worktree setting: every Agent runs in the shared Session workspace (#462).
@@ -101,20 +108,17 @@ states rather than one “loading” label. Change behavior (“Applies immediat
 (Applied / Preparing / Failed / Restart pending), and any “Active” statement is
 scoped to the native-confirmed unit rather than every Session. Conflicts preserve
 the draft. Settings renders simultaneous applied, preparing, failed/retry,
-process-restart state. The single **Adopt configuration** control lives below the
-focused Session title, outside Settings. It sends the inspected candidate and
-expected Session binding; the runtime's published adoption eligibility (Runtime
-Client snapshot state, never part of the application) is advisory and the native
-admission gate revalidates both. Failed preparation offers one owner-specific Settings
+process-restart state. There is no adoption control: native commits a prepared
+candidate automatically at the Session's safe boundary, and the compact status
+line below the focused Session title only observes it. Failed preparation offers one owner-specific Settings
 action per authored owner named by native `ConfigurationApplication.sources`.
 That application's `scope` is the Session identity, never a source owner, so the
 browser parses no scope string, infers nothing from the Session `cwd` and routes
 nothing to a default owner. A Workspace owner the Product Host does not register
 reports an explicit error and never falls back to User authoring; opening an
 owning editor allocates no Workspace, Session or runtime, and a later Session
-focus change never retargets it. Busy never cancels work or schedules
-automatic adoption. Diagnostics offers native rescan. Uncertain writes/adoption
-are repaired by rereading authority, never replayed. Reconnect rereads native
+focus change never retargets it. Waiting for current work never cancels it.
+Diagnostics offers native rescan. Uncertain writes and commits are repaired by rereading authority, never replayed. Reconnect rereads native
 state.
 
 Every Extensions row reports kind, owning scope and its relationship to this
@@ -126,11 +130,13 @@ not observed — never as "no". Opening the page probes and connects nothing.
 
 What a resource kind supports comes from a single native capability matrix
 (`app/settings/capability.ts`). MCP definitions and named-Agent profiles have
-structured editors. Skills, Workflows and Managed Python have no authoring
-operation on this protocol, so their details show inventory, diagnostics and the
-supported root selection with no Edit, Save or Delete for the definition itself.
-Full Workflow program, Skill-package and Python-source editing are outside this
-Settings scope.
+structured editors. Skills and Managed Python have no authoring operation on
+this protocol, so their details show inventory, diagnostics and the supported
+root selection with no Edit, Save or Delete for the definition itself. Workflow
+files are authored in the dedicated **Workflows** area of the sidebar (see
+[Workflow authoring](workflow-authoring.md#file-authoring-app-server-and-web));
+Settings keeps their inventory and root selection only. Skill-package and
+Python-source editing are outside this Settings scope.
 
 A resource's definition and its root availability are two native mutations with
 two outcomes. The resource detail edits the root selection through the same
@@ -175,8 +181,7 @@ The browser's asynchronous configuration semantics are owned by explicit XState
 v5 actors under `app/settings/machines/`, not by component effects: the Settings
 authority of one exact target (its authoritative reads, its one in-flight
 mutation and its single level-triggered convergence obligation), one CAS editing
-transaction per native semantic unit, Session observation and Session adoption,
-and top-level Settings navigation. React subscribes and submits intent. Those
+transaction per native semantic unit, Session observation, and top-level Settings navigation. React subscribes and submits intent. Those
 actors are addressed by `(endpoint, authority revision, subject)`, so a Settings
 dialog closing is a detach — never a cancelled native commit and never a
 discarded editing transaction — and replacing the App Server authority retires
@@ -187,7 +192,7 @@ retains editing transactions; attach revalidates authoritative observation: the
 retained observation is stale presentation data and is never accepted as fresh
 authority for a newly attached presentation. XState
 orchestrates browser behaviour only; the native App Server remains the authority
-for every value, conflict, application and adoption decision.
+for every value, conflict, application and commit decision.
 
 Read ordering is structural rather than compared: exactly one authoritative read
 is in flight, and starting a newer one stops the older read actor, so a
@@ -377,8 +382,7 @@ asserted together with the interaction, geometry, overflow and axe checks in
 | `settings-provider-detail-mobile-dark` | Provider detail, long identity | 390 × 844 | dark |
 | `settings-agent-narrow-dark` | Workspace named-Agent detail | 390 × 844 | dark |
 | `session-banner-preparing-light` | Session banner, preparing | 1440 × 1000 | light |
-| `session-configuration-banner-light` | Session banner, ready to adopt | 1440 × 1000 | light |
-| `session-banner-blocked-light` | Session banner, blocked by Session work | 1440 × 1000 | light |
+| `session-banner-waiting-light` | Session banner, applies after current work | 1440 × 1000 | light |
 | `session-banner-failed-light` | Session banner, failed with owner actions | 1440 × 1000 | light |
 | `session-banner-failed-mobile-dark` | Session banner, failed | 390 × 844 | dark |
 
@@ -401,7 +405,7 @@ Settings presents seven facts that are never collapsed into one another:
 | Source commit | a definitive native acknowledgement of one semantic-unit mutation |
 | Authoritative reread | the read after a commit that observes (or fails to observe) it |
 | Application / preparation | the native per-unit consumer outcome (Applied, Preparing, Failed, Restart pending) |
-| Session adoption | a Session's explicit move onto a prepared candidate, gated natively |
+| Session commit | native's automatic move of a Session onto a prepared candidate at its safe boundary, recorded as one `configuration_applied` fact |
 
 A confirmed save is not an application, a successful read does not clear an
 unrelated application failure, a valid resource is not a prepared one, and a
@@ -431,15 +435,21 @@ draft. See `SETTINGS-ARCHITECTURE.md` → Automatic repair.
 
 ## Session configuration banner
 
-Below the Session title, one compact line per native fact: **Preparing**, a
-prepared candidate **ready** to adopt, the same candidate **blocked** by Session
-work (with the native reason and a disabled **Adopt configuration**), or
-**failed** preparation with the native diagnostic and one **Open … Settings**
-action per native owner. Lines wrap on a narrow Session instead of truncating.
-Presentation changed; semantics did not: no banner when native confirms nothing
-is pending, unavailable is never "up to date", Adopt sends the exact candidate
-and expected binding and native revalidates it, and nothing cancels work,
-queues adoption, or adopts on reconnect, attach, reopen or reload.
+Below the Session title, one compact line per native fact, shown only while it
+needs attention: **Preparing**, a prepared change that **applies after current
+work**, **failed** preparation that kept the previous configuration (the native
+diagnostic, one **Open … Settings** action per native owner and a native
+**Retry**), an **uncertain** commit, or settings waiting for a **restart**. Lines
+wrap on a narrow Session instead of truncating. Success is silent: the line
+disappears once everything is applied, and unavailable is never "up to date".
+Nothing here confirms, schedules or cancels work.
+
+Committed changes appear as facts, never as status. Following the Harness
+hidden-rows contract, Chat hides system-prompt and ordinary Context rows and
+shows only committed Tool additions and removals, in the Harness `DisclosureRow`
+style (`ConfigurationChangeRow`): one compact row for a single Tool, counts when
+collapsed and grouped names when expanded for several. Trace shows every
+committed change as a `Configuration` record with its domains and bounded names.
 
 ## Browser-owned language
 
@@ -484,10 +494,6 @@ current. A newer publication supersedes all earlier read completions, including
 null and error. Leaving the connection generation cancels its read authority.
 Known absence is a successful observation, not failed/unavailable authority.
 
-Adoption retains its own settlement obligation while an authoritative reread is
-in flight. A concurrent publication can establish current observation without
-releasing that obligation early; the superseded read still settles the transaction
-without overwriting the publication. A relevant failed reread remains visibly
-failed and cannot authorize adoption. Native gate revalidation is mandatory;
-uncertain adoption is never replayed. Streaming deltas and configuration
-publications issue zero additional configuration reads.
+A relevant failed reread remains visibly failed. An uncertain commit is never
+replayed. Streaming deltas and configuration publications issue zero additional
+configuration reads.

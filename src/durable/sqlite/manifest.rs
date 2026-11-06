@@ -56,12 +56,15 @@ const NODE_SCHEMA: &str = "CREATE TABLE native_input_nodes (
         CHECK((typeof(item_json)='text' AND item_digest IS NOT NULL AND count=1 AND height=1 AND left_id IS NULL AND right_id IS NULL AND left_digest IS NULL AND right_digest IS NULL) OR (item_json IS NULL AND item_digest IS NULL AND typeof(left_id)='integer' AND left_id>0 AND typeof(right_id)='integer' AND right_id>0 AND typeof(left_digest)='blob' AND length(left_digest)=32 AND typeof(right_digest)='blob' AND length(right_digest)=32))
     )";
 pub(super) fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    connection
-        .execute_batch(NODE_SCHEMA)
-        .map_err(|error| storage(format!("native selected input schema: {error}")))
+    connection.execute_batch(NODE_SCHEMA).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("native selected input schema: {error}"),
+        )
+    })
 }
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name='native_input_nodes'",[],|r|r.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name='native_input_nodes'",[],|r|r.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if sql.flatten().as_deref() != Some(NODE_SCHEMA) {
         return Err(ConversationStoreError::IncompatibleSchema(
             "native selected input schema differs".into(),
@@ -119,7 +122,7 @@ fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStore
     });
     let mut statement = connection
         .prepare_cached("SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height FROM native_input_nodes WHERE id=?1")
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let row: HeaderRow = statement
         .query_row([seq_to_i64(id)?], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .map_err(|e| storage(e.to_string()))?;
@@ -160,7 +163,7 @@ pub(super) fn node(
                 ))
             })
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let actual = decoded_header(expected.id, head)?;
     if actual != *expected {
         return Err(invalid("native selected input node identity"));
@@ -517,7 +520,7 @@ impl Owner {
             .query_row_cached("SELECT rootpage FROM sqlite_schema LIMIT 1", [], |row| {
                 row.get::<_, i64>(0)
             })
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let actual = (
             connection
                 .query_row_cached("PRAGMA main.data_version", [], |r| r.get::<_, u64>(0))

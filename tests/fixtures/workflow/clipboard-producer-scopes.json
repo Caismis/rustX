@@ -1,0 +1,1200 @@
+[
+  {
+    "kind": "model",
+    "source": {
+      "description": "Copy complete groups without rebinding local producers",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "sibling": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "seed",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "structured_output",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "generate": {
+                  "type": "model",
+                  "output": {
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "foo": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "foo"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Return the requested boolean."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Produce a result."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "structured_output",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "generate"
+                },
+                {
+                  "from": "generate",
+                  "to": "consume"
+                }
+              ],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "parallel_nums": 10
+          },
+          "generate": {
+            "type": "model",
+            "output": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "foo": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "foo"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "model": {
+              "mode": "session"
+            },
+            "messages": [
+              {
+                "role": "system",
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Return the requested boolean."
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Produce a result."
+                  }
+                ]
+              }
+            ]
+          },
+          "done": {
+            "type": "return",
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "generate",
+                  "structured_output",
+                  "foo"
+                ]
+              }
+            ]
+          },
+          "seed": {
+            "type": "loop",
+            "loop_count": 1,
+            "loop_variables": [
+              {
+                "label": "items",
+                "var_type": "array[string]",
+                "value": {
+                  "type": "literal",
+                  "value": [
+                    "x"
+                  ]
+                }
+              }
+            ],
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                }
+              },
+              "edges": [],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          },
+          "inherited": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "seed",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "structured_output",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "structured_output",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "consume"
+                }
+              ],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "parallel_nums": 10
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "seed"
+          },
+          {
+            "from": "seed",
+            "to": "sibling"
+          },
+          {
+            "from": "sibling",
+            "to": "generate"
+          },
+          {
+            "from": "generate",
+            "to": "inherited"
+          },
+          {
+            "from": "inherited",
+            "to": "done"
+          }
+        ]
+      }
+    },
+    "target": {
+      "description": "Paste target",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          }
+        },
+        "edges": []
+      }
+    },
+    "selection": [
+      "seed",
+      "sibling",
+      "generate",
+      "inherited",
+      "done"
+    ],
+    "pasted": {
+      "description": "Paste target",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "seed_copy": {
+            "type": "loop",
+            "loop_count": 1,
+            "loop_variables": [
+              {
+                "label": "items",
+                "var_type": "array[string]",
+                "value": {
+                  "type": "literal",
+                  "value": [
+                    "x"
+                  ]
+                }
+              }
+            ],
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                }
+              },
+              "edges": [],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          },
+          "sibling_copy": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "seed_copy",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "structured_output",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "generate": {
+                  "type": "model",
+                  "output": {
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "foo": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "foo"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Return the requested boolean."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Produce a result."
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "structured_output",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "generate"
+                },
+                {
+                  "from": "generate",
+                  "to": "consume"
+                }
+              ],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "parallel_nums": 10
+          },
+          "generate_copy": {
+            "type": "model",
+            "output": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "foo": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "foo"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "model": {
+              "mode": "session"
+            },
+            "messages": [
+              {
+                "role": "system",
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Return the requested boolean."
+                  }
+                ]
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "literal",
+                    "value": "Produce a result."
+                  }
+                ]
+              }
+            ]
+          },
+          "inherited_copy": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "seed_copy",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate_copy",
+                "structured_output",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate_copy",
+                            "structured_output",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "consume"
+                }
+              ],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "parallel_nums": 10
+          },
+          "done_copy": {
+            "type": "return",
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "generate_copy",
+                  "structured_output",
+                  "foo"
+                ]
+              }
+            ]
+          }
+        },
+        "edges": [
+          {
+            "from": "seed_copy",
+            "to": "sibling_copy"
+          },
+          {
+            "from": "sibling_copy",
+            "to": "generate_copy"
+          },
+          {
+            "from": "generate_copy",
+            "to": "inherited_copy"
+          },
+          {
+            "from": "inherited_copy",
+            "to": "done_copy"
+          },
+          {
+            "from": "start",
+            "to": "seed_copy"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "kind": "agent",
+    "source": {
+      "description": "Copy complete groups without rebinding local producers",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "sibling": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "seed",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "generate": {
+                  "type": "agent",
+                  "output": {
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "foo": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "foo"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "profile": "reviewer",
+                  "task": [
+                    {
+                      "type": "literal",
+                      "value": "Produce a result."
+                    }
+                  ]
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "generate"
+                },
+                {
+                  "from": "generate",
+                  "to": "consume"
+                }
+              ],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "parallel_nums": 10
+          },
+          "generate": {
+            "type": "agent",
+            "output": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "foo": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "foo"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "profile": "reviewer",
+            "task": [
+              {
+                "type": "literal",
+                "value": "Produce a result."
+              }
+            ]
+          },
+          "done": {
+            "type": "return",
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "generate",
+                  "foo"
+                ]
+              }
+            ]
+          },
+          "seed": {
+            "type": "loop",
+            "loop_count": 1,
+            "loop_variables": [
+              {
+                "label": "items",
+                "var_type": "array[string]",
+                "value": {
+                  "type": "literal",
+                  "value": [
+                    "x"
+                  ]
+                }
+              }
+            ],
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                }
+              },
+              "edges": [],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          },
+          "inherited": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "seed",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "consume"
+                }
+              ],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "parallel_nums": 10
+          }
+        },
+        "edges": [
+          {
+            "from": "start",
+            "to": "seed"
+          },
+          {
+            "from": "seed",
+            "to": "sibling"
+          },
+          {
+            "from": "sibling",
+            "to": "generate"
+          },
+          {
+            "from": "generate",
+            "to": "inherited"
+          },
+          {
+            "from": "inherited",
+            "to": "done"
+          }
+        ]
+      }
+    },
+    "target": {
+      "description": "Paste target",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          }
+        },
+        "edges": []
+      }
+    },
+    "selection": [
+      "seed",
+      "sibling",
+      "generate",
+      "inherited",
+      "done"
+    ],
+    "pasted": {
+      "description": "Paste target",
+      "block": {
+        "input": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "nodes": {
+          "start": {
+            "type": "start"
+          },
+          "seed_copy": {
+            "type": "loop",
+            "loop_count": 1,
+            "loop_variables": [
+              {
+                "label": "items",
+                "var_type": "array[string]",
+                "value": {
+                  "type": "literal",
+                  "value": [
+                    "x"
+                  ]
+                }
+              }
+            ],
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                }
+              },
+              "edges": [],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          },
+          "sibling_copy": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "seed_copy",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "generate": {
+                  "type": "agent",
+                  "output": {
+                    "type": "json_schema",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "foo": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "foo"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "profile": "reviewer",
+                  "task": [
+                    {
+                      "type": "literal",
+                      "value": "Produce a result."
+                    }
+                  ]
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "generate"
+                },
+                {
+                  "from": "generate",
+                  "to": "consume"
+                }
+              ],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "parallel_nums": 10
+          },
+          "generate_copy": {
+            "type": "agent",
+            "output": {
+              "type": "json_schema",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "foo": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "foo"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "profile": "reviewer",
+            "task": [
+              {
+                "type": "literal",
+                "value": "Produce a result."
+              }
+            ]
+          },
+          "inherited_copy": {
+            "type": "iteration",
+            "iterator": {
+              "type": "reference",
+              "path": [
+                "seed_copy",
+                "items"
+              ]
+            },
+            "output": {
+              "type": "reference",
+              "path": [
+                "generate_copy",
+                "foo"
+              ]
+            },
+            "body": {
+              "nodes": {
+                "start": {
+                  "type": "start"
+                },
+                "consume": {
+                  "type": "model",
+                  "model": {
+                    "mode": "session"
+                  },
+                  "messages": [
+                    {
+                      "role": "system",
+                      "content": [
+                        {
+                          "type": "literal",
+                          "value": "Read the boolean as data."
+                        }
+                      ]
+                    },
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "reference",
+                          "path": [
+                            "generate_copy",
+                            "foo"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "output": {
+                    "type": "text"
+                  }
+                }
+              },
+              "edges": [
+                {
+                  "from": "start",
+                  "to": "consume"
+                }
+              ],
+              "input": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            },
+            "parallel_nums": 10
+          },
+          "done_copy": {
+            "type": "return",
+            "outputs": [
+              {
+                "variable": "result",
+                "value_selector": [
+                  "generate_copy",
+                  "foo"
+                ]
+              }
+            ]
+          }
+        },
+        "edges": [
+          {
+            "from": "seed_copy",
+            "to": "sibling_copy"
+          },
+          {
+            "from": "sibling_copy",
+            "to": "generate_copy"
+          },
+          {
+            "from": "generate_copy",
+            "to": "inherited_copy"
+          },
+          {
+            "from": "inherited_copy",
+            "to": "done_copy"
+          },
+          {
+            "from": "start",
+            "to": "seed_copy"
+          }
+        ]
+      }
+    }
+  }
+]

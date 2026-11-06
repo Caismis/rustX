@@ -1,7 +1,7 @@
 import { translator } from '../src/locale/translation';
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v52';
+import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v73';
 import {
   applicationOwners, applicationScope, authoredUnit, catalogEntries, catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, documentAuthoring,
   effectiveStateLabel, inheritedResources, observedResult, observedResultLabel, openOwnerLabel, provenanceLabel,
@@ -149,7 +149,7 @@ it('S1-14 whole-unit semantic units use their exact whole-unit native paths', ()
     [{ kind: 'config', mutation: { unit: 'goal', authored: null } }, 'agent.plugins.goal'],
     [{ kind: 'config', mutation: { unit: 'agent_status', authored: null } }, 'agent.plugins.agent_status'],
     [{ kind: 'config', mutation: { unit: 'agents', authored: null } }, 'agent.agents'],
-    [{ kind: 'config', mutation: { unit: 'workflows', authored: null } }, 'agent.workflows'],
+    [{ kind: 'config', mutation: { unit: 'workflow_enabled', id: 'nightly', enabled: true } }, 'agent.workflows'],
     [{ kind: 'config', mutation: { unit: 'agent_identity', authored: null } }, 'agent_id'],
     [{ kind: 'config', mutation: { unit: 'description', authored: null } }, 'agent.description'],
     [{ kind: 'config', mutation: { unit: 'instructions', authored: null } }, 'agent.instructions'],
@@ -216,7 +216,7 @@ it('S1-15 owner navigation reads the native source owners, never the application
 
 it('S1-08 native per-unit observations stay independent and never pose as a classification', () => {
   const application = cfg3Application();
-  application.units = { capabilities: { status: 'preparing' }, instructions: { status: 'applied'}, provider: { status: 'failed', diagnostic: 'resource failed' }, process_bindings: { status: 'process_restart' }, shared_capacity: { status: 'ready', impact: 'unproven' } };
+  application.units = { capabilities: { status: 'preparing' }, instructions: { status: 'applied'}, provider: { status: 'failed', diagnostic: 'resource failed' }, process_bindings: { status: 'process_restart' }, shared_capacity: { status: 'ready' } };
   expect(observedResultLabel(translator('en'), observedResult(unitApplication(application, 'capabilities')))).toBe('Preparing');
   expect(observedResultLabel(translator('en'), observedResult(unitApplication(application, 'instructions')))).toBe('Applied');
   expect(observedResult(unitApplication(application, 'provider'))).toEqual({ state: 'failed', diagnostic: 'resource failed' });
@@ -320,7 +320,7 @@ it('S1-15 a Workspace reaches native effective identities of a named container, 
 
 // ── Identity discovery survives effective-resolution failure ────────────────
 
-const workspaceModel: Model = { provider: 'transport', id: 'wire-w', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], tool_calls: true, reasoning: false } };
+const workspaceModel: Model = { provider: 'transport', id: 'wire-w', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false } };
 const userModel: Model = { ...workspaceModel, id: 'wire-u' };
 
 it('ID-01 a Workspace keeps its own authored identities when a malformed User document makes resolution unavailable', () => {

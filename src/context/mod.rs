@@ -16,6 +16,7 @@ pub mod contribution;
 
 pub mod checkpoint;
 pub(crate) mod compaction;
+pub mod compaction_budget;
 pub(crate) mod compaction_metadata;
 pub mod engine;
 pub mod error;
@@ -25,6 +26,7 @@ pub mod projection;
 pub mod resources;
 pub mod status;
 pub mod summarizer;
+mod system_prompt;
 pub mod tokens;
 
 use std::sync::Arc;
@@ -64,6 +66,7 @@ pub use status::{
     render_agent_status,
 };
 pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
+pub(crate) use system_prompt::DEFAULT_SYSTEM_PROMPT;
 pub use tokens::{
     ClosureTokenEstimator, DefaultTokenEstimator, ObservedAnchor, ProviderObservedInput,
     TokenEstimator, bytes_to_tokens, model_input_fingerprint, non_conversation_fingerprint,
@@ -99,9 +102,16 @@ pub struct ContextRuntime {
     pub(crate) native_system: NativeContextInput,
     /// Process-local resource generation that supplied `native_system`.
     pub(crate) resource_revision: crate::runtime::RuntimeResourceRevision,
+    pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
 }
 
 impl ContextRuntime {
+    pub(crate) fn compaction_budget(
+        &self,
+        operation_id: crate::runtime::identity::CompactionOperationId,
+    ) -> compaction_budget::CompactionBudget {
+        compaction_budget::CompactionBudget::new(operation_id, self.monotonic_clock.clone())
+    }
     /// Test-only convenience wrapper for the explicit production-capable
     /// assembly constructor. It requires the same admitted policy and clock
     /// that the sibling `AgentExecution` receives; it never creates either.
@@ -198,13 +208,14 @@ impl ContextRuntime {
             summarizer: Arc::new(ModelBackedSummarizer::new(
                 summary,
                 model_timeout_policy,
-                monotonic_clock,
+                monotonic_clock.clone(),
             )),
             native_composition: crate::extensions::NativeContextComposition::new(status_engine),
             assembly,
             compaction_budgets,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
+            monotonic_clock,
         })
     }
 
@@ -214,10 +225,7 @@ impl ContextRuntime {
         mut self,
         resources: &crate::runtime::RuntimeResourceSnapshot,
     ) -> Self {
-        self.native_system.workspace_instructions =
-            resources.project_instructions().map(str::to_owned);
-        self.native_system.skill_guidance = resources.skill_catalog().map(str::to_owned);
-        self.native_system.agent_profile = resources.agent_profile().map(str::to_owned);
+        self.native_system = resources.native_system_input();
         self.resource_revision = resources.revision();
         self
     }
@@ -263,6 +271,7 @@ impl ContextRuntime {
             compaction_budgets,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
+            monotonic_clock: Arc::new(crate::runtime::monotonic::SystemMonotonicClock::new()),
         }
     }
 }

@@ -2,6 +2,7 @@
 //! staged-child driver. Ordering is established by IPC frames and registry
 //! snapshots, never by elapsed time.
 use super::*;
+use crate::durable::InboxStore;
 use crate::events::types::{AgentActivationAdmissionPhase, RuntimeEvent};
 
 fn git(root: &std::path::Path, args: &[&str]) -> String {

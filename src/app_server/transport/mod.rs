@@ -36,7 +36,7 @@ pub const OUTBOUND_MESSAGES: usize = 32;
 /// sender keeps an additional encoded record and no second permit is needed.
 pub const OUTBOUND_QUEUE_BYTES: usize = OUTBOUND_MESSAGES * MAX_MESSAGE_BYTES;
 /// Maximum concurrently polled semantic requests per physical connection.
-pub const IN_FLIGHT_REQUESTS: usize = 16;
+pub const IN_FLIGHT_REQUESTS: usize = 18 + super::connection::MAX_ATTACHMENTS;
 /// Deadline for each physical write, including flush.
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -45,10 +45,10 @@ fn failure(message: &'static str) -> io::Error {
 }
 
 // A size-limited serializer does not first allocate an unbounded encoded String.
-struct Record(Vec<u8>);
+struct Record(Vec<u8>, usize);
 impl io::Write for Record {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > MAX_MESSAGE_BYTES - self.0.len() {
+        if bytes.len() > self.1 - self.0.len() {
             return Err(io::Error::new(
                 io::ErrorKind::FileTooLarge,
                 "outbound message exceeds limit",
@@ -62,7 +62,7 @@ impl io::Write for Record {
                 .max(8)
                 .saturating_mul(2)
                 .max(required)
-                .min(MAX_MESSAGE_BYTES);
+                .min(self.1);
             self.0.reserve_exact(capacity - self.0.len());
         }
         self.0.extend_from_slice(bytes);
@@ -90,10 +90,24 @@ impl Outbound {
             Option<super::registration::Publication>,
         ),
     ) -> io::Result<Self> {
-        #[cfg(test)]
-        let encoded = notification_fault::serialize(&notification);
-        #[cfg(not(test))]
-        let encoded = serialize_envelope_record(&notification);
+        let encoded = if matches!(
+            notification.notification,
+            super::protocol::NotificationMethod::Auxiliary { .. }
+        ) {
+            serialize_record_limit(
+                &notification,
+                crate::runtime::auxiliary::delivery::RESULT_RECORD_BYTES_MAX,
+            )
+        } else {
+            #[cfg(test)]
+            {
+                notification_fault::serialize(&notification)
+            }
+            #[cfg(not(test))]
+            {
+                serialize_record(&notification)
+            }
+        };
         match encoded {
             Ok(record) => Ok(Outbound {
                 record,
@@ -142,8 +156,25 @@ impl Outbound {
 
     /// The response is encoded (and size-checked) now; its publication is
     /// decided only when a transport accepts it.
-    pub(crate) fn reply(reply: Reply) -> io::Result<Self> {
-        let (record, success) = match serialize_envelope_record(&reply.response) {
+    pub(crate) fn reply(mut reply: Reply) -> io::Result<Self> {
+        let may_have_committed = reply.preserve_outcome();
+        let limit = match &reply.response {
+            super::protocol::Response::Success(success)
+                if matches!(
+                    success.result,
+                    super::protocol::MethodResult::AuxiliarySubmitted { .. }
+                        | super::protocol::MethodResult::AuxiliaryStatus { .. }
+                        | super::protocol::MethodResult::AuxiliaryResult { .. }
+                        | super::protocol::MethodResult::AuxiliarySubmissionLookup { .. }
+                        | super::protocol::MethodResult::AuxiliaryCancelled { .. }
+                        | super::protocol::MethodResult::AuxiliaryDiscarded { .. }
+                ) =>
+            {
+                crate::runtime::auxiliary::delivery::RESULT_RECORD_BYTES_MAX
+            }
+            _ => MAX_MESSAGE_BYTES,
+        };
+        let (record, success) = match serialize_record_limit(&reply.response, limit) {
             Ok(record) => (
                 record,
                 matches!(reply.response, super::protocol::Response::Success(_)),
@@ -153,16 +184,14 @@ impl Outbound {
                     super::protocol::Response::Success(response) => Some(response.id.clone()),
                     super::protocol::Response::Failure(response) => response.id.clone(),
                 };
-                let data = if reply.may_have_committed
-                    && matches!(reply.response, super::protocol::Response::Success(_))
-                {
+                let data = if may_have_committed {
                     super::protocol::ErrorData::OutcomeUnknown
                 } else if error.kind() == io::ErrorKind::FileTooLarge {
                     super::protocol::ErrorData::ResponseTooLarge
                 } else {
                     super::protocol::ErrorData::ResponseSerializationFailed
                 };
-                let response = super::connection::failure(
+                let response = super::rpc_error::failure(
                     id,
                     super::protocol::RpcError {
                         code: -32000,
@@ -382,7 +411,10 @@ fn serialize_envelope_record(value: &impl super::wire::Envelope) -> io::Result<S
 }
 
 pub(super) fn serialize_record(value: &impl Serialize) -> io::Result<String> {
-    let mut record = Record(Vec::new());
+    serialize_record_limit(value, MAX_MESSAGE_BYTES)
+}
+fn serialize_record_limit(value: &impl Serialize, limit: usize) -> io::Result<String> {
+    let mut record = Record(Vec::new(), limit);
     serde_json::to_writer(&mut record, value).map_err(|error| {
         let kind = if error.io_error_kind() == Some(io::ErrorKind::FileTooLarge)
             || error.to_string() == "native record exceeds limit"
@@ -499,7 +531,7 @@ pub(crate) mod notification_fault {
             return serialize_envelope_record(notification);
         };
         fault.fired.store(true, Ordering::SeqCst);
-        let mut record = Record(Vec::new());
+        let mut record = Record(Vec::new(), MAX_MESSAGE_BYTES);
         serde_json::to_writer(
             &mut Budget {
                 inner: &mut record,
@@ -551,7 +583,7 @@ where
     tokio::pin!(incoming, write);
     let mut requests: FuturesUnordered<BoxFuture<'static, io::Result<()>>> =
         FuturesUnordered::new();
-    // Invalid/unadmitted input may produce one reply outside the sixteen
+    // Invalid/unadmitted input may produce one reply outside the fifty
     // admitted requests. Retain only that reply, then backpressure input.
     let mut immediate: Option<BoxFuture<'static, io::Result<()>>> = None;
     // Alternate ready observations with protocol progress. Completion priority
@@ -809,6 +841,37 @@ mod tests {
     }
 
     #[test]
+    fn uncertain_failure_encoding_overflow_cannot_become_non_admission() {
+        for data in [
+            ErrorData::OutcomeUnknown,
+            ErrorData::CommittedDurabilityUncertain,
+        ] {
+            let response = crate::app_server::rpc_error::failure(
+                Some(RequestId::String("uncertain".into())),
+                RpcError {
+                    code: -32000,
+                    message: "x".repeat(MAX_MESSAGE_BYTES),
+                    data: Some(data),
+                },
+            );
+            let outbound = Outbound::reply(Reply {
+                response,
+                publication: None,
+                association: None,
+                registration: None,
+                may_have_committed: false,
+            })
+            .unwrap();
+            let Response::Failure(failure) = serde_json::from_str(&outbound.record).unwrap() else {
+                panic!("bounded uncertain failure")
+            };
+            assert!(outbound.record.len() < 1024);
+            assert_eq!(failure.id, Some(RequestId::String("uncertain".into())));
+            assert_eq!(failure.error.data, Some(ErrorData::OutcomeUnknown));
+        }
+    }
+
+    #[test]
     fn t20_response_acceptance_releases_association_before_flush_and_fences_physical_cleanup() {
         let table = Arc::new(crate::app_server::admission::Associations::default());
         let id = RequestId::String("correlation".into());
@@ -862,7 +925,7 @@ mod tests {
             "id": "bounded-candidate",
             "result": { "body": "x".repeat(600_000), "items": (0..30_000).collect::<Vec<u32>>() },
         });
-        let mut record = Record(Vec::new());
+        let mut record = Record(Vec::new(), MAX_MESSAGE_BYTES);
         serde_json::to_writer(&mut record, &value).unwrap();
         assert!(record.0.len() < MAX_MESSAGE_BYTES);
         assert!(record.0.capacity() <= MAX_MESSAGE_BYTES);
@@ -950,7 +1013,7 @@ mod tests {
         assert_eq!(receiver.len(), OUTBOUND_MESSAGES);
         assert_eq!(receiver.try_recv().unwrap().record, "0");
         enqueue(&sender, &0).unwrap();
-        let mut record = Record(Vec::new());
+        let mut record = Record(Vec::new(), MAX_MESSAGE_BYTES);
         std::io::Write::write_all(&mut record, &vec![0; MAX_MESSAGE_BYTES]).unwrap();
         assert!(std::io::Write::write_all(&mut record, &[0]).is_err());
         assert_eq!(record.0.len(), MAX_MESSAGE_BYTES);

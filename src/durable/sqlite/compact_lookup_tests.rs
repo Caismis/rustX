@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::sqlite::schema::shape::verify_schema_shape;
 
 #[test]
 fn compact_lookup_schema_refuses_a_shadow_rowid_tree() {

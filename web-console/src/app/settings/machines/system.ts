@@ -1,9 +1,10 @@
 import { createActor, type Actor, type Subscription } from 'xstate';
-import type { AppServerClient, ClientView } from '../../../client/app-server';
+import type { AppServerClient } from '../../../client/app-server';
+import type { ClientView } from '../../../client/contracts';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { settingsTargetKey, type SettingsTarget } from '../projection';
 import { createConfigurationPort } from './port';
-import { adoptionInFlight, createSessionConfigurationPort, sessionConfigurationMachine, sessionTransport } from './session-configuration';
+import { createSessionConfigurationPort, sessionConfigurationMachine, sessionTransport } from './session-configuration';
 import { mutationInFlight, settingsTargetMachine } from './settings-target';
 
 export type SettingsTargetActor = Actor<typeof settingsTargetMachine>;
@@ -26,10 +27,6 @@ function transactionOwner(actor: SettingsTargetActor): TransactionOwner {
 interface SessionEntry {
   readonly actor: SessionConfigurationActor;
   holders: number;
-  /** Present exactly while no presentation holds the actor and an adoption
-   * transaction is still in flight: the subscription that releases the actor at
-   * that transaction's terminal point. */
-  settlement?: Subscription;
 }
 
 /** One App Server authority lifetime: (endpoint, authority revision). */
@@ -116,9 +113,9 @@ export class ConfigurationSystem {
       for (const actor of this.targets.values()) this.retireTarget(actor);
       this.targets.clear();
       // A Session actor owns no durable browser intent, so a replaced authority
-      // ends it at once — an adoption still in flight included, whose late
-      // response then has no completion path at all.
-      for (const [key, entry] of this.sessions) this.dropSession(key, entry);
+      // ends it at once.
+      for (const entry of this.sessions.values()) entry.actor.stop();
+      this.sessions.clear();
     }
     // A connection generation replacement inside one authority is not an
     // authority replacement: it retires nothing here, and is the actors' own
@@ -234,37 +231,18 @@ export class ConfigurationSystem {
    * actors deliberately are not: their editing transactions are exactly the
    * thing that has to outlive every presentation. */
   retainSession(actor: SessionConfigurationActor) {
-    for (const entry of this.sessions.values()) {
-      if (entry.actor !== actor) continue;
-      entry.holders += 1;
-      // A holder owns the actor again; nothing waits on settlement to release it.
-      entry.settlement?.unsubscribe();
-      entry.settlement = undefined;
-    }
+    for (const entry of this.sessions.values()) if (entry.actor === actor) entry.holders += 1;
   }
-  /** The last holder leaving releases the actor — at once, or, when an adoption
-   * transaction is still in flight, exactly at that transaction's terminal
-   * point, so the adoption settles under its own Session lifetime. */
+  /** The last holder leaving releases the actor: it owns no transaction, so
+   * nothing outlives the presentation that observes it. */
   releaseSession(actor: SessionConfigurationActor) {
     for (const [key, entry] of this.sessions) {
       if (entry.actor !== actor) continue;
       entry.holders -= 1;
       if (entry.holders > 0) continue;
-      if (!adoptionInFlight(entry.actor.getSnapshot())) {
-        this.dropSession(key, entry);
-        continue;
-      }
-      entry.settlement = entry.actor.subscribe({
-        next: snapshot => { if (!adoptionInFlight(snapshot)) this.dropSession(key, entry); },
-        error: () => this.dropSession(key, entry),
-      });
+      entry.actor.stop();
+      this.sessions.delete(key);
     }
-  }
-  private dropSession(key: string, entry: SessionEntry) {
-    entry.settlement?.unsubscribe();
-    entry.settlement = undefined;
-    entry.actor.stop();
-    this.sessions.delete(key);
   }
 
   /** Test-only inspection of every live transaction owner, oldest lifetime

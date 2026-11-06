@@ -320,6 +320,7 @@ fn format_size(bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::path::Path;
 
     use super::{NAME, ReadTool, document, testdata};
@@ -379,6 +380,20 @@ mod tests {
             "---\nname: release-guide\ndescription: Release guidance.\n---\nUse assets/checklist.md\n",
         )
         .expect("SKILL.md");
+        let mut body = std::fs::OpenOptions::new()
+            .append(true)
+            .open(skill.join("SKILL.md"))
+            .unwrap();
+        let mut lines = vec![b'x'; 65_536];
+        for index in (63..lines.len()).step_by(64) {
+            lines[index] = b'\n';
+        }
+        for _ in 0..32 {
+            body.write_all(&lines).unwrap();
+        }
+        body.write_all(b"past-the-old-file-bound\n").unwrap();
+        drop(body);
+
         std::fs::write(skill.join("assets/checklist.md"), "procedure\n").expect("asset");
         let discovered = SkillDiscovery::with_config(
             &workspace,
@@ -420,8 +435,11 @@ mod tests {
                     arguments: serde_json::json!({ "path": path }),
                 },
                 ToolExecutionContext {
+                    stdout_capture: None,
+                    workspace_changes: None,
                     model_invocation: None,
                     goal: None,
+                    schedule: None,
                     conversation_id: &conversation_id,
                     execution_id: None,
                     cancellation: crate::runtime::ExecutionCancellation::detached(
@@ -448,6 +466,16 @@ mod tests {
         };
         assert!(text.text.contains("assets/checklist.md"));
 
+        assert!(text.text.contains("Use offset="));
+        assert!(!text.text.contains("past-the-old-file-bound"));
+        let (mut invocation, execution) = context("read-skill-continuation", &location);
+        invocation.arguments["offset"] = serde_json::json!(32 * 1024 + 6);
+        let continued = ReadTool.start(invocation, execution).completion.await;
+        assert_eq!(continued.status, ToolExecutionStatus::Success);
+        let Some(ToolResultContent::Text(continued)) = continued.content.first() else {
+            panic!("continuation")
+        };
+        assert!(continued.text.contains("past-the-old-file-bound"));
         std::fs::write(
             skill.join("SKILL.md"),
             "---\nname: release-guide\ndescription: Release guidance.\n---\nCurrent body.\n",
@@ -611,8 +639,11 @@ mod tests {
                 arguments,
             };
             let context = ToolExecutionContext {
+                stdout_capture: None,
+                workspace_changes: None,
                 model_invocation: None,
                 goal: None,
+                schedule: None,
                 conversation_id: &self.conversation_id,
                 execution_id: None,
                 cancellation: crate::runtime::ExecutionCancellation::detached(

@@ -32,7 +32,7 @@ pub(in crate::durable::sqlite) fn install_workspace(
 ) -> Result<(), ConversationStoreError> {
     connection
         .execute_batch("CREATE TEMP TABLE request_source_fact_spool(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID")
-        .map_err(|error| storage(format!("install request capture workspace: {error}")))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("install request capture workspace: {error}")))
 }
 #[cfg(test)]
 pub(in crate::durable::sqlite) use fragments::spool::exercise_workspace_spill;
@@ -199,7 +199,7 @@ struct Fact {
     name: Option<String>,
 }
 fn bounded<T: Serialize>(value: &T, max: usize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::runtime_client::checkpoint::bounded_bytes(value, max)
+    crate::observation::bounded::bounded_bytes(value, max)
         .ok_or_else(|| storage("composed observation metadata exceeds bound"))
 }
 fn hash(bytes: &[u8]) -> index::Hash {
@@ -297,13 +297,13 @@ pub(super) fn index_selection(
             "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
             params![sequence.to_string(), bytes, checksum.as_slice()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
         .execute_cached(
             "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('trace_request',?1,0,'j',1,?2)",
             params![sequence.to_string(), length],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     #[cfg(feature = "issue-387-profile")]
     profile.layout_completed();
     Ok(())
@@ -321,7 +321,7 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
     if sequence == 0 || sequence.to_string() != id {
         return Err(invalid());
     }
-    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.checksum)='blob' AND length(r.checksum)=32 THEN r.checksum END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count,f.readable_end FROM request_source_roots r JOIN request_snapshots s ON s.observation_source_id=r.source_id JOIN content_frontiers f ON f.source_kind='trace_request' AND f.source_id=r.source_id AND f.block_index=0 AND f.representation='j' AND f.revision=1 WHERE r.source_id=?1").map_err(|error|storage(error.to_string()))?.query_row([id], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|storage(error.to_string()))?;
+    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.checksum)='blob' AND length(r.checksum)=32 THEN r.checksum END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count,f.readable_end FROM request_source_roots r JOIN request_snapshots s ON s.observation_source_id=r.source_id JOIN content_frontiers f ON f.source_kind='trace_request' AND f.source_id=r.source_id AND f.block_index=0 AND f.representation='j' AND f.revision=1 WHERE r.source_id=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([id], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let bytes = row
         .0
         .ok_or_else(|| storage("composed request root unavailable"))?;
@@ -354,7 +354,7 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
         || root.kind == RootKind::Request
             && (root.prefix.is_none()
                 || root.prefix_length() == 0
-                || root.children != 24
+                || root.children != crate::observation::trace::frozen::REQUEST_FIELD_COUNT
                 || !(1..=33).contains(&root.nodes)
                 || root.messages_start < root.prefix_length()
                 || root.messages_start >= root.messages_end
@@ -379,7 +379,7 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
     let source =
         crate::runtime::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
     let scalar = fragments::whole(connection, &source)?;
-    let native=connection.query_row("SELECT s.input_root,s.input_root_digest,s.input_count,n.height FROM request_snapshots s LEFT JOIN native_input_nodes n ON n.id=s.input_root WHERE s.observation_source_id=?1",[sequence.to_string()],|row|{let id:Option<u64>=row.get(0)?;let digest:Option<Vec<u8>>=row.get(1)?;let count:u64=row.get(2)?;let height:Option<u8>=row.get(3)?;Ok((id,digest,count,height))}).map_err(|error|storage(error.to_string()))?;
+    let native=connection.query_row("SELECT s.input_root,s.input_root_digest,s.input_count,n.height FROM request_snapshots s LEFT JOIN native_input_nodes n ON n.id=s.input_root WHERE s.observation_source_id=?1",[sequence.to_string()],|row|{let id:Option<u64>=row.get(0)?;let digest:Option<Vec<u8>>=row.get(1)?;let count:u64=row.get(2)?;let height:Option<u8>=row.get(3)?;Ok((id,digest,count,height))}).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let native = match native {
         (Some(id), Some(digest), count, Some(height)) => Some(manifest::NodeRef {
             id,
@@ -412,19 +412,19 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
             "DELETE FROM request_source_roots WHERE source_id=?1",
             [sequence.to_string()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
         .execute_cached(
             "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
             params![sequence.to_string(), bytes, checksum.as_slice()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
         .execute_cached(
             "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('trace_request',?1,0,'j',1,?2)",
             params![sequence.to_string(), root.length],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 

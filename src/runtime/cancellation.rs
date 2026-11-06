@@ -58,6 +58,22 @@ impl CancellationSignal {
         result
     }
 
+    /// A short native grant shares the ancestor cancellation boundary. The
+    /// closure must not await, write SQL or recursively use this signal.
+    pub(crate) fn with_active<T>(&self, grant: impl FnOnce() -> T) -> Option<T> {
+        let _gate = self.commit_gate.lock().expect("cancellation commit gate");
+        (!self.token.is_cancelled()).then(grant)
+    }
+
+    pub(crate) fn authorize_compaction_commit_with(
+        &self,
+        operation_id: crate::runtime::identity::CompactionOperationId,
+        eligible: impl FnOnce() -> bool,
+    ) -> Option<CompactionCommitGrant> {
+        self.with_active(|| eligible().then_some(CompactionCommitGrant { operation_id }))
+            .flatten()
+    }
+
     /// Creates a child signal: cancelling this signal cancels the child, so
     /// one owner can fan out one signal per operation while all of them
     /// terminate together.

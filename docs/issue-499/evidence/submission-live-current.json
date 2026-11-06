@@ -1,0 +1,1334 @@
+{
+  "schema": "issue-499-bounded-live-startup-v1",
+  "measurement": "real ConversationRuntime inbound -> AgentExecution -> ModelAdapter::stream(request); timestamp recorded at adapter entry",
+  "timing_scope": "starts immediately before native source preparation; includes candidate commit, runtime construction, activation, admission and context assembly; authored config, loopback servers and tool storage setup are outside the clock",
+  "provider": "scripted adapter; exactly one actual ModelRequest per row; no external provider network latency",
+  "transport": "real loopback Streamable HTTP; client and server share one test process; server processes are therefore exactly zero",
+  "handler_count_scope": "server_handler_instances counts SDK request-handler factory invocations, not physical connections or MCP sessions; handshake counts independently prove one live initialization per source",
+  "first_tool_scope": "first affected MCP tools/call through the captured native executor after the measured model Attempt settles; not a model-generated tool step",
+  "capability_scope": "terminal_capability_ready_ms includes Ready and explicit Unavailable outcomes, not successful readiness of failed sources",
+  "baseline_failure_scope": "a preparation rejection records startup_failure and null capability/request/Attempt timestamps with zero model requests; it is not converted into optional success by the baseline adapter",
+  "fresh_repeat_scope": "a separate Conversation native source owner first discovers the same endpoints/workspace with fast responses, closes its connections, and is excluded from the measured clock and request counts",
+  "fast_phase_delay_ms": 10,
+  "slow_and_failed_phase_delay_ms": 1500,
+  "failed_phase": "tools/list returns a protocol error after its controlled delay",
+  "fixture_watchdog_seconds": 30,
+  "timing_assertions": "none; exact model/tool/protocol counts and tool inventories are asserted; controlled delays are workload inputs",
+  "rows": [
+    {
+      "profile": "fast",
+      "servers": 0,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 1.337331,
+      "terminal_capability_ready_ms": 1.440099,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 54.501718999999994,
+      "attempt_settled_ms": 71.56349900000001,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 0,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.24699,
+      "terminal_capability_ready_ms": 0.274324,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 31.976151,
+      "attempt_settled_ms": 47.694793,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 1,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 84.22808900000001,
+      "terminal_capability_ready_ms": 84.312359,
+      "ready_sources": 1,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 117.192058,
+      "attempt_settled_ms": 132.966748,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 134.502001,
+      "first_tool_completion_ms": 135.432088,
+      "first_tool_elapsed_ms": 2.4189659999999997,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/call": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 3
+      },
+      "server_handler_instances": 4,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 1,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "source_batch_settled_ms": 48.218506,
+      "terminal_capability_ready_ms": 48.341647,
+      "ready_sources": 1,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 94.328218,
+      "attempt_settled_ms": 110.17341,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 111.631468,
+      "first_tool_completion_ms": 112.51576200000001,
+      "first_tool_elapsed_ms": 2.292389,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/call": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 3
+      },
+      "server_handler_instances": 4,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 4,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 51.856823000000006,
+      "terminal_capability_ready_ms": 51.997021,
+      "ready_sources": 4,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 97.063767,
+      "attempt_settled_ms": 113.303373,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 114.71687,
+      "first_tool_completion_ms": 115.392724,
+      "first_tool_elapsed_ms": 2.029292,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/call": 1,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 9
+      },
+      "server_handler_instances": 10,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 4,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "source_batch_settled_ms": 47.771215999999995,
+      "terminal_capability_ready_ms": 47.85955800000001,
+      "ready_sources": 4,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 85.441935,
+      "attempt_settled_ms": 102.424992,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 104.01682299999999,
+      "first_tool_completion_ms": 104.70467,
+      "first_tool_elapsed_ms": 2.201136,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/call": 1,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 9
+      },
+      "server_handler_instances": 10,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 8,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 98.242313,
+      "terminal_capability_ready_ms": 98.400053,
+      "ready_sources": 8,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 142.08435,
+      "attempt_settled_ms": 158.507567,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2f65232c9ce53aa6b5f446a0075e4471a2e992d9695346e3dc35bab77bdddf79",
+          "name": "startup-04",
+          "description": "fixture startup-04",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:51cf34019595ceccaa8ae29231c8eb27576f3848c3b2cf7dab364db72769a5c6",
+          "name": "startup-05",
+          "description": "fixture startup-05",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2bacb8a30548e119f51e212f52c9e02dad5fd833de8cd58ac6f4ebd6fe5df4c1",
+          "name": "startup-06",
+          "description": "fixture startup-06",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:49a7b0d4083b5f453d063056ee7401174c1457bef2d16c114025cb11e9a3e499",
+          "name": "startup-07",
+          "description": "fixture startup-07",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 159.970734,
+      "first_tool_completion_ms": 160.8919,
+      "first_tool_elapsed_ms": 2.290613,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/call": 1,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 17
+      },
+      "server_handler_instances": 18,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "fast",
+      "servers": 8,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "source_batch_settled_ms": 94.438988,
+      "terminal_capability_ready_ms": 94.54403599999999,
+      "ready_sources": 8,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 134.295313,
+      "attempt_settled_ms": 150.606998,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2f65232c9ce53aa6b5f446a0075e4471a2e992d9695346e3dc35bab77bdddf79",
+          "name": "startup-04",
+          "description": "fixture startup-04",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:51cf34019595ceccaa8ae29231c8eb27576f3848c3b2cf7dab364db72769a5c6",
+          "name": "startup-05",
+          "description": "fixture startup-05",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2bacb8a30548e119f51e212f52c9e02dad5fd833de8cd58ac6f4ebd6fe5df4c1",
+          "name": "startup-06",
+          "description": "fixture startup-06",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:49a7b0d4083b5f453d063056ee7401174c1457bef2d16c114025cb11e9a3e499",
+          "name": "startup-07",
+          "description": "fixture startup-07",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 152.100212,
+      "first_tool_completion_ms": 152.770343,
+      "first_tool_elapsed_ms": 2.078856,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/call": 1,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 17
+      },
+      "server_handler_instances": 18,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 0,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.2894,
+      "terminal_capability_ready_ms": 0.324422,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 32.960369,
+      "attempt_settled_ms": 48.892888,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 0,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.24988400000000002,
+      "terminal_capability_ready_ms": 0.28250299999999995,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 31.772293,
+      "attempt_settled_ms": 47.249914,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 1,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 3034.350172,
+      "terminal_capability_ready_ms": 3034.524707,
+      "ready_sources": 1,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 3079.2864409999997,
+      "attempt_settled_ms": 3095.096629,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 3096.433712,
+      "first_tool_completion_ms": 3097.236888,
+      "first_tool_elapsed_ms": 2.096876,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/call": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 3
+      },
+      "server_handler_instances": 4,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 1,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "source_batch_settled_ms": 3031.539444,
+      "terminal_capability_ready_ms": 3031.6307020000004,
+      "ready_sources": 1,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 3065.673796,
+      "attempt_settled_ms": 3082.293376,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 3083.9375179999997,
+      "first_tool_completion_ms": 3084.6862889999998,
+      "first_tool_elapsed_ms": 2.3432090000000003,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/call": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 3
+      },
+      "server_handler_instances": 4,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 4,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 3034.278173,
+      "terminal_capability_ready_ms": 3034.467782,
+      "ready_sources": 4,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 3079.744409,
+      "attempt_settled_ms": 3095.834481,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 3097.5077450000003,
+      "first_tool_completion_ms": 3098.3139,
+      "first_tool_elapsed_ms": 2.4119089999999996,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/call": 1,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 9
+      },
+      "server_handler_instances": 10,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 4,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "source_batch_settled_ms": 3033.52084,
+      "terminal_capability_ready_ms": 3033.71965,
+      "ready_sources": 4,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 3082.5435890000003,
+      "attempt_settled_ms": 3099.0806700000003,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 3100.389954,
+      "first_tool_completion_ms": 3101.0643450000002,
+      "first_tool_elapsed_ms": 1.918487,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/call": 1,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 9
+      },
+      "server_handler_instances": 10,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 8,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 6067.302012,
+      "terminal_capability_ready_ms": 6067.551973,
+      "ready_sources": 8,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 6114.898071,
+      "attempt_settled_ms": 6131.047772999999,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2f65232c9ce53aa6b5f446a0075e4471a2e992d9695346e3dc35bab77bdddf79",
+          "name": "startup-04",
+          "description": "fixture startup-04",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:51cf34019595ceccaa8ae29231c8eb27576f3848c3b2cf7dab364db72769a5c6",
+          "name": "startup-05",
+          "description": "fixture startup-05",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2bacb8a30548e119f51e212f52c9e02dad5fd833de8cd58ac6f4ebd6fe5df4c1",
+          "name": "startup-06",
+          "description": "fixture startup-06",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:49a7b0d4083b5f453d063056ee7401174c1457bef2d16c114025cb11e9a3e499",
+          "name": "startup-07",
+          "description": "fixture startup-07",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 6132.404323000001,
+      "first_tool_completion_ms": 6133.1562,
+      "first_tool_elapsed_ms": 2.021775,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/call": 1,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 17
+      },
+      "server_handler_instances": 18,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "slow",
+      "servers": 8,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "source_batch_settled_ms": 6071.330132,
+      "terminal_capability_ready_ms": 6071.513252,
+      "ready_sources": 8,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 6111.753674,
+      "attempt_settled_ms": 6127.857844,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [
+        {
+          "id": "mcp:sha256:31f9211da02abb916e39c2b38b57320457a4b36f4489ee3b1deb40d7c72bfbe2",
+          "name": "startup-00",
+          "description": "fixture startup-00",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:4309a30f19bb4702f2fe3eb6e280f594efacfd0a797150304c347e962ca737ae",
+          "name": "startup-01",
+          "description": "fixture startup-01",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:d1313936800a389761327d64fc3f909e4a1efcbaef480fe6bb78db7d175f4203",
+          "name": "startup-02",
+          "description": "fixture startup-02",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:e9df08daf9f86de7ee18f49b38593c504cf2782db8393a274155a296ae6b5cc3",
+          "name": "startup-03",
+          "description": "fixture startup-03",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2f65232c9ce53aa6b5f446a0075e4471a2e992d9695346e3dc35bab77bdddf79",
+          "name": "startup-04",
+          "description": "fixture startup-04",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:51cf34019595ceccaa8ae29231c8eb27576f3848c3b2cf7dab364db72769a5c6",
+          "name": "startup-05",
+          "description": "fixture startup-05",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:2bacb8a30548e119f51e212f52c9e02dad5fd833de8cd58ac6f4ebd6fe5df4c1",
+          "name": "startup-06",
+          "description": "fixture startup-06",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "id": "mcp:sha256:49a7b0d4083b5f453d063056ee7401174c1457bef2d16c114025cb11e9a3e499",
+          "name": "startup-07",
+          "description": "fixture startup-07",
+          "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        }
+      ],
+      "first_tool_dispatch_ms": 6129.458985,
+      "first_tool_completion_ms": 6130.214699,
+      "first_tool_elapsed_ms": 2.275264,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/call": 1,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 17
+      },
+      "server_handler_instances": 18,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 0,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.21402,
+      "terminal_capability_ready_ms": 0.245829,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 38.13332,
+      "attempt_settled_ms": 54.905783,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 0,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 0.15513500000000002,
+      "terminal_capability_ready_ms": 0.184277,
+      "ready_sources": 0,
+      "unavailable_sources": 0,
+      "first_model_request_ms": 32.483592,
+      "attempt_settled_ms": 47.948530000000005,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {},
+      "total_protocol_requests": {},
+      "http_requests": {},
+      "server_handler_instances": 0,
+      "peak_in_flight_phases": 0,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 1,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 3033.537851,
+      "terminal_capability_ready_ms": 3033.7234030000004,
+      "ready_sources": 0,
+      "unavailable_sources": 1,
+      "first_model_request_ms": 3075.420109,
+      "attempt_settled_ms": 3091.343877,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 2
+      },
+      "server_handler_instances": 2,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 1,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "source_batch_settled_ms": 3031.573693,
+      "terminal_capability_ready_ms": 3031.759809,
+      "ready_sources": 0,
+      "unavailable_sources": 1,
+      "first_model_request_ms": 3072.029918,
+      "attempt_settled_ms": 3087.5976299999998,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "total_protocol_requests": {
+        "handshake": 1,
+        "tools/list": 1
+      },
+      "http_requests": {
+        "POST": 2
+      },
+      "server_handler_instances": 2,
+      "peak_in_flight_phases": 1,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 4,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 3039.309146,
+      "terminal_capability_ready_ms": 3039.518216,
+      "ready_sources": 0,
+      "unavailable_sources": 4,
+      "first_model_request_ms": 3079.083438,
+      "attempt_settled_ms": 3094.770106,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 8
+      },
+      "server_handler_instances": 8,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 4,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "source_batch_settled_ms": 3032.337093,
+      "terminal_capability_ready_ms": 3032.51794,
+      "ready_sources": 0,
+      "unavailable_sources": 4,
+      "first_model_request_ms": 3067.3902380000004,
+      "attempt_settled_ms": 3082.8775219999998,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "total_protocol_requests": {
+        "handshake": 4,
+        "tools/list": 4
+      },
+      "http_requests": {
+        "POST": 8
+      },
+      "server_handler_instances": 8,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 8,
+      "conversation_order": "fresh",
+      "earlier_conversation_requests": {},
+      "source_batch_settled_ms": 6079.3367849999995,
+      "terminal_capability_ready_ms": 6079.569055,
+      "ready_sources": 0,
+      "unavailable_sources": 8,
+      "first_model_request_ms": 6121.533232,
+      "attempt_settled_ms": 6137.069506,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 16
+      },
+      "server_handler_instances": 16,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    },
+    {
+      "profile": "failed",
+      "servers": 8,
+      "conversation_order": "fresh_after_earlier_conversation",
+      "earlier_conversation_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "source_batch_settled_ms": 6065.0617440000005,
+      "terminal_capability_ready_ms": 6065.325991,
+      "ready_sources": 0,
+      "unavailable_sources": 8,
+      "first_model_request_ms": 6106.340673,
+      "attempt_settled_ms": 6121.988649999999,
+      "startup_failure": null,
+      "model_request_count": 1,
+      "first_request_tools": [],
+      "first_tool_dispatch_ms": null,
+      "first_tool_completion_ms": null,
+      "first_tool_elapsed_ms": null,
+      "startup_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "total_protocol_requests": {
+        "handshake": 8,
+        "tools/list": 8
+      },
+      "http_requests": {
+        "POST": 16
+      },
+      "server_handler_instances": 16,
+      "peak_in_flight_phases": 4,
+      "active_phases_after_shutdown": 0,
+      "spawned_server_processes": 0
+    }
+  ]
+}

@@ -3,7 +3,7 @@
 use crate::message::types::{AssistantContentBlock, UserContentBlock};
 use crate::model::ModelInputMessage;
 use crate::model::projected::{DerivedModelMessage, ProjectedMessage};
-use crate::runtime_client::trace::{TraceRequestMessage, TraceToolOutcome};
+use crate::observation::trace::{TraceRequestMessage, TraceToolOutcome};
 use serde::Serialize;
 
 pub(super) struct Input<'a> {

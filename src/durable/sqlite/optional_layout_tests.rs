@@ -32,12 +32,12 @@ fn cached_layout_savepoints_preserve_nested_failure_and_outer_commit_after_reope
                     .execute("INSERT INTO facts VALUES(3)", [])
                     .unwrap();
                 Err(storage("derived layout failed"))
-            });
+            })?;
             assert!(failed.is_none());
             assert_eq!(rows(&transaction), [1, 2]);
             Ok(7)
         }),
-        Some(7)
+        Ok(Some(7))
     );
     let failed: Option<()> = optional_display_layout(&transaction, || {
         transaction
@@ -49,11 +49,12 @@ fn cached_layout_savepoints_preserve_nested_failure_and_outer_commit_after_reope
                     .execute("INSERT INTO facts VALUES(5)", [])
                     .unwrap();
                 Ok(())
-            })
+            })?
             .is_some()
         );
         Err(storage("outer derived layout failed"))
-    });
+    })
+    .unwrap();
     assert!(failed.is_none());
     // A schema change expires the cached statements. Reuse must still execute
     // the savepoint against the current connection and transaction.
@@ -67,6 +68,7 @@ fn cached_layout_savepoints_preserve_nested_failure_and_outer_commit_after_reope
                 .unwrap();
             Ok(())
         })
+        .unwrap()
         .is_some()
     );
     transaction.commit().unwrap();
@@ -107,7 +109,10 @@ fn failed_layout_rollback_never_releases_unreverted_changes() {
             .unwrap();
         Err::<(), ConversationStoreError>(storage("derived layout failed"))
     });
-    assert!(failed.is_none());
+    assert!(matches!(
+        failed,
+        Err(ConversationStoreError::TransactionInvalid(_))
+    ));
     assert_eq!(releases.load(Ordering::Relaxed), 0);
     connection
         .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)

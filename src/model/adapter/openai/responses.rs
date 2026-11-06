@@ -31,10 +31,9 @@ use crate::model::catalog::ResponsesStorageMode;
 use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
-use crate::model::input::RequestOnlyModelContext;
 use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
-use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
+use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use crate::runtime::identity::ToolCallId;
@@ -47,6 +46,7 @@ use crate::runtime::identity::ToolCallId;
 /// serves every Responses model of its provider.
 pub struct OpenAiResponsesAdapter {
     client: Client<OpenAIConfig>,
+    http_client: reqwest::Client,
 }
 
 impl std::fmt::Debug for OpenAiResponsesAdapter {
@@ -61,8 +61,10 @@ impl OpenAiResponsesAdapter {
     #[must_use]
     pub fn new(config: OpenAiAdapterConfig) -> Self {
         let (api_key, api_base, http_client) = config.into_parts();
+        let http_client = http_client.unwrap_or_default();
         Self {
-            client: build_client(&api_key, &api_base, http_client),
+            client: build_client(&api_key, &api_base, Some(http_client.clone())),
+            http_client,
         }
     }
 }
@@ -85,7 +87,16 @@ impl ModelAdapter for OpenAiResponsesAdapter {
             Ok(translated) => translated,
             Err(error) => return model_stream_of_failure(error),
         };
-        let client = self.client.clone();
+        let client = if let Some(limit) = request.response_byte_limit {
+            self.client
+                .clone()
+                .with_http_service(super::client::NoRetryService::bounded(
+                    self.http_client.clone(),
+                    limit,
+                ))
+        } else {
+            self.client.clone()
+        };
         let normalizer = ResponsesNormalizer::new(validated, storage_mode);
         Box::pin(futures_util::stream::unfold(
             ResponsesPhase::Preparing {
@@ -1245,25 +1256,13 @@ fn unsupported_response_event(event_type: &str) -> bool {
 }
 
 fn parse_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
-    let input_tokens = u64_field(usage, "input_tokens")?;
-    let output_tokens = u64_field(usage, "output_tokens")?;
-    let reasoning_tokens = usage
-        .get("output_tokens_details")
-        .and_then(|d| u64_field(d, "reasoning_tokens"));
-    let cached_input_tokens = usage
-        .get("input_tokens_details")
-        .and_then(|d| u64_field(d, "cached_tokens"));
-    let details =
-        (reasoning_tokens.is_some() || cached_input_tokens.is_some()).then_some(UsageDetails {
-            reasoning_tokens,
-            cached_input_tokens,
-        });
-    Some(ModelUsage {
-        input_tokens,
-        output_tokens,
-        total_tokens: u64_field(usage, "total_tokens").unwrap_or(input_tokens + output_tokens),
-        details,
-    })
+    super::mapping::normalize_usage(
+        usage,
+        "input_tokens",
+        "output_tokens",
+        "input_tokens_details",
+        "output_tokens_details",
+    )
 }
 
 /// Translates a provider-neutral request into a raw Responses request JSON value.
@@ -1327,12 +1326,6 @@ pub(crate) fn translate_request(
     }
     request_value["max_output_tokens"] = request.max_output_tokens().into();
     if !request.tools.is_empty() {
-        if !request.invocation.capabilities.tool_calls {
-            return Err(unsupported(
-                "the effective model capabilities do not include tool calls; \
-                 tool definitions are never sent to a text-only model",
-            ));
-        }
         request_value["tools"] = serde_json::json!(translate_tools(&request.tools));
     }
     let _ = tools;
@@ -1359,11 +1352,12 @@ pub(crate) fn translate_request(
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    finalize_provider_request(
+    let value = finalize_provider_request(
         request_value,
         request.request_params(),
         ModelProtocol::OpenAiResponses,
-    )
+    )?;
+    crate::model::adapter::structured::finalize_request(value, request)
 }
 
 /// Translated canonical context: input items, instructions, and the optional
@@ -1449,14 +1443,17 @@ fn translate_inputs(
                     &request.images,
                 )?);
             }
-            ModelMessageView::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
-                carryover,
-            )) => {
+            ModelMessageView::RequestOnly(carryover) => {
+                let (role, kind) = if carryover.is_assistant() {
+                    ("assistant", "output_text")
+                } else {
+                    ("user", "input_text")
+                };
                 input_items.push(serde_json::json!({
                     "type": "message",
-                    "role": "user",
+                    "role": role,
                     "content": [{
-                        "type": "input_text",
+                        "type": kind,
                         "text": carryover.render(),
                     }]
                 }));
@@ -1790,10 +1787,6 @@ fn optional_u32_field(value: &serde_json::Value, field: &str) -> Result<Option<u
                 "provider stream event has a non-integer {field:?} field"
             ))
         })
-}
-
-fn u64_field(value: &serde_json::Value, field: &str) -> Option<u64> {
-    value.get(field).and_then(serde_json::Value::as_u64)
 }
 
 fn provider_error(message: String) -> ModelError {

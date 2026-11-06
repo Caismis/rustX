@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::JournalStore;
 use crate::durable::response::CompletedResponseTiming;
 use crate::model::generation_evidence::GenerationEvidence;
 use crate::runtime::identity::RequestId;
@@ -112,7 +113,7 @@ fn missing_zero_and_no_output_are_distinct() {
         ..sample_generation()
     };
     let mut empty_usage = usage(None);
-    empty_usage.output_tokens = 0;
+    empty_usage.output_tokens = Some(0);
     let empty = timing_case(&[(Some(no_output), Some(empty_usage.clone()), true)]);
     assert_eq!(empty.ttft_ms, None);
     assert_eq!(empty.generation_ms, None);

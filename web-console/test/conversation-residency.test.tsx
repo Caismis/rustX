@@ -14,7 +14,8 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v52';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v73';
+import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 
 // These spies execute the actual functions, including their hooks. Calls count
 // render invocations, not merely DOM mutation or wrapper/parent renders.
@@ -71,7 +72,7 @@ it('streaming publications update the transcript but do not render AppFrame or c
   expect(screen.queryByText('Working…')).toBeNull();
 });
 
-const model = (id: string): CatalogModelView => ({ model: id, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: { inputModalities: ['text'], outputModalities: ['text'], reasoning: false, toolCalls: true }, effectiveCapabilities: { inputModalities: ['text'], outputModalities: ['text'], reasoning: false, toolCalls: true }, profiles: [] });
+const model = (id: string): CatalogModelView => ({ model: id, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: { inputModalities: ['text'], outputModalities: ['text'], jsonSchemaOutput: false }, effectiveCapabilities: { inputModalities: ['text'], outputModalities: ['text'], jsonSchemaOutput: false }, profiles: [] });
 function host() {
   const source: SourceSettings = { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'policy', session_models: { kind: 'available', default_model: { model: 'fixture/root' }, catalog: { models: [model('fixture/root'), model('fixture/chosen')] } } };
   return { ...server.workspaceHost, configureWorkspace: async () => ({ kind: 'read' as const, projection: source }), resolveWorkspace: async () => ({ cwd: '/workspace/A' }), classifyLocations: async (paths: string[]) => paths.map(() => ({ authorized: true as const, workspaceId: 'workspace-a' })) };
@@ -178,11 +179,11 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   await server.attached('A', 'B');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
-  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
   await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
   fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
   if (navigate) server.held.add('session/setModel');
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'fixture/chosen' })));
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'fixture/chosen' })));
   if (navigate) {
     const request = await server.waitFor('session/setModel', 1);
     await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
@@ -191,7 +192,7 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   expect(modelPreferences().read(endpoint)).toEqual({ model: 'fixture/chosen' });
   expect(server.client.getSnapshot().views.B.snapshot!.model!.configured).toEqual({ model: 'fixture/root' });
   if (!navigate) await act(async () => fireEvent.click(screen.getAllByRole('button', { name: 'New Conversation' })[0]));
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('fixture/chosen'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('fixture/chosen'));
   expect(server.requests.filter(row => row.request.method === 'session/setModel')).toHaveLength(1);
   expect(server.requests.some(row => row.request.method === 'configuration/sourceWrite')).toBe(false);
 });
@@ -203,8 +204,8 @@ it('an unavailable saved selection remains visibly invalid and cannot submit a s
   fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
   fireEvent.change(input(), { target: { value: 'must not substitute' } });
-  expect(screen.getByRole('button', { name: 'Model and profile' }).textContent).toContain('removed/provider-model');
-  fireEvent.click(screen.getByRole('button', { name: 'Model and profile' }));
+  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('removed/provider-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
   expect(screen.getByText(/removed\/provider-model is unavailable/)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
   fireEvent.keyDown(input(), { key: 'Enter' });
@@ -345,8 +346,11 @@ it('cold sessions accept a prompt while initialization is held, then admit it ex
   const opening = await server.waitFor('session/attach', 1);
   const message = input();
   expect(message.disabled).toBe(false);
+  expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toHaveLength(0);
   fireEvent.change(message, { target: { value: 'send while connecting' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  const intent = await server.waitFor('session/submissionIntent', 1);
+  expect(intent.params).toEqual({ session_id: 'A', node_id: 'node-A' });
   expect(screen.getByText('send while connecting')).toBeTruthy();
   expect(document.querySelector('[data-first-submission="attaching"]')?.textContent).toContain('Connecting');
   expect(message.value).toBe('');
@@ -372,7 +376,7 @@ it('a cold connection failure keeps the unsent prompt recoverable without dispat
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: opening.id, error: { code: -32000, message: 'Runtime initialization failed' } }));
   expect(input().value).toBe('retain on connection failure');
-  expect(server.client.firstSubmissions.session('A')?.phase).toBe('failed');
+  expect(firstSubmissions(server.client).session('A')?.phase).toBe('failed');
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
 });
 

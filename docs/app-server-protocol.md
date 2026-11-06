@@ -1,14 +1,114 @@
-# App Server protocol v52
+# App Server protocol v73
 
-App Server v52 / Runtime Client v73 allow `read_domains_updated.trace` to be null.
-A null value leaves the previously published Trace cache and its exact issued cut
-unchanged. The live worker refreshes bounded Session domains and Trace totals;
-explicit checkpoint and Trace reads still materialize their exact captured native
-cut. `trace_changed` requests Trace repair; a full replacement carrying an older Trace cut also requests a repair without retiring pending Trace readers. Readers upgrade together;
-v50/v71 peers are rejected. Persistence layouts and publication cadence are unchanged.
+App Server v73 / Runtime Client v84 integrate the main v72 surface with PR #485's
+shared observation owners, independent Trace repair and bounded native reads.
+Server, Web and TUI clients upgrade together; earlier peers are rejected.
+The automatic Session configuration commit and large Workflow document transport
+from main remain part of this single current contract.
 
-The current protocol retains bounded conversation observation, identity receipts,
-content range reads and atomic subscription acceptance (#467). It also retains
+App Server v73 and Runtime Client v84 add optional `reasoningProfileOrder` on full
+Model catalog views and `reasoning_profile_order` on authored Models. It is a
+complete Model-local permutation, lowest first, independent of selection ordinals
+and the default Profile. Frozen views and bounded selection headers omit it.
+The same generation carries automatic Session configuration commit (Issue #518;
+see [Automatic Session configuration commit](#automatic-session-configuration-commit-v73)).
+Only the current generated pair is retained; older peers are rejected.
+
+App Server v73 and Runtime Client v84 distinguish incomplete historical
+Workflow nodes from proven current activity. `WorkflowTraceNode` and its
+`WorkflowNodeTraceState` now come from the native generated vocabulary.
+Durable start/wait records alone are incomplete; only an exact current
+resident execution at its published read cut may supply running/waiting.
+Persisted terminals take precedence. v70 artifacts and peers are removed.
+
+App Server v73 adds Workflow numeric conditions (`greater`, `greater_equal`,
+`less`, `less_equal`), numeric equality, typed-array containment and explicit
+JSON emptiness. Condition variable catalogs admit the type needed to select an
+operator; numeric right operands remain constrained to number/integer sources.
+Integer comparisons preserve exact ordering. All clients and the server use
+v73 together; v71 artifacts and peer support are removed.
+
+The contract also includes Workflow List and Variable Aggregator alignment. List
+comparison operands are typed WorkflowValue expressions, with optional serial
+extraction, type-directed operators and nullable first/last records. Aggregators
+require an explicit grouped flag: root output or group.output, automatic type
+selection and ordered first-available sources. Disabled groups retain authored
+configuration without introducing execution reads. These replace the prior
+operand and flat grouped-output shapes; clients and authored configurations
+must use the current contract, with no compatibility reader or migration.
+
+App Server v73 requires a Workflow Code code_language (python3 or javascript).
+The compiler lowers each language's typed main-call adapter to native Bash;
+input values retain their types and the returned object supplies declared
+outputs. The former Bash-language Code format is removed without a reader,
+fallback or migration. Runtime Client is unchanged by it: native Tool invocation and
+physical settlement observations retain their original contract. Clients and
+server upgrade together; earlier App Server peers are rejected.
+
+App Server v73 aligns Question Classifier configuration: classes have separate
+stable IDs, display labels and typed topic parts; instructions are typed parts,
+with original native variable-scope analysis. Results expose rendered class
+names, labels and actual usage. Clients and server must upgrade together.
+
+
+The current generation combines durable Scheduled Workflow recovery, exact-node
+Scheduler controls and typed Scheduled origins with complete Workflow file
+metadata and bounded inert `workflow/analyze`. Analysis reports exact candidate
+correlation and separate declaration, availability and compatibility facts.
+Read, Check and whole-file mutations preserve editor metadata.
+
+App Server v73 also includes reasoning-free model metadata, workspace change
+inspection, native structured output, Workflow Model calls, connection-scoped
+silent Workspace draft MCP preparation and explicit first-submission targets.
+All clients upgrade together; Rust DTOs generate the sole supported vocabulary.
+
+App Server v73 adds native Workflow `template`, `list`, `classifier` and
+`aggregate` definitions and consumer addresses for their inputs. Runtime Client
+v84 exposes their observation kinds. Classifier execution uses the existing
+Auxiliary Model call contract; Code Execution lowers to the existing builtin Bash
+Tool. See [data processing nodes](workflow-programs.md#data-processing-nodes).
+
+Runtime Client v84 carries Scheduled Workflow/interaction origins and nullable
+outer ToolCall identities. Published MCP sources use the closed Unprepared/Ready/Unavailable
+vocabulary. The first executable Attempt captures live validated tools after the
+finite selected startup batch reaches readiness or terminal outcomes. Successful
+runtime catalog updates under committed authority publish automatically at the
+native admission boundary; prepared authored configuration commits automatically
+at the Session's safe boundary as well. No older cached-Connecting reader is retained.
+
+`session/submissionIntent` records the native first-submission receipt before
+MCP-dependent attachment or loading. It arms the shared initial readiness wait
+using `mcp_startup_policy.wait_timeout_ms` (default 15,000 ms). Preparation and
+attachment with no accepted executable work do not consume that budget; existing
+durable executable recovery is already accepted intent. See
+[submission-triggered MCP initialization](#submission-triggered-mcp-initialization).
+
+The current protocol also includes the native Workflow `model` node,
+its Text/JSON Schema output union, registered Model/Profile authoring choices,
+`requires_attempt` dependency diagnostics, separate Model Call accounting and
+node-to-Auxiliary CallId observations. Earlier peers are rejected, and generated
+bindings describe the one current vocabulary. No older Workflow reader is retained.
+
+The current protocol retains `jsonSchemaOutput` in the closed `ModelCapabilities` wire
+object (the native `json_schema_output` capability). Initialization requires v73 and
+WebSocket negotiation requires `rustx.app-server.v73`. v71 and earlier peers are rejected
+before attachment or configuration/catalog reads; Web and TUI upgrade together.
+Rust remains the schema authority, and validators keep rejecting unknown fields.
+Runtime Client v84 carries Workflow Model observations. Child IPC v37 carries typed
+Workflow/interaction origins and freezes independent MCP Resource source authority
+alongside model views and the JSON Schema capability. MCP Resource calls use the
+ordinary Tool event/result protocol; there are no separate Resource browsing RPCs.
+
+App Server v73 and Runtime Client v84 expose the shared Summary/Title model policy,
+independent Title model views, generated Session title metadata with provenance,
+and bounded auxiliary retry facts. WebSocket negotiation requires
+`rustx.app-server.v73`; earlier peers are rejected. Session display precedence is
+manual name, generated title, opening preview, then identity fallback.
+
+App Server v73 retains the removal of product count/size caps from generic workspace uploads
+and advertises transport flow control only. See [Generic file upload policy](#generic-file-upload-policy-v73).
+It retains bounded conversation observation, identity receipts, content range reads
+and atomic subscription acceptance introduced in v50 (#467). It also retains
 the source-scoped automatic `rustx.toml` repair receipts introduced in v47 (#464):
 `SourceSettings.user_repair` / `workspace_repair` carry each source's latest
 bounded, redacted `ConfigRepairReceipt`, and the
@@ -35,14 +135,16 @@ After source repair, explicit refresh can obtain a serviceable checkpoint and ne
 subscription. Neither transition repeats a mutation or settles execution.
 
 
-App Server v52 and Runtime Client v73 implement separate attachment, observation
+App Server v73 and Runtime Client v84 implement separate attachment, observation
 and execution lifetimes. `session/attach` returns only `attached { target,
 configuration_revision, attachment_kind, observation_source }`. The connection's
 `session/attachmentStatus { session_id }` returns its current Target/revision or
 an absent Target, without loading or attaching. Use it to reconcile an uncertain
 Attach receipt on the same open connection.
 
-Root startup is Attach → Checkpoint(C) → Subscribe(C) → Following.
+Root observation startup is Attach → Checkpoint(C) → Subscribe(C) → Following.
+A first local submission sends its native submission intent before waiting for
+this sequence, as specified below.
 Compaction display identifies the immutable context checkpoint and its activation.
 Derived summaries belong to model-context projection and never become canonical
 messages; bounded observation preserves that native ownership.
@@ -120,8 +222,8 @@ Historical content reads reject LivePublicationPrefix references. They grant no
 followable live cursor and cannot activate a node or run a model.
 
 Mutation receipts carry bounded identity/revision outcomes. Configuration writes
-return `sources_written { revision, configuration_revision }`; reconciliation and
-adoption return `configuration_receipt { scope, version }`; model selection returns
+return `sources_written { revision, configuration_revision }`; reconciliation
+returns `configuration_receipt { scope, version }`; model selection returns
 `model_set { settings_revision }`. Independently read current state afterwards.
 `configuration/sourcesRead` returns a bounded source projection. A small view is
 inline; a larger view has every native field as an inline value or a finite
@@ -161,9 +263,9 @@ a bounded correlated error, retaining Delivery Access publication ownership and
 cancellation/revocation precedence; actual physical I/O failure closes the connection.
 
 
-App Server v52 adds exact Message-positioned windows and the immutable inherited transcript boundary. Runtime Client v73 carries the boundary independently. App Server v52 also exposes `session/node { session_id, node_id } → node { node: SessionNode }`, an exact native metadata read. v45/v67 peers are rejected before initialization.
+App Server v50 adds exact Message-positioned windows and the immutable inherited transcript boundary. Runtime Client v84 carries the boundary independently. App Server v50 also exposes `session/node { session_id, node_id } → node { node: SessionNode }`, an exact native metadata read. v45/v66 peers are rejected before initialization.
 
-App Server v52 / Runtime Client v73 share one Session workspace across Agents
+App Server v73 / Runtime Client v84 share one Session workspace across Agents
 and Workflows (#462). `RuntimeClientAgent.workspace` is the frozen Session
 binding path; the isolation, resource-state and handoff object is gone, and
 `subagent/disposeWorkspace` with its `workspace_disposed` result is removed.
@@ -182,7 +284,7 @@ the Harness turn navigation surface, including distant unloaded turns, previews,
 active marks and return to latest. Runtime Client's internal vocabulary also
 exposes the child reads; its version advances independently.
 
-App Server v52 / Runtime Client v73 distinguish adopted runtime, Agent and mixed
+App Server v73 / Runtime Client v84 distinguish adopted runtime, Agent and mixed
 inputs with `TraceKind::Context`. Only wholly human message batches are `User`.
 This classification is native and independent of preview text or adjacent records.
 There is no old-vocabulary fallback.
@@ -201,7 +303,7 @@ Trace. These asynchronous read-only methods neither resume nor settle a child,
 work after child process exit, and do not depend on its live inspection socket.
 `SubagentObservation.attempt_id` is the exact current child Attempt, cleared at
 settlement. Live repairs require that identity and exact request/tool identity;
-durable terminal facts always win. Clients must upgrade together to v52/v73.
+durable terminal facts always win. Clients must upgrade together to v73/v84.
 
 
 Child statistics remain available through `agent/statistics { target, agent_id }`.
@@ -245,15 +347,15 @@ per-connection `ServerCapabilities.delivery_access` report. Only transport
 authentication grants the access. See
 [Committed delivery access](#committed-delivery-access-v52).
 
-App Server v52 / Runtime Client v73 refresh retained Trace input ownership at the
-current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v52).
+App Server v73 / Runtime Client v84 refresh retained Trace input ownership at the
+current read cut. See [Trace retained-input ownership](#trace-retained-input-ownership-v50).
 
-App Server v52 / Runtime Client v73 separate Session configuration-adoption
-eligibility from configuration application state. `ConfigurationApplication` no
-longer carries `eligibility`; the live runtime publishes it on its Runtime Client
-snapshot (`configuration_adoption_eligibility`) and changes it only through
-`configuration_adoption_eligibility_changed`. See
-[Session configuration adoption eligibility](#session-configuration-adoption-eligibility-v52).
+App Server v73 / Runtime Client v84 remove manual Session configuration adoption:
+`session/adoptConfiguration`, the `configuration_adoption` error, the available
+candidate on `ConfigurationApplication` and the Runtime Client adoption
+eligibility are gone. Native commits prepared configuration automatically and
+records each commit as one `configuration_applied` fact. See
+[Automatic Session configuration commit](#automatic-session-configuration-commit-v73).
 Only the one current version is accepted.
 
 The preceding v34 separated upload preparation/status from a bounded binary
@@ -268,14 +370,14 @@ credential-authenticated native seam, outside the ordinary Method vocabulary.
 Runtime Client v56 added typed canonical delivery facts. The preceding main's
 App Server v30 introduced cut-bound native turn outlines and transcript windows.
 
-The previous App Server v29 / Runtime Client v55 combined main's Harness semantic ledger with
+The previous App Server v29 / Runtime Client v56 combined main's Harness semantic ledger with
 required configured Tool inventory, capability-gated image admission, and Bash
 presentation metadata. Every earlier version is rejected; there is one current
 mandatory vocabulary and no compatibility decoder.
 
 App Server is the only external product control protocol (#428): a bare
 `rustx` prints help, and no process serves the Runtime Client envelopes to a
-client. Runtime Client v55 removed its Session catalog requests, results and
+client. Runtime Client v56 removed its Session catalog requests, results and
 views; App Server v30 replaced the root transcript paging vocabulary for Issue #430.
 
 App Server v28 / Runtime Client v53 introduced bounded canonical Tool argument
@@ -306,7 +408,7 @@ and Chat frame contract are documented in [CHAT.md](../web-console/CHAT.md).
 `job_id` and terminal lifecycle; `agents`/`agent_updated` carry stable `agent_id`,
 parent lineage, child ConversationId, current/latest activation identity and explicit
 Admitting/Active/Stopping/Inactive/Unavailable state. Controls route directly to each domain owner. A
-resumed activation updates the same Agent row. Only current v52 generated artifacts are retained, following repository policy;
+resumed activation updates the same Agent row. Only current v73 generated artifacts are retained, following repository policy;
 Older peers are rejected without a compatibility decoder. See
 [Jobs and continuable Agents](jobs-and-agents.md).
 
@@ -322,18 +424,18 @@ open across reconstruction and paging. `CompletedResponseView` retains finalized
 answer/TurnTail provenance and actions. Lineage remains selective: finalized
 completed-response provenance may cross into children; unsuccessful source
 execution outcomes do not. See [the ownership contract](issue-406/terminal-process-ownership.md).
-Only App Server v52 / Runtime Client v73 are supported. Earlier peers are rejected without compatibility paths.
+Only App Server v73 / Runtime Client v84 are supported. Earlier peers are rejected without compatibility paths.
 
 The earlier v22/v49 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. The current v52/v73 pair retains these capabilities. A browser product preference can
+its catalog. The current v73/v84 pair retains these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
 The historical v21/v52 revision introduced `completed_process` on transcript
 entries, using committed Assistant identities and exact Tool occurrence owners
-to identify a successful Attempt and its final response. v27/v52 replaced that
+to identify a successful Attempt and its final response. v27/v53 replaced that
 field with `turn_process`, extending the semantic owner across outcomes. SQLite
 schema 44 retains exact completed-process members in lineage provenance,
 remapped by the native copy owner; this selective lineage policy is unchanged.
@@ -383,15 +485,19 @@ RequestSnapshot facts, not live Todo/Goal authority. See
 [native contribution lifecycle](native-context-contributions.md)
 for atomic startup and same-step reuse. Generated v14 artifacts are removed.
 
-App Server v52 identifies one complete mandatory vocabulary, including exact
+App Server v73 identifies one complete mandatory vocabulary, including exact
 `session/summary`, bounded historical Trace detail, and read-only Subagent
-transcripts. v12 and all earlier initialization and WebSocket admission versions
+transcripts. v65 and all earlier initialization and WebSocket admission versions
 are rejected; there is no downgrade or compatibility path.
 
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
 `src/app_server/protocol.rs` are authoritative. `AppServerConnection` in
-`src/app_server/connection.rs` is the transport-neutral semantic endpoint.
+`src/app_server/connection.rs` is the transport-neutral semantic endpoint: it alone
+admits requests, reserves and registers attachments and accepts final replies, then
+routes each admitted request by an exhaustive request-family classification to the
+catalog, history, configuration and runtime handlers under `src/app_server/connection/`.
+`src/app_server/rpc_error.rs` is the one native-failure to JSON-RPC error mapping.
 
 ```text
 one client connection → AppServerConnection (initialize once)
@@ -491,13 +597,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v52",
+  "rustx.app-server.v73",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v52` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v73` in its response. It never echoes
 the credential. A client the operator trusts with committed-delivery bytes may also
 offer `rustx-delivery-access.<separate secret>` (`--delivery-access-token-file`); a
 wrong or unconfigured value fails the whole handshake, and it never substitutes for
@@ -517,7 +623,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v52 subprotocols above.
+endpoint/token; the browser then connects directly using the v73 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -528,7 +634,7 @@ nor remote attachment grants Product Host Workspace filesystem authority.
 | --- | --- | --- |
 | Complete JSON-RPC record | 1,048,576 encoded UTF-8 bytes | Reject oversized input before dispatch; substitute a bounded correlated response error or exact-registration Resync for oversized output |
 | Stdio read buffer | 8 KiB | Incremental bounded record assembly |
-| In-flight request-ID associations per connection | 16 | Bounded request-capacity refusal; eight Child observations, six ordinary RPCs and two reserved controls |
+| In-flight request-ID associations per connection | 50 | Bounded request-capacity refusal; 32 attachment lifecycle waits, eight Child observations, six ordinary RPCs, two Session metadata operations and two reserved controls |
 | Outbound queue per connection | 32 messages | Pause candidate production; a completed reply waits at most 10 seconds for capacity |
 | One outbound write including flush | 10 seconds | Drop writer future and close |
 | WebSocket frame and assembled text message | 1,048,576 bytes each | Library rejects excess before dispatch |
@@ -546,9 +652,9 @@ remain under their existing owners; these transport limits are independent from 
 
 Ready observations alternate with protocol progress (a completed response or
 incoming-message admission), starting with protocol progress. At most one ready
-notification precedes each progress step. Since there are at most 16 pending
+notification precedes each progress step. Since there are at most 50 pending
 requests and only input admission can add another, ready input cannot wait behind
-more than 16 response completions plus 17 observations. Conversely, continuous
+more than 50 response completions plus 51 observations. Conversely, continuous
 input/response traffic cannot starve a ready notification. No backlog drain,
 sleep, queue expansion, or semantic bypass is needed.
 
@@ -571,30 +677,47 @@ Already admitted runtime operations continue under their existing server owners.
 A mutation whose response is lost has an **unknown outcome**: no transport retries it.
 Reconnect with initialize/attach/checkpoint/subscribe and inspect authoritative state.
 
-The Web typed request layer gives `agent/wait`, `job/wait` and
-`agent/sendMessage` no response deadline: these operations can legitimately await
-native admission, durable acceptance or physical settlement. `agent/interrupt`,
+The Web typed request layer gives `session/attach`, `agent/wait`, `job/wait`,
+`context/compact` and `mcp/probe` no generic response deadline. Their native
+initialization, admission or settlement owners govern the wait. In particular,
+attachment preparation before submission remains unarmed even after 60 seconds;
+first submission arms the native absolute MCP readiness deadline. Web cannot
+retire that healthy attachment using its ordinary 30-second response clock.
+`agent/sendMessage`, ordinary RPCs and Session metadata operations retain that
+30-second deadline and existing response-loss disconnect behavior. A lost
+`session/create` response remains an uncertain mutation. `agent/interrupt`,
 `job/cancel` and `turn/cancel` return finite cancellation-intent receipts; they
 never wait for physical settlement while occupying reserved control capacity.
-Their lifetime is not transport liveness. Ordinary RPCs retain the 30-second
-response deadline and existing response-loss disconnect behavior. Actual socket
-close/error settles each pending operation once; transmitted mutations remain
-uncertain, waits are abandoned without cancellation, and no request is replayed.
+Actual socket close/error settles each pending operation once; transmitted
+mutations remain uncertain, waits are abandoned without cancellation, and no
+request is replayed.
 
-Web admission uses the server's eight observation, six ordinary RPC and two
-reserved control positions. Ordinary positions include lifecycle waits and
-message admissions. Lifecycle controls (`agent/interrupt`, `job/cancel`,
-`turn/cancel`) use the reserved positions.
-`turn/cancel` consumes neither ordinary RPC capacity nor its 30-second response
-deadline; ordinary RPC saturation cannot delay an otherwise admissible exact
-cancellation. A full control lane rejects new local control admission before send,
-just as other full domain lanes reject new local requests before transmission.
-The existing 64-request queue/uncertainty bound remains; cancellation has no browser
-queue, retry or replay. Socket loss after transmission still leaves cancellation
-uncertain under the response-loss contract above.
-Waiting cannot occupy inspection/control slots, and message admission cannot occupy
-interrupt/cancel slots. Connection generations and attachment-target checks still
-fence result adoption after reconnect, detach, or target replacement.
+Web, TUI and Native admission reserve 32 attachment lifecycle, eight observation,
+six ordinary RPC, two Session metadata and two control positions. The attachment
+lane uses the existing 32-attachment connection bound; a thirty-third local
+attachment request is refused before ID allocation or send. Its association stays
+owned through response disposition. Six or even 32 cold attachments cannot
+consume metadata, ordinary or control capacity.
+
+The metadata lane admits only `session/read`, `session/settings` and
+`session/create`. Reads are inert native catalog operations; creation authors a
+durable Session identity without initializing MCP. They keep fresh node/cwd
+resolution and first-Conversation creation available before control submission
+intent. No authorization cache replaces those fresh reads or final Product Host
+exact-root validation. Web metadata has two dispatched requests and shares the
+existing 64-request bounded pending queue. Its 30-second response clock starts at
+actual send; queueing does not consume it. TUI uses the same finite positions and
+retains its existing absence of a response clock.
+
+Lifecycle controls (`agent/interrupt`, `job/cancel`, `turn/cancel`) use the reserved
+positions. Saturated ordinary, metadata, observation and attachment lanes cannot
+delay an otherwise admissible exact cancellation. Full control and attachment
+lanes reject new local admission before send; metadata and observation requests
+retain bounded pending queuing. The existing 64-request queue/uncertainty bound
+remains; cancellation has no browser queue, retry or replay. Socket loss after
+transmission still leaves cancellation uncertain under the response-loss contract
+above. Connection generations and attachment-target checks fence result adoption
+after reconnect, detach or target replacement.
 
 `AppServerConnection::close()` is permanent and idempotent. Its route-table lock
 linearizes close against attachment reservation/claim/commit, including pending loads.
@@ -633,7 +756,7 @@ an ID does not deduplicate a mutation. Integer correlation IDs must fit the
 JavaScript safe integer range. String IDs are recommended for arbitrary IDs.
 
 ```json
-{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":16,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
+{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":58,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
 ```
 
 `APP_SERVER_PROTOCOL_VERSION` is independent of crate, manifest, journal,
@@ -649,8 +772,169 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v52; pipeline individual requests instead. This limitation is
+supported in the current protocol; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
+
+## Silent Workspace draft MCP preparation
+
+- `mcp/draftPrepare { target, cwd }` starts or replaces this connection's unsent
+  draft. `target` contains a bounded opaque `draft_id`, positive `generation` and
+  Product Host `host_authority`. Generations increase across this connection's
+  selections. Exact repeated selection is idempotent; stale, consumed and
+  conflicting reserved targets are refused. `cwd` is an absolute Host-authorized
+  path, resolved and freshly classified by the existing Web Product Host route.
+- `mcp/draftCancel { target }` revokes only the exact untransferred selection or
+  reservation. It is idempotent and cannot cancel a Conversation after transfer.
+- Both return `mcp_draft_accepted {}`. This acknowledges intent, never readiness
+  or physical settlement. They are connection-local operations in shared method
+  policy; losing a reply creates no durable Session or uncertain user input.
+- `session/create { settings, submission: target }` is the actual Web first Send.
+  The native connection captures its monotonic receipt synchronously before the
+  returned request future can be left unpolled, configuration resolution, capacity
+  queueing or MCP-dependent loading. It seals the exact draft once. This field is
+  absent for inert identity creation used by other clients; those calls continue
+  to create no runtime and arm no readiness clock.
+- The normal `session_transition` creation acknowledgement remains authoritative
+  independently of claim validation, attachment, uploads and first-message
+  acceptance. Creation failure settles the reserved draft. A committed Session
+  starts the ordinary native loading flight without delaying the acknowledgement
+  for discovery. Uncertain creation is never replayed. Web then attaches, uploads
+  and sends through the existing Session operations. The exact first-submission
+  Session/binding retains its preparation across that acknowledgement, Settings
+  and same-Session selection until transfer or actual departure. Discarding input
+  after creation does not create another draft preparation.
+
+The loading owner compares actual admitted Workspace/source demand, transport,
+command/arguments/cwd/environment, captured credentials and policy before the
+scope's one transfer lock. A missing, revoked or invalid preparation follows normal
+initialization under the same captured submission clock. Transfer moves the actual
+pending discovery or ready live generations, invalidation synchronization,
+lifecycle admissions and cleanup registry. It is not a catalog-only hint.
+Capability selection and commit remain separate and validate the full candidate.
+
+Draft ownership is native connection-local, including same-Workspace tabs.
+Connection close cancels untransferred resources; App Server drain supervises
+physical settlement. A finite 32-source process reservation includes live ready
+and retiring draft resources. Replacement intent is coalesced to the latest
+selection. No draft has an elapsed prewarm cutoff while it remains owned.
+`server/diagnostics.mcp_drafts` exposes pending/prepared/failed/cancelling counts,
+source reservation usage and retained cleanup failures. Prepared is a complete
+physical batch outcome, not executable capability authority. The Web adds no
+prewarm-specific presentation or notices.
+
+## Submission-triggered MCP initialization
+
+`session/submissionIntent { session_id, node_id }` returns
+`submission_intent_accepted {}`. It is a side-effecting control operation in the
+attachment family, available before an attachment exists. Native captures its
+monotonic receipt before resolving the target or awaiting an MCP-dependent load,
+attach, claim or readiness operation. Clients supply Session/node identity, never
+a clock value. The method requires the exact node; there is no omitted-node
+form. Clients resolve missing selection metadata through MCP-independent Session
+reads before attachment, and use that same node for intent and attachment.
+
+Because intent can initialize native resources, Web routes it through the same
+existing `admitSessionOperation` proof and reserved-dispatch-slot validation as
+attachment, for both new and existing Sessions. A missing or canonically replaced
+Workspace root refuses dispatch before intent reaches Native. Removing a
+registration does not revoke configured-root authorization; the existing
+[exact-root policy](open-workspace.md) is unchanged.
+
+At synchronous host Control admission, Native captures the semantic receipt and
+registers its exact `(session_id, node_id, received_at)` before the request future
+can be left unpolled. An existing matching Loading owner receives it immediately,
+before asynchronous catalog lookup. A new loading flight consumes compatible
+receipts under the same manager registry lock before publishing its entry or
+starting source work. Host FIFO ordering covers finite intent registration, never
+MCP readiness waits.
+
+The accepted request owns the receipt through registration. Its RAII lifetime
+removes a weak manager index when registration settles; that index is bounded by
+existing admitted request owners and owns no Session, connection or draft lease.
+Dropping the RPC waiter does not drop the counted native registration job. The
+response acknowledges registered intent; it does not submit prompt blocks, create
+canonical input, dispatch a provider request or prove MCP readiness.
+
+An existing loading owner and its waiters share one initialization and physical
+connections. The first receipt arms one absolute deadline after native policy
+resolution: `submission_received_at + effective_wait_timeout`. If resolution or
+other work took time, that time is already charged to the receipt. The effective
+positive `mcp_startup_policy.wait_timeout_ms` defaults to 15,000 milliseconds and
+uses CFG3 User/Workspace complete-object replacement. Checked construction rejects
+an unrepresentable deadline. Preparation may have run for an arbitrary period
+before receipt without consuming this budget. Already-ready sources and no-MCP
+Sessions add no artificial wait.
+
+Durable Pending Inbox or a safe `ContinueAdoptedTurn` is already accepted
+executable intent. Native load/headless entry captures a prospective monotonic
+recovery receipt before metadata resolution or allocation claim. Read-only
+existing `RecoveryEvidence`/`RecoveryPlan` recognition runs before source
+preparation, including selected managed Python; only recognized executable work
+arms that receipt. Empty/completed history alone leaves the clock unarmed.
+Recognition changes no history and does not move native reconciliation or replay.
+If an earlier receipt is recognized after a later Send, the shared deadline can
+only tighten. For load receipt T0 and Send at T10, the provisional T25 deadline
+becomes T15 with the default policy; no new budget is granted.
+
+The selected Root/enabled-Workflow batch shares that deadline across queueing,
+negotiation, every discovery page and validation. Concurrent intent calls,
+reconnection, ownership handoff and phase changes cannot extend it. Later
+ordinary messages within the same initialization do not rearm it. A cold
+Conversation load after unload starts a new physical initialization, whose first
+accepted submission needing preparation owns its wait; it creates no artificial
+full-budget delay per message. The first executable Attempt waits for live
+results: healthy tools are included, optional Root failures/timeouts are reported
+without suppressing healthy siblings/native tools. Affected Workflows are disabled
+with diagnostics; frozen child contracts remain strict. Expiry cancels and retires
+pending initialization; the
+same attempt cannot publish Ready afterward. Physical ownership remains counted
+until settlement, even after the wait has timed out.
+
+Unloading a Loading incarnation retires its shared generic `Initialization`
+and joins its owner. A short control mutex orders retirement intent against
+prepared native control installation before activation; it never covers SQL or
+native retirement. If no native control exists, cancellation publishes before a
+publisher can install it. Otherwise retirement invokes the existing native
+`PreparationRollback`/drain lifecycle and admission cut before publishing the
+cancellation token, after releasing host, registry and control locks. The native
+activation CAS still shares the signal's short grant, released before recovery
+SQL and Attempt admission. Retirement before CAS or after CAS/before first
+admission prevents provider dispatch. A request dispatched first stays owned
+through ordinary shutdown. `LoadingCancelled` follows settlement of owned
+inactive preparation, not dropping its future.
+
+Accepted receipts bind one exact non-retiring initialization, so a failed
+initialization cannot lend a receipt to a retry or resurrect it after unload.
+Host drain permanently fences new initialization before its first residency
+inventory. Each `begin_drain` recollects owners and issues their native retirement
+outside global locks before returning, closing recovered admission even if
+activation won earlier. Accepted metadata jobs cannot introduce another runtime
+between cleanup passes.
+
+Web first submission records intent before awaiting attachment, including when
+opening an existing Session. TUI preserves its early attachment and editable
+surface; submitting while attachment is pending records intent independently of
+that wait. Prompt content remains locally owned until ordinary inbound admission.
+Withdrawing a queued prompt does not restart the native clock. Submission failure
+uses existing status/error surfaces. This protocol adds no prewarm presentation,
+Workspace-selection work, draft lease or connection-transfer contract; those are
+separate [Issue #504](https://github.com/Caismis/rustX/issues/504) work.
+
+Successful later runtime catalog/recovery results use native capability validation
+and the same lock as next-Attempt admission. When publication wins first, the next
+Attempt includes the update. When admission wins, its entire snapshot stays
+frozen and publication waits for a later safe boundary. No client call,
+new user input, provider/auxiliary request or history mutation is required for
+idle publication. Unrelated staged authored configuration remains staged and is
+revalidated against the new baseline before its own commit. A failed refresh retains the last-good generation and does not schedule
+endless retries. The native commit grant is nonblocking: Busy keeps the result and
+defers existing admission while the worker awaits `commit_available` outside the
+coordinator, so controls remain responsive. Per-source continuous authorization
+rejects X→Y→X completion reuse, while pure rebase retains an eligible fresh retry
+and current committed Todo/context/model/sibling state without discovery. A newer
+explicit refresh failure keeps its source-scoped diagnostic across older pending
+or unrelated sibling success; a newer successful explicit whole-batch refresh
+clears it. Superseded source completions cannot publish stale tools or failures.
 
 ## Methods and native owners
 
@@ -661,15 +945,17 @@ explicitly rejected as an invalid request before any action occurs.
 | `session/create` | Durable creation from explicit Session selections |
 | `session/fork`, `session/branch` | Selected SurfaceRevision R fixes structure; invocation-time native read cut C fixes temporal facts. A message boundary further narrows structure, with explicit `side`: `before` restores ordinary User input; `after` includes a durably completed Assistant response with an empty editor. Fork without a boundary clones structure through R into an independent Session |
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
+| `session/submissionIntent` | Capture first native submission receipt for the Session/node before MCP-dependent attachment or loading; no inbound content or model request |
 | `session/attach`, `session/detach` | Load/reuse a runtime and acquire/release its external control attachment |
 | `session/switchNode` | Switch to a selected branch; manager owns retirement and composition |
 | `session/checkpoint`, `session/subscribe`, `session/transcript`, `session/turns`, `session/boundaries` | Authoritative projection, bounded replay, cut-bound transcript windows/native Attempt outline and lineage-specific user-message pages |
+| `conversation/changes`, `conversation/changeDiff` | Read-only, attachment-bound completed-Attempt workspace summaries and immutable per-file comparison hunks |
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
 | `session/settings` | Durable resolved Session selection; model mutation uses `session/setModel` |
 | `session/model`, `session/models`, `session/setModel`, `session/selectModel` | Bounded attached Session model/catalog reads and finite mutation receipts; complete authored selections or catalog defaults at exact native binding revision and ordinals |
 | `configuration/sourcesRead`, `configuration/sourceWrite` | Native structured User/Workspace documents and exact revisions; bounded semantic-unit CAS writes |
-| `session/effectiveConfiguration`, `configuration/reconcile`, `session/adoptConfiguration` | Authoritative application state, native rescan/retry, and fenced explicit Session adoption |
+| `session/effectiveConfiguration`, `configuration/reconcile` | Authoritative application state and native rescan/retry |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
 | `job/list`, `job/status`, `job/wait`, `job/cancel` | ConversationBackgroundRegistry: bounded finite Jobs, immediate status and cancellation-intent receipt; the separate exact terminal wait reaches physical settlement or typed publication abandonment |
 | `agent/statistics` | Parent `AttachmentTarget` → exact parent registry Agent ownership → existing child store → incremental native usage, timing and occupancy; read-only, no child activation |
@@ -716,8 +1002,9 @@ the committed settings revision. Neither successful response
 replaces the active Attempt's frozen `AttemptModelView`, including when only a
 Profile, output budget or request parameter differs. Subsequent independent
 Attempts capture the new selection; child work from an older Attempt inherits its
-parent's captured authority. General `session/adoptConfiguration` retains its
-separate Busy/readiness rules.
+parent's captured authority. A staged source candidate whose baseline a selection
+replaces is superseded and prepared again; a selection that loses its own fence
+to a newer binding reports `model_selection_conflict`.
 
 Selection errors distinguish invalid complete selections, stale candidates,
 unavailable/retired runtimes, persistence failures and committed durability
@@ -775,6 +1062,13 @@ joins the projection worker, and releases the composition/allocation. No
 registry lock is held across any of this asynchronous work. The gate is
 subordinate to registry residency, not a second runtime state machine.
 
+`context/compact`, `job/wait` and `agent/wait` transfer exact native completion
+tails after bounded manager admission. Those waits retain their Host request
+ownership and original result, while releasing the manager lease before waiting
+for execution settlement. They retain no Runtime, Store or allocation handle;
+explicit unload/replacement can cancel the native owner and settle its physical
+resources without waiting for a terminal observer to release residency first.
+
 `session/detach` only removes the exact connection-local attachment relationship;
 it acquires no runtime operation lease and works even during `Unloading` or after
 residency ends. It does not cancel execution, settle interactions, or unload.
@@ -787,7 +1081,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v52 admits at most one writable external controller per resident
+Protocol v73 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -923,8 +1217,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v52.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v52.ts`: TypeScript generated from that schema using pinned
+- `v73.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v73.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -977,7 +1271,7 @@ products or policies is implemented by this semantic endpoint.
 
 `tests/support/app_server_conformance.rs` defines one small semantic parity scenario
 and a test-only `AppServerConformanceDriver`: concurrent typed `request` and
-`next_notification` calls. `tests/scripted/app_server/protocol.rs` runs it through
+`next_notification` calls. `tests/scripted/app_server/protocol/admission.rs` runs it through
 the direct `AppServerConnection` adapter now. #36 can include the same support
 module via `#[path = "..."]`, supply a fresh connection and two idle Policy-mode
 Sessions, and implement drivers that exchange the same DTOs over stdio or WebSocket.
@@ -1081,12 +1375,22 @@ WebSocket servers and owned stdio children. The first request commits
 `Accepting -> Draining` at AppServerHost's admission mutex, shared by semantic
 request, connection and attachment capacity admission. Runtime-targeted request
 admission also captures the manager operation lease before releasing the host
-boundary, so drain cannot reject a previously accepted request in that gap. The manager has no server
-lifecycle: already accepted host requests may still claim runtime operations or
-loads. Host drain immediately supervises the current residency set while waiting
-for those request owners, then drains a final inventory to cover late admitted
-loads. Both passes supervise all entries without failing fast. Diagnostics remain readable, but new semantic work receives
-`server_draining`. New WebSocket sockets are refused at the transport boundary.
+boundary, so drain cannot reject a previously accepted runtime operation in
+that gap. Before the first residency inventory, the same host admission boundary
+permanently closes the manager's native initialization admission. A metadata job
+accepted before drain can finish its owned lookup/registration, but cannot create
+or activate a new loading incarnation afterward. Existing Loading flights are
+cancelled and joined through physical settlement; their receipt provenance cannot
+restart them. This is a generic manager lifecycle fence, not an MCP-specific
+exception in request semantics. Every `begin_drain` recollects current
+initializations and closes prepared native admission outside host/registry locks
+before publishing their cancellation tokens and returning. This covers recovery
+that already crossed activation but has not dispatched its first request.
+
+Host drain supervises the current residency set while waiting for accepted request
+owners, then drains a final inventory to verify cleanup. Both passes supervise all
+entries without failing fast. Diagnostics remain readable, but new semantic work
+receives `server_draining`. New WebSocket sockets are refused at the transport boundary.
 Every reserved/live runtime is supervised concurrently through native shutdown;
 operation leases, native settlement, and the existing host projection drain
 are awaited before composition release.
@@ -1125,7 +1429,7 @@ are exposed.
 
 Each physical connection has a 1 MiB encoded-message limit, 32 outbound queued
 messages (explicit 32 MiB queue byte budget), one additional message being
-written, 16 in-flight protocol requests, and a 10-second physical write deadline.
+written, 50 in-flight protocol requests, and a 10-second physical write deadline.
 These transport-owned budgets remain fixed, not Session policy. Encoded messages
 are bounded before queue insertion; no byte allocation is inferred from object
 sizes. Slow consumers are disconnected and release attachments without semantic
@@ -1133,13 +1437,15 @@ settlement. Handshaking sockets count toward the configured connection quota and
 have a five-second handshake deadline. Capacity/drain rejection before JSON-RPC
 uses HTTP 503 where the socket can accept the response, then closes. stdio owns
 one physical connection. Process catalog request ownership is additionally
-bounded by `max_connections * 16` outstanding operations; refusal is
-`request_capacity`. Other typed refusals are `residency_capacity`,
+bounded by `max_connections * 50` outstanding operations; noncontrol admission
+stops at `max_connections * 48` to preserve the two control positions per
+configured connection. Refusal is `request_capacity`. Other typed refusals are `residency_capacity`,
 `attachment_capacity`, and the existing `stale_runtime` for retired incarnations.
 
 ## Session workspace uploads (WEB-02A)
 
-`session/uploadPrepare { target, operation_id, files: [{ name, size }] }` returns
+`session/uploadPrepare { target, operation_id, files: [{ name, size }] }` accepts
+exactly one file per operation and returns
 `upload_prepared { transfer }`. `session/uploadStatus { target, operation_id }`
 returns `upload_status { outcome }`: absent, unresolved, failed, or ready with the
 original native receipts. Preparation uses exact attachment admission. Bytes use
@@ -1167,8 +1473,8 @@ use the existing subscription as invalidation signals. Neither historical reads
 nor Trace cursors advance a subscription cursor. See [Trace architecture](trace.md)
 for source authorities, ordering, read cuts, repair, bounds and unavailable facts.
 
-Generated Rust Schema/TypeScript, Web Console and TUI negotiate App Server v52
-and Runtime Client v73 in their independent version domains.
+Generated Rust Schema/TypeScript, Web Console and TUI negotiate App Server v73
+and Runtime Client v84 in their independent version domains.
 Earlier versions are rejected; there are no aliases or dual-version paths.
 
 `session/trace` accepts optional `records: TraceCursor[]` (maximum 128) and returns
@@ -1194,7 +1500,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v52; no compatibility path is provided.
+This remains mandatory protocol v73; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -1224,8 +1530,8 @@ Complete = terminal
 The obsolete `GoalView.armed` member and every activation-only observation are
 removed, so no snapshot and no `goal_changed` event can represent
 `Active + disarmed`. Native Runtime Client version 43 introduced this vocabulary;
-current version 68 retains it and rejects older peers by strict negotiation. This remains mandatory
-App Server protocol v52, with no compatibility field and no activation mode.
+current version 79 retains it and rejects older peers by strict negotiation. This remains mandatory
+App Server protocol v73, with no compatibility field and no activation mode.
 
 Clients derive presentation from the phase alone: `Active` offers Pause,
 `Paused` and `Blocked` offer Resume, and there is no separate Play/arm control
@@ -1240,7 +1546,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v52 includes `inbound/edit { target, expected, text }` and
+Protocol v73 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and controller attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -1326,7 +1632,7 @@ native summary projection, projected from persisted catalog metadata only: neith
 message — published after the first canonical root user commit, derived from
 the frozen seed at clone/fork publication, or backfilled by the explicit
 idempotent repair seam at reopen/compose/recovery. Display precedence is
-explicit name → preview → identity fallback.
+manual name → generated title → preview → identity fallback.
 
 Canonical commitment and projection publication are **two separate commit
 points**, in that order, and a client can legally read `session/summary`
@@ -1342,7 +1648,7 @@ Publication has a defined live-client convergence path:
 [`session/summaryInvalidated`](#sessionsummaryinvalidated). A client never polls, retries, or
 infers settlement from canonical history.
 `session/list` remains bounded searchable/paginated browsing: its query matches ID,
-name or preview substrings and must never be used as exact identity resolution.
+name, generated-title or preview substrings and must never be used as exact identity resolution.
 Web `view.summary` is a replaceable exact observation, not durable/catalog authority.
 After canonical first-user-message observation, only successful exact reads complete
 preview convergence (including `preview: null`); failed reads remain retryable.
@@ -1436,20 +1742,21 @@ There are no `mcp/connect`, `mcp/status` or `mcp/disconnect` settings methods.
 Configuration reads never acquire external MCP resources; runtime
 connections belong exclusively to the native capability generation owner.
 
-Protocol v52 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v73 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
 target. Browser-provided paths are not authorization. Opening the editor discovers
 inert definitions without allocating Sessions, runtimes, MCP connections or Python.
 Rust validates and serializes whole semantic units. Save transfers responsibility
-to native reconciliation. Complete independent units apply automatically;
-context-changing or unproven candidates await explicit Session adoption.
+to native reconciliation. Independent units apply on their own; context,
+capability and model candidates commit automatically at the Session's safe
+boundary.
 
 `session/effectiveConfiguration` and source projections expose desired input revision,
-application identity, per-unit results, current process bindings, complete ready
-candidate, and adopted Session binding. Applied, ready, failed and restart states
-can coexist. `configuration/changed` carries scope and monotonic version; clients
+application identity, per-unit results, current process bindings and the
+committed Session binding. Applied, preparing, ready, failed, uncertain and
+restart states can coexist. `configuration/changed` carries scope and monotonic version; clients
 reject older notifications. Versions are native `u64` counters, comparable only
 within one source scope, authority and connection lifetime, and never against a
 source revision. Reconnect rereads authority without mutation replay.
@@ -1481,24 +1788,23 @@ one-shot read, the owner keeps or deterministically transfers the outstanding
 obligation to another bounded pass before releasing ownership. Because an
 application version orders application publications only — never authored source
 revisions or whole `SourceSettings` snapshots — an acknowledgement is mutation
-evidence, not a candidate replacement for the read model: a client that adopted a
+evidence, not a candidate replacement for the read model: a client that installed a
 causally later authoritative read must not let an acknowledgement carrying an
 equal or older application version restore earlier authored state. Status strings
 are never ranked: a later legitimate edit republishes as `preparing`, and
 `applied` is not a terminal conclusion.
 
-`session/adoptConfiguration` requires the inspected candidate identity and expected
-binding revision. `session/configuration` reads the retained binding/candidate
-without loading a cold Session. `configuration/changed` publishes its bounded
+`session/configuration` reads the retained binding and application without
+loading a cold Session. `configuration/changed` publishes its bounded
 scope/version and inline-or-deferred application reference. Clients retain the
 native version obligation while loading deferred bytes through
 `session/configurationValueRead`; the fully reconstructed application is installed
 only if its exact scope, version and source ownership remain current.
-`configuration_adoption` reports Busy, NotReady, Conflict or a
-preparation/commit diagnostic. Adoption is ordered against Attempt admission and
-preserves canonical history. `configuration/reconcile` rescans external inputs or
+A failed or uncertain unit carries its native diagnostic; the previous
+configuration stays committed. Automatic commit is ordered against Attempt
+admission and preserves canonical history. `configuration/reconcile` rescans external inputs or
 starts a new same-revision application attempt. It is never a second Save step.
-See [the native contract](configuration.md#save-automatic-application-and-session-adoption).
+See [the native contract](configuration.md#save-and-automatic-application).
 
 A published Model Catalog that no longer admits a Session's configured Model or
 Profile leaves it configured and unavailable: `session/model` carries
@@ -1647,47 +1953,98 @@ sequences already delivered for other sources. A client that forgets sources
 therefore cannot order a change notice of a source it no longer holds by
 arrival; it rereads that source (see [TUI and App Server](tui-app-server.md)). Receipts are not persisted, not Event Journal facts and never canonical history.
 
-## Session configuration adoption eligibility (v52)
+## Automatic Session configuration commit (v73)
 
-Whether a Session could adopt a prepared configuration *now* is runtime state,
-not configuration state. Native `ConversationRuntime` derives it with the
-adoption gate's own idle rule over its in-memory owners — lifecycle and counted
-admissions, the foreground attempt and manual compaction, recovery and
-durability, live interactions, background work and subagents — and from nothing
-about any candidate. The advisory derivation never repeats the gate's two
-durable-store probes (pending inbox, Goal continuation authority): whenever
-either holds while the runtime is otherwise idle, the admission pass that
-follows admits an attempt, which is itself an announced busy owner. The gate
-evaluates the complete rule at its commit boundary. Ownership is therefore:
+Native commits a Session's prepared configuration itself; no client confirms,
+schedules or adopts anything. A complete prepared candidate is staged in the
+resident runtime and committed under the coordinator lock that linearizes
+Attempt admission, at the Session's safe boundary: no current or scheduled
+Attempt, manual compaction or manual tail, no durability failure, and no
+background or Subagent work still holding the old configuration. Pending inbox,
+Goal continuation and recovered continuation do not block it, so the commit
+lands before their next Attempt captures. A Busy capability grant keeps the
+candidate staged, holds back the admission that reached it, and wakes on the
+commit frontier outside the lock to commit and resume exactly that admission.
 
 ```text
-ConfigurationApplication            configuration/application facts (scope, version,
-                                    units, candidate); published by configuration/changed
-RuntimeClientSnapshot               configuration_adoption_eligibility: eligible | busy |
-  .configuration_adoption_eligibility    unavailable — the live runtime's advisory state
-session/adoptConfiguration          the final authoritative admission check
+ConfigurationApplication.units.*   preparing → ready → applied | failed | uncertain
+                                   (ready = prepared, waiting for the safe boundary)
+RuntimeEvent::ConfigurationApplied one Journal fact per effective change
+RuntimeClientEvent                 configuration_applied { item, transcript_cursor }
+RuntimeClientTranscriptItem        configuration_applied { event_id, timestamp, change, instructions, catalog }
+TraceRecord.kind = configuration   with TraceRecord.configuration = change,
+                                   TraceRecord.configuration_instructions = instructions,
+                                   TraceRecord.configuration_catalog = catalog
+ContentSource                      configuration_instructions { journal_sequence }
+                                   configuration_catalog { journal_sequence }
 ```
 
-Activation publishes the first value synchronously; afterwards the runtime's
-admission worker re-derives eligibility whenever a lifecycle transition or
-counted admission entry/exit is announced, after each admission pass it runs,
-and after an absorbing durability failure. The announcement is enabled before
-each derivation, so the publication is level-triggered, and derivation and
-publication share one lock, so it is published only when the value changes. A
-host binds before activation, so every snapshot starts `unavailable`; the first
-event of an idle activated runtime is therefore `eligible`, and drain publishes
-`unavailable` after `runtime_shutdown` and before its exit boundary.
+`ConfigurationChange` carries the reason (`source`, `model_selection`,
+`reallocation`), previous and new binding revisions (equal for the
+independently published execution-policy unit, which never rebinds), the
+changed domains (`instructions`, `context_policy`, `tools`, `skills`, `model`,
+`execution_policy` — approval mode, model timeout, Tool deadline and MCP
+startup policies), bounded Tool and Skill names — at most 16 and 1 KiB of
+encoded names per added/removed/changed list, each with its exact total — and
+`instructions_bytes` and `catalog_bytes`. A same-name Tool whose definition or
+implementation (server binding; enabled Workflow program with its leaf Tools;
+or the Named Agents it runs, with their Tools, sources, Skill versions and
+project instructions) changed, and a
+same-name Skill whose content version changed, is `changed`. `instructions` is a
+`ContentRef` to the exact effective instructions the commit installed; `catalog`
+is a `ContentRef` to a JSON document of every Tool and Skill the commit added,
+changed or removed: `{ tools: [{ name, change, before, after }], skills: [...] }`
+with `before` for a change or removal and `after` for an addition or change. A
+Tool state is `{ definition, model_input_schema, server_binding_digest,
+workflow, runs, agents }`. `runs` is `{ tools, sources }`: the leaf Tool
+definitions a Workflow's direct Tool nodes call, by Tool id, and the binding
+digest of every Tool source beneath them (`null` without a binding); the
+commit itself compares each whole captured binding, credentials included.
+`agents` holds each Named Agent a Workflow froze or `subagent` admits as
+`{ definition, runs, skills, project_instructions, environment }`: its
+definition digest, its Tools and sources (sources it has not prepared yet
+included), the version of each Skill it selects, a digest of its project
+instructions, and the names of the authorized environment variables it
+inherits (compared by value, never retained). `model` changes when an
+invocation that runs resolves differently — the Session's selections, a Named
+Agent's explicit model or a direct Workflow Model node's, including provider
+binding, wire model, compat and parameters. `execution_policy` also changes
+with the effective Tool environment: an authorized value or a shared Skill
+Python/Node environment. A Skill state is `{ entry, version_id }`. The server
+binding appears only as a digest of its transport and policy, never its
+credentials. Both are
+retained with the fact and read through `conversation/contentRead` (or the
+history equivalent) within the reader's cut; a Trace configuration record opens
+them through its detail cut.
 
 Invariants:
 
-- `ConfigurationApplication` publication is configuration-domain state; a
-  busy/eligible transition never advances an application version.
-- Configuration adoption eligibility is runtime-domain advisory state.
-- Runtime Client snapshot identity is never a configuration invalidation signal.
-- Native adoption revalidates eligibility, candidate identity and expected
-  binding at the actual commit boundary; a native refusal is definitive.
-- Ordinary streaming Runtime Client deltas publish no eligibility change and
-  cause no Session-configuration RPC.
+- An admitted Attempt keeps its frozen snapshot, fencing and resource
+  settlement; a commit affects only later Attempts.
+- Each scope's desired application identity is an epoch fence: a superseded
+  candidate never commits after a newer one, and a candidate whose baseline or
+  owner moved is superseded and prepared again.
+- Every committed effective change has exactly one durable
+  `configuration_applied` fact, released to the transcript and Trace in Journal
+  order and counted in the Trace total. A failed append is an absorbing
+  `record_configuration_change` durability failure and leaves the unit
+  `uncertain`: published, not recorded, with new work fenced. The attached
+  runtime allocation owns that fact apart from the first failure its
+  durability gate keeps, and every application view reads it: while it holds
+  no unit reads `applied`, whatever later edit, late settlement or earlier
+  durable failure. Units keep their real outcome, so a published unit is
+  retained across reload either way; a healthy replacement allocation recovers
+  the view and notifies its observers, whichever entry (client load,
+  Scheduler or recovery) published it, before that entry reports it loaded
+  and only while it is still the Session's resident incarnation. The
+  configuration worker attaches, applies policy to, stages in or defers for
+  only the allocation still resident under the application lock; otherwise
+  it prepares the application again for the current one.
+- The fact never enters model context. Web Chat shows only Tool additions and
+  removals from it; instruction, context, Skill and same-name Tool changes stay
+  in Trace and inspection.
+- `configuration_applied` is a notification; the row itself is read through the
+  ordinary transcript read domain.
 
 ## Agent read projections (#346)
 
@@ -1763,9 +2120,9 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v52 and WebSocket requires `rustx.app-server.v52`.
-v51 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v52.ts`, `v52.schema.json`, and the serialized fixtures; only the current version is kept.
+Initialization requires exactly v73 and WebSocket requires `rustx.app-server.v73`.
+v72 and all earlier versions are rejected without fallback. Rust DTOs generate
+`v73.ts`, `v73.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -1794,8 +2151,8 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
-explicit recovery action. These recovery semantics remain in App Server v52;
-native Runtime Client is v73.
+explicit recovery action. These recovery semantics remain in App Server v73;
+native Runtime Client is v84.
 
 ## Rich historical Trace inspection (#364)
 
@@ -1826,7 +2183,7 @@ dual Trace DTO path.
 
 `session/exportPrepare { session_id }` returns a `session_archive` result with a
 short-lived, single-use native download descriptor. All clients consume the same
-`rustx-session-archive/v3` stream. The request has no output-path field. Remote
+`rustx-session-archive/v11` stream. The request has no output-path field. Remote
 HTTP(S) downloads share the App Server listener; owned stdio children advertise a
 loopback stream port. See [Session archive](session-archive.md) for cut semantics,
 authentication, resource bounds and cancellation.
@@ -1856,7 +2213,16 @@ The Child inspection handshake carries read-only identity/capabilities; explicit
 bounded checkpoint/event/content/page requests follow. It carries no snapshot.
 One absolute fifteen-second budget covers Child observation setup and reads.
 
-SQLite v52 private Agent authority persists the required `title` independently of its profile name. The
+Frozen Child canonical message pages keep the `source_cut` supplied by
+`agent/transcript`, independently of subsequent live checkpoints. Their
+`CheckpointReadCut` carries the exact Child conversation and activation, revision
+zero, `through = source_cut.read.journal`, empty domain/collection revisions and
+no live-publication or foreground selector. The Registry resolves the owned
+Child store for those pages and immutable canonical content bytes even while the
+Child is active. Append-only source growth preserves reconstructible history;
+foreign conversation/activation identities and inconsistent or mutated cuts fail.
+
+SQLite v50 private Agent authority persists the required `title` independently of its profile name. The
 `subagent` tool requires a short title; continuation preserves that title and the
 same Agent identity. Workflow children derive titles from their node names.
 
@@ -1880,7 +2246,7 @@ must belong to that exact child's store. `agent/turns { target, agent_id, offset
 limit }` returns `conversation_turns { page }`, counting every native Attempt
 across activations while retaining at most 64 directory rows. Both survive
 terminal child exit and parent restart, neither starts a child. The former
-`before`-only child transcript request is removed; all clients upgrade to v52.
+`before`-only child transcript request is removed; all clients upgrade to v73.
 
 `target` is the **parent** AttachmentTarget (Session,
 Conversation, runtime incarnation, attachment). App Server validates that route;
@@ -1992,13 +2358,13 @@ catalog membership as well as the named summary; `false` invalidates only the
 summary. Every membership visibility commit publishes invalidation independently
 of attachment or deletion cleanup. The sequence coalescer preserves an unobserved membership change even
 when a newer preview change arrives for that Session. Catalog reads must not gate
-attach or first admission. v52 is mandatory; no earlier-version decoder or compatibility path
+attach or first admission. v73 is mandatory; no earlier-version decoder or compatibility path
 is retained. See [ownership and evidence](issue-419/ownership.md).
 
 
 ## Bounded Tool presentation (v52)
 
-Runtime Client v54 and App Server v29 introduced `TraceToolSummary.arguments`, a
+Runtime Client v56 and App Server v29 introduced `TraceToolSummary.arguments`, a
 `TracePreview` of canonical JSON arguments (at most 512 UTF-8 bytes, with explicit
 `truncated`). Null means the exact canonical proposal is unavailable. The same
 native same-Step ToolCall resolution supplies name and input; lifecycle refresh
@@ -2029,11 +2395,11 @@ row only for the exact canonical occurrence.
 App Server v29 combined the v28 Harness semantic ledger with required
 `CapabilityView.configured_tools` and image/Bash Tool presentation. The required
 field changes the complete mandatory vocabulary, so v28 is rejected. Rust DTOs
-remain the sole schema authority; only the v52 generated pair is retained.
+remain the sole schema authority; only the v73 generated pair is retained.
 
 ### Native process identity for reconnecting presentation
 
-The current mandatory v52 `initialized` result includes `authority_id`, an opaque
+The current mandatory v73 `initialized` result includes `authority_id`, an opaque
 UUID allocated once by `AppServerHost`. Cloned hosts/connections share it; a new
 native process owner has a new identity even when it listens at the same endpoint.
 It is observation identity, never authorization or persistent Session membership.
@@ -2043,8 +2409,8 @@ this field; there is no reader for the previous result shape.
 
 ## Conversation reading windows
 
-App Server v52 is mandatory and replaces the v29 root transcript request/result;
-all consumers negotiate v52 and only its generated schema/TypeScript pair is retained.
+The v50 revision replaced the v29 root transcript request/result. App Server v73 is
+mandatory; all consumers negotiate v73 and only its generated schema/TypeScript pair is retained.
 Root `session/transcript` uses `ConversationWindowAt` (`latest`, `older`, `newer`, `turn`) and
 returns `transcript_window` with one contiguous finite page. `session/turns`
 supplies the ordered, paged native Attempt outline, stamped with the
@@ -2089,7 +2455,7 @@ the returned page offset; an omitted offset always means native latest.
 
 `ToolExecutionResult.deliveries` contains runtime-owned `SessionFileReference`
 facts, distinct from managed `FileReference` / `ArtifactId`. Only committed
-successful Tool results authorize cards. App Server v52 exposes no ordinary
+successful Tool results authorize cards. App Server v73 exposes no ordinary
 Session-file read Method or caller-supplied root authorization; `delivery/read`
 requires transport-granted delivery access (below). Browser actions
 use canonical coordinates through the Product Host HTTP carrier; a dedicated
@@ -2146,9 +2512,10 @@ committed) and that response stands as produced. Without delivery access the
 method is `unauthorized`; another connection's ids are never visible. Cancelling
 one request never affects another request or the connection.
 
-**Cancellation capacity.** Each connection has eight observation positions,
-six ordinary RPC positions, and two reserved control positions, for at most
-16 associated requests. Exhaustion returns a bounded correlated capacity error
+**Cancellation capacity.** Each connection has 32 attachment lifecycle positions,
+eight observation positions, six ordinary RPC positions, two Session metadata
+positions and two reserved control positions, for at most 50 associated requests.
+Exhaustion returns a bounded correlated capacity error
 and preserves the connection. Clients reserve the same lanes and retain request
 occupancy until terminal response disposition. Agent/Job cancellation intent,
 Attempt cancellation, Observe cancellation, Delivery cancellation, interaction
@@ -2174,10 +2541,11 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v73. Only App Server v52 clients
+The internal Runtime Client vocabulary is v84. Only App Server v73 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
-decoder. The current storage/control formats are Event envelope 1, SQLite 69, Session
-catalog 16 and subagent IPC v33. Child file and artifact reads use the registered
+decoder. The current storage/control formats are Event envelope 1, SQLite 97, Session
+catalog 18 and subagent IPC v37. The child specification freezes MCP Resource source
+authority independently of ordinary Tool identities. Child file and artifact reads use the registered
 child Conversation and the parent attachment's native delivery authority.
 
 
@@ -2186,17 +2554,14 @@ child Conversation and the parent attachment's native delivery authority.
 `context/compact.params.request_id` is a `ManualCompactionRequestId`: 1–64 ASCII
 letters, digits, underscores or hyphens. UUID strings are accepted. The same native
 type validates JSON deserialization before runtime dispatch and describes the
-v52 schema's length/pattern constraints. Invalid IDs return invalid params without
+v73 schema's length/pattern constraints. Invalid IDs return invalid params without
 admission, lifecycle publication or provider execution. This ID correlates native
 read evidence only; it does not authorize execution or provide exactly-once replay.
 An exact correlated native release frees Web's gesture guard independently of the
 original transport acknowledgement. The unresolved RPC still settles normally,
 with its callbacks fenced from any later explicit request.
 
-The v52 upload policy separately names `max_files_per_transfer`,
-`max_transfer_bytes`, `max_uploads_per_user_input` and
-`max_upload_bytes_per_user_input`. User-input limits apply to the whole receipt
-collection at turn/start and turn/steer, using native persisted admitted sizes.
+Generic uploads use the current [v73 upload policy](#generic-file-upload-policy-v73).
 Preparation reserves intent; binary handshake admission linearizes against host
 drain. Prepared capabilities are revoked; accepted carriers retain a host upload
 guard until settlement. See [Session uploads](session-uploads.md).
@@ -2210,7 +2575,7 @@ unallocated operation is Absent; consumed work survives control disconnect.
 
 ### Trace retained-input ownership (v52)
 
-App Server v52 / Runtime Client v73 require `TraceLifecycle.location` in each
+App Server v73 / Runtime Client v84 require `TraceLifecycle.location` in each
 retained-record refresh. An idle `InboundTurnAdopted` initially has no Attempt;
 its answering Attempt is resolved natively at the read cut after that Attempt
 starts. Summary pages and retained-record refreshes use the same resolution.
@@ -2239,11 +2604,18 @@ cold-read path for trajectory pages and inspection details. They return
 use `session/tracePage` and `session/traceValueRead` with the captured cut. Pages are bounded to
 1..=32 records; detail identities to 256 bytes. Both retain allocation access and
 reuse the native durable TraceProjection without loading configuration or tools.
+The root `trace.records` domain is also available at that exact cut. Its page
+offset is an exclusive Journal-sequence boundary (`0` starts at latest), and
+deferred headers use `traceValueRead` with their advertised sequence as
+`item_offset` and an empty field path. Live checkpoint and retained child readers
+use the same header contract; a sequence never denotes a collection rank.
 The WebUI fences preview reads by navigation, connection and attachment epoch,
 and replaces them with the bounded checkpoint after attachment. Prompts
-submitted during initialization stay locally owned until attachment, display
-connecting feedback immediately, and are admitted once; connection failure keeps
-the unsent draft recoverable.
+submitted during initialization record `session/submissionIntent` before waiting
+for attachment. Their content stays locally owned, uses the existing submitted-
+prompt status, and is admitted once; connection failure keeps the unsent draft
+recoverable. Session creation, attachment and background preparation alone add no
+new labels, banners, spinners, countdowns or completion notifications.
 
 `session/statistics { session_id, node_id? }` independently reads durable
 whole-conversation statistics and the last measured context occupancy. Its
@@ -2328,7 +2700,7 @@ No older protocol files, alternate subprotocol or historical-page scan remain.
 App Server exposes `session/traceLocateTool` and `agent/traceLocateTool`.
 Both take the current parent `target` and a `locator` containing
 `occurrence: { assistant_message_id, block_index }`, `call_id`, and `tool_id`.
-The Agent method also takes the registered `agent_id`. Runtime Client v73 carries
+The Agent method also takes the registered `agent_id`. Runtime Client v84 carries
 `agent_trace_locate_tool` through the child inspection protocol.
 
 The native reader validates the canonical assistant block, then searches indexed
@@ -2361,5 +2733,167 @@ Tool associations in frozen request detail carry nullable `wire_id`. Null means
 both occurrences are covered by native continuation and this request transmits no
 correlation field for them. Stored Responses results retain the actual accepted
 output's native ID; stateless replay and full explicit history retain their encoded
-request-local IDs. This observation contract is App Server v52 / Runtime Client v73;
+request-local IDs. This observation contract is App Server v73 / Runtime Client v84;
 only the current schema generation is shipped.
+
+
+## Generic file upload policy (v73)
+
+App Server v73 retains the removal of generic file count, per-file bytes and aggregate bytes
+from `ServerCapabilities.upload_policy`. It now advertises transport flow control
+only: `max_concurrent_transfers` and `max_chunk_bytes`. The native Session accepts
+ordinary workspace attachments without a product count/size cap, matching DSH.
+The carrier receives one chunk at a time into anonymous scratch storage and
+hands complete, verified file bodies to the existing native allocation owner.
+
+Each `session/uploadPrepare` operation admits exactly one file. Multi-file selections
+are queued as independent operations by the Composer; there is no selection count
+limit. The native Session upload owner still controls allocation, commit, and
+receipts. One bounded filename and one receipt per operation keep every committed
+wire upload recoverable through repeatable `session/uploadStatus` reads, including
+after a lost carrier acknowledgment.
+
+Web and TUI negotiate only `rustx.app-server.v73`; v61 and older peers are
+rejected explicitly. The current native contracts are Runtime Client v84,
+Session catalog schema 18 and SQLite schema 97. There are no old policy fields, alternate upload paths
+or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).
+
+## Workflow file authoring (Issue #491)
+
+Workflow authoring methods expose native files of one exact scope; the
+semantics are specified in [Workflow authoring](workflow-authoring.md#file-authoring-app-server-and-web).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `workflow/list` | `target` | `workflow_library`: `target`, `directory`, `absent_revision`, bounded `files[]` and an optional directory `diagnostic` |
+| `workflow/read` | `target`, `id` | `workflow_source`: `revision`, `present`, a strictly parsed document reference (absent for a malformed file), `diagnostic` and the editor `vocabulary` |
+| `workflow/check` | `target`, `id`, candidate `document` reference, optional `context`, `explain` | `workflow_check`: a read-only `report` reference (`report_id`, byte length, SHA-256) for the complete structure/dependencies/Explain report and candidate revision |
+| `workflow/checkReportRead` | `target`, report `reference`, `offset`, `max_bytes` ≤65,536 | `workflow_check_report_chunk`: exact `offset`, base64 `data`, optional `next_offset` |
+| `workflow/checkReportRelease` | `target`, report `reference` | `workflow_check_report_released`: connection-local scratch cleanup |
+
+Writes add no method: `configuration/sourceWrite` accepts the mutation
+`{kind: "workflow", id, edit}` with `edit.operation` one of `create`,
+`replace`, `copy` or `delete`, under the ordinary `expected_revision` fence. The
+acknowledgement is the existing `sources_written` receipt (file `revision` and
+`configuration_revision`). A rejected candidate returns the error data
+`{kind: "workflow_invalid", diagnostic}` and leaves the file unchanged; a
+changed revision is the ordinary revision conflict.
+
+These authoring reads are side-effect free (`may_commit` is false): they start no
+node, connect to no provider or MCP endpoint and read no credential. Diagnostic
+paths are bounded to 512 bytes and details to 1 KiB, and each listing entry to a
+7 KiB serialized share, so a scope's at most 128 files always list within the
+message bound. Document numbers follow the Workflow number contract: a file or
+candidate holding a number a browser would round, retype or re-sign (an integer beyond ±(2^53 − 1), an integral float such as `1.0` below 1e21, or negative zero) is `unsupported_number`; see [the number contract](workflow-authoring.md#number-contract). Numbers
+travel in the existing exact wire domains, so `u64` fields such as `timeout_ms`
+are decimal strings in TypeScript. Workflow source and normalized documents each
+have an independent 16 MiB native limit; candidate transfer has a 32 MiB wire
+encoding allowance. The complete check report, including a single schema larger
+than a control record and the requested Explain, uses native-held anonymous
+scratch and 64 KiB reads. Derived report size has no source/candidate byte cap.
+Report references are read-only and cannot be used as candidate/source-write
+capabilities. Candidates and reports share four connection-owned scratch entries
+and a 60-second idle lease; releasing or closing retires them. Every ordinary
+control record retains its 1 MiB limit.
+
+A `create` or `copy` that would pass a discovery bound (1024 authored entries or 128
+`.yaml` entries in the directory, or 64 composed Workflow IDs: User alone for a
+User target, User with the Workspace for a Workspace target) is refused before publication with
+`workflow_invalid`, diagnostic category `capacity`; see
+[Capacity](workflow-authoring.md#capacity).
+
+Workspace targets reach the App Server through the Product Host, which maps a
+registration ID to its directory on its per-registration lane
+(`/product-host/workflow`); browsers never send Workspace paths. Each request
+carries the Product Host authority scope the browser transaction was bound to,
+validated in the lane immediately before native dispatch, and, separately, the
+native App Server identity (`native`, the `authority_id` the browser observed at
+`initialize`), which the Host compares with the connection it initialized before
+sending any Workflow request (`native_replaced` otherwise). User-scope
+calls use the browser's App Server connection directly. A lost write
+acknowledgement on either path is reported as uncertain and reconciled by
+rereading, never by replaying the write.
+
+## Named auxiliary consumers
+
+Protocol v73 exposes `auxiliary/classify`, `auxiliary/btw`, `auxiliary/status`, `auxiliary/result`, `auxiliary/submissionLookup`, `auxiliary/cancel` and `auxiliary/discard`. Starts return bounded native receipts; notifications use `auxiliary/segment` and the current registration slot. Every carrier uses the existing DeliveryAccess/Writer publication fence. Cancellation retains reserved control capacity. [Semantics, exact correlation, limits and ownership](auxiliary-consumers.md) apply to generated direct, Stdio and WebSocket clients.
+
+## Scheduler exact-node controls
+
+`schedule/catalog { session_id?, after?, limit, query? }` reads native task headers
+and saved Session metadata without an attachment. The optional Session filter
+and UTF-8 query (at most 1024 bytes) are evaluated natively. Each page inspects at
+most 128 definitions through at most eight bounded reads, returning at most 100
+matching entries, an optional keyset cursor and explicit unavailable bindings.
+Reminder bodies and pinned Workflow contracts remain deferred. A full final page
+may be followed by an empty page. Clients retain prior rows of unavailable sources.
+
+`schedule/changed {}` is a coalesced read-invalidation notification available
+without Session attachment. It conveys no task or execution authority. Native
+changes mark the connection's watch receiver independently of the driver's wake
+handle; clients reread on this hint, reconnect and focus return.
+
+The following exact-node methods require the initialized product-control connection and
+explicit `session_id`/`node_id`. Native catalog authority resolves the exact
+conversation; no runtime attachment, UI focus change or Agent activation occurs.
+
+| Method | Additional params | Result |
+| --- | --- | --- |
+| `schedule/list` | `after_ordinal` (exclusive u64 decimal string), `limit` (1–100) | `schedules`: bounded headers excluding reminder text, plus optional `next_ordinal` |
+| `schedule/get` | `id`: exact conversation/ordinal | `schedule`: optional full native snapshot |
+| `schedule/command` | `command`: stable command ID and typed create/metadata/target-update/enable/disable/delete mutation | `schedule_command`: native committed receipt, no-op, stale conflict or capacity result |
+| `schedule/recoverStorage` | none | `schedule_storage_recovered`: reconciled store generation |
+| `workflow/scheduled/getRecovery` | `start_id`, `after_effect_ordinal` (u64 decimal string), `limit` (1–100) | `scheduled_workflow_recovery`: exact native header, bounded effects, committed result and next cursor |
+| `workflow/scheduled/cancel` | `start_id` | `scheduled_workflow_recovery`: durable cancellation intent or pre-Claim cancellation |
+| `workflow/scheduled/reconcile` | same bounded page parameters as getRecovery | `scheduled_workflow_recovery`: native proof reconciliation, never graph replay |
+
+List pages use keyset order. A full last page can supply a cursor whose next
+page is empty. A full page of maximum-size definitions remains within the public
+frame budget because reminder bodies require individual Get reads. All native
+u64 counters remain lossless decimal strings; clients must not use Number.
+Completed means no future occurrence, and a trigger receipt proves admission.
+Reads and receipt display never imply target execution success.
+
+Commands use the native trusted `RuntimeControl` namespace. Clients cannot supply
+a Human grant or authority field. Mutation/recovery retains server operation
+ownership through settlement if the response waiter disconnects. Retry the same
+command identity and authored input after uncertain acknowledgment; stale CAS
+requires rereading rather than automatic overwrite. Storage recovery reopens and
+reconciles an existing native store under manager ownership; it is not Workflow
+force recovery and cannot bypass unproven writers. Workflow authoring uses native
+preparation at the composed exact node; admission/recovery can remain cold.
+Recovery/cancel/reconcile reject force/proof fields. Missing physical proof keeps
+capacity and deletion blocked. Scheduled Workflow and interaction DTOs carry a
+real Scheduled origin, with nullable outer tool-call identity and no fabricated
+Attempt or model turn. Root model Tools receive a separate native current-Human
+grant and eight-mutation budget; transport input cannot provide either. See
+[Scheduler](scheduler.md).
+
+
+### Explicit initialization recovery
+
+`session/retryInitialization { session_id, node_id? }` is a side-effecting control-lane
+command returning `submission_intent_accepted`. It replaces only the retained
+terminal initialization failure for the exact selected node. An absent/null
+`node_id` resolves the current catalog-selected node; an explicit ID addresses that
+node without changing the catalog selection. Absent, loading and loaded owners
+are unchanged. Another physical node's Session claim still refuses recovery.
+Default recovery never follows an older failed node after a cold branch selected
+another one. It creates no Session, input, upload or Attempt.
+Its synchronous native ingress records a new explicit recovery timestamp, before
+configuration/MCP work, and the retry owns one newly armed startup deadline.
+Repeated automatic attach/reconnect continues to observe the previous terminal
+result unless the user requests this recovery. A retry that itself fails retains
+its own terminal result too. Lost responses are uncertain and are never replayed.
+Retained WriterAbsent results are per-Conversation receipts outside the physical
+registry. They occupy neither a residency slot nor the Session's node claim, so
+another cold node can load while the old node retains its failure. Retry, new
+submission intent and replacement each reserve capacity atomically before
+starting another loading owner; capacity refusal leaves the prior result intact.
+WriterAbsent failure receipts also permit ordinary cold historical reads, including
+`session/history` and `session/traceHistoryDetail`. Reading preserves the original
+attach error and starts no runtime, MCP initialization or input replay. Loading,
+Unloading and invalid live runtime cuts still reject reads through their fences.
+Web Open Session performs fresh Product Host authorization before this command;
+TUI explicit reselection can recover a known failed attachment. Initial create
+continuation and transport recovery do not emit it.

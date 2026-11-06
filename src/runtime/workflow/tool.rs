@@ -5,7 +5,7 @@ use super::{
     bound_workflow_diagnostic, execution, expressions, workflow_event_id,
 };
 use crate::capabilities::selection::ExactToolSelector;
-use crate::runtime::subagent::AttemptSubagentContext;
+use crate::runtime::subagent::NativeExecutionContext;
 use crate::tools::executor::{PreflightOutcome, ToolExecutionContext};
 use crate::tools::invocation::{ForegroundInvocation, NativeInvocationFact, terminal};
 use crate::tools::types::{
@@ -29,20 +29,138 @@ pub(super) fn eligible(definition: &ToolDefinition) -> bool {
                 || crate::tools::native::is_domain_control(&definition.name)))
 }
 
+/// One builtin Tool an author can choose for a Tool node: its name and the
+/// tool-owned description and argument schema an authoring form is built from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowToolChoice {
+    pub name: String,
+    pub description: String,
+    pub input_schema: std::sync::Arc<Value>,
+    /// The fixed result a node of this Tool commits.
+    pub result: WorkflowToolResult,
+}
+
+#[derive(Debug, Clone)]
+pub enum WorkflowToolArguments {
+    Value(super::WorkflowValue),
+    Code {
+        language: super::WorkflowCodeLanguage,
+        variables: super::BTreeMap<String, super::WorkflowValue>,
+        code: String,
+    },
+}
+
+impl WorkflowToolArguments {
+    pub(super) fn evaluate(
+        &self,
+        input: &Value,
+        values: &imbl::OrdMap<String, Value>,
+    ) -> Result<Value, WorkflowRunError> {
+        let evaluate = |value: &super::WorkflowValue| super::evaluate_value(value, input, values);
+        match self {
+            Self::Value(value) => evaluate(value),
+            Self::Code {
+                language,
+                variables,
+                code,
+            } => super::code::arguments(*language, variables, code, evaluate),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum WorkflowToolProjection {
+    Native(WorkflowToolResult),
+    Code { schema: Value },
+}
+
+impl WorkflowToolProjection {
+    pub(super) fn schema(&self) -> Value {
+        match self {
+            Self::Native(result) => result.schema(),
+            Self::Code { schema } => schema.clone(),
+        }
+    }
+
+    pub(super) fn project(
+        &self,
+        result: &ToolExecutionResult,
+        node: &WorkflowNodeInstance,
+        stdout: Option<&crate::tools::output::BoundedStdoutCapture>,
+    ) -> Result<Value, WorkflowRunError> {
+        match self {
+            Self::Native(projection) => projection.project(result, node),
+            Self::Code { schema } => {
+                if result.status != ToolExecutionStatus::Success {
+                    return Err(WorkflowRunError::ToolFailed {
+                        node: node.to_string(),
+                        status: bounded_status(&result.status),
+                    });
+                }
+                let bytes = stdout
+                    .ok_or_else(|| {
+                        WorkflowRunError::InvalidValue("Code has no result channel".into())
+                    })?
+                    .take_complete()
+                    .map_err(|error| WorkflowRunError::InvalidValue(error.into()))?;
+                let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
+                    WorkflowRunError::InvalidValue("Code stdout must be one JSON object".into())
+                })?;
+                expressions::bounded_value_bytes(&value)?;
+                execution::validate_commit(schema, &value)?;
+                Ok(value)
+            }
+        }
+    }
+}
+
+/// The builtin Tools a Workflow Tool node can select at all, in the native
+/// order. Authoring presents these as choices; admission against the
+/// adopted generation remains the only authority.
+#[must_use]
+pub fn selectable_builtin_tools() -> Vec<WorkflowToolChoice> {
+    crate::tools::native::definitions(
+        crate::tools::native::NativeToolPolicies::default(),
+        &crate::runtime::subagent::AgentCatalog::default(),
+    )
+    .into_iter()
+    .filter(|(definition, policy)| {
+        definition.origin == crate::tools::types::ToolOrigin::Builtin
+            && *policy == crate::tools::deadline::ForegroundPolicy::Leaf
+            // A Workflow asks a person through its Review node.
+            && definition.name != "ask_user"
+            && eligible(definition)
+    })
+    .map(|(definition, _)| WorkflowToolChoice {
+        result: WorkflowToolResult::declared(
+            crate::tools::native::output_schema(&definition.name).as_ref(),
+        ),
+        name: definition.name,
+        description: definition.description,
+        input_schema: definition.input_schema,
+    })
+    .collect()
+}
+
 impl WorkflowRuntime {
     /// One exact admitted registration through the standard native
     /// invocation path and the invoking Session's execution binding.
     /// External Tools keep their own admitted materialization contract.
-    #[allow(clippy::too_many_lines)]
+    /// `retry` numbers this call of the visit; the flag says whether the
+    /// call's physical settlement is proven, as only then may it be handled.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(super) async fn invoke_tool(
         &self,
         run: &WorkflowRun,
-        context: &AttemptSubagentContext,
+        context: &NativeExecutionContext,
         node: &WorkflowNodeInstance,
         selector: &ExactToolSelector,
         arguments: Value,
+        stdout: Option<crate::tools::output::BoundedStdoutCapture>,
+        retry: u32,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<ToolExecutionResult, WorkflowRunError> {
+    ) -> Result<(ToolExecutionResult, bool), WorkflowRunError> {
         let services = context.native.as_ref().ok_or_else(|| {
             WorkflowRunError::InvocationAuthority(
                 "attempt has no native invocation services".into(),
@@ -61,6 +179,7 @@ impl WorkflowRuntime {
             .map_err(WorkflowRunError::IdentityChanged)?;
         let id = ToolInvocationId::Workflow {
             node: Box::new(node.clone()),
+            retry,
         };
         self.read_model.node(node, |view| {
             view.invocation = Some(id.clone());
@@ -72,7 +191,7 @@ impl WorkflowRuntime {
         {
             PreflightOutcome::Ready(prepared) => prepared,
             PreflightOutcome::Rejected { error, .. } => {
-                return Ok(terminal(ToolExecutionStatus::Failed { error }));
+                return Ok((terminal(ToolExecutionStatus::Failed { error }), true));
             }
         };
         let emit = |fact| self.emit_native(run, &id, &definition.id, fact);
@@ -82,10 +201,17 @@ impl WorkflowRuntime {
                 &prepared.invocation.arguments,
             ),
         });
+        if let Some(effects) = &run.effects {
+            effects.owner(
+                node,
+                super::scheduled::lifecycle::ScheduledEffectOwner::Tool {
+                    invocation: id.clone(),
+                },
+            )?;
+        }
         let view = crate::agent::PreToolView {
             conversation_id: &run.run_id.conversation_id,
-            attempt_id: context.attempt_id(),
-            turn: services.turn,
+            execution: services.execution.clone(),
             invocation_id: &id,
             tool_id: &definition.id,
             tool_name: &definition.name,
@@ -100,6 +226,7 @@ impl WorkflowRuntime {
                 reason: super::read_model::WorkflowWait::Approval,
             }
         });
+        let mut settled = true;
         let result = if let Some(result) =
             crate::tools::invocation::authorize(&services.lifecycle, &view, cancellation)
                 .await
@@ -153,7 +280,7 @@ impl WorkflowRuntime {
                     }
                 });
                 let progress = NativeProgress(std::sync::Mutex::new(Vec::new()));
-                let native_context = ToolExecutionContext::new(
+                let mut native_context = ToolExecutionContext::new(
                     &run.run_id.conversation_id,
                     None,
                     cancellation.clone(),
@@ -163,11 +290,18 @@ impl WorkflowRuntime {
                     services.runtime.tool_output(),
                     context.resources().capability().effective_environment(),
                 );
-                let native_context = match services.lifecycle.native_questionnaire_requester(
-                    context.attempt_id().clone(),
-                    cancellation.clone(),
-                    services.turn,
-                ) {
+                native_context.stdout_capture = stdout;
+                let requester = services
+                    .lifecycle
+                    .native_interaction_coordinator()
+                    .map(|owner| {
+                        crate::runtime::interaction::QuestionnaireRequester::for_execution(
+                            owner,
+                            services.execution.clone(),
+                            cancellation.clone(),
+                        )
+                    });
+                let native_context = match requester {
                     Some(requester) => native_context.with_questionnaire_requester(requester),
                     None => native_context,
                 };
@@ -183,7 +317,7 @@ impl WorkflowRuntime {
                     completion_won: None,
                 };
                 let executor = registration.executor.clone();
-                let (result, facts) = driver
+                let outcome = driver
                     .execute(
                         &*executor,
                         prepared.invocation,
@@ -191,19 +325,27 @@ impl WorkflowRuntime {
                         native_context,
                     )
                     .await;
+                if outcome.physical_settlement
+                    == crate::tools::deadline::ToolSettlementCertainty::Unconfirmed
+                {
+                    settled = false;
+                    if let Some(effects) = &run.effects {
+                        effects.unproven(node,"native Tool physical settlement is unconfirmed; inspect its original owner, never replay the Workflow");
+                    }
+                }
                 for progress in progress.0.into_inner().expect("progress buffer") {
                     emit(NativeInvocationFact::Progress { progress });
                 }
-                for fact in facts {
+                for fact in outcome.facts {
                     emit(NativeInvocationFact::Lifecycle { fact });
                 }
-                result
+                outcome.result
             }
         };
         emit(NativeInvocationFact::Completed {
             status: bounded_status(&result.status),
         });
-        Ok(result)
+        Ok((result, settled))
     }
 
     fn emit_native(
@@ -229,7 +371,7 @@ impl WorkflowRuntime {
             event_id,
             sequence: 0,
             conversation_id: run.run_id.conversation_id.clone(),
-            attempt_id: Some(run.run_id.attempt_id.clone()),
+            attempt_id: run.run_id.origin.attempt_id().cloned(),
             turn_id: None,
             timestamp: Utc::now(),
             event,
@@ -249,7 +391,7 @@ impl crate::tools::executor::ProgressReporter for NativeProgress {
     }
 }
 
-pub(super) const fn default_workflow_timeout_ms() -> u64 {
+pub(crate) const fn default_workflow_timeout_ms() -> u64 {
     600_000
 }
 
@@ -268,22 +410,45 @@ fn bounded_status(status: &ToolExecutionStatus) -> ToolExecutionStatus {
     }
 }
 
-/// Select exactly one native content part, never provider text or log heuristics.
+/// What a Tool node commits, fixed by the Tool: its declared structured
+/// result, or its text. Never provider text heuristics or a part index.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum WorkflowToolResult {
-    /// The indexed part must be native structured JSON satisfying this schema.
-    Json { part: usize, schema: Value },
-    /// The indexed part must be native text; retain it as a typed JSON string.
-    Text { part: usize },
+    /// The result's one native structured JSON part, satisfying this schema.
+    Json { schema: Value },
+    /// `{text}`: the result's native text parts, joined by newlines.
+    Text {},
 }
 
 impl WorkflowToolResult {
+    /// The result a Tool declares: structured when its output schema is a
+    /// Workflow object contract, otherwise its text.
+    #[must_use]
+    pub fn declared(output_schema: Option<&Value>) -> Self {
+        match output_schema {
+            Some(schema)
+                if super::schema_type(schema) == Some("object")
+                    && super::validate_workflow_schema(schema, "Tool result").is_ok() =>
+            {
+                Self::Json {
+                    schema: schema.clone(),
+                }
+            }
+            _ => Self::Text {},
+        }
+    }
+
     pub(super) fn schema(&self) -> Value {
         match self {
-            Self::Json { schema, .. } => schema.clone(),
-            Self::Text { .. } => serde_json::json!({"type":"string"}),
+            Self::Json { schema } => schema.clone(),
+            Self::Text {} => serde_json::json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+                "additionalProperties": false,
+            }),
         }
     }
 
@@ -300,32 +465,40 @@ impl WorkflowToolResult {
             });
         }
         let value = match self {
-            Self::Json { part, .. } => match result.content.get(*part) {
-                Some(ToolResultContent::Json { value }) => {
-                    expressions::bounded_value_bytes(value)?;
-                    value.clone()
-                }
-                _ => {
-                    return Err(WorkflowRunError::InvalidValue(
-                        "selected result part is not structured JSON".into(),
-                    ));
-                }
-            },
-            Self::Text { part } => match result.content.get(*part) {
-                Some(ToolResultContent::Text(text)) => {
-                    if text.text.len() > super::MAX_VALUE_BYTES {
+            Self::Json { .. } => {
+                let mut parts = result.content.iter().filter_map(|part| match part {
+                    ToolResultContent::Json { value } => Some(value),
+                    _ => None,
+                });
+                match (parts.next(), parts.next()) {
+                    (Some(value), None) => {
+                        expressions::bounded_value_bytes(value)?;
+                        value.clone()
+                    }
+                    _ => {
                         return Err(WorkflowRunError::InvalidValue(
-                            "selected text exceeds Workflow value bound".into(),
+                            "Tool result has no single structured JSON part".into(),
                         ));
                     }
-                    Value::String(text.text.clone())
                 }
-                _ => {
-                    return Err(WorkflowRunError::InvalidValue(
-                        "selected result part is not text".into(),
-                    ));
+            }
+            Self::Text {} => {
+                let mut text = String::new();
+                for part in &result.content {
+                    if let ToolResultContent::Text(block) = part {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(&block.text);
+                        if text.len() > super::MAX_VALUE_BYTES {
+                            return Err(WorkflowRunError::InvalidValue(
+                                "Tool text exceeds Workflow value bound".into(),
+                            ));
+                        }
+                    }
                 }
-            },
+                serde_json::json!({ "text": text })
+            }
         };
         expressions::bounded_value_bytes(&value)?;
         execution::validate_commit(&self.schema(), &value)?;

@@ -5,12 +5,13 @@ runs:
   steps:
     - name: Install libclang
       shell: bash
+      env:
+        APT_INSTALLER: ${{ github.action_path }}/../../scripts/install_ubuntu_packages.py
       run: |
         set -euo pipefail
         case "$RUNNER_OS" in
           Linux)
-            sudo apt-get update
-            sudo apt-get install -y libclang-dev
+            sudo python3 "$APT_INSTALLER" libclang-dev
             ;;
           macOS)
             brew list --versions llvm >/dev/null || brew install llvm

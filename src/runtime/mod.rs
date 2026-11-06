@@ -21,8 +21,12 @@
 //! public runtime API.
 
 pub mod agent_profile;
+pub mod auxiliary;
 pub mod cancellation;
 pub mod capability_inspection;
+/// Native configuration-adoption contracts: prepared candidates, adoption
+/// eligibility/refusal, admitted Attempt configuration, and cache impact.
+pub mod configuration_commit;
 pub mod continuation;
 /// The conversation runtime coordinator (Issue #61): the semantic owner of
 /// conversation coordination — session model state, attempt admission, the
@@ -126,8 +130,6 @@ pub mod subagent;
 /// process unit (M5 Bash and M7 interactive MCP stdio). Internal
 /// coordination only — it is not part of the public runtime API.
 pub(crate) mod supervised_unit;
-/// On-demand bounded derived transcript history over durable owners.
-pub mod transcript_history;
 pub mod types;
 /// Native bounded Workflow definitions, immutable compiled programs, and
 /// catalog admission (Issue #83).
@@ -169,17 +171,15 @@ pub use recovery::{
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
 pub use resources::{
-    FilesystemRuntimeResourceLoader, PreparedRuntimeResources, ProjectContextFile,
-    RuntimeResourceLoadError, RuntimeResourceLoader, RuntimeResourceSnapshot,
-    load_project_context_files,
+    PreparedRuntimeResources, ProjectContextFile, RuntimeResourceLoadError,
+    RuntimeResourceSnapshot, load_project_context_files,
 };
-pub use transcript_history::{TranscriptHistory, TranscriptHistoryError};
 pub use types::{
     ApprovalMode, CancellationReason, ConversationLifecycle, ConversationLifecycleState,
     RuntimeClock, RuntimeError, SystemClock, TokenMeasurement, TokenMeasurementSource,
 };
 pub use workflow::{
-    WorkflowAgentProgram, WorkflowBlock, WorkflowBranch, WorkflowCatalog, WorkflowCatalogError,
+    WorkflowAgentProgram, WorkflowBlock, WorkflowCatalog, WorkflowCatalogError,
     WorkflowCompileError, WorkflowDefinition, WorkflowEdgeDefinition, WorkflowEdgeProgram,
     WorkflowId, WorkflowIdError, WorkflowNodeDefinition, WorkflowNodeProgram, WorkflowOutputLatch,
     WorkflowOutputSubmission, WorkflowOutputTerminal, WorkflowPort, WorkflowPredicate,

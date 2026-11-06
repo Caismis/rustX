@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v52.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v73.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v52.schema.json
+ * protocol/app-server/v73.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v52.ts       (generated)
+ * protocol/app-server/v73.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -34,7 +34,6 @@
  */
 
 import type {
-  AttachmentTarget,
   InteractionResponse as InteractionResponseValue,
   QuestionSpecification,
   QuestionnaireAnswerEntry,
@@ -57,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundaryObservation,
   Success,
-} from "../../../protocol/app-server/v52.ts";
+} from "../../../protocol/app-server/v73.ts";
 
 export type {
   AttemptIdentitySource,
@@ -69,11 +68,11 @@ export type {
   ConfigRepairReceipt,
   ConfigRepairStatus,
   ConfigurationApplication,
+  BoundedNames,
+  ConfigurationChange,
   NativeToolRemoval,
   SourceSettings,
   SourceTarget,
-  AdoptionEligibility,
-  AvailableConfiguration,
   AdmittedSettings,
   EffectiveConfiguration,
   AgentStatusGenerationMetadata,
@@ -146,7 +145,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v52.ts";
+} from "../../../protocol/app-server/v73.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -508,14 +507,16 @@ export function describeRpcError(error: RpcError): string {
       return `unknown session ${data.session_id}`;
     case "unknown_node":
       return `unknown node ${data.node_id} in session ${data.session_id}`;
-    case "configuration_adoption":
-      return `Configuration adoption: ${data.rejection.status === "failed" ? data.rejection.diagnostic : data.rejection.status.replaceAll("_", " ")}`;
+    case "model_selection_conflict":
+      return "the Session configuration changed during this model selection; nothing was changed";
     case "model_unavailable":
       return `the configured model is not in the published catalog; choose one with /model (${data.diagnostic})`;
     case "source_conflict":
       return `${data.scope} source changed (expected ${data.expected}, found ${data.actual})`;
     case "stale_settings":
       return `settings changed underneath this edit (expected revision ${data.expected}, found ${data.actual})`;
+    case "workflow_invalid":
+      return `the Workflow is invalid at ${data.diagnostic.path}: ${data.diagnostic.reason}; the file was not changed`;
     case "interaction_not_pending":
       return "that interaction is no longer pending";
     case "interaction_audit_failed":
@@ -555,6 +556,8 @@ export function describeRpcError(error: RpcError): string {
       return `the request parameters were rejected: ${error.message}`;
     case "resync_required":
       return "the projection needs an authoritative repair";
+    case "auxiliary":
+      return `auxiliary request rejected: ${data.reason}`;
     case "operation_failed":
       return `the operation failed: ${error.message}`;
     default: {
@@ -563,27 +566,6 @@ export function describeRpcError(error: RpcError): string {
       return `${error.message} (code ${error.code})`;
     }
   }
-}
-
-/** Whether two attachment targets name the same attachment in every domain. */
-export function sameTarget(
-  left: AttachmentTarget,
-  right: AttachmentTarget,
-): boolean {
-  return (
-    left.session_id === right.session_id &&
-    left.conversation_id === right.conversation_id &&
-    left.runtime_incarnation === right.runtime_incarnation &&
-    left.attachment_id === right.attachment_id
-  );
-}
-
-/** Session identity alone, ignoring incarnation and attachment. */
-export function sameSession(
-  left: AttachmentTarget,
-  right: AttachmentTarget,
-): boolean {
-  return left.session_id === right.session_id;
 }
 
 export type { SessionNode as SessionNodeView };

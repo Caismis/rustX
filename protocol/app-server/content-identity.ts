@@ -1,4 +1,4 @@
-import type { CanonicalContentLocator, ContentRef, ContentSource } from './v52.ts';
+import type { CanonicalContentLocator, CheckpointReadCut, ContentRef, ContentSource, ObservationReadCut } from './v73.ts';
 
 /** Closed native identities are independent of JSON object property order. */
 export function canonicalLocatorKey(locator: CanonicalContentLocator): string {
@@ -7,8 +7,19 @@ export function canonicalLocatorKey(locator: CanonicalContentLocator): string {
     : ['by_ledger_position', locator.position]);
 }
 
+/** Every content source a message, audit or live publication owns. */
+export type MessageContentSource = Exclude<ContentSource, { type: 'configuration_instructions' | 'configuration_catalog' }>;
+
+/** The message-owned source, or undefined for a configuration fact's retained content. */
+export function messageSource(source: ContentSource): MessageContentSource | undefined {
+  return source.type === 'configuration_instructions' || source.type === 'configuration_catalog' ? undefined : source;
+}
+
 function sourceIdentity(source: ContentSource): readonly unknown[] {
   switch (source.type) {
+    case 'configuration_instructions':
+    case 'configuration_catalog':
+      return [source.type, source.journal_sequence];
     case 'canonical_message_block':
       return [source.type, source.component, canonicalLocatorKey(source.locator), source.block_index];
     case 'durable_transcript_audit':
@@ -31,4 +42,26 @@ export function contentRefKey(reference: ContentRef): string {
 
 export function sameContentRef(left: ContentRef, right: ContentRef): boolean {
   return contentRefKey(left) === contentRefKey(right);
+}
+
+/** Exact durable frontier, independent of transport object property order. */
+export function observationReadCutKey(cut: ObservationReadCut): string {
+  const read = cut.read;
+  return JSON.stringify([read.conversation_id, read.journal, read.transcript, read.mutation_revision,
+    read.ledger_through, read.surface_revision, read.transcript_total, read.pending_through, read.pending_total,
+    cut.ledger_through, cut.transcript_total, cut.surface_revision, cut.inherited_through]);
+}
+
+/** Closed read evidence normalizes optional native selectors and map ordering. */
+export function checkpointReadCutKey(cut: CheckpointReadCut): string {
+  const foreground = cut.canonical_foreground, publication = cut.live_publication;
+  return JSON.stringify([cut.conversation_id, cut.activation_id ?? null, cut.revision, cut.through,
+    cut.source_cut ? observationReadCutKey(cut.source_cut) : null,
+    foreground ? [canonicalLocatorKey(foreground.locator), foreground.total] : null,
+    publication ? [sourceIdentity(publication.source), publication.revision, publication.block_total, publication.tool_total] : null,
+    Object.keys(cut.domain_revisions).sort().map(key => [key, cut.domain_revisions[key]]),
+    Object.keys(cut.collection_cuts).sort().map(key => {
+      const collection = cut.collection_cuts[key]!;
+      return [key, collection.generation, collection.total];
+    })]);
 }

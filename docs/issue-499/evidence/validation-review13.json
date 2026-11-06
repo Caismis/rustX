@@ -1,0 +1,1048 @@
+{
+  "schema": "issue-499-reconnect-publication-input-intent-v1",
+  "recorded_at": "2026-10-25T00:02:36.116827+00:00",
+  "previous_head": "0b7196c846932ddf28fb7d2fee14267562904464",
+  "base": "00978bbe3072b211efe835950f7f99666e1cc02d",
+  "scope": "Follow-up in existing PR503: new-generation publication of a selected Web Session draft; same logical TUI editor/paste provenance; complete queued input plus explicit Queue choice; literal known-unsent restoration. No Native production/test, protocol, runtime policy, preparation-capacity or measurement-workload change. No504 prewarming.",
+  "source": {
+    "followup_inputs": [
+      {
+        "path": "tui/src/ui/app.ts",
+        "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+      },
+      {
+        "path": "tui/src/ui/composer.ts",
+        "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+      },
+      {
+        "path": "tui/test/convergence.test.ts",
+        "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+      },
+      {
+        "path": "tui/test/startup.test.ts",
+        "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+      },
+      {
+        "path": "web-console/src/app/navigation/machine.ts",
+        "sha256": "a439163641b3f9f9af0dba0f1ce166c02f816f058dab16829b58e56dc8ad75a6"
+      },
+      {
+        "path": "web-console/test/cold-session-navigation.test.tsx",
+        "sha256": "419798569cd16f1dcda4075a49d1284b87508807c6e882ff34d4e2ec8385d882"
+      },
+      {
+        "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+        "sha256": "a397fbf137e942c578c252756bfe6750a524198eeb5d65945ecf441c8e67a2d2"
+      },
+      {
+        "path": "web-console/test/navigation-ownership.test.ts",
+        "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+      }
+    ],
+    "followup_sha256": "0662ca51f2c036d4a8550b049234cfadb9a74c8f8b5f1c60b330ec1ca2889da8",
+    "native_inputs": 1012,
+    "native_sha256": "ea1c7076d0b16fae90bdcc40d51f4fcec2385b2840b42c202bcad4071fc41177",
+    "cumulative_repair": {
+      "anchor": "5a86a5631019ea0c7c16e12ed07bd92aa3869198",
+      "inputs": 65,
+      "sha256": "e1c371b3a280de7416a5adab187e56867ab64820096f1e7dc10b43bb6e2972f7"
+    },
+    "cumulative_followup": {
+      "anchor": "d2a5aff54e9e82df1680ad4887f6824cdb556976",
+      "inputs": 33,
+      "sha256": "107c8b6a2ce9a0fd160724757a108ae1783dcb0af2bdc850504a02aaec39060e"
+    },
+    "recipe": "SHA256 of sorted POSIX path + NUL + ASCII file SHA256 + LF for each record; docs and Markdown excluded from the 8-file delta.",
+    "reconstruction": "Review12 source inventories plus these8 source/test replacements/additions; all1012 Native inputs freshly recomputed unchanged. Complete working inventory retained in /tmp/issue499/review13-source.json."
+  },
+  "regressions": {
+    "tui_actual_app": {
+      "new_cases": 26,
+      "literal": "12 leading-paste/token-end-extension cases crossing no-reconnect/held-Attach/ready with empty/nonempty suffix;2 typed-token/pasted-separator controls;2 genuine clear/replacement typed-command controls;2 known-unsent literal restoration cases. Literal sends have1 exact input request and0cancel/Settings dispatch; new connecting Send has1intent; no unsolicited replay.",
+      "queue": "4 running Enter/Tab cases crossing ready/held-extra-resync;4 structured Queue cases crossing empty/nonempty tail and both intent/resync ACK orders. Tab has1turn/start and0turn/steer; Enter has1turn/steer. Exact prefix/upload/tail and confirmed receipt preserved;0replacement upload."
+    },
+    "tui_editor": {
+      "new_cases": 4,
+      "contract": "Actual Enter after literal restoration, clear, explicit replacement or empty restore verifies command-provenance boundaries."
+    },
+    "web_dom": {
+      "new_cases": 2,
+      "contract": "A control plus cold-B metadata held before Attach; immediate reconnect and separately settled disconnect/Settings/reconnect both regain current control/executable route with same draft/intake/local file. Old metadata cannot change it.0intent/turn/cancel/detach."
+    },
+    "web_publication_guards": {
+      "new_cases": 3,
+      "contract": "Explicit cancellation, newer selection and replacement authority reject delayed old SESSION.RESUME/metadata; no input is synthesized."
+    },
+    "web_browser": {
+      "new_cases": 1,
+      "contract": "Real Native/App Server, physical stdio MCP gate and pinned Chromium:0MCP initialization while B metadata ACK held; after same-authority reconnect exactly1MCP catalog gate, fresh A/B Target subscriptions, B route/editor/text/file recovered;0submissionIntent/turn/provider requests. Title, pageerror, consoleerror and no-Vite-overlay checked."
+    },
+    "limits": "FakeTransport App/editor/DOM cases prove client and wire ownership, not real provider/MCP cleanup. The one new browser case proves actual startup/recovery without model dispatch; complete physical settlement and provider coverage remain separate Native boundary suites."
+  },
+  "independent_review": {
+    "path": "docs/issue-499/evidence/independentreview13.md",
+    "sha256": "6ab09d0db1c449f2d9a9546fde8548e360ad27f0180bcc7589762f9cdba1790c",
+    "verdict": "No actionable findings; reviewer authored no implementation or regression tests.157TUI and134Web focused passes plus both typechecks on identical before/after8-input inventory."
+  },
+  "completed_checks": [
+    {
+      "id": "review13-fmt",
+      "receipt": {
+        "command": "cargo fmt --all -- --check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:49:29.141261+00:00",
+        "finished_at": "2026-10-24T23:49:34.985583+00:00",
+        "elapsed_seconds": 5.844369611993898,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-fmt.log"
+    },
+    {
+      "id": "review13-clippy",
+      "receipt": {
+        "command": "cargo clippy --all-targets --all-features -- -D warnings",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:49:35.805709+00:00",
+        "finished_at": "2026-10-24T23:49:36.162109+00:00",
+        "elapsed_seconds": 0.35640560899628326,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "2461b00c8697c4189b2de92ca6fb05b5d72273c78a0a47b1ce4e83ccca077b70"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-clippy.log"
+    },
+    {
+      "id": "review13-bins",
+      "receipt": {
+        "command": "cargo build --bins",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:49:36.190519+00:00",
+        "finished_at": "2026-10-24T23:49:36.501228+00:00",
+        "elapsed_seconds": 0.31071725697256625,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "f591e097f22f91dd5c31fbbf7e587d80c0a4e0ed594f9c9012a544f38c52d926"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-bins.log"
+    },
+    {
+      "id": "review13-cargo-full",
+      "receipt": {
+        "command": "cargo test --all-targets --all-features --no-fail-fast -- --test-threads=4",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:49:36.532990+00:00",
+        "finished_at": "2026-10-25T00:01:47.015295+00:00",
+        "elapsed_seconds": 730.4823100859649,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "1b93dc5bee363905e74583c91bb2ceb8b6af0bd2b89adc5b75ef5fd8cb179c22"
+      },
+      "counts": {
+        "harnesses": 20,
+        "passed": 5475,
+        "failed": 0,
+        "ignored": 16
+      },
+      "log_path": "/tmp/issue499/review13-cargo-full.log"
+    },
+    {
+      "id": "review13-lanes",
+      "receipt": {
+        "command": "cargo run --all-features --example check_test_lanes",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-25T00:01:47.050220+00:00",
+        "finished_at": "2026-10-25T00:02:11.875794+00:00",
+        "elapsed_seconds": 24.825577076000627,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "fa3c6ec740785b6fe331f456543c7fdd37fcdcb74e7c15784d4366eeb598054c"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-lanes.log"
+    },
+    {
+      "id": "review13-emulator",
+      "receipt": {
+        "command": "uv run --project test-support/fake-provider --frozen pytest -o addopts= -q test-support/fake-provider/tests",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:50:39.733103+00:00",
+        "finished_at": "2026-10-24T23:50:40.028783+00:00",
+        "elapsed_seconds": 0.2956799819949083,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "f55ec4f379cf6d33fa9b4ec786ec9dd3591701de3c529f3c706cc90922d249a9"
+      },
+      "counts": {
+        "passed": 55
+      },
+      "log_path": "/tmp/issue499/review13-emulator.log"
+    },
+    {
+      "id": "review13-launcher-typecheck",
+      "receipt": {
+        "command": "pnpm --dir dev typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:50:39.750798+00:00",
+        "finished_at": "2026-10-24T23:50:41.181153+00:00",
+        "elapsed_seconds": 1.4303567470051348,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-launcher-typecheck.log"
+    },
+    {
+      "id": "review13-launcher-test",
+      "receipt": {
+        "command": "pnpm --dir dev test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:50:41.208285+00:00",
+        "finished_at": "2026-10-24T23:50:43.627998+00:00",
+        "elapsed_seconds": 2.419714661024045,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "5b2358323e92ae15a5c645b5818a3be2d31e7b257561fe9a6ec195011240f16c"
+      },
+      "counts": {
+        "tests": 41,
+        "pass": 41,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log_path": "/tmp/issue499/review13-launcher-test.log"
+    },
+    {
+      "id": "review13-protocol-check",
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server check",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:50:43.654466+00:00",
+        "finished_at": "2026-10-24T23:50:45.488868+00:00",
+        "elapsed_seconds": 1.8344056300120428,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "34669ea5161bdbf8e187e78130a2593f691d9d3f4ff65d2e0aea59468e6e55d2"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-protocol-check.log"
+    },
+    {
+      "id": "review13-protocol-typecheck",
+      "receipt": {
+        "command": "pnpm --dir protocol/app-server typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:50:45.518474+00:00",
+        "finished_at": "2026-10-24T23:50:46.617120+00:00",
+        "elapsed_seconds": 1.0986447599716485,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "9c2087a01065ee43c12d5737d7bff4ded722c311c7de5914f5b88d24e8c40152"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-protocol-typecheck.log"
+    },
+    {
+      "id": "review13-tui-typecheck-final",
+      "receipt": {
+        "command": "pnpm --dir tui typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:53:08.635568+00:00",
+        "finished_at": "2026-10-24T23:53:15.510716+00:00",
+        "elapsed_seconds": 6.87515022297157,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-tui-typecheck-final.log"
+    },
+    {
+      "id": "review13-tui-full-final",
+      "receipt": {
+        "command": "pnpm --dir tui test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:53:08.635571+00:00",
+        "finished_at": "2026-10-24T23:53:47.284640+00:00",
+        "elapsed_seconds": 38.649072998028714,
+        "exit_code": 0,
+        "environment": {
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "c7aa910d3ca4185b5605f006a1f2fa860929cfad98f7cc72ddc473ca20cb7314"
+      },
+      "counts": {
+        "tests": 1259,
+        "pass": 1258,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 1,
+        "todo": 0
+      },
+      "log_path": "/tmp/issue499/review13-tui-full-final.log"
+    },
+    {
+      "id": "review13-web-typecheck-final2",
+      "receipt": {
+        "command": "pnpm --dir web-console typecheck",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:57:38.252987+00:00",
+        "finished_at": "2026-10-24T23:58:15.853909+00:00",
+        "elapsed_seconds": 37.60091675497824,
+        "exit_code": 0,
+        "environment": {},
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-web-typecheck-final2.log"
+    },
+    {
+      "id": "review13-web-full-final",
+      "receipt": {
+        "command": "pnpm --dir web-console test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:58:42.514201+00:00",
+        "finished_at": "2026-10-24T23:59:21.801749+00:00",
+        "elapsed_seconds": 39.2875497219502,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "68a2ac43ad0f238c822530e290d717fd995b36bc92285b95d2c17c303e2d4903"
+      },
+      "counts": {
+        "passed": 3296,
+        "skipped": 4
+      },
+      "log_path": "/tmp/issue499/review13-web-full-final.log"
+    },
+    {
+      "id": "review13-i18n",
+      "receipt": {
+        "command": "pnpm --dir web-console check:i18n",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:59:21.829048+00:00",
+        "finished_at": "2026-10-24T23:59:22.762773+00:00",
+        "elapsed_seconds": 0.9337296820012853,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "f74a6863137352ef1a277bafd1f9a6bf4e3a36fcc3f34bc9a7d3299bdc944a7b"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-i18n.log"
+    },
+    {
+      "id": "review13-provenance",
+      "receipt": {
+        "command": "pnpm --dir web-console check:provenance",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:59:22.787600+00:00",
+        "finished_at": "2026-10-24T23:59:23.859234+00:00",
+        "elapsed_seconds": 1.0716348040150478,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "327c85a05e316d5b82d2aa199d75d317e864709324c9df5dd9ce0ce94155f6e2"
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-provenance.log"
+    },
+    {
+      "id": "review13-web-browser-final",
+      "receipt": {
+        "command": "pnpm --dir web-console test:e2e mcp-cold-navigation.spec.ts -g 'cold Session metadata interrupted'",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:57:33.146719+00:00",
+        "finished_at": "2026-10-24T23:58:10.750375+00:00",
+        "elapsed_seconds": 37.60365643398836,
+        "exit_code": 0,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "95c87a0e3327fd481ca76198232f36498d1cc551f8935433705a4a3c7b1d7287"
+      },
+      "counts": {
+        "passed": 1
+      },
+      "log_path": "/tmp/issue499/review13-web-browser-final.log"
+    },
+    {
+      "id": "review13-independent-tui-focused",
+      "receipt": {
+        "command": [
+          "node",
+          "--test",
+          "test/startup.test.ts",
+          "test/composer-app.test.ts",
+          "test/session-focus.test.ts",
+          "test/convergence.test.ts"
+        ],
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX/tui",
+        "started_at": "2026-10-24T23:53:40.389772+00:00",
+        "finished_at": "2026-10-24T23:53:43.287536+00:00",
+        "elapsed_seconds": 2.8977642769459635,
+        "exit_code": 0,
+        "log_path": "/tmp/issue499/review13-independent-tui-focused.log",
+        "log_sha256": "0452c767fbd72d051a594b31af2a988c206dbedd3e07261f917a6b3f270a1f42",
+        "source_before": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          }
+        ],
+        "source_after": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          }
+        ],
+        "source_stable": true,
+        "counts": {}
+      },
+      "counts": {
+        "tests": 157,
+        "pass": 157,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log_path": "/tmp/issue499/review13-independent-tui-focused.log"
+    },
+    {
+      "id": "review13-independent-tui-typecheck",
+      "receipt": {
+        "command": [
+          "pnpm",
+          "--dir",
+          "tui",
+          "typecheck"
+        ],
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:53:40.389772+00:00",
+        "finished_at": "2026-10-24T23:53:44.972506+00:00",
+        "elapsed_seconds": 4.582733843009919,
+        "exit_code": 0,
+        "log_path": "/tmp/issue499/review13-independent-tui-typecheck.log",
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+        "source_before": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          }
+        ],
+        "source_after": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          }
+        ],
+        "source_stable": true,
+        "counts": {}
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-independent-tui-typecheck.log"
+    },
+    {
+      "id": "review13-independent-web-focused-retry",
+      "receipt": {
+        "command": [
+          "pnpm",
+          "--dir",
+          "web-console",
+          "exec",
+          "vitest",
+          "run",
+          "test/cold-session-navigation.test.tsx",
+          "test/navigation-ownership.test.ts",
+          "test/client.test.ts",
+          "test/session-lifecycle.test.ts"
+        ],
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:58:25.204974+00:00",
+        "finished_at": "2026-10-24T23:58:34.173843+00:00",
+        "elapsed_seconds": 8.968868597992696,
+        "exit_code": 0,
+        "log_path": "/tmp/issue499/review13-independent-web-focused-retry.log",
+        "log_sha256": "36befb49ba99c998604a15ff1a268120f3f260d67d2599868b4c2ba3f5333f15",
+        "source_before": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          },
+          {
+            "path": "web-console/src/app/navigation/machine.ts",
+            "sha256": "a439163641b3f9f9af0dba0f1ce166c02f816f058dab16829b58e56dc8ad75a6"
+          },
+          {
+            "path": "web-console/test/cold-session-navigation.test.tsx",
+            "sha256": "419798569cd16f1dcda4075a49d1284b87508807c6e882ff34d4e2ec8385d882"
+          },
+          {
+            "path": "web-console/test/navigation-ownership.test.ts",
+            "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+          },
+          {
+            "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+            "sha256": "a397fbf137e942c578c252756bfe6750a524198eeb5d65945ecf441c8e67a2d2"
+          }
+        ],
+        "source_after": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          },
+          {
+            "path": "web-console/src/app/navigation/machine.ts",
+            "sha256": "a439163641b3f9f9af0dba0f1ce166c02f816f058dab16829b58e56dc8ad75a6"
+          },
+          {
+            "path": "web-console/test/cold-session-navigation.test.tsx",
+            "sha256": "419798569cd16f1dcda4075a49d1284b87508807c6e882ff34d4e2ec8385d882"
+          },
+          {
+            "path": "web-console/test/navigation-ownership.test.ts",
+            "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+          },
+          {
+            "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+            "sha256": "a397fbf137e942c578c252756bfe6750a524198eeb5d65945ecf441c8e67a2d2"
+          }
+        ],
+        "source_stable": true
+      },
+      "counts": {
+        "passed": 134
+      },
+      "log_path": "/tmp/issue499/review13-independent-web-focused-retry.log"
+    },
+    {
+      "id": "review13-independent-web-typecheck",
+      "receipt": {
+        "command": [
+          "pnpm",
+          "--dir",
+          "web-console",
+          "typecheck"
+        ],
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:57:33.523048+00:00",
+        "finished_at": "2026-10-24T23:58:12.662548+00:00",
+        "elapsed_seconds": 39.13950002298225,
+        "exit_code": 0,
+        "log_path": "/tmp/issue499/review13-independent-web-typecheck.log",
+        "log_sha256": "8366207267355d3e3d5bf3bf6e8c94c5f93f6078c34f08973fa2b38cdda6cc92",
+        "source_before": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          },
+          {
+            "path": "web-console/src/app/navigation/machine.ts",
+            "sha256": "a439163641b3f9f9af0dba0f1ce166c02f816f058dab16829b58e56dc8ad75a6"
+          },
+          {
+            "path": "web-console/test/cold-session-navigation.test.tsx",
+            "sha256": "419798569cd16f1dcda4075a49d1284b87508807c6e882ff34d4e2ec8385d882"
+          },
+          {
+            "path": "web-console/test/navigation-ownership.test.ts",
+            "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+          },
+          {
+            "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+            "sha256": "a397fbf137e942c578c252756bfe6750a524198eeb5d65945ecf441c8e67a2d2"
+          }
+        ],
+        "source_after": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          },
+          {
+            "path": "web-console/src/app/navigation/machine.ts",
+            "sha256": "a439163641b3f9f9af0dba0f1ce166c02f816f058dab16829b58e56dc8ad75a6"
+          },
+          {
+            "path": "web-console/test/cold-session-navigation.test.tsx",
+            "sha256": "419798569cd16f1dcda4075a49d1284b87508807c6e882ff34d4e2ec8385d882"
+          },
+          {
+            "path": "web-console/test/navigation-ownership.test.ts",
+            "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+          },
+          {
+            "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+            "sha256": "a397fbf137e942c578c252756bfe6750a524198eeb5d65945ecf441c8e67a2d2"
+          }
+        ],
+        "source_stable": true
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-independent-web-typecheck.log"
+    }
+  ],
+  "preserved_development_failures": [
+    {
+      "id": "review13-tui-intent-red",
+      "receipt": {
+        "command": [
+          "node",
+          "--test",
+          "--test-timeout=20000",
+          "--test-name-pattern=^reconnect input intent:",
+          "tui/test/startup.test.ts"
+        ],
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:48:11.170287+00:00",
+        "finished_at": "2026-10-24T23:48:12.371346+00:00",
+        "elapsed_seconds": 1.2010587680269964,
+        "exit_code": 1,
+        "source_before": {
+          "tui/src/ui/app.ts": "5fc3830c2dce8df3117bdffea72e5e2e14bc9923d8fdaa1b327da47c20d4dc7f",
+          "tui/src/ui/composer.ts": "c38af5591616e158e06d8840318f23761cfd0d65dd6ace0f2aec9428bab09798",
+          "tui/test/startup.test.ts": "e3ffebc9bd2fe156cba66a7945e341a482175d12c5ae7c81dfd133c191e5ed6d"
+        },
+        "source_after": {
+          "tui/src/ui/app.ts": "5fc3830c2dce8df3117bdffea72e5e2e14bc9923d8fdaa1b327da47c20d4dc7f",
+          "tui/src/ui/composer.ts": "c38af5591616e158e06d8840318f23761cfd0d65dd6ace0f2aec9428bab09798",
+          "tui/test/startup.test.ts": "e3ffebc9bd2fe156cba66a7945e341a482175d12c5ae7c81dfd133c191e5ed6d"
+        },
+        "log_sha256": "e55ec8cbf7b45bd7d218997ef1d4279496a15f57170c872a2a20fe184b41c5c3"
+      },
+      "counts": {
+        "tests": 12,
+        "pass": 7,
+        "fail": 5,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log_path": "/tmp/issue499/review13-tui-intent-red.log",
+      "scope": "Original12 new cases on original0b TUI production:7 passed/5 failed. The final26 App tests include additional boundaries, so this red is not attributed to final test bytes."
+    },
+    {
+      "id": "review13-tui-restored-literal-red",
+      "receipt": {
+        "command": [
+          "node",
+          "--test",
+          "--test-timeout=20000",
+          "--test-name-pattern=^reconnect input intent: (Escape|intent rejection) restores",
+          "tui/test/startup.test.ts"
+        ],
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:51:56.601210+00:00",
+        "finished_at": "2026-10-24T23:51:57.771807+00:00",
+        "elapsed_seconds": 1.1705987339955755,
+        "exit_code": 1,
+        "source_before": {
+          "tui/src/ui/app.ts": "70664411ce4755aa71be192c18441a3d160f91e96847eb8dfe50038264053648",
+          "tui/src/ui/composer.ts": "c38af5591616e158e06d8840318f23761cfd0d65dd6ace0f2aec9428bab09798",
+          "tui/test/startup.test.ts": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+        },
+        "source_after": {
+          "tui/src/ui/app.ts": "70664411ce4755aa71be192c18441a3d160f91e96847eb8dfe50038264053648",
+          "tui/src/ui/composer.ts": "c38af5591616e158e06d8840318f23761cfd0d65dd6ace0f2aec9428bab09798",
+          "tui/test/startup.test.ts": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+        },
+        "log_sha256": "ca4fe419035318164b8fbc7d1437cc22666010c42c4a8041bfdba4d06d678938"
+      },
+      "counts": {
+        "tests": 2,
+        "pass": 0,
+        "fail": 2,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log_path": "/tmp/issue499/review13-tui-restored-literal-red.log",
+      "scope": "Two additional actual-App known-unsent restoration cases on the intermediate same-draft/Queue repair:0 passed/2 failed, both promoted literal text to Settings commands."
+    },
+    {
+      "id": "review13-web-red",
+      "receipt": {
+        "command": "pnpm --dir web-console exec vitest run test/cold-session-navigation.test.tsx -t 'same-authority reconnect renews cold B publication'",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:47:32.007731+00:00",
+        "finished_at": "2026-10-24T23:47:38.196740+00:00",
+        "elapsed_seconds": 6.189011825015768,
+        "exit_code": 1,
+        "environment": {},
+        "log_sha256": "30141944ff0a488dc6c7f75eb66c1c5150c0fc3c18389227eed81322b6362701"
+      },
+      "counts": {
+        "failed": 1,
+        "skipped": 12
+      },
+      "log_path": "/tmp/issue499/review13-web-red.log",
+      "scope": "Original single actual React App/Client/Lifecycle cold-B metadata reconnect:1 failed,12 other cases excluded by name filter. Current control proof succeeded but editor stayed disabled."
+    },
+    {
+      "id": "review13-web-settled-disconnect-red",
+      "receipt": {
+        "command": "pnpm --dir web-console exec vitest run test/cold-session-navigation.test.tsx -t 'settled disconnect and reopened Settings'",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:55:07.647832+00:00",
+        "finished_at": "2026-10-24T23:55:14.070788+00:00",
+        "elapsed_seconds": 6.4229585899738595,
+        "exit_code": 1,
+        "environment": {},
+        "log_sha256": "6f5d2d7b8abbeb04b04947827404ed284604d4c7af6a606cee05f7513c06f05f"
+      },
+      "counts": {
+        "failed": 1,
+        "skipped": 13
+      },
+      "log_path": "/tmp/issue499/review13-web-settled-disconnect-red.log",
+      "scope": "Separate disconnect settlement followed by Settings/reconnect reproduced loss of the selected logical draft owner after the first candidate repair."
+    },
+    {
+      "id": "review13-web-green",
+      "receipt": {
+        "command": "pnpm --dir web-console exec vitest run test/cold-session-navigation.test.tsx -t 'same-authority reconnect renews cold B publication'",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:48:29.876834+00:00",
+        "finished_at": "2026-10-24T23:48:34.950743+00:00",
+        "elapsed_seconds": 5.073911577987019,
+        "exit_code": 1,
+        "environment": {},
+        "log_sha256": "7811d1b21df11a81b32e240defcdd54bc26dac706c9c024f3d228731eee25245"
+      },
+      "counts": {
+        "failed": 1,
+        "skipped": 12
+      },
+      "log_path": "/tmp/issue499/review13-web-green.log",
+      "scope": "Intermediate test incorrectly expected the original A intake to remain registered after B successfully committed; final proof keeps that assertion while B is still pending and independently verifies B draft/incarnation/intake after recovery. This failed result is preserved, not reclassified as green."
+    },
+    {
+      "id": "review13-web-full",
+      "receipt": {
+        "command": "pnpm --dir web-console test",
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:57:30.996762+00:00",
+        "finished_at": "2026-10-24T23:58:16.360480+00:00",
+        "elapsed_seconds": 45.36372120998567,
+        "exit_code": 1,
+        "environment": {
+          "CARGO_INCREMENTAL": "0",
+          "CARGO_TARGET_DIR": "/home/capi/Documents/codes/rustX/target",
+          "CARGO_BUILD_JOBS": "4",
+          "TMPDIR": "/run/user/1000/rustx-issue-499-baseline-tmp",
+          "RUSTX_REQUIRE_PROVIDER_EMULATOR": "1"
+        },
+        "log_sha256": "a923d6af73ecdc13d4ab40d619500e5c3b563886ef1630e50491beb5a870e662"
+      },
+      "counts": {
+        "passed": 3274,
+        "skipped": 4
+      },
+      "log_path": "/tmp/issue499/review13-web-full.log",
+      "scope": "Root and author accidentally overlapped native-addon rebuild ownership: one test-file import failed with pty.node MODULE_NOT_FOUND;3274 passed/4 platform skips. Final serial run passed3296/0/4 on unchanged production bytes. No test or deadline was relaxed."
+    },
+    {
+      "id": "review13-independent-web-focused",
+      "receipt": {
+        "command": [
+          "pnpm",
+          "--dir",
+          "web-console",
+          "exec",
+          "vitest",
+          "run",
+          "test/cold-session-navigation.test.tsx",
+          "test/navigation-ownership.test.ts",
+          "test/client.test.ts",
+          "test/session-lifecycle.test.ts"
+        ],
+        "cwd": "/home/capi/.codex/worktrees/issue-499/rustX",
+        "started_at": "2026-10-24T23:57:33.527934+00:00",
+        "finished_at": "2026-10-24T23:57:34.217865+00:00",
+        "elapsed_seconds": 0.6899283730308525,
+        "exit_code": 1,
+        "log_path": "/tmp/issue499/review13-independent-web-focused.log",
+        "log_sha256": "df3b981431812be2352e7a7af909aead6f1e182b38e6808b8bdb79cbd0cd25bd",
+        "source_before": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          },
+          {
+            "path": "web-console/src/app/navigation/machine.ts",
+            "sha256": "a439163641b3f9f9af0dba0f1ce166c02f816f058dab16829b58e56dc8ad75a6"
+          },
+          {
+            "path": "web-console/test/cold-session-navigation.test.tsx",
+            "sha256": "419798569cd16f1dcda4075a49d1284b87508807c6e882ff34d4e2ec8385d882"
+          },
+          {
+            "path": "web-console/test/navigation-ownership.test.ts",
+            "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+          },
+          {
+            "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+            "sha256": "a397fbf137e942c578c252756bfe6750a524198eeb5d65945ecf441c8e67a2d2"
+          }
+        ],
+        "source_after": [
+          {
+            "path": "tui/src/ui/app.ts",
+            "sha256": "65bd1ae2719e0020d389fc4ae8f60743d951c4f6ceb38a693a11bb62d052aeec"
+          },
+          {
+            "path": "tui/src/ui/composer.ts",
+            "sha256": "598cc5759b4ed8dcfbf2b1cbb9ec623087428f857eefd53c2309ed2e6dc719bc"
+          },
+          {
+            "path": "tui/test/startup.test.ts",
+            "sha256": "b81a67b1a5d5de53860f64ef6605523d51baaa447e19f47b6d8a78278ff2e78b"
+          },
+          {
+            "path": "tui/test/convergence.test.ts",
+            "sha256": "927c88a389a6c4f0b290a9de29f2560e0f98818baeaebd76d2f8fac948dfffa0"
+          },
+          {
+            "path": "web-console/src/app/navigation/machine.ts",
+            "sha256": "a439163641b3f9f9af0dba0f1ce166c02f816f058dab16829b58e56dc8ad75a6"
+          },
+          {
+            "path": "web-console/test/cold-session-navigation.test.tsx",
+            "sha256": "419798569cd16f1dcda4075a49d1284b87508807c6e882ff34d4e2ec8385d882"
+          },
+          {
+            "path": "web-console/test/navigation-ownership.test.ts",
+            "sha256": "8d882cbb508118e5d18156ba5cdb9ba47bbd6dc00850b71a04035a7132984a8d"
+          },
+          {
+            "path": "web-console/test/e2e/mcp-cold-navigation.spec.ts",
+            "sha256": "a397fbf137e942c578c252756bfe6750a524198eeb5d65945ecf441c8e67a2d2"
+          }
+        ],
+        "source_stable": true
+      },
+      "counts": {},
+      "log_path": "/tmp/issue499/review13-independent-web-focused.log",
+      "scope": "Independent invocation failed before test collection while the concurrent native-addon rebuild temporarily removed pty.node.0 tests ran. After the module was available, the same final-input command independently passed134 tests."
+    }
+  ],
+  "intermediate_results": "The114-case first focused run,24-case green and1252-pass fullTUI preceded the final known-unsent literal repair; they are retained in /tmp but are not final-source coverage. Source-bearing final receipts and the complete1258-pass run establish final TUI coverage.",
+  "receipt_basename_collision": {
+    "recorded_at": "2026-10-24T23:58:27.249579+00:00",
+    "event": "Root reused an already occupied typecheck receipt basename; no CI terminal or committed checkpoint was touched.",
+    "original_receipt_provenance": "Complete JSON was read in the root tool output before the collision; the original wrapper format is json.dumps(indent=2)+LF. Restored fields are exactly that observed result, not a rerun. The log bytes from the two commands are identical by SHA256.",
+    "original_restored": "/tmp/issue499/review13-web-typecheck.result.json",
+    "root_final_preserved_as": "/tmp/issue499/review13-web-typecheck-root-final.result.json",
+    "source_scope": "Original is pre-final Web author typecheck; use author final or final2 for frozen eight-file proof. Root-final actual source includes the final production inputs but precedes browser QA test a397."
+  },
+  "performance": "No new startup timings are claimed for this Web/TUI-only repair. The existing24-row ea1c70 Native measurement workload, fixture and raw results remain byte-identical; superseded speculative-cache42ms results remain historical.",
+  "browser_evidence": {
+    "path": "/tmp/issue499/review13-web-cold-reconnect-final.png",
+    "sha256": "103b3c40bf9218df666af54a13eae336cc091aa29b374b2af9fcf3ff4a48f85d",
+    "visual_review": "Root inspected1440x1000 image: targetB selected, retained text/file and enabled Send; no layout redesign or prewarm presentation."
+  },
+  "pending_at_recording_cut": [
+    {
+      "id": "review13-browser-full",
+      "status": "complete416-case local browser run is still running; no terminal result claimed"
+    },
+    {
+      "id": "final-head-postcommit-protocol-diff",
+      "status": "postcommit checks to be recorded separately"
+    },
+    {
+      "id": "final-head-FULL-CI-and-Merge-verification",
+      "status": "not yet dispatched at this precommit cut; priorCI1530 verifies only0b7196/base00978/merge163a. Fresh final commit requires its own verdict; live results belong in PR503."
+    }
+  ],
+  "historical_evidence": "All55 previously committed evidence files and originalCI1530 terminalc798c5e5 remain unchanged. New terminal snapshots must use new filenames and actual head/base/merge identity. No pending or cancelled job is counted as success.",
+  "git_outcome_policy": "Commit/push normal follow-up to codex/issue-499-cache-aware-mcp; preserve worktree, no merge and no auto-merge."
+}

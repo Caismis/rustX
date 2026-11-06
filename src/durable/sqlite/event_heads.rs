@@ -1,7 +1,7 @@
 //! Two shared B-trees for four optional event heads. A lookup seeks the last
 //! sequence in each of the two exact masks containing its bit, then selects the
 //! newer of those two rows. It never scans unrelated headers or sorts history.
-use super::{Connection, ConversationStoreError, OptionalExtension, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension};
 
 pub(super) const STATISTICS: &str = "SELECT sequence,
     CASE WHEN typeof(observation_statistics)='blob' AND length(observation_statistics)<=98340 THEN observation_statistics ELSE 0 END
@@ -75,7 +75,7 @@ const INDEXES: &[(&str, &str)] = &[
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     // Narrow indexes rely on the implicit rowid being the native sequence.
     // INTEGER PRIMARY KEY DESC and WITHOUT ROWID have different layouts.
-    let alias:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name='events' AND type='table' AND wr=0) AND EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name='sequence' AND type='INTEGER' AND pk=1 AND hidden=0) AND NOT EXISTS(SELECT 1 FROM pragma_index_list('events') WHERE origin='pk')",[],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let alias:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_list WHERE schema='main' AND name='events' AND type='table' AND wr=0) AND EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name='sequence' AND type='INTEGER' AND pk=1 AND hidden=0) AND NOT EXISTS(SELECT 1 FROM pragma_index_list('events') WHERE origin='pk')",[],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if !alias {
         return Err(ConversationStoreError::IncompatibleSchema(
             "event sequence must alias rowid".into(),
@@ -87,9 +87,9 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     for &(name, definition) in COLUMNS {
-        let virtual_integer: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name=?1 AND type='INTEGER' AND hidden=2)", [name], |row| row.get(0)).map_err(|error| storage(error.to_string()))?;
+        let virtual_integer: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name=?1 AND type='INTEGER' AND hidden=2)", [name], |row| row.get(0)).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if !virtual_integer || !events.contains(definition) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "invalid derived event head column {name}"
@@ -104,7 +104,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if actual.as_deref() != Some(definition) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "invalid derived event head index {name}"
