@@ -89,16 +89,21 @@ were reused; this change's crate artifacts and binaries were rebuilt independent
 | Focused all-feature Skill/revision/watcher/coordinator/child/automatic-commit tests | 217 checks passed; the two real-Workflow checks were rerun with matching isolated binaries |
 | Real-child process conformance | Passed: all 45 Subagent integration tests, including the 2 GiB no-copy provider-gate check |
 | `cargo test --all-features --no-fail-fast` | Passed: 5,965 tests, 0 failures, 20 existing ignored tests |
+| macOS FULL native suites | Passed: 4,148 in-crate tests and 558 external tests; 12 existing ignored tests and the Linux-owned lane filters are checked by CI |
 | App Server protocol generation and TypeScript contracts | Passed; regenerated files have zero drift |
 | Web Console TypeScript and Vitest | Passed after the Office launcher follow-up: 4,069 tests, 4 skipped |
 | Selected rendered browser regressions | Passed: 82 tests with strict pixel comparison; original deadlines and cold-start counters retained |
 | Workflow editor and Harness/native detail parity | Passed after renderer follow-up: 17 tests, including native 256-node startup, semantic port edits and all 8 paired detail presentations |
 | Office conversion and launcher lifecycle | Passed: 17 focused tests, including actual descendant cgroups and deterministic exit-before-pipe-close settlement |
 | Office sidebar rendered regressions | Passed: 8 cases covering continuous pages, first-page readiness, localized retry and desktop/mobile layouts |
-| Resource revision regressions after macOS fixture correction | Passed: 8 Linux tests; macOS case runs in FULL CI |
+| Response-loss recovery | Passed: 3 consecutive local repetitions with the original assertions, followed by the final FULL run's complete 302-case first browser shard |
+| Deletion-confirmation screenshot | Passed: 3 consecutive focused local repetitions with the original exact pixel comparison |
+| Resource revision regressions after macOS fixture correction | Passed: 8 focused Linux tests and the case-sensitive/case-insensitive coverage in FULL CI on Linux/macOS |
 | Terminal Console TypeScript and Jest | Passed: 1,320 tests, 1 skipped |
 | CI controller Python tests | Passed: 64 tests |
 | Runtime benchmark controller Python tests | Passed: 37 tests |
+| FULL CI and browser coverage | Passed: all 15 selected jobs, 655 browser cases, complete inventory coverage; one unchanged second-shard rerun described below |
+| Workspace Host platform conformance | Passed on Linux and macOS |
 | `git diff --check` | Passed |
 
 The final full run on `9120fd5c410fd3a398201c0b5f289c50cd345caf` contains
@@ -182,6 +187,22 @@ real-cgroup lifecycle checks pass, including cancellation, external deadline,
 launcher loss, empty descendant cgroups and a successful next operation. No
 boundary assertion or timeout was relaxed.
 
+The third FULL run also had one navigation timeout in the response-loss recovery
+case: its screenshot retained the new MCP editor while the test waited for a
+list entry. Three consecutive focused repetitions passed, and the unchanged case
+passed in the final 302-case first shard. No MCP implementation or recovery
+assertion was changed for that isolated failure.
+
+The final run's second browser shard initially passed 352 cases and failed one
+confirmation screenshot: 61 pixels behind the backdrop blur differed by at most
+one channel level. The foreground dialog matched. The same case passed three
+focused local repetitions, and the preceding FULL run had passed that shard.
+References, pixel policies, timeouts and product code remain unchanged for the
+manual rerun of the complete second shard on the same implementation commit.
+That rerun passed all 353 cases. Combined with the unchanged first shard's 302
+cases, the coverage gate verified all 655 discovered cases against the same
+commit and prepared inputs.
+
 ## 7. Measurements and reproduction
 
 Baseline: `eae92389c01abb2b214c0222070dabd84f38ba2f`. Both revisions use the same
@@ -227,6 +248,9 @@ strace -f -yy -e trace=openat,getdents64,read \
 
 ## 8. Limits and risks
 
+- Internal IPC v38 and profile digest v8 deliberately replace the old execution
+  contract. Rebuild the native binaries and restart local runtimes together;
+  old child executables and frozen execution profiles are not migrated.
 - Runtime resource bytes remain mutable and are not archived by configuration
   events. Strict execution reproducibility requires a separate snapshot owner.
 - The 1 MiB prefix bound rejects excessively large or unterminated frontmatter;
@@ -265,7 +289,19 @@ passed Linux, protocol, client, Host and macOS full checks, but exposed the two
 browser issues described above. The renderer/hover follow-up is committed as
 [`50ffb31c22018171702c58c10e3f7bbbc28f5b98`](https://github.com/Caismis/rustX/commit/50ffb31c22018171702c58c10e3f7bbbc28f5b98).
 The [third FULL CI run](https://github.com/Caismis/rustX/actions/runs/42218559090)
-exposed the Office launcher-loss issue described above. Its remaining browser and
-macOS full lanes are still running. The Office fix and regression test receive
-another complete FULL run on the final implementation revision. The concluding
-report update is documentation-only.
+exposed the Office launcher-loss issue described above. The final implementation,
+including that fix and its deterministic regression test, is
+[`28bb6d4fd63f86ff2ec61a0e0947f6ac6edfa7a5`](https://github.com/Caismis/rustX/commit/28bb6d4fd63f86ff2ec61a0e0947f6ac6edfa7a5).
+No Rust implementation changed after the fully tested `9120fd5c4` revision.
+
+The [final FULL CI run](https://github.com/Caismis/rustX/actions/runs/42221459145)
+**passed on attempt 2** for that exact implementation revision. All 15 selected
+jobs succeeded, including Merge verification and complete 655-case browser
+coverage. The three skipped jobs are alternative FAST-profile lanes, replaced
+by the selected FULL suites. [Workspace Host platform conformance](https://github.com/Caismis/rustX/actions/runs/42221431550)
+also passed on both Linux and macOS.
+
+[Raw CI evidence](measurements/validation-ci.json) records both run identities,
+the implementation SHA, job conclusions, platform counts and the unchanged
+manual shard rerun. The concluding delivery commit only adds documentation and
+validation evidence; the verified implementation remains `28bb6d4fd`.
