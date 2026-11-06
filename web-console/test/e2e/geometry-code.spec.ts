@@ -20,7 +20,7 @@ async function observeCode(page: Page) {
   });
 }
 const counts = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryCode }));
-const ready = (page: Page, count = 1) => expect(page.locator('[data-geometry-format] canvas[data-geometry-completeness="complete"]')).toHaveCount(count, { timeout: 20_000 });
+const ready = (page: Page, count = 1) => expect(page.locator('[data-geometry-format]:visible canvas[data-geometry-completeness="complete"]')).toHaveCount(count, { timeout: 20_000 });
 const settledOutlines = (page: Page) => expect.poll(async () => page.getByRole('button', { name: 'Model outlines', exact: true }).evaluateAll(buttons => buttons.every(button => button.getAttribute('aria-pressed') === 'true' && button.getAttribute('aria-busy') === 'false'))).toBe(true);
 
 test('cancelled CAD code wait retires its idle Worker and the retained copy reuses only compiled code', async ({ page }, info) => {
@@ -65,11 +65,13 @@ test('two actual split CAD owners share code and allocate fresh import Workers a
   for (const name of ['cube.step', 'cube-inch.step']) {
     await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await ready(page); await settledOutlines(page);
   }
-  await page.getByRole('button', { name: 'Split preview', exact: true }).click(); await ready(page, 2); await settledOutlines(page);
+  await page.getByRole('button', { name: 'Split preview', exact: true }).click(); await ready(page, 2);
+  await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2); await settledOutlines(page);
   await expect.poll(async () => (await resources(page)).contexts).toBe(2);
   await page.getByRole('button', { name: 'Hide delivery', exact: true }).click(); await expect.poll(() => resources(page)).toEqual(retired);
   const before = await counts(page), start = performance.now();
-  await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page, 2); await settledOutlines(page);
+  await page.getByRole('button', { name: 'Show delivery', exact: true }).click(); await ready(page, 2);
+  await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2); await settledOutlines(page);
   const reopenedMs = performance.now() - start, after = await counts(page);
   expect(after.workers - before.workers).toBe(2); expect(after.modules - before.modules).toBe(2); expect(fetches).toBe(1);
   // Each small source fits one bounded content read. Reveals reauthorize the

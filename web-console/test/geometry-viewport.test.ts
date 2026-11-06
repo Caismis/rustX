@@ -24,6 +24,7 @@ vi.mock('three', async original => {
 vi.mock('three/addons/controls/OrbitControls.js', async () => {
   const { EventDispatcher, Vector3 } = await import('three');
   return { OrbitControls: class extends EventDispatcher<any> {
+    mouseButtons = {}; touches = {};
     target = new Vector3(); dispose = vi.fn(); listenToKeyEvents = vi.fn();
     constructor(readonly object: PerspectiveCamera | OrthographicCamera) { super(); runtime.controls.push(this); }
     update() { this.object.lookAt(this.target); this.object.updateMatrixWorld(true); this.dispatchEvent({ type: 'change' }); }
@@ -55,6 +56,89 @@ function tier(level: 0 | 1 = 0, x=0) {
   const value=modelScene({meshes:[0,2].map(offset=>({name:`Surface ${offset}`,positions:new Float32Array([x+offset,0,0,x+offset+1,0,0,x+offset,1,0]),groups:[]})),root:{name:'Assembly',meshes:[],children:[0,1].map(index=>({name:`Part ${index}`,meshes:[index],children:[]}))}});
   return {level,scene:value.scene,bounds:value.bounds,dispose:vi.fn(()=>disposeScene([value.scene]))};
 }
+it('mounts a hidden body without a frame, buffer allocation, timers or a replacement saved camera', () => {
+  const camera = { projection: 'orthographic' as const, verticalSpan: 2, position: [3, 2, 4] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] };
+  const f = mount(undefined, { copyId: 'copy', camera }, { generated: true, visible: false });
+  resize(); draw(); vi.advanceTimersByTime(1000); draw();
+  expect(f.renderer.render).not.toHaveBeenCalled(); expect(f.renderer.setDrawingBufferSize).not.toHaveBeenCalled();
+  expect(f.control().enabled).toBe(false); expect(f.changed).not.toHaveBeenCalled(); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  Object.defineProperty(f.element, 'clientWidth', { value: 800 }); vi.stubGlobal('devicePixelRatio', 1.5);
+  f.view.setVisible(true); draw();
+  expect(f.control().enabled).toBe(true); expect(f.renderer.setDrawingBufferSize).toHaveBeenCalledExactlyOnceWith(800, 480, .5);
+  expect(f.changed).toHaveBeenCalledOnce(); expect(f.changed.mock.lastCall![0].camera).toEqual(camera);
+  vi.advanceTimersByTime(L.refineDelayMs); draw(); expect(f.renderer.setDrawingBufferSize).toHaveBeenLastCalledWith(800, 480, 1.5);
+});
+it('pauses pending GPU fence polling and refinement and resumes the retained renderer and pose', () => {
+  const ready = vi.fn(), f = mount(undefined, undefined, { generated: true, onFirstGpuReady: ready });
+  draw(); f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.TIMEOUT_EXPIRED); draw();
+  const callbacks = [...frames.values()], calls = f.renderer.gl.clientWaitSync.mock.calls.length;
+  f.view.setVisible(false); callbacks.forEach(callback => callback(0)); resize();
+  vi.advanceTimersByTime(1000); draw();
+  expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(ready).not.toHaveBeenCalled();
+  expect(f.renderer.gl.clientWaitSync).toHaveBeenCalledTimes(calls); expect(f.renderer.render).toHaveBeenCalledOnce();
+  expect(f.renderer.dispose).not.toHaveBeenCalled(); expect(f.renderer.gl.deleteSync).not.toHaveBeenCalled();
+  const camera = f.control().object.position.clone(); f.renderer.gl.clientWaitSync.mockReturnValue(f.renderer.gl.ALREADY_SIGNALED);
+  f.view.setVisible(true); draw();
+  expect(runtime.renderers).toHaveLength(1); expect(f.control().object.position.equals(camera)).toBe(true); expect(ready).toHaveBeenCalledOnce();
+  expect(f.renderer.render).toHaveBeenCalledTimes(2);
+});
+it('starts no hidden outlines and fences an outline request waiting for imported surface preparation', async () => {
+  const worker = vi.fn(); vi.stubGlobal('Worker', class { constructor() { worker(); } });
+  const f = mount(undefined, undefined, { generated: true, visible: false, pendingPreview: true });
+  expect(await f.view.setOutlines(true)).toBe('off'); expect(worker).not.toHaveBeenCalled();
+  f.view.setVisible(true); const request = f.view.setOutlines(true); f.view.setVisible(false); f.view.refreshPreview();
+  expect(await request).toBe('off'); expect(worker).not.toHaveBeenCalled(); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  outlineWorker(); f.view.setVisible(true); expect(await f.view.setOutlines(true)).toBe('on');
+});
+it('lets an in-flight outline finish while hidden without scheduling or submitting a frame', async () => {
+  let finish: (() => void) | undefined;
+  vi.stubGlobal('Worker', class {
+    onmessage: any; onerror: any; onmessageerror: any; terminate() {}
+    postMessage({ inputs }: { inputs: Parameters<typeof outlineData>[0][] }) {
+      finish = () => this.onmessage?.({ data: { ok: true, data: inputs.map(value => outlineData(value, L.outlineSegments, performance.now() + 2000)) } });
+    }
+  });
+  const f = mount(undefined, undefined, { generated: true }), request = f.view.setOutlines(true);
+  await vi.dynamicImportSettled(); expect(finish).toBeDefined(); f.view.setVisible(false); finish!();
+  expect(await request).toBe('on'); draw();
+  expect(f.renderer.render).not.toHaveBeenCalled(); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+  f.view.setVisible(true); draw(); expect(f.renderer.render).toHaveBeenCalledOnce();
+});
+it('keeps hidden progressive tiers unpainted and hands final content to a hidden body with one renderer', async () => {
+  const element = document.createElement('div'); Object.defineProperties(element, { clientWidth: { value: 640, configurable: true }, clientHeight: { value: 480, configurable: true } });
+  const graphics = prepareGeometryGraphics(true, vi.fn(), { visible: false }), displayed = vi.fn(), show = vi.fn(), a = tier();
+  const owner = progressivePresentation({ container: element, graphics, visible: false, current: () => true, copyId: 'copy', labels: () => en, mounted: show, displayed, failed: vi.fn() });
+  try {
+    owner.add(a); draw(); expect(show).not.toHaveBeenCalled(); expect(frames.size).toBe(0); expect(graphics.renderer.compile).not.toHaveBeenCalled();
+    await owner.complete(); owner.dispose(); expect(a.dispose).toHaveBeenCalledOnce();
+    const object = new Group(); object.add(new Mesh(new BoxGeometry(), new MeshBasicMaterial()));
+    const full = mountGeometry(element, object, new Box3().setFromObject(object), undefined, en, vi.fn(), vi.fn(), { generated: true, graphics, visible: false }); mounted.push(full);
+    draw(); expect(graphics.renderer.render).not.toHaveBeenCalled(); expect(graphics.renderer.setDrawingBufferSize).not.toHaveBeenCalled(); expect(displayed).not.toHaveBeenCalled();
+    full.setVisible(true); draw(); expect(runtime.renderers).toHaveLength(1); expect(graphics.renderer.render).toHaveBeenCalledOnce();
+  } finally { owner.dispose(); graphics.dispose(); }
+});
+it('settles a hidden progressive gesture immediately and retains its last visible framing for handoff', async () => {
+  const element = document.createElement('div'); Object.defineProperties(element, { clientWidth: { value: 640, configurable: true }, clientHeight: { value: 480, configurable: true } });
+  const graphics = prepareGeometryGraphics(true, vi.fn()), a = tier(); let preview: ReturnType<typeof mountGeometry> | undefined;
+  const owner = progressivePresentation({ container: element, graphics, current: () => true, copyId: 'copy', labels: () => en, mounted: view => { preview = view; }, displayed: vi.fn(), failed: vi.fn() });
+  try {
+    owner.add(a); draw(); draw(); preview!.setProjection('perspective'); const control = runtime.controls.at(-1);
+    control.dispatchEvent({ type: 'start' }); move(control, control.object.position.x + 1);
+    const expected = control.object.position.clone(); const pending = owner.complete();
+    Object.defineProperties(element, { clientWidth: { value: 0 }, clientHeight: { value: 0 } }); owner.setVisible(false);
+    const seed = await pending; expect(preview).toBeUndefined(); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+    const camera = cameraFromPose(seed!.pose!, a.bounds, seed!.viewportSize, seed!.projection);
+    expect(new Vector3().fromArray(camera.position).distanceTo(expected)).toBeLessThan(1e-12);
+    expect(graphics.renderer.dispose).not.toHaveBeenCalled();
+    const final = tier();
+    const full = mountGeometry(element, final.scene, final.bounds, { copyId: 'copy', camera }, en, vi.fn(), vi.fn(), { generated: true, graphics, visible: false }); mounted.push(full);
+    owner.dispose(); expect(a.dispose).toHaveBeenCalledOnce(); draw();
+    expect(frames.size).toBe(0); expect(runtime.renderers).toHaveLength(1);
+    Object.defineProperties(element, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
+    full.setVisible(true); expect(runtime.controls.at(-1).object.position.distanceTo(expected)).toBeLessThan(1e-12);
+    full.dispose(); final.dispose();
+  } finally { owner.dispose(); graphics.dispose(); }
+});
 it('replaces whole-model tiers, waits for the active gesture, and upgrades with one context', async () => {
   const element=document.createElement('div');Object.defineProperties(element,{clientWidth:{value:640},clientHeight:{value:480}});
   const graphics=prepareGeometryGraphics(true,vi.fn()),displayed=vi.fn(),failed=vi.fn(),a=tier(),b=tier(1,2);

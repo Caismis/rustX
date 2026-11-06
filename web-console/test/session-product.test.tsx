@@ -65,7 +65,7 @@ async function mount() {
   server = new Server();
   server.snapshots.get('A')!.attempt = running();
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server!.client} workspaceHost={server!.workspaceHost} />); });
   return server;
 }

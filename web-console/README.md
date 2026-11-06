@@ -241,9 +241,15 @@ attaching or cold-loading the Session to discover the outcome. Only a later
 explicit **Open Session** sets wanted intent again. A fresh attach
 cannot by itself prove the previous mutation's outcome, so uncertainty remains.
 
-The endpoint/openViews navigation hints retain only wanted views for automatic
-page-reload restoration only at the same normalized endpoint; they never choose
-connection material. Replacing App Server authority closes active browser views
+The v3 endpoint/openViews/route navigation hints retain only wanted views and
+the last safe selected page for reload restoration at the same normalized
+endpoint; they never choose connection material. Open-view order is not the
+selected Session. Cold Session restoration still requires native attachment;
+new explicit navigation supersedes an unfinished startup restore. Workflows,
+Schedules and New Conversation retain their own safe route hints. Uncommitted
+Session drafts, input, commands and observations are not persisted. Only native
+`unknown_session` can remove a missing saved identity; a partial catalog cannot.
+Replacing App Server authority closes active browser views
 and focus instead of reinterpreting their IDs against the new server. Old uncertain
 operations and unresolved deletion obligations remain detached, read-only evidence;
 they do not block replacement except at the explicit diagnostic capacity bound. See [connection ownership](CONNECTION.md).

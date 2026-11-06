@@ -402,7 +402,7 @@ it('stale authorized summary cannot authorize current outside cwd', async () => 
 });
 it('unauthorized saved views cannot cold attach on initial restoration or reconnect', async () => {
   const host = hostFixture();
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ authorityId: 'fixture-host', endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ authorityId: 'fixture-host', endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/outside/roots' },'0')));
   await act(async () => { render(<App client={server.client} workspaceHost={host} />); await server.connect(); });
   await act(async () => { server.client.disconnect(); await server.connect(); });

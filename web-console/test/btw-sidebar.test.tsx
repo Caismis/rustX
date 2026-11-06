@@ -60,7 +60,7 @@ it('hides a running question without replay or cancel, then recovers its result 
 });
 
 it('opens from collapsed sidebar chrome, coexists with files and restores the retained draft and focus', async () => {
-  await connected(); localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
+  await connected(); localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   const host = { ...server.workspaceHost, workbench: async () => ({ entries: [], terminals: [], shells: [] }) };
   render(<App client={server.client} workspaceHost={host}/>); await act(async () => {});
   const opener = () => document.querySelector<HTMLButtonElement>('[data-side-question-toggle]')!;

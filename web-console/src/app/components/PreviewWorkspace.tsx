@@ -74,7 +74,7 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, o
       {reason && <span id={separatorId} className={css.reason}>{reason}</span>}
       <div className={css.panes} data-preview-split={split || undefined}>
         {workspace.panes.map((pane, index) => {
-          const shown = split || pane.id === workspace.activePane, chrome = split ? index === 1 : shown, selected = workspace.tabs.find(tab => tab.id === pane.selected)!;
+          const shown = split || pane.id === workspace.activePane, chrome = split ? index === 1 : shown;
           return <div key={pane.id} className={css.paneGroup} style={split ? { flex: `${index === 0 ? clampSplit(workspace.ratio, width) : 1 - clampSplit(workspace.ratio, width)} 1 0` } : undefined} hidden={!shown}>
             {index === 1 && split && visible && <Divider width={width} ratio={workspace.ratio} commit={ratio => owner.setRatio(ratio)} retireFocus={() => {
               const current = owner.getSnapshot();
@@ -95,7 +95,7 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, o
                   event.preventDefault(); focusTab(tabs[next]);
                 }}>
                   {workspace.tabs.filter(tab => tab.pane === pane.id).map(tab => <div className={`${dockCss.tab} ${css.tabItem} ${tab.id === pane.selected ? dockCss.tabActive : ''}`} key={tab.id} data-preview-occurrence={tab.id}>
-                    <button type="button" className={`${dockCss.tabTitle} ${css.tab}`} id={`preview-tab-${tab.id}`} data-preview-tab={tab.id} role="tab" aria-selected={tab.id === pane.selected} aria-controls={`preview-body-${pane.id}`} tabIndex={tab.id === pane.selected ? 0 : -1} title={tab.artifact.name} onClick={() => owner.selectTab(tab.id)}><FileTypeIcon path={tab.artifact.name} size={16}/><span>{tab.artifact.name}</span></button>
+                    <button type="button" className={`${dockCss.tabTitle} ${css.tab}`} id={`preview-tab-${tab.id}`} data-preview-tab={tab.id} role="tab" aria-selected={tab.id === pane.selected} aria-controls={`preview-body-${tab.id}`} tabIndex={tab.id === pane.selected ? 0 : -1} title={tab.artifact.name} onClick={() => owner.selectTab(tab.id)}><FileTypeIcon path={tab.artifact.name} size={16}/><span>{tab.artifact.name}</span></button>
                     <button type="button" className={dockCss.tabClose} aria-label={tx('artifacts:workspace.close-tab', { p0: tab.artifact.name })} title={tx('artifacts:workspace.close-tab', { p0: tab.artifact.name })} onClick={() => close(tab.id)}><span aria-hidden="true"><IconCloseFill14/></span></button>
                   </div>)}
                 </div>
@@ -111,9 +111,12 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, o
                   </>}
                 </div>
               </div>
-              <div className={css.body} id={`preview-body-${pane.id}`} role="tabpanel" aria-labelledby={`preview-tab-${pane.selected}`}>
-                {shown && snapshot.leases.get(selected.id) && <ArtifactPreview key={selected.id} artifact={selected.artifact} resources={snapshot.leases.get(selected.id)!} viewState={selected.view} onViewStateChange={patch => owner.updateView(selected.id, patch)} onDownload={() => void owner.download(selected.artifact)} />}
-              </div>
+              {workspace.tabs.filter(tab => tab.pane === pane.id && snapshot.leases.has(tab.id)).map(tab => {
+                const bodyVisible = visible && shown && tab.id === pane.selected;
+                return <div key={tab.id} className={css.body} id={`preview-body-${tab.id}`} role="tabpanel" aria-labelledby={`preview-tab-${tab.id}`} hidden={!bodyVisible} inert={!bodyVisible}>
+                  <ArtifactPreview visible={bodyVisible} artifact={tab.artifact} resources={snapshot.leases.get(tab.id)!} viewState={tab.view} onViewStateChange={patch => owner.updateView(tab.id, patch)} onDownload={() => void owner.download(tab.artifact)} />
+                </div>;
+              })}
             </section>
           </div>;
         })}

@@ -50,7 +50,7 @@ for (const workload of [
     const response = await fetch('/test/fixtures/geometry/bracket-array.step');
     (window as any).geometryContract.replace('cube.step', [...new Uint8Array(await response.arrayBuffer())]);
   });
-  const ready = async () => { await expect(page.locator('[data-geometry-format]')).toContainText(workload.dimensions, { timeout: 20_000 }); await painted(page); };
+  const ready = async () => { await expect(page.locator('[data-geometry-format]:visible')).toContainText(workload.dimensions, { timeout: 20_000 }); await painted(page); };
   const start = performance.now(); await page.getByRole('button', { name: `Preview ${workload.name} in sidebar`, exact: true }).click(); await ready();
   const firstDisplayMs = duration(start);
   const remount = await sample(page, async () => {
@@ -82,9 +82,10 @@ for (const workload of [
   const picking = await sample(page, async () => { await page.mouse.click(point!.x, point!.y); });
   expect(await contentReads()).toBe(expectedReads);
   const beforeSplit = performance.now(); await page.getByRole('button', { name: 'Preview cube.glb in sidebar', exact: true }).click();
-  await expect(page.locator('[data-geometry-format]')).toContainText('10 × 10 × 10');
+  await expect(page.locator('[data-geometry-format]:visible')).toContainText('10 × 10 × 10');
   await page.getByRole('button', { name: 'Split preview', exact: true }).click();
   await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2);
+  await expect(page.locator('[data-geometry-format]:visible canvas')).toHaveCount(2);
   await expect.poll(async () => (await resources(page)).contexts).toBe(2); await painted(page);
   const twoModelDisplayMs = duration(beforeSplit), twoModelResources = await resources(page);
   await page.getByRole('button', { name: `Close preview ${workload.name}`, exact: true }).click();

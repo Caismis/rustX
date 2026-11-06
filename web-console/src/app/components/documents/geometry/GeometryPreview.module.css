@@ -10,7 +10,7 @@
 .axisShaft { fill: none; stroke: currentColor; stroke-width: 2px; pointer-events: none; }
 .axisHead, .axisPole { fill: currentColor; stroke: var(--dsw-alias-bg-document-preview); stroke-width: 1px; stroke-linejoin: round; pointer-events: none; }
 .axisControl:hover .axisHead, .axisControl:hover .axisPole, .axisControl:focus-visible .axisHead, .axisControl:focus-visible .axisPole { stroke: var(--dsw-alias-label-primary); stroke-width: 2px; }
-.axisControl:focus-visible { outline: none; }
+.axisControl:focus { outline: none; }
 .outlineStatus { position: absolute; bottom: 8px; inset-inline: 164px 8px; margin: 0; padding: 6px 8px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-secondary); font-size: 11px; pointer-events: none; }
 .previewStatus { composes: outlineStatus; z-index: 1; }
 .footer { display: flex; flex: none; align-items: center; gap: 12px; min-width: 0; min-height: 30px; padding-inline: 12px; border-top: .5px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-base); }

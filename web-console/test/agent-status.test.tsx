@@ -191,7 +191,7 @@ describe('cold attach, live folding and resync converge on one placement', () =>
   const mount = async (initial: RuntimeClientSnapshot, holdHistory = false) => {
     server = new Server(); if (holdHistory) server.held.add('session/transcript'); server.snapshots.set('A', initial);
     await server.attached('A');
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   };
   const transcript = () => document.querySelector('[aria-label="Canonical conversation"]') as HTMLElement;

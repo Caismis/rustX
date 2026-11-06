@@ -8,13 +8,13 @@ import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 
 const origin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
-const ready = (page: Page) => expect(page.locator('[data-geometry-format] canvas[data-geometry-completeness="complete"]')).toBeVisible();
+const ready = (page: Page) => expect(page.locator('[data-geometry-format]:visible canvas[data-geometry-completeness="complete"]')).toBeVisible();
 const pose = (page: Page) => page.evaluate(() => (window as any).geometryContract.snapshot().find((tab: any) => tab.name === 'cube.glb').state);
 const reads = (page: Page) => page.evaluate(() => (window as any).geometryContract.reads.filter((read: any) => !read.probe).length);
 const painted = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 // Pixel/resource/idle assertions require the final picture. Latency clocks keep
 // their original first-model and input endpoints and do not use this helper.
-const refined = async (page: Page) => { await expect.poll(() => page.locator('[data-geometry-format] canvas').evaluateAll(canvases => canvases.length > 0 && canvases.every(canvas => canvas.getAttribute('data-geometry-quality') === 'complete'))).toBe(true); await painted(page); };
+const refined = async (page: Page) => { await expect.poll(() => page.locator('[data-geometry-format]:visible canvas').evaluateAll(canvases => canvases.length > 0 && canvases.every(canvas => canvas.getAttribute('data-geometry-quality') === 'complete'))).toBe(true); await painted(page); };
 
 function assemblyGlb(nodes: object[] = [{ name: 'Assembly', translation: [100,200,300], scale: [2,3,4], children: [1,2] }, { name: 'A', mesh: 0 }, { name: 'B', mesh: 0, translation: [20,0,0] }]) {
   const original = new Uint8Array(readFileSync(new URL('../fixtures/geometry/cube.glb', import.meta.url))), header = new DataView(original.buffer), length = header.getUint32(12, true);
@@ -36,6 +36,67 @@ async function parts(page: Page) {
   await page.getByRole('button', { name: 'Expand: Assembly', exact: true }).click();
   return page.getByRole('list', { name: 'Parts', exact: true });
 }
+
+test('single Pan toggle preserves real drag semantics, pressed styles and geometry ownership', async ({ page }) => {
+  await page.addInitScript(() => {
+    const seen = new WeakSet<object>(), activity = { contextsCreated: 0, displayPreparations: 0 };
+    const getContext = HTMLCanvasElement.prototype.getContext, measure = performance.measure;
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { value: function (this: HTMLCanvasElement, ...args: unknown[]) {
+      const context = Reflect.apply(getContext, this, args);
+      if (args[0] === 'webgl2' && context && !seen.has(context)) { seen.add(context); activity.contextsCreated++; }
+      return context;
+    } });
+    Object.defineProperty(performance, 'measure', { value: function (...args: unknown[]) {
+      if (args[0] === 'geometry:display-prepare:glb') activity.displayPreparations++;
+      return Reflect.apply(measure, performance, args);
+    } });
+    Object.assign(window, { geometryPanActivity: activity });
+  });
+  await load(page); await refined(page);
+  const pan = page.getByRole('button', { name: 'Pan', exact: true }), outlines = page.getByRole('button', { name: 'Model outlines', exact: true });
+  await expect(pan).toHaveCount(1); await expect(pan).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('button', { name: 'Orbit', exact: true })).toHaveCount(0);
+  const canvas = page.locator('[data-geometry-format] canvas'), originalCanvas = await canvas.elementHandle();
+  const initialReads = await reads(page), activity = () => page.evaluate(() => ({ ...(window as any).geometryPanActivity }));
+  const initialActivity = await activity(); expect(initialActivity).toEqual({ contextsCreated: 1, displayPreparations: 1 });
+  const inactiveStyle = await pan.evaluate(button => { const style = getComputedStyle(button); return { backgroundColor: style.backgroundColor, color: style.color, boxShadow: style.boxShadow }; });
+  await pan.click(); await expect(pan).toHaveAttribute('aria-pressed', 'true');
+  const tree = await parts(page); await tree.getByRole('button', { name: 'A', exact: true }).click();
+  const isolate = page.getByRole('button', { name: 'Isolate', exact: true });
+  await isolate.click(); await expect(isolate).toHaveAttribute('aria-pressed', 'true');
+  await expect(outlines).toHaveAttribute('aria-pressed', 'true');
+  await page.mouse.move(0, 0); await canvas.focus(); await painted(page);
+  const pressedStyle = await pan.evaluate(button => { const style = getComputedStyle(button); return { backgroundColor: style.backgroundColor, color: style.color, boxShadow: style.boxShadow }; });
+  expect(pressedStyle.backgroundColor).not.toBe(inactiveStyle.backgroundColor);
+  for (const button of [outlines, isolate]) expect(await button.evaluate(button => { const style = getComputedStyle(button); return { backgroundColor: style.backgroundColor, color: style.color, boxShadow: style.boxShadow }; })).toEqual(pressedStyle);
+  await expect(page.getByRole('button', { name: /Exit isolation|Restore isolation/ })).toHaveCount(0);
+  await isolate.click(); await expect(isolate).toHaveAttribute('aria-pressed', 'false');
+  await expect(tree.getByRole('checkbox', { name: 'Visible: B', exact: true })).toBeChecked();
+  await page.getByRole('button', { name: 'Close parts', exact: true }).click();
+  const axis = page.locator('[data-axis="Y"]'); await axis.locator('circle').last().click(); await painted(page);
+  expect(await axis.evaluate(element => getComputedStyle(element).outlineStyle)).toBe('none');
+  await expect(pan).toHaveAttribute('aria-pressed', 'true'); expect((await pose(page)).navigationMode).toBe('pan');
+  const beforePan = (await pose(page)).camera, position = new Vector3(...beforePan.position), target = new Vector3(...beforePan.target), direction = position.clone().sub(target);
+  const drag = async () => {
+    const box = (await canvas.boundingBox())!, x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 72, y + 32, { steps: 8 }); await page.mouse.up(); await painted(page);
+  };
+  await drag(); const afterPan = (await pose(page)).camera;
+  const positionShift = new Vector3(...afterPan.position).sub(position), targetShift = new Vector3(...afterPan.target).sub(target);
+  expect(positionShift.length()).toBeGreaterThan(.01); expect(targetShift.length()).toBeGreaterThan(.01);
+  expect(positionShift.distanceTo(targetShift)).toBeLessThan(1e-7);
+  expect(new Vector3(...afterPan.position).sub(new Vector3(...afterPan.target)).distanceTo(direction)).toBeLessThan(1e-7);
+  expect(afterPan.verticalSpan).toBeCloseTo(beforePan.verticalSpan, 8);
+  await pan.click(); await expect(pan).toHaveAttribute('aria-pressed', 'false');
+  await drag(); const afterOrbit = await pose(page);
+  expect(new Vector3(...afterOrbit.camera.target).distanceTo(new Vector3(...afterPan.target))).toBeLessThan(1e-8);
+  expect(new Vector3(...afterOrbit.camera.position).sub(new Vector3(...afterOrbit.camera.target)).distanceTo(direction)).toBeGreaterThan(.01);
+  expect(afterOrbit.navigationMode).toBeUndefined();
+  await refined(page); expect(await activity()).toEqual(initialActivity); expect(await reads(page)).toBe(initialReads);
+  expect(await canvas.evaluate((element, original) => element === original, originalCanvas)).toBe(true);
+  expect((await resources(page)).contexts).toBe(1);
+});
+
 for (const entry of ['delivery', 'workspace']) test(`roadmap structure, focus and source-coordinate properties: ${entry}`, async ({ page }) => {
   await load(page, entry); const tree = await parts(page), initialReads = await reads(page);
   const a = tree.getByRole('button', { name: 'A', exact: true }), b = tree.getByRole('button', { name: 'B', exact: true });
@@ -46,20 +107,21 @@ for (const entry of ['delivery', 'workspace']) test(`roadmap structure, focus an
   await tree.getByRole('checkbox', { name: 'Visible: Assembly', exact: true }).uncheck();
   await expect(tree.getByRole('checkbox', { name: 'Visible: A', exact: true })).toHaveAttribute('aria-description', 'Hidden by an ancestor');
   await expect(page.getByRole('button', { name: 'Focus selected', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Isolate', exact: true }).click(); await expect(page.getByRole('button', { name: 'Exit isolation', exact: true })).toBeVisible();
+  const isolate = page.getByRole('button', { name: 'Isolate', exact: true });
+  await isolate.click(); await expect(isolate).toHaveAttribute('aria-pressed', 'true');
   await b.click(); await expect(page.getByRole('button', { name: 'Focus selected', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Isolate', exact: true }).click();
   await expect(tree.getByRole('checkbox', { name: 'Visible: B', exact: true })).toBeChecked();
   await page.getByRole('button', { name: 'Focus selected', exact: true }).click();
-  await page.getByRole('button', { name: 'Exit isolation', exact: true }).click();
+  await isolate.click(); await expect(isolate).toHaveAttribute('aria-pressed', 'false');
   await expect(tree.getByRole('checkbox', { name: 'Visible: B', exact: true })).not.toBeChecked();
   await page.getByRole('button', { name: 'Show all', exact: true }).click(); await expect(tree.getByRole('checkbox', { name: 'Visible: B', exact: true })).toBeChecked();
   await a.click(); await page.getByRole('button', { name: 'Isolate', exact: true }).click();
   await page.getByRole('button', { name: entry === 'delivery' ? 'Hide delivery' : 'Toggle workspace body', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
   await page.getByRole('button', { name: entry === 'delivery' ? 'Show delivery' : 'Toggle workspace body', exact: true }).click(); await ready(page);
-  await page.getByRole('button', { name: 'Parts', exact: true }).click(); await expect(page.getByRole('button', { name: 'Exit isolation', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Show all', exact: true }).click();
+  await page.getByRole('button', { name: 'Parts', exact: true }).click(); await expect(isolate).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Show all', exact: true }).click(); await expect(isolate).toHaveAttribute('aria-pressed', 'false');
   expect(await reads(page)).toBe(initialReads);
 });
 
@@ -284,8 +346,10 @@ for (const workload of ['planar-outline-envelope', 'cad-96-parts']) test(`two-pa
   await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await ready(page);
   await page.getByRole('button', { name: 'Preview cube.glb in sidebar', exact: true }).click(); await ready(page);
   await page.getByRole('button', { name: 'Split preview', exact: true }).click();
-  await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2); await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
-  for (const panel of await page.locator('[data-geometry-format]').all()) {
+  await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2);
+  await expect(page.locator('[data-geometry-format]:visible canvas')).toHaveCount(2);
+  await expect.poll(async () => (await resources(page)).workers).toBe(0); await painted(page);
+  for (const panel of await page.locator('[data-geometry-format]:visible').all()) {
     const button = panel.getByRole('button', { name: 'Model outlines', exact: true });
     await expect(button).toHaveAttribute('aria-pressed', 'true'); await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'false');
   }
@@ -309,7 +373,7 @@ for (const workload of ['planar-outline-envelope', 'cad-96-parts']) test(`two-pa
     const sorted = [...samples].sort((a, b) => a - b); return { samples, p50: sorted[2], p95: sorted[4] };
   };
   const off = await capture(), beforeResources = await resources(page), preparation: number[] = [];
-  for (const panel of await page.locator('[data-geometry-format]').all()) {
+  for (const panel of await page.locator('[data-geometry-format]:visible').all()) {
     const start = performance.now(), button = panel.getByRole('button', { name: 'Model outlines', exact: true });
     await button.click(); await expect(button).toHaveAttribute('aria-pressed', 'true'); preparation.push(performance.now() - start);
   }

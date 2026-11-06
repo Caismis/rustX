@@ -20,7 +20,7 @@ it('boots the source-derived shell with no Host backend and exposes only support
 });
 it('switching and unmounting open Session views remains presentation-only', async () => {
   await server.attached('A', 'B');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   let ui!: ReturnType<typeof render>;
   await act(async () => { ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   const baseline = server.requests.length;
@@ -37,7 +37,7 @@ it('switching and unmounting open Session views remains presentation-only', asyn
 });
 it('renders streaming then one committed response, and an authoritative Approval removes obsolete controls', async () => {
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const live = { ...snapshot(), attempt: { attempt_id: 'attempt-A', phase: { type: 'running' as const }, turn: 1,
     in_flight: { message_id: 'assistant-1', blocks: [{ type: 'text' as const, block_index: 0, text: 'Streaming response' }] } } };
@@ -53,7 +53,7 @@ it('renders streaming then one committed response, and an authoritative Approval
 it('pending interaction remains visible but disabled across transport loss and recovers after connect', async () => {
   server.snapshots.get('A')!.pending_interactions = [interaction('questionnaire')];
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   act(() => server.socket.close());
   expect(screen.getByRole('region', { name: 'Questionnaire' })).toBeTruthy();
@@ -76,7 +76,7 @@ it('native Review preserves instance and subject digest and waits for authoritat
   const instance = { block: { run: { conversation_id: 'conversation-A', origin: {type:'tool' as const,attempt_id:'attempt-A'}, invocation: '1' }, definition: { workflow_id: 'workflow', blocks: [] }, invocations: [0] }, node: 'review', visit: 1 };
   review.kind = 'review'; review.body!.kind = { type: 'review', subject_digest: 'native-subject-digest', review: { instance, questionnaire: { questions: [{ question: 'Review this plan', header: 'review', answer: { type: 'single_choice', options: [{ label: 'Approve', description: '' }, { label: 'Revise', description: '' }], allow_custom: false } }] } } };
   server.snapshots.get('A')!.pending_interactions = [review]; await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   fireEvent.click(screen.getByRole('radio', { name: 'Approve' }));
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
@@ -88,7 +88,7 @@ it('native Review preserves instance and subject digest and waits for authoritat
 it('closing A immediately emits exactly its detach, preserving B, runtime work and pending facts', async () => {
   server.snapshots.set('A', { ...snapshot(), attempt: { attempt_id: 'active-A', phase: { type: 'running' }, turn: 1 }, pending_interactions: [interaction('approval')] });
   await server.attached('A', 'B'); server.held.add('session/detach');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const target = server.client.target('A'), beforeA = server.client.getSnapshot().views.A.snapshot, beforeB = server.client.getSnapshot().views.B;
   const baseline = server.requests.length;
@@ -116,7 +116,7 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
 });
 it('lost close-view acknowledgement leaves intent released across reconnect and marks the affected Sidebar row', async () => {
   await server.attached('A', 'B'); server.held.add('session/detach');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   fireEvent.click(screen.getByRole('button', { name: 'View options' }));
   fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Close view' }));
@@ -129,5 +129,5 @@ it('lost close-view acknowledgement leaves intent released across reconnect and 
   expect(server.claims().map(item => item.session_id)).toEqual(['B']);
   expect(server.requests.filter(({ request }) => request.method === 'session/detach')).toHaveLength(1);
   expect(server.requests.filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual(['B']);
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!).openViews).toEqual(['B']);
 });

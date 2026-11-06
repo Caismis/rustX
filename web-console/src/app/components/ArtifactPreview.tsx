@@ -6,7 +6,7 @@ import { ArtifactPreview as Preview } from '../../presentation/right-panel/Artif
 import { documentKind } from '../../../shared/documents.ts';
 import { DocumentPreview } from './documents/DocumentPreview';
 import type { PreviewViewStateProps } from '../../presentation/right-panel/preview-view-state';
-import { viewersForPath, loadsBytes, type Viewer } from './workbench-documents/definitions';
+import { viewersForArtifact, loadsBytes } from './workbench-documents/definitions';
 import { ImagePreview } from './documents/ImagePreview';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { languageForPath } from '../../presentation/primitives/file-language';
@@ -20,14 +20,13 @@ import { GeometryLoading } from './documents/GeometryLoading';
 export interface PreviewArtifact { source: PreviewSource; name: string; image: boolean; mimeType?: string }
 export interface PreviewIntents { openPreview: (artifact: PreviewArtifact) => void; download: (artifact: PreviewArtifact) => void }
 export const PreviewContext = createContext<PreviewIntents | undefined>(undefined);
-export function ArtifactPreview({ artifact, resources, viewState, onViewStateChange, onDownload }: PreviewViewStateProps & { artifact: PreviewArtifact; resources: FilePreviewLease; onDownload: () => void }) {
+export function ArtifactPreview({ artifact, resources, viewState, onViewStateChange, onDownload, visible = true }: PreviewViewStateProps & { visible?: boolean; artifact: PreviewArtifact; resources: FilePreviewLease; onDownload: () => void }) {
   const tx = useTranslation(), [menu, setMenu] = useState(false);
   // Managed display names can be opaque IDs or alt text. Preserve their typed
   // media semantics; filesystem deliveries still use the suffix policy.
   const managed = artifact.source.kind === 'artifact', mime = managed ? artifact.mimeType?.split(';')[0].trim().toLowerCase() : undefined;
-  const typedImage = managed && (artifact.image || mime?.startsWith('image/'));
   const typedMarkdown = mime === 'text/markdown';
-  const choices: Viewer[] = typedImage ? ['image'] : typedMarkdown ? ['markdown', 'code', 'text'] : viewersForPath(artifact.name);
+  const choices = viewersForArtifact(artifact);
   const mode = viewState.viewer && choices.includes(viewState.viewer) ? viewState.viewer : choices[0];
   const kind = loadsBytes(mode) || mode === 'office' ? documentKind(artifact.name) : undefined;
   const office = mode === 'office' && (kind === 'docx' || kind === 'pptx');
@@ -62,7 +61,7 @@ export function ArtifactPreview({ artifact, resources, viewState, onViewStateCha
     hasMore={paged && content.page !== undefined && !content.page.eof} moreLoading={content.loading} onLoadMore={() => owner.more()}
     viewState={viewState} onViewStateChange={saveViewState} onDownload={() => { if (resources.current()) onDownload(); }}
     refresh={() => owner.refresh()} retry={retry}>
-    {mode === 'geometry' ? <GeometryDocument bytes={content.data} name={artifact.name} copyId={`${content.revision}:${content.version}`} signal={resources.signal} current={() => resources.current() && sameGeometryCopy()} takeSource={() => content.data && sameGeometryCopy() ? owner.takeGeometryBytes(content.data) : undefined} releaseSource={() => { if (content.data && sameGeometryCopy()) owner.releaseGeometryBytes(content.data); }} viewState={viewState} onViewStateChange={saveViewState} onGeometryRetire={geometry => { if (resources.sourceCurrent() && sameGeometryCopy()) onViewStateChange({ geometry }); }}/>
+    {mode === 'geometry' ? <GeometryDocument visible={visible} bytes={content.data} name={artifact.name} copyId={`${content.revision}:${content.version}`} signal={resources.signal} current={() => resources.current() && sameGeometryCopy()} takeSource={() => content.data && sameGeometryCopy() ? owner.takeGeometryBytes(content.data) : undefined} releaseSource={() => { if (content.data && sameGeometryCopy()) owner.releaseGeometryBytes(content.data); }} viewState={viewState} onViewStateChange={saveViewState} onGeometryRetire={geometry => { if (resources.sourceCurrent() && sameGeometryCopy()) onViewStateChange({ geometry }); }}/>
       : mode === 'image' ? image.url && !error ? <ImagePreview url={image.url} name={artifact.name} signal={resources.signal} decodeError={decodeError} viewState={viewState} onViewStateChange={saveViewState}/> : undefined
       : kind && content.data ? <DocumentPreview kind={kind === 'docx' || kind === 'pptx' ? 'pdf' : kind} derived={office} bytes={content.data} resources={resources} viewState={viewState} onViewStateChange={saveViewState} retry={retry}/> : undefined}
   </Preview>;

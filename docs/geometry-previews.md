@@ -63,9 +63,11 @@ resources retire. No provisional data enters the final geometry streams.
 
 A fresh geometry range read authorizes itself; watch registration follows the
 complete copy instead of blocking first display. The existing reauthorization
-barrier still precedes reuse of a hidden retained copy. Version changes during
-reads, errors, hide, cancellation and authority retirement fence provisional
-publication. Incomplete source copies are evicted on hide. Source reading yields
+barrier still precedes reuse after body retirement. A parked geometry tab retains
+its already active, authorized owner; it does not deactivate and reread merely
+because another sidebar file is selected. Version changes during reads, errors,
+body retirement, cancellation and authority retirement fence provisional
+publication. Incomplete source copies are evicted on retirement. Source reading yields
 between bounded tasks; cancellation does not release a physical read permit
 until its transport has settled.
 
@@ -100,9 +102,23 @@ it again to reverse the view. Manual orbit updates the next action from the
 actual camera direction. Axis actions use orthographic projection; menu actions
 retain the chosen projection. Each arrow has a 24-pixel hit target, keyboard
 activation and a localized action name; projected pole axes remain addressable.
-The View control uses rotation arrows, while Outlines uses a dashed boundary.
+The View control and Isometric item share the original cube icon. Reset has its
+own reset symbol and shares a menu group with Isometric. Each of the six standard
+directions highlights its actual cube face, including the three hidden faces;
+hidden edges are drawn explicitly. The mapping agrees with the viewer's
+positive-X/positive-Y/positive-Z isometric camera.
+Outlines uses four aligned right-angle corners and symmetric edge dashes. Its
+Chinese label and tooltip are simply “轮廓线”. Pointer activation of an axis
+does not draw a rectangular focus outline; keyboard focus remains distinguishable.
 Background outline preparation has no visible loading message; busy state and
 explicit unavailable/failure feedback remain accessible.
+One Pan icon toggles the left-button drag action. Default rotation uses normal
+OrbitControls rotation; pressed Pan uses its public mouse/touch pan actions.
+Pan, Outlines and Isolate share the same selected visual state. Right-button
+pan, wheel zoom and keyboard navigation retain their existing behavior. The
+navigation mode belongs to the current geometry copy and survives parked-tab
+restoration, projection/up-axis changes and coarse-to-final adoption without
+creating another renderer or import.
 Camera fitting centers a presentation-only parent. The admitted mesh surface,
 position-derived bounds and physical scale remain intact; preparation can remove
 redundant tessellation. Bounds are recomputed from admitted coordinates,
@@ -116,7 +132,8 @@ and hidden IDs are bounded inert occurrence metadata tied to a content copy.
 Isolation, its one previous visibility snapshot and the outline preference use
 the same copy fence. Isolation shows the selected subtree and its ancestors,
 including a previously hidden selection. Choosing a different isolated part
-retains the original snapshot. Exit isolation restores that snapshot exactly;
+retains the original snapshot. Isolation is one pressed-state toggle with a
+persistent inset shadow; pressing it again restores that snapshot exactly.
 Show all clears both visibility overrides and isolation. Manual visibility edits
 while isolated do not overwrite the snapshot. Each action publishes and draws
 once, without cloning scene resources or rereading/tessellating the source.
@@ -503,7 +520,22 @@ Workers have no general JavaScript heap/RSS limit. Their deadline can terminate
 Worker execution; a main-thread GLB parse or GPU submission is cooperative and
 cannot be preempted by a timer. Measurements must describe these distinctions.
 
-Idle scenes have no continuous animation loop. Close, hide, supersession and
+Idle scenes have no continuous animation loop. Switching sidebar files may keep
+up to two mounted geometry bodies in the current scope, including visible bodies.
+Visible files take priority; spare slots retain the most recently used hidden
+geometry. A third file or visible split evicts a hidden owner before replacement
+admission. Ordinary unselected HTML, PDF, Office and text tabs do not gain new
+retention behavior. The existing selected non-geometry collapsed-body behavior
+is preserved.
+
+Parked geometry keeps its scene, canvas, camera, selection, outlines and prepared
+surfaces. It pauses input, GPU draws, animation/fence polling, refinement timers
+and new outline work. Resume synchronizes actual size, DPR and theme. In-flight
+imports keep their original deadlines and cannot steal hidden focus; no periodic
+reimport is scheduled. Collapse without a still-visible floating pane, mode or
+Session changes and scope retirement end this residency.
+
+Close, sidebar collapse, residency eviction, supersession and
 authority retirement dispose controls/listeners, geometry, materials, textures,
 image bitmaps, axes/highlight resources and the renderer,
 then lose the context.

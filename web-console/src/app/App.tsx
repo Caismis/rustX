@@ -32,6 +32,7 @@ import { WorkspaceSessionAdmission } from '../workspaces/session-admission';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
+import { navigationPreferencesKey, readNavigationPreferences, restoreRoute, resumableViews, saveRoute } from './navigation/preferences';
 import type { AppServerClient } from '../client/app-server';
 import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v72';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
@@ -78,14 +79,6 @@ import { taskKey, parseTaskKey, type TaskRef } from './scheduler/model';
 import { IconClockOutline16 } from '../presentation/primitives/icons';
 import schedulerCss from './scheduler/scheduler.module.css';
 
-const PREFERENCES = 'rustx-console-view-v2';
-function readPreferences(): { endpoint?: string; openViews: string[] } {
-  try {
-    const value = JSON.parse(localStorage.getItem(PREFERENCES) ?? 'null');
-    if (value && typeof value.endpoint === 'string' && Array.isArray(value.openViews)) return { endpoint: value.endpoint, openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))].slice(0, 32) };
-  } catch { /* Preferences are optional presentation, never recovery input. */ }
-  return { openViews: [] };
-}
 const defaultWorkspaceHost = new HttpWorkspaceHost();
 type AppProps = { client: AppServerClient; workspaceHost?: ProductHostWorkspaces; connection?: ConnectionController };
 /** Browser-session owners outlive the disposable rendered projection. */
@@ -101,10 +94,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     lookup: createOwnerLookup(workspaceHost, client),
     inspected: inspectionAcknowledger(client, repairAcknowledgements),
   } });
-  const [preferences] = useState(readPreferences);
-  const first = preferences.endpoint === client.getSnapshot().endpoint ? preferences.openViews[0] : undefined;
+  const [preferences] = useState(readNavigationPreferences);
+  const savedRoute = restoreRoute(preferences, client.getSnapshot());
   const drafts = draftPreparations(client, workspaceHost, workspaceAuthority);
-  const navigation = useActorRef(shellNavigationMachine, { input: { drafts, client, settings, route: first && client.isAttachmentControlCurrent(first, client.getSnapshot().views[first]?.attachmentObservation) ? { kind: 'session', sessionId: first } : undefined } });
+  const navigation = useActorRef(shellNavigationMachine, { input: { drafts, client, settings, route: savedRoute?.kind === 'session' && !client.isAttachmentControlCurrent(savedRoute.sessionId, client.getSnapshot().views[savedRoute.sessionId]?.attachmentObservation) ? undefined : savedRoute } });
   const [composerDraft] = useState(() => new ComposerDraft());
   // Browser-lifetime Workflows surface: its open file target and unsaved
   // edits survive leaving the route, and never follow conversation focus.
@@ -153,9 +146,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   useLayoutEffect(() => { document.body.style.setProperty('--dsh-content-font-size', `${displayPreferences.fontSize}px`); }, [displayPreferences.fontSize]);
   const [requestedConversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const conversationMode = displayPreferences.codingView ? requestedConversationMode : 'chat';
-  const [preferences] = useState(readPreferences);
+  const [preferences] = useState(readNavigationPreferences);
   const endpoint = state.endpoint ?? '';
-  const initialViews = preferences.endpoint === state.endpoint ? preferences.openViews : [];
+  const initialViews = preferences.endpoint === state.endpoint ? resumableViews(preferences.openViews, state) : [];
   const [openViews, setOpenViews] = useState<string[]>(initialViews);
   const routeState = useSelector(shell, snapshot => snapshot);
   useEffect(() => { const subscription = shell.subscribe(() => client.recheckAdmissions()); return () => subscription.unsubscribe(); }, [shell, client]);
@@ -179,7 +172,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
   // Existing navigation hints may restore wanted views, never a released claim.
   // Released views are not restored. Sidebar rows remain catalog-owned.
-  const resumeViews = JSON.stringify(openViews.filter(id => state.views[id]?.attachmentIntent !== 'released'));
+  const resumeViews = JSON.stringify(resumableViews(openViews, state));
   const [error, setError] = useToastNotice();
   const [deletingSession, setDeletingSession] = useState<string>();
   const [presentationAuthority, setPresentationAuthority] = useState(state.authorityRevision);
@@ -249,24 +242,38 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     void action().catch(cause => { if (generation === client.getSnapshot().generation && current()) setError(actionError(cause)); });
   };
   // Subscription cleanup is presentation-only. No component owns socket/runtime life.
-  const preferencesApplied = useRef(false);
+  const [preferencesApplied, setPreferencesApplied] = useState(false);
   useEffect(() => {
-    if (!endpoint || state.connection !== 'connected' || settingsOpen || preferencesApplied.current) return;
-    preferencesApplied.current = true;
-    if (preferences.endpoint !== endpoint || shell.getSnapshot().context.route.kind !== 'new-conversation' || shell.getSnapshot().context.binding !== 0 || shell.getSnapshot().context.pending) return;
-    client.restoreViews(preferences.openViews);
-    setOpenViews(preferences.openViews);
-    if (preferences.openViews[0]) shell.send({ type: 'OPEN', destination: { kind: 'restore-session', sessionId: preferences.openViews[0], sidebar: false } });
-    if (client.getSnapshot().connection === 'connected') for (const id of preferences.openViews.filter(id => id !== preferences.openViews[0])) {
+    if (!endpoint || state.connection !== 'connected' || settingsOpen || preferencesApplied) return;
+    setPreferencesApplied(true);
+    const owner = shell.getSnapshot().context, native = client.getSnapshot();
+    const route = restoreRoute(preferences, native);
+    if (!route || owner.intentRevision !== 0 || owner.pending) return;
+    const views = resumableViews(preferences.openViews, native);
+    client.restoreViews(views);
+    setOpenViews(views);
+    if (route.kind === 'session') shell.send({ type: 'OPEN', destination: { kind: 'restore-session', sessionId: route.sessionId, sidebar: false } });
+    else if (!sameValue(owner.route, route)) {
+      if (route.kind === 'workflows') shell.send({ type: 'WORKFLOWS' });
+      else if (route.kind === 'schedules') shell.send({ type: 'SCHEDULES' });
+      else shell.send({ type: 'DRAFT', workspaceId: route.workspaceId });
+    }
+    if (client.getSnapshot().connection === 'connected') for (const id of views.filter(id => route.kind !== 'session' || id !== route.sessionId)) {
       if (!client.getSnapshot().views[id]?.target && (!firstSubmissions(client).session(id) || ['admitted', 'discarded'].includes(firstSubmissions(client).session(id)!.phase))) void client.attach(id).catch(() => {});
     }
-  }, [client, shell, endpoint, preferences, state.connection, settingsOpen]);
+  }, [client, shell, endpoint, preferences, state.connection, settingsOpen, preferencesApplied]);
+  const resumeRoute = JSON.stringify(saveRoute(center, JSON.parse(resumeViews)));
   useEffect(() => {
     try {
-      // Persist only safe navigation. Never the token, drafts, snapshots or requests.
-      if (endpoint) localStorage.setItem(PREFERENCES, json({ endpoint, openViews: JSON.parse(resumeViews) }));
+      // Initialization cannot overwrite the saved route before restoration has
+      // either published it or yielded to a newer explicit navigation intent.
+      // Read the actor now: an earlier effect may have started restoration
+      // after this render captured its placeholder route.
+      const current = shell.getSnapshot().context;
+      if (current.route !== center || current.pending?.destination.kind === 'restore-session') return;
+      if (endpoint && preferencesApplied) localStorage.setItem(navigationPreferencesKey, json({ endpoint, openViews: JSON.parse(resumeViews), route: JSON.parse(resumeRoute) }));
     } catch { /* Storage may be disabled in a trusted browser. */ }
-  }, [endpoint, resumeViews]);
+  }, [shell, center, endpoint, resumeViews, resumeRoute, preferencesApplied]);
   /** Navigation away from the Workflows area asks the Workflows surface
    * first, so unsaved semantic edits are never dropped silently. */
   const leaveWorkflows = (proceed: () => void) => {

@@ -116,7 +116,7 @@ it('authority replacement clears open/focused browser Session A before B can reu
   expect(screen.queryByLabelText('Session title')).toBeNull();
   expect(screen.queryByRole('dialog', { name: 'Rename session' })).toBeNull();
   expect(screen.getByText('What would you like to build?')).toBeTruthy();
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!)).toEqual({ endpoint: remote, openViews: [] });
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!)).toEqual({ endpoint: remote, openViews: [], route: { kind: 'new-conversation' } });
   expect(b.requests.some(row => row.request.method === 'session/attach')).toBe(false);
   await act(async () => owner.disconnect());
 });
@@ -155,7 +155,7 @@ it('close timeout fails closed without retiring unresolved evidence or creating 
 });
 it('saved view hints from a different endpoint cannot open the colliding Session ID', async () => {
   const { a, client, owner } = pair();
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: remote, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: remote, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={client} connection={owner} workspaceHost={a.workspaceHost} />);
   await act(async () => owner.start());
   expect(screen.queryByLabelText('Session title')).toBeNull();

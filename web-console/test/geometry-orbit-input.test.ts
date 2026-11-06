@@ -6,6 +6,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mountGeometry, prepareGeometryGraphics } from '../src/app/components/documents/geometry/viewport';
 import { progressivePresentation } from '../src/app/components/documents/geometry/progressive';
 import { en } from '../src/locale/dictionaries/geometry';
+import { localeController } from '../src/locale/controller';
+import type { PreviewViewState } from '../src/presentation/right-panel/preview-view-state';
 import GeometryPreview from '../src/app/components/documents/geometry/GeometryPreview';
 import type { GeometryLod } from '../src/app/components/documents/geometry/parse';
 import { GEOMETRY_LIMITS as L } from '../src/app/components/documents/geometry/limits';
@@ -42,7 +44,7 @@ beforeEach(() => {
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
   vi.stubGlobal('matchMedia', () => ({ addEventListener() {}, removeEventListener() {} }));
 });
-afterEach(() => { cleanup(); mounted.splice(0).forEach(view => view.dispose()); document.body.replaceChildren(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); localeController.setLocale('en'); mounted.splice(0).forEach(view => view.dispose()); document.body.replaceChildren(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 function draw() { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); }
 function mount() {
   const object = new Group(), normal = new Mesh(new BoxGeometry(), new MeshBasicMaterial()), tiny = normal.clone();
@@ -55,8 +57,8 @@ function mount() {
   const renderer = runtime.renderers.at(-1), canvas = renderer.domElement as HTMLCanvasElement;
   return { view, changed, renderer, canvas };
 }
-function pointer(target: EventTarget, type: string, x: number) {
-  const event = new MouseEvent(type, { button: 2, buttons: type === 'pointerup' ? 0 : 2, clientX: x, clientY: 200, bubbles: true });
+function pointer(target: EventTarget, type: string, x: number, button = 2) {
+  const event = new MouseEvent(type, { button, buttons: type === 'pointerup' ? 0 : button === 0 ? 1 : 2, clientX: x, clientY: 200, bubbles: true });
   Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: 'mouse' } }); target.dispatchEvent(event);
 }
 it('renders a 120px sub-EPS pan during the gesture and persists its final pose without idle polling', async () => {
@@ -70,6 +72,54 @@ it('renders a 120px sub-EPS pan during the gesture and persists its final pose w
   expect(Math.abs(pose.position[0] - before.x)).toBeGreaterThan(1e-7); expect(Math.abs(pose.position[0] - before.x)).toBeLessThan(1e-5);
   vi.advanceTimersByTime(L.refineDelayMs); draw();
   const settledDraws = f.renderer.render.mock.calls.length; vi.advanceTimersByTime(1000); expect(frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0); expect(f.renderer.render).toHaveBeenCalledTimes(settledDraws);
+});
+
+it.each(['orthographic', 'perspective'] as const)('uses left-drag Pan and Orbit through real %s controls after axis/projection rebuild and pause', async projection => {
+  const updates = vi.spyOn(OrbitControls.prototype, 'update'), disposals = vi.spyOn(OrbitControls.prototype, 'dispose');
+  try {
+    const f = mount(); f.view.reset(); f.view.setNavigationMode('pan');
+    const switched = disposals.mock.calls.length;
+    f.view.setNavigationMode('orbit'); f.view.setNavigationMode('pan');
+    expect(disposals).toHaveBeenCalledTimes(switched);
+    f.view.fit('front'); f.view.fit('top'); f.view.setProjection(projection); draw();
+    const control = updates.mock.contexts.at(-1) as OrbitControls, camera = control.object as OrthographicCamera | PerspectiveCamera;
+    f.view.setVisible(false); f.view.setVisible(true); draw();
+    const before = { position: camera.position.clone(), target: control.target.clone(), direction: camera.position.clone().sub(control.target), zoom: camera.zoom };
+    pointer(f.canvas, 'pointerdown', 300, 0); pointer(document, 'pointermove', 420, 0); pointer(document, 'pointerup', 420, 0);
+    await Promise.resolve();
+    expect(camera.position.distanceTo(before.position)).toBeGreaterThan(.01);
+    expect(control.target.distanceTo(before.target)).toBeGreaterThan(.01);
+    expect(camera.position.clone().sub(before.position).distanceTo(control.target.clone().sub(before.target))).toBeLessThan(1e-9);
+    expect(camera.position.clone().sub(control.target).distanceTo(before.direction)).toBeLessThan(1e-9); expect(camera.zoom).toBe(before.zoom);
+    expect(f.changed.mock.lastCall![0].navigationMode).toBe('pan');
+    f.view.setNavigationMode('orbit'); const target = control.target.clone(), direction = camera.position.clone().sub(target);
+    pointer(f.canvas, 'pointerdown', 300, 0); pointer(document, 'pointermove', 420, 0); pointer(document, 'pointerup', 420, 0);
+    expect(control.target.distanceTo(target)).toBeLessThan(1e-9);
+    expect(camera.position.clone().sub(target).distanceTo(direction)).toBeGreaterThan(.01);
+    expect(f.changed.mock.lastCall![0].navigationMode).toBeUndefined(); expect(runtime.renderers).toHaveLength(1);
+  } finally { updates.mockRestore(); disposals.mockRestore(); }
+});
+
+it.each(['en', 'zh'] as const)('keeps selected Pan through native coarse-to-full handoff without importing or allocating graphics again (%s)', async locale => {
+  localeController.setLocale(locale);
+  const updates = vi.spyOn(OrbitControls.prototype, 'update');
+  try {
+    const changed = vi.fn(), ui = render(createElement(GeometryPreview, { bytes: new Uint8Array([1]), name: 'assembly.step', copyId: 'copy', signal: new AbortController().signal, current: () => true, viewState: {}, onViewStateChange: changed, onGeometryRetire: vi.fn() }));
+    const container = ui.container.querySelector('section > div')!;
+    Object.defineProperties(container, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
+    const makeScene = () => { const scene = new Group(); scene.add(new Mesh(new BoxGeometry(), new MeshBasicMaterial())); return { scene, bounds: new Box3().setFromObject(scene), dispose: vi.fn() }; };
+    act(() => { imports.cad[0].lod({ level: 0, ...makeScene() }); draw(); draw(); });
+    const pan = ui.getByRole('button', { name: locale === 'en' ? 'Pan' : '平移' }) as HTMLButtonElement;
+    expect(pan.getAttribute('aria-pressed')).toBe('false'); expect(pan.disabled).toBe(false); expect(ui.queryByRole('button', { name: locale === 'en' ? 'Orbit' : '旋转' })).toBeNull();
+    act(() => { pan.click(); }); expect(pan.getAttribute('aria-pressed')).toBe('true');
+    act(() => { pan.click(); }); expect(pan.getAttribute('aria-pressed')).toBe('false');
+    act(() => { pan.click(); }); expect(pan.getAttribute('aria-pressed')).toBe('true');
+    await act(async () => { imports.cad[0].resolve({ ...makeScene(), prepareStart: 0, ready: Promise.resolve() }); });
+    expect(pan.getAttribute('aria-pressed')).toBe('true'); expect(changed.mock.lastCall![0].geometry.navigationMode).toBe('pan');
+    const canvas = container.querySelector('canvas')!, control = updates.mock.contexts.at(-1) as OrbitControls, target = control.target.clone();
+    act(() => { pointer(canvas, 'pointerdown', 300, 0); pointer(document, 'pointermove', 420, 0); pointer(document, 'pointerup', 420, 0); });
+    expect(control.target.distanceTo(target)).toBeGreaterThan(.01); expect(imports.cad).toHaveLength(1); expect(runtime.renderers).toHaveLength(1);
+  } finally { updates.mockRestore(); }
 });
 it('retires an input pose before its queued observation through the supplied retirement callback only', async () => {
   const f = mount(), retired = vi.fn();
@@ -267,4 +317,34 @@ it.each(['axis', 'aligned-axis', 'canvas', 'external', 'moved-focus'] as const)(
     const camera = runtime.renderers[0].render.mock.calls.at(-1)![1]; expect(camera).toBeInstanceOf(OrthographicCamera);
     expect(camera.position.x * (nextView === 'right' ? 1 : -1)).toBeGreaterThan(0);
   } else expect(document.activeElement).toBe(focus === 'canvas' ? canvas : external);
+});
+
+
+it('restores same-copy Pan after remount, retains it while hidden, and defaults a new copy to Orbit', async () => {
+  const updates = vi.spyOn(OrbitControls.prototype, 'update');
+  let geometry: PreviewViewState['geometry'] = { copyId: 'copy', navigationMode: 'pan', outlines: false };
+  const bytes = new Uint8Array([1]), signal = new AbortController().signal;
+  const props = { bytes, name: 'assembly.step', signal, current: () => true, onViewStateChange: (patch: Partial<PreviewViewState>) => { geometry = patch.geometry; }, onGeometryRetire: vi.fn() };
+  const makeScene = () => { const scene = new Group(); scene.add(new Mesh(new BoxGeometry(), new MeshBasicMaterial())); return { scene, bounds: new Box3().setFromObject(scene), dispose: vi.fn(), prepareStart: 0, ready: Promise.resolve() }; };
+  try {
+    for (const [index, copyId] of ['copy', 'copy', 'fresh'].entries()) {
+      const saved = { geometry }, ui = render(createElement(GeometryPreview, { ...props, copyId, viewState: saved }));
+      const container = ui.container.querySelector('section > div')!;
+      Object.defineProperties(container, { clientWidth: { value: 640 }, clientHeight: { value: 480 } });
+      await act(async () => { imports.cad[index].resolve(makeScene()); draw(); });
+      expect(ui.getByRole('button', { name: 'Pan' }).getAttribute('aria-pressed')).toBe(String(copyId === 'copy'));
+      const control = updates.mock.contexts.at(-1) as OrbitControls, target = control.target.clone(), camera = control.object.position.clone();
+      const canvas = container.querySelector('canvas')!;
+      act(() => { pointer(canvas, 'pointerdown', 300, 0); pointer(document, 'pointermove', 420, 0); pointer(document, 'pointerup', 420, 0); });
+      expect(control.object.position.distanceTo(camera)).toBeGreaterThan(.01);
+      if (copyId === 'copy') {
+        expect(control.target.distanceTo(target)).toBeGreaterThan(.01); expect(geometry?.navigationMode).toBe('pan');
+        ui.rerender(createElement(GeometryPreview, { ...props, copyId, viewState: { geometry }, visible: false }));
+        ui.rerender(createElement(GeometryPreview, { ...props, copyId, viewState: { geometry }, visible: true }));
+        expect(ui.getByRole('button', { name: 'Pan' }).getAttribute('aria-pressed')).toBe('true');
+        expect(container.querySelector('canvas')).toBe(canvas); expect(imports.cad).toHaveLength(index + 1); expect(runtime.renderers).toHaveLength(index + 1);
+      } else { expect(control.target.distanceTo(target)).toBeLessThan(1e-9); expect(geometry?.navigationMode).toBeUndefined(); }
+      ui.unmount();
+    }
+  } finally { updates.mockRestore(); }
 });

@@ -11,7 +11,7 @@ it('keeps the first input visible between its ACK and exact canonical observatio
     return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'empty', files: [], diagnostic: null } };
   });
   try {
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     const ui = await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
     fireEvent.click(await screen.findByRole('button', { name: 'Open Session B' }));
     const input = screen.getByRole('textbox', { name: 'Message' }); fireEvent.change(input, { target: { value: 'First message stays visible' } });

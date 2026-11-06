@@ -13,7 +13,30 @@ function displayDuration(start: number) {
   const value = Math.round((performance.now() - start) * 10) / 10;
   expect(Number.isFinite(value)).toBe(true); expect(value).toBeGreaterThanOrEqual(0); return value;
 }
-const painted = (page: Page) => page.locator('[data-geometry-format] canvas').evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+const painted = (page: Page) => page.locator('[data-geometry-format]:visible canvas').evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+
+/** Observe creation as well as live counts without changing admission or timing. */
+async function observeResidency(page: Page) {
+  await page.addInitScript(() => {
+    const seen = new WeakSet<object>(), state = { createdContexts: 0, liveContexts: 0, peakContexts: 0, workersStarted: 0 };
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { value: function (this: HTMLCanvasElement, ...args: unknown[]) {
+      const result = Reflect.apply(getContext, this, args);
+      if (args[0] === 'webgl2' && result && !seen.has(result)) {
+        seen.add(result); state.createdContexts++; state.liveContexts++; state.peakContexts = Math.max(state.peakContexts, state.liveContexts);
+        this.addEventListener('webglcontextlost', () => { state.liveContexts--; }, { once: true });
+      }
+      return result;
+    } });
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(url: string | URL, options?: WorkerOptions) { super(url, options); state.workersStarted++; }
+    };
+    Object.assign(window, { geometryResidency: state });
+  });
+}
+const residency = (page: Page) => page.evaluate(() => ({ ...(window as any).geometryResidency, nativeImports: (window as any).geometryImports.length }));
+const frameOpportunity = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
 async function deliveredModel(page: Page, largeStep?:string) {
   const fixture = await startDogfood('web_geometry_previews');
@@ -68,7 +91,9 @@ test('approximately 200 MB STEP has an admitted whole-model first picture throug
 });
 
 test('delivery CAD occupies the existing document sidebar without clipping on a short window', async ({ page }, info) => {
-  await instrument(page);
+  await instrument(page); await observeResidency(page);
+  let sourceReads = 0;
+  page.on('request', request => { if (/\/(?:file-read|workbench-preview)$/.test(new URL(request.url()).pathname)) sourceReads++; });
   const fixture = await deliveredModel(page); let passed = false;
   await observeGeometryLatency(page);
   const timings: { entry: string; name: string; phase: string; displayMs: number; firstFrameReadyProxyMs?: number }[] = [];
@@ -102,7 +127,7 @@ test('delivery CAD occupies the existing document sidebar without clipping on a 
     expect((await canvas.screenshot()).equals(beforeOrbit)).toBe(false);
     await sidebar.getByRole('button', { name: 'Fit view', exact: true }).click();
     await parts.click();
-    const expand = sidebar.getByRole('button', { name: 'Expand: Mounting bracket', exact: true });
+    const expand = sidebar.getByRole('button', { name: /^(?:Expand|Collapse): Mounting bracket$/ });
     await expect(expand).toHaveAttribute('aria-expanded', 'false');
     await expand.click();
     await sidebar.getByRole('button', { name: 'Base plate', exact: true }).click();
@@ -127,25 +152,67 @@ test('delivery CAD occupies the existing document sidebar without clipping on a 
     })).toBeLessThanOrEqual(0);
     await page.keyboard.press('Escape'); await expect(parts).toHaveAttribute('aria-expanded', 'false'); await expect(sidebar).toBeVisible();
     await page.setViewportSize({ width: 1440, height: 1000 });
+    // Preserve an intentionally open tree, expanded branch and selection too.
+    await parts.click(); await expect(parts).toHaveAttribute('aria-expanded', 'true');
+    await expect(expand).toHaveAttribute('aria-expanded', 'true');
+    const step = sidebar.locator('[data-geometry-format="step"]'), stepCanvas = step.locator('canvas');
+    await expect(stepCanvas).toHaveAttribute('data-geometry-quality', 'complete');
+    await expect.poll(async () => (await resources(page)).workers).toBe(0);
+    const originalStepCanvas = (await stepCanvas.elementHandle())!, initialResidency = await residency(page);
+    expect(initialResidency.createdContexts).toBe(1); expect(initialResidency.liveContexts).toBe(1);
     await page.getByRole('button', { name: 'Preview notes.md in sidebar', exact: true }).click();
     await expect(sidebar.getByRole('heading', { name: 'Model review', exact: true })).toBeVisible();
-    await expect(sidebar.locator('[data-geometry-format]')).toHaveCount(0);
+    await expect(step).toHaveCount(1); await expect(step).toBeHidden();
+    await expect(step.locator('xpath=ancestor::*[@role="tabpanel"][1]')).toHaveAttribute('inert', '');
+    const readsAfterNotes = sourceReads;
+    await frameOpportunity(page);
+    const hiddenDraws = await page.evaluate(() => (window as any).geometryDrawCalls.calls);
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(hiddenDraws);
+    expect(await residency(page)).toEqual(initialResidency);
     start = performance.now(); await sidebar.getByRole('tab', { name: 'mounting-bracket.step', exact: true }).click();
-    await expect(sidebar.locator('[data-geometry-format] canvas')).toBeVisible();
+    await expect(stepCanvas).toBeVisible();
+    expect(await stepCanvas.evaluate((element, original) => element === original, originalStepCanvas)).toBe(true);
     await painted(page); timings.push({ entry: 'delivery', name: 'mounting-bracket.step', phase: 'retained-reopen', displayMs: displayDuration(start) });
-    await expect(parts).toHaveAttribute('aria-expanded', 'false');
+    expect(sourceReads).toBe(readsAfterNotes); expect(await residency(page)).toEqual(initialResidency);
+    await expect(parts).toHaveAttribute('aria-expanded', 'true'); await expect(expand).toHaveAttribute('aria-expanded', 'true');
+    await expect(sidebar.getByRole('button', { name: 'Base plate', exact: true })).toHaveAttribute('aria-pressed', 'true');
     start = performance.now(); await page.getByRole('button', { name: 'Preview mounting-bracket.glb in sidebar', exact: true }).click();
-    await expect(sidebar.locator('[data-geometry-format]')).toContainText('0.12 × 0.072 × 0.08');
+    const glb = sidebar.locator('[data-geometry-format="glb"]'), glbCanvas = glb.locator('canvas');
+    await expect(sidebar.locator('[data-geometry-format]:visible')).toContainText('0.12 × 0.072 × 0.08');
     await painted(page); timings.push({ entry: 'delivery', name: 'mounting-bracket.glb', phase: 'first-open', displayMs: displayDuration(start) });
     await expect(parts).toHaveAttribute('aria-expanded', 'false');
+    await expect(glbCanvas).toHaveAttribute('data-geometry-quality', 'complete');
+    await expect.poll(async () => (await resources(page)).workers).toBe(0);
+    const originalGlbCanvas = (await glbCanvas.elementHandle())!, twoModels = await residency(page), readsAfterGlb = sourceReads;
+    expect(twoModels.createdContexts).toBe(2); expect(twoModels.liveContexts).toBe(2); expect(twoModels.peakContexts).toBe(2);
     await page.screenshot({ path: info.outputPath('geometry-sidebar-glb.png'), animations: 'disabled' });
+    await sidebar.getByRole('tab', { name: 'mounting-bracket.step', exact: true }).click(); await expect(stepCanvas).toBeVisible();
+    expect(await stepCanvas.evaluate((element, original) => element === original, originalStepCanvas)).toBe(true);
+    await expect(parts).toHaveAttribute('aria-expanded', 'true'); await expect(expand).toHaveAttribute('aria-expanded', 'true');
+    await sidebar.getByRole('tab', { name: 'mounting-bracket.glb', exact: true }).click(); await expect(glbCanvas).toBeVisible();
+    expect(await glbCanvas.evaluate((element, original) => element === original, originalGlbCanvas)).toBe(true);
+    expect(sourceReads).toBe(readsAfterGlb); expect(await residency(page)).toEqual(twoModels);
+    const retired = { workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 };
+    await sidebar.getByRole('button', { name: 'Collapse preview workspace', exact: true }).click();
+    await expect.poll(() => resources(page)).toEqual(retired);
+    await page.getByRole('button', { name: 'Preview mounting-bracket.step in sidebar', exact: true }).click(); await expect(stepCanvas).toBeVisible();
+    await sidebar.getByRole('tab', { name: 'mounting-bracket.glb', exact: true }).hover();
+    const closeGlb = sidebar.getByRole('button', { name: 'Close preview mounting-bracket.glb', exact: true });
+    await expect(closeGlb).toHaveCSS('pointer-events', 'auto');
+    await closeGlb.click();
+    await sidebar.getByRole('button', { name: 'Close preview mounting-bracket.step', exact: true }).click();
+    await expect.poll(() => resources(page)).toEqual(retired);
+    await info.attach('native-geometry-residency', { body: JSON.stringify({ initialResidency, twoModels, hiddenDraws, readsAfterNotes, readsAfterGlb, retired: await resources(page), method: 'Same canvas identities and unchanged native import/Worker/context creation and source-read counts prove reuse of the authorized copies. A notes tab submits zero hidden geometry draws. Collapse and close release all resources.' }, null, 2), contentType: 'application/json' });
     writeFileSync(info.outputPath('native-display-timings.json'), JSON.stringify(timings, null, 2));
     passed = true;
   } finally { await page.close(); await fixture.workspaceHost.stop(); await fixture.stop(passed); }
 });
 
 test('Workbench CAD uses the shared document body and defaults to revealing the original file', async ({ page }, info) => {
-  await instrument(page);
+  await instrument(page); await observeResidency(page);
+  let sourceReads = 0;
+  page.on('request', request => { if (/\/(?:file-read|workbench-preview)$/.test(new URL(request.url()).pathname)) sourceReads++; });
   const fixture = await deliveredModel(page); let passed = false;
   try {
     await page.locator('[data-preview-toggle]').click();
@@ -160,6 +227,33 @@ test('Workbench CAD uses the shared document body and defaults to revealing the 
     await expect.poll(() => page.evaluate(() => (window as any).geometryLatency.first), { timeout: 20_000 }).toBeGreaterThan(0);
     writeFileSync(info.outputPath('native-workbench-display.json'), JSON.stringify({ entry: 'workbench', name: 'mounting-bracket.step', phase: 'first-open', displayMs, firstFrameReadyProxyMs: await page.evaluate(() => (window as any).geometryLatency.first) }, null, 2));
     await page.screenshot({ path: info.outputPath('geometry-workbench.png'), animations: 'disabled' });
+    await expect.poll(async () => (await resources(page)).workers).toBe(0);
+    const originalCanvas = (await file.locator('canvas').elementHandle())!, beforeSwitch = await residency(page);
+    const parts = file.getByRole('button', { name: 'Parts', exact: true });
+    await parts.click();
+    const branch = file.getByRole('button', { name: /^(?:Expand|Collapse): Mounting bracket$/ });
+    await branch.click();
+    await workbench.getByRole('tab', { name: 'Files', exact: false }).click();
+    await workbench.getByRole('button', { name: 'notes.md', exact: true }).click();
+    await expect(workbench.getByRole('heading', { name: 'Model review', exact: true })).toBeVisible();
+    await expect(file).toHaveCount(1); await expect(file).toBeHidden();
+    const readsAfterNotes = sourceReads;
+    await frameOpportunity(page);
+    const hiddenDraws = await page.evaluate(() => (window as any).geometryDrawCalls.calls);
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(() => (window as any).geometryDrawCalls.calls)).toBe(hiddenDraws);
+    await workbench.getByRole('tab', { name: 'mounting-bracket.step', exact: false }).click();
+    await expect(file.locator('canvas')).toBeVisible();
+    expect(await file.locator('canvas').evaluate((element, original) => element === original, originalCanvas)).toBe(true);
+    expect(sourceReads).toBe(readsAfterNotes); expect(await residency(page)).toEqual(beforeSwitch);
+    await expect(parts).toHaveAttribute('aria-expanded', 'true'); await expect(branch).toHaveAttribute('aria-expanded', 'true');
+    await file.getByRole('button', { name: 'Close parts', exact: true }).click();
+    // The existing later mobile check starts from the original collapsed tree.
+    await parts.click();
+    await file.getByRole('button', { name: 'Collapse: Mounting bracket', exact: true }).click();
+    await expect(branch).toHaveAttribute('aria-expanded', 'false');
+    await file.getByRole('button', { name: 'Close parts', exact: true }).click();
+    await info.attach('native-workbench-residency', { body: JSON.stringify({ beforeSwitch, afterSwitch: await residency(page), readsAfterNotes, hiddenDraws }, null, 2), contentType: 'application/json' });
     await expect(file.getByRole('button', { name: 'Open file location', exact: true })).toBeVisible();
     await expect(file.getByRole('button', { name: 'Choose application', exact: true })).toBeVisible();
     await expect(file.getByRole('note')).toHaveCount(0);

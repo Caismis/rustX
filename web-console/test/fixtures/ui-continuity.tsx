@@ -58,7 +58,7 @@ if (deferredReading) {
 server.handlers.set('workflow/list', request => { if (request.method !== 'workflow/list') throw Error('library'); return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'empty', files: [], diagnostic: null } }; });
 await server.attached('A');
 if (scene === 'first') {
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   server.held.add('session/attach');
 }
 const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;

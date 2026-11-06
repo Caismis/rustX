@@ -1,4 +1,4 @@
-import { BoxHelper, BufferGeometry, BufferAttribute, Color, Group, Mesh, MeshStandardMaterial, NeutralToneMapping, OrthographicCamera, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, HemisphereLight, DirectionalLight, type Object3D, type Box3 } from 'three';
+import { MOUSE, TOUCH, BoxHelper, BufferGeometry, BufferAttribute, Color, Group, Mesh, MeshStandardMaterial, NeutralToneMapping, OrthographicCamera, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, WebGLRenderer, HemisphereLight, DirectionalLight, type Object3D, type Box3 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { PreviewViewState } from '../../../../presentation/right-panel/preview-view-state';
 import { GEOMETRY_LIMITS as L, GeometryError } from './limits';
@@ -11,6 +11,7 @@ import type { createOutlines, OutlineStatus } from './outlines';
 export type { Part } from './structure';
 
 type Saved = NonNullable<PreviewViewState['geometry']>;
+export type NavigationMode = NonNullable<Saved['navigationMode']>;
 export type Projection = NonNullable<Saved['camera']>['projection'];
 export type StandardView = 'isometric' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 let activeContexts = 0;
@@ -21,7 +22,7 @@ function studioLighting(scene: Scene) {
 }
 /** Demand-owned context and shader preparation can overlap source import. No
  * model is drawn, copied or admitted by the trusted three-vertex warmup. */
-export function prepareGeometryGraphics(generated: boolean, lost: () => void) {
+export function prepareGeometryGraphics(generated: boolean, lost: () => void, options?: { visible?: boolean }) {
   if (activeContexts >= L.owners) throw new GeometryError('capacity'); let renderer: WebGLRenderer;
   try { renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' }); }
   catch { throw new GeometryError('webgl'); }
@@ -38,7 +39,7 @@ export function prepareGeometryGraphics(generated: boolean, lost: () => void) {
     activeContexts--; renderer.dispose(); renderer.forceContextLoss(); renderer.domElement.remove();
   }
   try {
-    if (generated) {
+    if (generated && options?.visible !== false) {
       const scene = new Scene(); studioLighting(scene);
       warm = new BufferGeometry().setAttribute('position', new BufferAttribute(new Float32Array([0,0,0, 1,0,0, 0,1,0]), 3)); warm.computeVertexNormals();
       material = new MeshStandardMaterial({ metalness: .05, roughness: .65 }); scene.add(new Mesh(warm, material));
@@ -51,8 +52,9 @@ export function prepareGeometryGraphics(generated: boolean, lost: () => void) {
 }
 
 /** Mounted view owns every graphics resource. Source bytes belong to the content owner. */
-export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: AxisLabels & { canvas: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void, options?: { generated: boolean; pendingPreview?: boolean; provisional?: boolean; lod?: GeometryLodLevel; onInteraction?: (active: boolean) => void; onFirstGpuReady?: () => void; graphics?:ReturnType<typeof prepareGeometryGraphics> }) {
-  const graphics = options?.graphics ?? prepareGeometryGraphics(options?.generated === true, lost), renderer = graphics.renderer, gl = graphics.gl;
+export function mountGeometry(container: HTMLElement, object: Object3D, bounds: Box3, saved: Saved | undefined, labels: AxisLabels & { canvas: string }, change: (state: Omit<Saved, 'copyId'>) => void, lost: () => void, options?: { generated: boolean; visible?: boolean; pendingPreview?: boolean; provisional?: boolean; lod?: GeometryLodLevel; onInteraction?: (active: boolean) => void; onFirstGpuReady?: () => void; graphics?:ReturnType<typeof prepareGeometryGraphics> }) {
+  let visible = options?.visible !== false;
+  const graphics = options?.graphics ?? prepareGeometryGraphics(options?.generated === true, lost, { visible }), renderer = graphics.renderer, gl = graphics.gl;
   const canvas = renderer.domElement; canvas.tabIndex = 0; canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', labels.canvas);
   canvas.dataset.geometryCompleteness = options?.provisional ? 'preview' : 'complete';
   canvas.dataset.geometryLod = options?.provisional ? options.lod === 1 ? 'medium' : 'coarse' : 'full';
@@ -69,7 +71,9 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   studioLighting(scene);
   let controls: OrbitControls<PerspectiveCamera | OrthographicCamera> = new OrbitControls(camera, canvas);
   const orbitUp = camera.up.clone();
-  const configureControls = () => { controls.enableDamping = false; controls.minDistance = radius / 100; controls.maxDistance = radius * 100; controls.listenToKeyEvents(canvas); };
+  let navigationMode: NavigationMode = saved?.navigationMode === 'pan' ? 'pan' : 'orbit';
+  const configureNavigation = () => { controls.mouseButtons.LEFT = navigationMode === 'pan' ? MOUSE.PAN : MOUSE.ROTATE; controls.touches.ONE = navigationMode === 'pan' ? TOUCH.PAN : TOUCH.ROTATE; };
+  const configureControls = () => { controls.enabled = visible; controls.enableDamping = false; controls.minDistance = radius / 100; controls.maxDistance = radius * 100; configureNavigation(); controls.listenToKeyEvents(canvas); };
   const configureZoom = () => {
     if (!(camera instanceof OrthographicCamera)) return;
     const height = camera.top - camera.bottom;
@@ -92,9 +96,9 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   let cameraDirty = false, interacting = false, lastPublished = -Infinity, publication: ReturnType<typeof setTimeout> | undefined;
   const projection = (): Projection => camera instanceof OrthographicCamera ? 'orthographic' : 'perspective';
   const verticalSpan = () => camera instanceof OrthographicCamera ? (camera.top - camera.bottom) / camera.zoom : 2 * camera.position.distanceTo(controls.target) * Math.tan(camera.fov * Math.PI / 360) / camera.zoom;
-  const snapshot = (): Omit<Saved, 'copyId'> => ({ camera: { position: camera.position.toArray(), target: controls.target.toArray(), up: camera.up.toArray(), ...(camera instanceof OrthographicCamera ? { projection: 'orthographic', verticalSpan: verticalSpan() } : { projection: 'perspective' }) }, ...structure.snapshot(), outlines: outlinesWanted });
+  const snapshot = (): Omit<Saved, 'copyId'> => ({ camera: { position: camera.position.toArray(), target: controls.target.toArray(), up: camera.up.toArray(), ...(camera instanceof OrthographicCamera ? { projection: 'orthographic', verticalSpan: verticalSpan() } : { projection: 'perspective' }) }, ...structure.snapshot(), outlines: outlinesWanted, ...(navigationMode === 'pan' ? { navigationMode } : {}) });
   const emit = (publish = change) => {
-    if (disposed || restoring) return;
+    if (disposed || restoring || initial) return;
     clearTimeout(publication); publication = undefined; cameraDirty = false; lastPublished = performance.now(); rememberPose(); publish(snapshot());
   };
   const flush = (publish = change) => { if (!disposed && poseChanged()) cameraDirty = true; if (cameraDirty) emit(publish); };
@@ -103,7 +107,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     axisCamera.updateMatrixWorld(true); navigation.update(axisCamera, Math.min(144, viewportWidth, viewportHeight));
   };
   const draw = () => {
-    frame = 0; if (disposed) return;
+    frame = 0; if (disposed || !visible) return;
     // At most one submitted frame per owner. Coalesce new camera poses while
     // the GPU is busy instead of accumulating obsolete full-resolution frames.
     if (pendingDraw) {
@@ -128,26 +132,26 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     gl.flush();
     if (!firstSubmitted && options?.onFirstGpuReady) { firstSubmitted = true; presentationFrame = requestAnimationFrame(checkFirstReady); }
   };
-  function notifyFirstReady() { if (firstSubmitted && !firstReady && !disposed) { firstReady = true; cancelAnimationFrame(presentationFrame); presentationFrame = 0; options?.onFirstGpuReady?.(); } }
+  function notifyFirstReady() { if (firstSubmitted && !firstReady && !disposed && visible) { firstReady = true; cancelAnimationFrame(presentationFrame); presentationFrame = 0; options?.onFirstGpuReady?.(); } }
   function checkFirstReady() {
-    presentationFrame = 0; if (disposed || firstReady) return;
+    presentationFrame = 0; if (disposed || firstReady || !visible) return;
     if (!pendingDraw) { notifyFirstReady(); return; }
     const status = gl.clientWaitSync(pendingDraw, 0, 0);
     if (status === gl.TIMEOUT_EXPIRED) presentationFrame = requestAnimationFrame(checkFirstReady);
     else if (status === gl.WAIT_FAILED) { dispose(); lost(); }
     else notifyFirstReady();
   }
-  const render = () => { if (!disposed && !frame) frame = requestAnimationFrame(draw); };
+  const render = () => { if (!disposed && visible && !frame) frame = requestAnimationFrame(draw); };
   const refine = () => {
     clearTimeout(refinement); refinement = undefined;
-    if (disposed || interacting || !moving || backgroundPending) return;
+    if (disposed || !visible || interacting || !moving || backgroundPending) return;
     refinement = setTimeout(() => { refinement = undefined; if (!disposed) { moving = false; render(); } }, L.refineDelayMs);
   };
   const renderMoving = (urgent = false) => {
     moving = true; canvas.dataset.geometryQuality = options?.provisional ? 'preview' : 'interactive'; refine();
     if (!urgent) { render(); return; }
     if (inputDrawQueued) return; inputDrawQueued = true;
-    queueMicrotask(() => { inputDrawQueued = false; if (disposed) return; cancelAnimationFrame(frame); frame = 0; draw(); });
+    queueMicrotask(() => { inputDrawQueued = false; if (disposed || !visible) return; cancelAnimationFrame(frame); frame = 0; draw(); });
   };
   const updateHighlight = () => {
     const item = structure.selectedObject;
@@ -169,6 +173,10 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     if (!(camera instanceof OrthographicCamera)) return;
     const aspect = viewportWidth / viewportHeight || 1;
     camera.top = span / 2; camera.bottom = -span / 2; camera.left = -span * aspect / 2; camera.right = span * aspect / 2; camera.zoom = 1;
+  };
+  const setNavigationMode = (value: NavigationMode) => {
+    if (disposed || value === navigationMode) return;
+    navigationMode = value; configureNavigation(); emit();
   };
   const setProjection = (value: Projection) => {
     if (disposed || value === projection()) return;
@@ -207,12 +215,15 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     const request = ++outlineRequest;
     if (disposed) return 'off'; outlinesWanted = enabled; emit();
     try {
+      // The owner retries the wanted outline state when this body is shown.
+      // An already running request may finish, but hidden bodies start no work.
+      if (!visible) return 'off';
       if (!outlines && !enabled) return 'off';
       if (enabled && backgroundPending) await backgroundDone;
-      if (disposed || request !== outlineRequest) return 'off';
+      if (disposed || !visible || request !== outlineRequest) return 'off';
       if (!outlines) {
         const { createOutlines } = await import('./outlines');
-        if (disposed || request !== outlineRequest) return 'off';
+        if (disposed || !visible || request !== outlineRequest) return 'off';
         outlines ??= createOutlines(object, () => getComputedStyle(container).getPropertyValue('--dsw-alias-label-document-preview').trim() || '#dbe6f3', options);
         centered.add(outlines.group);
       }
@@ -225,7 +236,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     }
   };
   const resize = () => {
-    if (disposed) return;
+    if (disposed || !visible) return;
     const width = Math.max(1, Math.min(container.clientWidth, 4096)), height = Math.max(1, Math.min(container.clientHeight, 4096));
     const pixelRatio = Math.min(globalThis.devicePixelRatio || 1, 2, Math.sqrt(L.canvasPixels / (width * height)));
     if (width === viewportWidth && height === viewportHeight && pixelRatio === viewportRatio) return;
@@ -259,6 +270,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const rememberPose = () => { observedPosition.copy(camera.position); observedTarget.copy(controls.target); observedRotation.copy(camera.quaternion); observedZoom = camera.zoom; observedProjection = projection(); };
   const poseChanged = () => !observedPosition.equals(camera.position) || !observedTarget.equals(controls.target) || !observedRotation.equals(camera.quaternion) || observedZoom !== camera.zoom || observedProjection !== projection();
   const changed = () => {
+    if (disposed || !visible) return;
     rememberPose();
     updateClipping(); renderMoving(true); if (restoring || disposed) return;
     cameraDirty = true;
@@ -268,14 +280,14 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
     else publication ??= setTimeout(() => { publication = undefined; flush(); }, remaining);
   };
   const observePose = () => {
-    if (!disposed && poseChanged()) changed();
+    if (!disposed && visible && poseChanged()) changed();
   };
   // OrbitControls' change event uses an absolute world-distance threshold.
   // Its public input events still update smaller models. Read the final pose
   // after their handlers, without scheduling any work while the view is idle.
-  const inputFinished = () => { if (!interacting) options?.onInteraction?.(false); queueMicrotask(observePose); };
-  const started = () => { interacting = true; options?.onInteraction?.(true); clearTimeout(refinement); refinement = undefined; observePose(); clearTimeout(publication); publication = undefined; };
-  const ended = () => { observePose(); interacting = false; options?.onInteraction?.(false); refine(); flush(); };
+  const inputFinished = () => { if (!visible) return; if (!interacting) options?.onInteraction?.(false); queueMicrotask(observePose); };
+  const started = () => { if (!visible) return; interacting = true; options?.onInteraction?.(true); clearTimeout(refinement); refinement = undefined; observePose(); clearTimeout(publication); publication = undefined; };
+  const ended = () => { if (!visible) return; observePose(); interacting = false; options?.onInteraction?.(false); refine(); flush(); };
   const inputMoved = () => { if (interacting) inputFinished(); };
   canvas.ownerDocument.addEventListener('pointermove', inputMoved, true);
   canvas.addEventListener('keydown', inputFinished, true);
@@ -309,12 +321,12 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   const resolutionChanged = () => { if (disposed) return; resolution.removeEventListener('change', resolutionChanged); watchResolution(); resize(); };
   const watchResolution = () => { resolution = matchMedia(`(resolution: ${globalThis.devicePixelRatio || 1}dppx)`); resolution.addEventListener('change', resolutionChanged); };
   watchResolution();
-  const themeObserver = new MutationObserver(() => { if (!disposed && outlines?.enabled) { outlines.recolor(); render(); } });
+  const themeObserver = new MutationObserver(() => { if (!disposed && visible && outlines?.enabled) { outlines.recolor(); render(); } });
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
   const raycaster = new Raycaster(); let down: [number, number] | undefined;
-  const pointerDown = (event: PointerEvent) => { down = [event.clientX, event.clientY]; };
+  const pointerDown = (event: PointerEvent) => { if (visible) down = [event.clientX, event.clientY]; };
   const pointerUp = (event: PointerEvent) => {
-    if (options?.provisional) return;
+    if (!visible || options?.provisional) return;
     if (!down || Math.hypot(event.clientX - down[0], event.clientY - down[1]) > 4) return; down = undefined;
     const rect = canvas.getBoundingClientRect(); raycaster.setFromCamera(new Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
     const candidates: Mesh[] = [];
@@ -324,6 +336,22 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   };
   const contextLost = (event: Event) => { event.preventDefault(); dispose(); lost(); };
   canvas.addEventListener('pointerdown', pointerDown); canvas.addEventListener('pointerup', pointerUp); canvas.addEventListener('webglcontextlost', contextLost);
+  const setVisible = (value: boolean) => {
+    if (disposed || value === visible) return;
+    if (!value) flush();
+    if (disposed) return;
+    visible = value; controls.enabled = value;
+    if (!value) {
+      cancelAnimationFrame(frame); frame = 0; cancelAnimationFrame(presentationFrame); presentationFrame = 0;
+      clearTimeout(refinement); refinement = undefined; clearTimeout(publication); publication = undefined;
+      down = undefined; interacting = false; options?.onInteraction?.(false);
+      return;
+    }
+    resolution.removeEventListener('change', resolutionChanged); watchResolution();
+    restoring = true;
+    try { resize(); } finally { restoring = false; }
+    outlines?.recolor(); updateHighlight(); renderMoving(); emit();
+  };
   function dispose() { retire(false); }
   function retire(keepGraphics: boolean) {
     if (disposed) return; flush(); if (disposed) return;
@@ -339,11 +367,13 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
   try {
     graphics.adopt(scene,camera);
     resize();
-    updateNavigation(); updateHighlight();
+    if (visible) updateNavigation(); updateHighlight();
     restoring = false; emit();
   } catch (error) { dispose(); throw error; }
-  return { parts: structure.parts, fit, reset, focus, select, visibility, inspect: structure.inspect,
+  return { parts: structure.parts, fit, reset, focus, select, visibility, setVisible, inspect: structure.inspect,
+    get viewportSize() { return { clientWidth: viewportWidth, clientHeight: viewportHeight }; },
     get focusedAxis() { return navigation.focusedAxis; }, focusAxis: navigation.focusAxis,
+    setNavigationMode, get navigationMode() { return navigationMode; },
     setOutlines, setProjection, refreshPreview: () => { backgroundPending=false;releaseBackground?.();releaseBackground=undefined;quality?.refresh();if(moving){refine();render();} }, get projection() { return projection(); },
     isolate: () => structureAction(structure.isolate), restore: () => structureAction(structure.restore), showAll: () => structureAction(structure.showAll),
     relabel: (value: AxisLabels & { canvas: string }) => { canvas.setAttribute('aria-label', value.canvas); canvas.setAttribute('aria-description', value.axes); navigation.relabel(value); },

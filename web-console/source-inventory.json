@@ -4578,6 +4578,7 @@
         "./WorkbenchFiles",
         "./WorkbenchIcons",
         "./WorkbenchTerminal",
+        "./workbench-documents/definitions",
         "./workbench-persistence",
         "react"
       ],
@@ -4585,7 +4586,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "c81bc8bcab2caca4ebeb6d491b5b781b12dd5f2eb10c9495d17910ccbf83a69b",
+      "local_sha256": "fa054d515c8c5ad97c31194377a37b52eb60e7e07adcff72f7ac81bb5797ca28",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4942,7 +4943,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "bcf0a69ac42f1e550a87314db0698df85961206f4854195dfac43b02e04fb402"
+      "local_sha256": "83438ee105ae14e43ca722d486b1b513339be9bc9a98bc46294d0b0fed574c18"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5913,7 +5914,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "00de0309003abce96fa1ac582af9314e142aae6c40163cd2d43575931c7b9c5d"
+      "local_sha256": "e3d3a02da5edfa2a134abd95f4420a8cb79edb2c5b96e1569e5b76cd7119934b"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",

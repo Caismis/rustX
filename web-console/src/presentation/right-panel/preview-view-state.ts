@@ -9,6 +9,7 @@ export interface PreviewViewState {
     hidden?: string[];
     isolation?: { target: string; hidden: string[] };
     outlines?: boolean;
+    navigationMode?: 'orbit' | 'pan';
   };
   imageZoom?: { readonly kind: 'fit-width' } | { readonly kind: 'fixed'; readonly scale: number };
   wrap?: boolean;

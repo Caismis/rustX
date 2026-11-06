@@ -10,7 +10,7 @@ const names = ['cube.glb', 'cube.stl', 'cube-ascii.stl', 'cube.step', 'cube-inch
 // when the pinned browser runs behind Docker Desktop's separate network.
 test.use({ connectOptions: { wsEndpoint: process.env.RUSTX_BROWSER_WS_ENDPOINT ?? '', exposeNetwork: '<loopback>' } });
 
-const ready = (page: Page) => expect(page.locator('[data-geometry-format]')).toContainText('10 × 10 × 10', { timeout: 20_000 });
+const ready = (page: Page) => expect(page.locator('[data-geometry-format]:visible')).toContainText('10 × 10 × 10', { timeout: 20_000 });
 async function openDelivery(page: Page, name: string) { await page.getByRole('button', { name: `Preview ${name} in sidebar`, exact: true }).click(); await ready(page); }
 function measuredDuration(value: number) {
   expect(Number.isFinite(value)).toBe(true); expect(value).toBeGreaterThanOrEqual(0);
@@ -48,9 +48,11 @@ test('all geometry formats render through actual delivery and Workspace entry po
     const displayMs = elapsed(start), importMs = measuredDuration(await page.evaluate(name => (window as any).geometryContract.measureImport(name), name));
     timings.push({ entry, name, displayMs, importMs });
     if (entry === 'delivery') expect(await page.evaluate(name => (window as any).geometryContract.snapshot().find((item: any) => item.name === name).state.camera.up, name)).toEqual([0, 1, 0]);
-    await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(1);
+    const mountedBodies = entry === 'delivery' ? Math.min(names.indexOf(name) + 1, 2) : 1;
+    await expect(page.locator('[data-geometry-format]:visible canvas')).toHaveCount(1);
+    await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(mountedBodies);
     await expect.poll(async () => (await resources(page)).workers).toBe(0);
-    await expect.poll(async () => (await resources(page)).contexts).toBe(1);
+    await expect.poll(async () => (await resources(page)).contexts).toBe(mountedBodies);
   }
   await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('cad-preview.png') });
   writeFileSync(info.outputPath('format-display-timings.json'), JSON.stringify(timings, null, 2));
@@ -128,10 +130,13 @@ test('selection, visibility, keyboard views, split/fullscreen and narrow localiz
   await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2);
   await page.getByRole('button', { name: 'Fullscreen preview', exact: true }).click(); await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2);
   await page.getByRole('button', { name: 'Restore preview', exact: true }).click();
-  await page.setViewportSize({ width: 390, height: 844 }); await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('[data-geometry-format]:visible canvas')).toHaveCount(1);
+  await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(2);
+  await expect.poll(async () => (await resources(page)).contexts).toBe(2);
   await page.getByRole('button', { name: 'Chinese', exact: true }).click(); await expect(page.getByRole('button', { name: '适合窗口', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Dark theme', exact: true }).click(); await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
-  await page.locator('[data-geometry-format]').screenshot({ path: info.outputPath('geometry-narrow-zh-dark.png') });
+  await page.locator('[data-geometry-format]:visible').screenshot({ path: info.outputPath('geometry-narrow-zh-dark.png') });
   await page.getByRole('button', { name: 'Revoke authority', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
 });

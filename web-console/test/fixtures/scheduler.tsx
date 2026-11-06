@@ -31,7 +31,7 @@ f.server.workspaceHost.configureWorkspace = async (id, _endpoint, operation) => 
 f.server.handlers.set('workflow/scheduled/getRecovery', () => ({ type: 'scheduled_workflow_recovery', recovery: workflow.recovery }));
 f.server.handlers.set('workflow/scheduled/reconcile', () => ({ type: 'scheduled_workflow_recovery', recovery: workflow.recovery }));
 await f.server.connect();
-localStorage.removeItem('rustx-console-view-v2');
+localStorage.removeItem('rustx-console-view-v3');
 Object.assign(window, { schedulerFixture: {
   requests: () => f.server.requests.map(row => row.request),
   changeTitle: () => { const row = f.rows.get(daily.id.ordinal)!; f.rows.set(row.id.ordinal, { ...row, title: zh ? '其他窗口已修改' : 'Changed in another window', revision: String(BigInt(row.revision) + 1n) }); f.notify(); },

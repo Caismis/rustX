@@ -134,7 +134,7 @@ for (const destination of ['existing', 'new'] as const) test(`first Send to ${de
     }
     expect(gate.calls).toBe(0);
     const ids = sessions.map(session => session.id);
-    await page.addInitScript(({ endpoint, ids }) => localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ids })), { endpoint: new URL(fixture.endpoint).href, ids });
+    await page.addInitScript(({ endpoint, ids }) => localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ids, route: ids[0] ? { kind: 'session', sessionId: ids[0] } : { kind: 'new-conversation' } })), { endpoint: new URL(fixture.endpoint).href, ids });
     const wire = await wireProbe(page);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/');
@@ -228,7 +228,7 @@ test('same-authority reconnect accepts first Send while its idle-evicted Session
     await expect.poll(async () => (await activeNative.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.policy.idle_grace_ms).toBe(1);
     const created = await activeNative.createSession({ cwd: fixture.workspaceA });
     await activeNative.renameSession(created.session.id, 'Retained cold MCP');
-    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: [id] })), { endpoint: new URL(fixture.endpoint).href, id: created.session.id });
+    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: [id], route: { kind: 'session', sessionId: id } })), { endpoint: new URL(fixture.endpoint).href, id: created.session.id });
     const wire = await wireProbe(page);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/');
