@@ -19,7 +19,7 @@ import { PartsTree } from './PartsTree';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Tooltip } from '../../../../presentation/primitives/Tooltip';
-import { IconChecklistOutline14, IconCloseOutline16, IconRefreshOutline16 } from '../../../../presentation/primitives/icons';
+import { IconChecklistOutline14, IconCloseOutline16, IconLoadingOutline16, IconRefreshOutline16 } from '../../../../presentation/primitives/icons';
 import css from './GeometryPreview.module.css';
 
 export interface GeometryPreviewProps extends PreviewViewStateProps { visible?: boolean; bytes: Uint8Array<ArrayBuffer>; name: string; copyId: string; signal: AbortSignal; current: () => boolean; takeSource?: () => Uint8Array<ArrayBuffer> | undefined; releaseSource?: () => void; onGeometryRetire: (geometry: NonNullable<PreviewViewState['geometry']>) => void }
@@ -159,7 +159,7 @@ export default function GeometryPreview({ bytes, name, copyId, signal, current, 
   }}>
     <div className={css.viewport} ref={container}>
       {state.error ? <div className={css.message} role="alert"><GeometryCubeGlyph/><p>{t[state.error]}</p></div>
-        : !state.parts && (state.preview ? <p className={css.previewStatus} role="status" aria-live="polite">{t.refining}</p> : <div className={css.loading} role="status" aria-live="polite"><span className={css.loader} aria-hidden="true"/><GeometryLoading stage={state.stage ?? 'loading'}/></div>)}
+        : !state.parts && (state.preview ? <p className={css.previewStatus} role="status" aria-live="polite">{t.refining}</p> : <div className={css.loading} role="status" aria-live="polite"><span aria-hidden="true"><IconLoadingOutline16 size={20} className={css.loader} /></span><GeometryLoading stage={state.stage ?? 'loading'}/></div>)}
       {!state.error && <>
         <div className={css.rail} role="toolbar" aria-label={t.controls} aria-orientation="vertical">
           <Tooltip label={t.pan} side="right" delayMs={500}><button type="button" className={`${css.control} ${state.navigationMode === 'pan' ? css.controlActive : ''}`} disabled={!state.navigationMode} aria-label={t.pan} aria-pressed={state.navigationMode === 'pan'} onClick={() => changeNavigationMode(state.navigationMode === 'pan' ? 'orbit' : 'pan')}><PanGlyph/></button></Tooltip>

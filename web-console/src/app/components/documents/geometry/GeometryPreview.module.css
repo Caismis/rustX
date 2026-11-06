@@ -35,6 +35,6 @@
 .message p { max-width: 320px; margin: 0; }
 .message > svg { width: 32px; height: 32px; opacity: .6; }
 .loading { pointer-events: none; }
-.loader { width: 20px; height: 20px; box-sizing: border-box; border: 1.5px solid currentColor; border-inline-end-color: transparent; border-radius: 50%; animation: spin 800ms linear infinite; }
+.loader { display: block; flex: none; animation: spin 800ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .loader { animation: none; } }
