@@ -1,0 +1,6 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived PreviewFrame layout; see PROVENANCE.md. */
+.preview { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; height: 100%; min-height: 0; }
+.content { position: relative; isolation: isolate; display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.main { isolation: isolate; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
+.header { display: flex; flex: 0 0 auto; gap: 4px; align-items: center; box-sizing: border-box; height: 38px; padding: 0 6px 0 16px; border-bottom: .5px solid var(--dsw-alias-border-l3); }
+.path { margin-right: 12px; }

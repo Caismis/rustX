@@ -2601,7 +2601,7 @@
         "./Tooltip.module.css",
         "react"
       ],
-      "local_sha256": "1bc0d819f46c786f4cdb9906c143b7e869400491b814217b4ba775be870a798a",
+      "local_sha256": "29400100c354cf70a62c6bed53eb11b57057ef52d1aac4139bee44ef4f1574fb",
       "classification": "A",
       "additional_sources": [
         {
@@ -2715,7 +2715,7 @@
       "treatment": "Adapted header, bounded scrolling text and wrap styling; excludes Host filesystem, slots, registry and automatic reload. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Preview sidebar alignment: two 38px rows, shared dockkit file chips and icon chrome; header visibility is independent of docked layout.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "792d87ed962b3fcbe39a50fca6f29faf4ca92dec4b63b6b260b14b74378e1e82",
-      "local_sha256": "f29fd9a68527d140a725e3e2cee59b9389919c04c7451f38327e525c54cb980f",
+      "local_sha256": "6a46037edf5d7d0c489a372df4bfc3e84b5a09a4640e3331cd80a564884f3250",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -4072,7 +4072,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "cdc6e2875a671729f87f5b22691a8d96b1b5ca3720043da21f02bb372742ac35"
+      "local_sha256": "2c0e0761d187353ad07278dc8290020f8ed6ae2693ba9c6649516aa4fe81ce4d"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4576,7 +4576,9 @@
         "./ChangesReview",
         "./WorkbenchFiles",
         "./WorkbenchIcons",
+        "./WorkbenchNavigator",
         "./WorkbenchTerminal",
+        "./workbench-documents/definitions",
         "./workbench-persistence",
         "react"
       ],
@@ -4584,7 +4586,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "6fb1db6653c1bbb96a53ad4dcc614104bf2569bcdb73221c4570e0cf47359d1b",
+      "local_sha256": "819b6848abd094d987b48f8fd7b0af5f8a03e78abc6641ef84a1ac6162e576c0",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4904,10 +4906,13 @@
         "../../presentation/markdown/CodeBlock",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/FileTypeIcon",
+        "../../presentation/primitives/LoadingIndicator",
         "../../presentation/primitives/Menu",
         "../../presentation/primitives/PathLabel",
         "../../presentation/primitives/file-language",
         "../../presentation/primitives/icons",
+        "../../presentation/right-panel/PreviewFrame",
+        "../../presentation/right-panel/TextLines",
         "../../presentation/right-panel/WorkbenchFiles.module.css",
         "../../presentation/right-panel/preview-view-state",
         "../../presentation/right-panel/use-view-scroll",
@@ -4938,7 +4943,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "019f6535a7b40c52caa47c7c8e6832ba9db80b73e1831d1730595e99348d871f"
+      "local_sha256": "e5d1cf93e56dc66028a955f24e7d9af4fabc11cd0c1979aa0a6ea0f95ef1f36e"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -4971,7 +4976,7 @@
           "treatment": "Plain source uses the full pane as its sole scrollport, retaining the shared text inset and wrap preference; remove the inherited global pre height limit and inner scrolling."
         }
       ],
-      "local_sha256": "245cc04f89cee425cea64fb9928b5031c2b5cdf1296961a61b6137fe7e9e3255"
+      "local_sha256": "13f71dce1343ba1aaa0494e7ddfeaa6bf34efa3749c26b172b858b13964da742"
     },
     {
       "upstream": "packages/client/ui-primitives/src/CodeToolbar.tsx",
@@ -5894,6 +5899,7 @@
         "../../../locale/react",
         "../../../presentation/markdown/DocumentResources",
         "../../../presentation/markdown/MarkdownText",
+        "../../../presentation/primitives/LoadingIndicator",
         "../WorkbenchFiles",
         "../documents/ImagePreview",
         "../documents/PdfPreview",
@@ -5908,7 +5914,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "8313d02f7110163df4ec915961d11827f1cef6659c4ad6fb897f0faed6552251"
+      "local_sha256": "3074173a425a80e0bdb21bea6e822ac6329fccd4703763d9aa3249a52d217ff5"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",
@@ -6135,6 +6141,7 @@
       ],
       "retained_dependencies": [
         "../../../../locale/react",
+        "../../../../presentation/primitives/LoadingIndicator",
         "../../WorkbenchFiles",
         "../../documents/errors",
         "../basic-document",
@@ -6146,7 +6153,7 @@
         "./preferences",
         "react"
       ],
-      "local_sha256": "28e678d2c8f43bc70582b42c61f08fb1b53aa24ff3f0b9e3b08f492b1d6df0d9"
+      "local_sha256": "e05a134458efc40193f9456611dfa2f2b02ba17da8e778586752cfb3ac593674"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/HtmlBody.module.css",
@@ -7385,6 +7392,7 @@
         "../../../client/pdf-document",
         "../../../client/pdf-limits",
         "../../../locale/react",
+        "../../../presentation/primitives/LoadingIndicator",
         "../../../presentation/right-panel/preview-view-state",
         "../../../presentation/right-panel/use-view-scroll",
         "../workbench-documents/zoom/ZoomViewport",
@@ -7396,7 +7404,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "940a104c4fc40ef941aa567b0195adbbf0f543a487e6f34371bbd2822da15e8e",
+      "local_sha256": "a39a48524516cdf6aa4169acb174ca56b3301613cdb2fb50d4d473cf1f3ef101",
       "additional_sources": [
         {
           "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -7683,16 +7691,19 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../locale/react",
+        "../../../presentation/primitives/LoadingIndicator",
         "../../../presentation/right-panel/preview-view-state",
         "../../../presentation/right-panel/use-view-scroll",
         "../workbench-documents/zoom/ZoomViewport",
+        "./ImagePreview.module.css",
+        "./image-pan",
         "react"
       ],
       "excluded_dependencies": [
         "Cordis slots/store and resource addresses",
         "SVG/ICO decoding and broader filesystem authority"
       ],
-      "local_sha256": "c0bc821ad0e1c6dbb428e5216bedbbb34ecf9674e27f31da2b9ee30aa55c8d0e"
+      "local_sha256": "3e55825af7a47c0fe51a90082e6d074e0236949efb09ca50de2d10c12a167709"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8053,6 +8064,185 @@
         "Harness schedule mutation and delivery authority"
       ],
       "local_sha256": "984c6dc4e636ec0c0f918f73b199ed5c35ee1b160169ad82976e566405388b55"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/LoadingIndicator.tsx",
+      "upstream_sha256": "93ba0482fd2333d67f3938d552d795027ce4f0c737f24f2b6cf3550854eda61e",
+      "destination": "web-console/src/presentation/primitives/LoadingIndicator.tsx",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [
+        "./LoadingIndicator.module.css",
+        "./StateDot",
+        "clsx",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "63f923ce19e2a23baffcdbb6065b8ac1b9ce8a9971cbba0596adaa3a9836f8cf"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/LoadingIndicator.module.css",
+      "upstream_sha256": "636ca4bb3f68ccdeabd4667d3d6fcaeaf0c8e318e534b6afba0e922310ba38bd",
+      "destination": "web-console/src/presentation/primitives/LoadingIndicator.module.css",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "50459132c94017bb2d327f1bb75c7b122f33ae907c6788ea5eacdeff54194d95"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/PreviewFrame.tsx",
+      "upstream_sha256": "c3ee3a3b9f2bba8b27258b499e5ef6ffa88ea2b00e77ad7b2f15d38d974932fb",
+      "destination": "web-console/src/presentation/right-panel/PreviewFrame.tsx",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [
+        "../primitives/PathLabel",
+        "./PreviewFrame.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "7fea6dd3d1e6b419ac43d65cbb65682fa9b543390995d9caabeb0768ae6931e9"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/TextPreview.module.css",
+      "upstream_sha256": "d67a94d5dc0bb4a816ff01b702b79ebde740cd21a4a9bcd5a7489d98a558882c",
+      "destination": "web-console/src/presentation/right-panel/PreviewFrame.module.css",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "21cfe63b9885c21c3e9b0744b41af6e348b97b811dadc560c78b1e03f18f64b2"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/text/TextBody.tsx",
+      "upstream_sha256": "09f56591c3311354495b1f2a5be615746e6af1c6701b0fb5b2496c759edccf95",
+      "destination": "web-console/src/presentation/right-panel/TextLines.tsx",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [
+        "./TextLines.module.css"
+      ],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "ec3d0eb35e6ac3ff93075b6e99da38bb511e1aca0a5f3694980ed506bd82c7df"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/TextPreview.module.css",
+      "upstream_sha256": "d67a94d5dc0bb4a816ff01b702b79ebde740cd21a4a9bcd5a7489d98a558882c",
+      "destination": "web-console/src/presentation/right-panel/TextLines.module.css",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "95552e850dd1499c854a0a8553630efd0757033893fc06a3a911733a3e3a1ff2"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/image/pan.ts",
+      "upstream_sha256": "c44b7a485406465f31677eaddc8f2bbeaaf678147b3e3d708e26135867a5438a",
+      "destination": "web-console/src/app/components/documents/image-pan.ts",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "ba0a17f93daa747a7cf9e5c1b3d1eb037e6fce776b143b051d6a11d120ce7c17"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-documentpreview/src/client/image/ImageBody.module.css",
+      "upstream_sha256": "774643afb1d231e35caac6a4d91cf57bda6d112078ee7314cbdd4b425e802538",
+      "destination": "web-console/src/app/components/documents/ImagePreview.module.css",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "0c12cf367561bf5ab0b8858d215840a3c0ed77d66d0086e1a070e10b9a7313ac"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-files/src/client/FileNavigator.tsx",
+      "upstream_sha256": "82467f970878752c685c99b6a53a3d74ffe8d9e8e5a7826fdcc514c6bafea675",
+      "destination": "web-console/src/app/components/WorkbenchNavigator.tsx",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [
+        "../../locale/react",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/icons",
+        "../../presentation/right-panel/WorkbenchFiles.module.css",
+        "./WorkbenchFiles",
+        "./WorkbenchNavigator.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "additional_sources": [
+        {
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream": "packages/client/ui-sidebar-files/src/client/NavigatorToggle.tsx",
+          "upstream_sha256": "e7066331c8343b442611d222f149d1bf51db16878209dbb7fd0182cf1ac51fe1",
+          "treatment": "Pane-owned navigator toggle, width clamps, push/overlay/fill layout and accessible resize adapted to native workspace tree."
+        },
+        {
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream": "packages/client/ui-sidebar-files/src/client/store.ts",
+          "upstream_sha256": "ba1ef1ae318b543a574d1055eb84767ce2fe3aaa9a760e1a742766e5393f424f",
+          "treatment": "Pane-owned navigator toggle, width clamps, push/overlay/fill layout and accessible resize adapted to native workspace tree."
+        },
+        {
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream": "packages/client/ui-sidebar-files/src/client/navigator-layout.ts",
+          "upstream_sha256": "91d4cfa62bbfeea2e1481cbec42040d0ff59f8a1e449030c9985a85037222059",
+          "treatment": "Pane-owned navigator toggle, width clamps, push/overlay/fill layout and accessible resize adapted to native workspace tree."
+        }
+      ],
+      "local_sha256": "de22c18a99b165e06cb854371477f41963b413998122eaa19ea07da5b75606bc"
+    },
+    {
+      "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+      "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
+      "upstream_sha256": "b412321d7d82be7273349831335f3748723ee9ee083999387615131825b35c2b",
+      "destination": "web-console/src/app/components/WorkbenchNavigator.module.css",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "treatment": "Harness sidebar preview presentation adapted to native React content and pane ownership. Shared loading/frame/source-line/image and navigator behavior; no upstream transport or runtime authority.",
+      "retained_dependencies": [],
+      "excluded_dependencies": [
+        "Cordis, Remote, plugin slots/store and resource-address authority"
+      ],
+      "local_sha256": "32ceb0d7557379f6ea83076833cac0fe8373256757e72b3b9a2ea458ef569f4b"
     }
   ],
   "inspected_only": [

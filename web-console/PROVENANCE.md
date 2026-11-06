@@ -1,3 +1,24 @@
+## Shared sidebar preview and reusable Office converter (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`.
+`PreviewFrame`, `LoadingIndicator`, plain source lines, image layout/panning and
+`ui-sidebar-files` pane navigator geometry/presentation are ported or adapted
+under MIT, with exact paths, hashes and import closures in source-inventory.json.
+Native React owners supply source bytes and pane state; Cordis/Remote authority,
+plugin slots and filesystem APIs are not introduced into presentation.
+The Files page and adjacent preview navigator share pane-owned directory state;
+wide/overlay/fill layouts, resize, Escape, selection and file replacement follow
+the inspected implementation. Markdown, HTML, code, Excel and zoom retain their
+existing source ports. Supported-format admission remains native.
+
+Office conversion follows `document/office-to-pdf/src/index.ts` converter-slot
+ownership: initialize once and render multiple private files. Linux retains a
+sandboxed UNO Desktop through a private named pipe; macOS retains the existing
+kit's createConverter instance in a Seatbelt worker. A framed PDF response ends
+with an explicit document-close/output-cleanup trailer. Per-job manager timers,
+physical cancellation, Host disposal and bounded ready-PDF reuse retain native
+resource and authorization boundaries. No per-file CLI converter path remains.
+
 ## Office preview latency and Harness alignment (2026-11-06)
 
 Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,

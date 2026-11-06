@@ -1,7 +1,4 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted TextPreview chrome and MarkdownBody document; see PROVENANCE.md. */
-.preview { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden; }
-.header { display: flex; flex: 0 0 38px; gap: 4px; align-items: center; box-sizing: border-box; height: 38px; padding: 0 6px 0 16px; border-bottom: .5px solid var(--dsw-alias-border-l3); }
-.path { flex: 1 1 auto; min-width: 0; font-size: 13px; }
 .tool { display: flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 6px; color: var(--dsw-alias-label-secondary); background: transparent; border: 0; border-radius: var(--dsw-radius-sm); cursor: pointer; }
 .tool > span { display: flex; }
 .tool svg { width: 15px; height: 15px; }

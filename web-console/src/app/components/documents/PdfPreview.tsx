@@ -1,4 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from Harness pdf/pdf.tsx; native resource ownership retained. See PROVENANCE.md. */
+import { LoadingIndicator } from '../../../presentation/primitives/LoadingIndicator';
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { PdfDocumentOwner, type PdfPageSize } from '../../../client/pdf-document';
 import { PDF_LIMITS } from '../../../client/pdf-limits';
@@ -52,7 +53,7 @@ export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8
     return () => { signal.removeEventListener('abort', retire); retire(); };
   }, [props.bytes, props.signal, props.maxBytes]);
   if (error) return <div role="alert" className={css.status}><span>{tx(`artifacts:document.${documentFailure(new Error(error))}`)}</span><button onClick={props.retry}>{tx('artifacts:artifact-preview.retry-preview')}</button></div>;
-  if (!loaded || loaded.bytes !== props.bytes) return <p className={css.status} role="status">{tx('artifacts:document.loading')}</p>;
+  if (!loaded || loaded.bytes !== props.bytes) return <LoadingIndicator label={tx('artifacts:document.loading')}/>;
   return <ZoomViewport preference={preference} intrinsicWidth={pageWidth} horizontalInset={24}
     labels={{ controls: tx('artifacts:document.zoom'), menu: tx('artifacts:document.zoom'), out: tx('artifacts:workbench.zoom-out'), into: tx('artifacts:workbench.zoom-in'), fitWidth: tx('artifacts:workbench.fit-width'), value: percent => `${percent}%` }}
     signal={props.signal} scrollportRef={attachScroll} onPreference={setPreference} onRenderZoom={setRenderZoom}>
