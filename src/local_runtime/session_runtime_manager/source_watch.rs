@@ -142,16 +142,15 @@ fn skill_entry(root: &Path, rest: &Path, same: &impl Fn(&Path, &Path) -> bool) -
     let Some(candidate) = parts.next() else {
         return Some(root.to_path_buf());
     };
-    if candidate.as_os_str().as_encoded_bytes().starts_with(b".") {
-        return None;
-    }
+    let hidden = candidate.as_os_str().as_encoded_bytes().starts_with(b".");
     let candidate = root.join(candidate);
     let Some(file) = parts.next() else {
-        // Notifications carry paths, not trusted pre-change types. A former
-        // candidate may already have been replaced by a regular file.
+        // Every direct entry counts toward collection admission, including
+        // hidden entries and files. Notifications carry no trusted pre-change
+        // type: a former candidate may already be a regular file.
         return Some(candidate);
     };
-    if parts.next().is_some() {
+    if hidden || parts.next().is_some() {
         return None;
     }
     loader_name(
@@ -1683,6 +1682,8 @@ mod tests {
             candidate.join("notes.txt"),
             candidate.join("assets/deep/image.png"),
             candidate.join("assets/other/SKILL.md"),
+            collection.join(".hidden/SKILL.md"),
+            collection.join(".hidden/assets/deep/image.png"),
         ] {
             assert!(
                 notified(&path, &sources, &same_entry, &mut watches).is_empty(),
@@ -1696,6 +1697,17 @@ mod tests {
                 "{path:?}"
             );
         }
+        assert_eq!(
+            notified(
+                &collection.join(".hidden"),
+                &sources,
+                &same_entry,
+                &mut watches
+            )
+            .len(),
+            1,
+            "every direct entry consumes the collection budget"
+        );
         std::fs::rename(&candidate, collection.join("old")).unwrap();
         std::fs::write(&candidate, "a directory replaced by a file").unwrap();
         assert_eq!(

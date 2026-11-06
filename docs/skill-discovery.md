@@ -52,7 +52,9 @@ Native notifications invalidate observations; they never supply trusted content.
 The watcher registers the collection and each direct candidate directory
 non-recursively, so atomic SKILL.md replacement and directory recreation remain
 observable. Only candidate/collection structure and direct SKILL.md events route
-to Skill capture; resource files and deeper paths do not. Existing bounded merging,
+to Skill capture; every direct collection entry, including a hidden entry or an
+ordinary file, can change the collection admission budget and invalidates that
+observation. Hidden subtrees, resource files and deeper paths do not. Existing bounded merging,
 overflow rescan, rearming, physical-directory deduplication, case spelling and
 explicit `configuration/reconcile` remain. A rescan still observes definitions
 only. An explicitly configured non-Skill input keeps its own owner's semantics.
