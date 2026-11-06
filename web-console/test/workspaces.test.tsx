@@ -17,6 +17,8 @@ import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog, 
 import { configurationSystem } from '../src/app/settings/machines/system';
 import { Server, endpoint, snapshot, boundedSettings } from './fixture';
 import { cfg3Source } from './cfg3-data';
+import type { SourceSettings } from '../../protocol/app-server/v72';
+import { workspaceSettingsTarget } from '../src/app/settings/projection';
 let server: Server;
 beforeEach(() => {
   server = new Server(); localStorage.clear();
@@ -965,4 +967,65 @@ it.each(['ready', 'failed', 'disconnected'] as const)('shows Send preparation on
     expect(screen.getByRole('alert').textContent).toContain('Workspace read unavailable');
     expect(screen.getByRole('button', { name: 'Reread Workspace' })).toBeTruthy();
   }
+});
+
+it.each(['native diagnostic', 'missing diagnostic'] as const)('explains settled invalid Workspace permissions and rereads without sending: %s', async diagnostic => {
+  const host = hostFixture();
+  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
+  let source: SourceSettings = { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' },
+    prospective_approval_mode: null,
+    prospective_diagnostic: diagnostic === 'native diagnostic' ? 'Unknown provider in current Workspace configuration; repair rustx.toml.' : null,
+    // A published runtime can still supply its catalog while current-file
+    // resolution fails. That catalog must never admit this draft by itself.
+    session_models: { kind: 'available', default_model: { model: 'fixture/model' }, catalog: { models: [{
+      model: 'fixture/model', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192,
+      declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [],
+      credentialSource: { type: 'environment', variable: 'KEY' },
+    }] } },
+  };
+  server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(source) }));
+  host.configureWorkspace = vi.fn<NonNullable<ProductHostWorkspaces['configureWorkspace']>>(async (_id, _endpoint, operation) => {
+    if (operation.kind !== 'read') throw new Error('Unexpected write');
+    await server.client.request({ method: 'configuration/sourcesRead', params: { target: source.target } }, 'source_settings');
+    return { kind: 'read', projection: source };
+  });
+  server.held.add('configuration/sourcesRead');
+  await mount(host);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New conversation in Workspace A' })));
+  const read = await server.waitFor('configuration/sourcesRead', 1);
+  expect(await screen.findByRole('button', { name: 'Preparing to send…' })).toHaveProperty('disabled', true);
+  const input = screen.getByRole('textbox', { name: 'Message' });
+  fireEvent.change(input, { target: { value: 'Keep this draft through configuration repair' } });
+  await act(async () => server.reply(read));
+  const actor = configurationSystem(server.client).settingsTarget(workspaceSettingsTarget('wA'), () => host);
+  expect(actor.getSnapshot().context.readError).toBe('');
+  expect(actor.getSnapshot().context.observation?.session_models?.kind).toBe('available');
+  const explanation = source.prospective_diagnostic ?? 'Workspace permissions are unavailable. Repair the Workspace configuration and reread before sending.';
+  expect((await screen.findByRole('alert')).textContent).toContain(explanation);
+  expect(screen.queryByRole('button', { name: 'Preparing to send…' })).toBeNull();
+  expect(screen.queryByText('Awaiting authoritative Workspace permissions.')).toBeNull();
+  const send = screen.getByRole('button', { name: 'Send' });
+  expect(send).toHaveProperty('disabled', true);
+  expect(send.getAttribute('aria-busy')).not.toBe('true');
+  expect(input).toHaveProperty('disabled', false);
+  expect(input).toHaveProperty('readOnly', false);
+  await act(async () => {
+    fireEvent.click(send);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+  });
+  const submissions = () => methods().filter(method => ['session/create', 'session/attach', 'turn/start'].includes(method));
+  expect(submissions()).toEqual([]);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Reread Workspace' })));
+  const reread = await server.waitFor('configuration/sourcesRead', 2);
+  expect(screen.getByRole('button', { name: 'Preparing to send…' })).toHaveProperty('disabled', true);
+  expect(screen.queryByText(explanation)).toBeNull();
+  source = { ...source, prospective_approval_mode: 'policy', prospective_diagnostic: null };
+  await act(async () => server.reply(reread));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false));
+  expect(screen.queryByRole('button', { name: 'Preparing to send…' })).toBeNull();
+  expect(screen.queryByText(explanation)).toBeNull();
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', 'Keep this draft through configuration repair');
+  expect(submissions()).toEqual([]);
 });

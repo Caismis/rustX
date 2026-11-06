@@ -1,6 +1,6 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-06, Asia/Shanghai, through review comment 6675579112 and the
+Checked on 2026-11-06, Asia/Shanghai, through review comment 6680895688 and the
 requested first-image/navigation policy. The latest repairs cover failed-module
 Refresh recovery, contiguous-read assertions, bounded exact STL preparation and
 Workflow fixture shutdown. Details and validation limits are in
@@ -37,6 +37,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6680895688](https://github.com/Caismis/rustX/pull/517#issuecomment-6680895688) | A settled Workspace source with no prospective approval mode now shows Native's configuration diagnostic, or a localized unavailable explanation, through the existing source owner and reread action. An available previously published Session catalog cannot admit sending. Actual reads still use the Send-preparation spinner; no waiting footer is restored. Two real-App regressions first failed because the settled diagnostic was absent, then passed with draft retention, blocked button/keyboard submission, reread preparation and repaired-source recovery without automatic sending. |
 | [6675579112](https://github.com/Caismis/rustX/pull/517#issuecomment-6675579112) | A current outline request retains its desired state while preparation suspends it in a parked preview; visibility restoration resumes that request without hidden work, duplicate Workers or retries of actual failures. Latest Off and replacement-copy fences remain authoritative. An unresolved startup Session hint survives transient admission failure and closing another tab; authoritative deletion or newer explicit navigation retires it. Real component/viewport and App regressions reproduce both findings before the repairs. Validation is recorded in [the suspension repair report](suspension-review-repairs.md). |
 | [6654200365](https://github.com/Caismis/rustX/pull/517#issuecomment-6654200365) | Copy-ID changes retry a failed viewer import in the same artifact pane, with late-result fencing and a real Refresh regression. CAD expected reads follow actual fixture size. Large binary STL can prepare a complete, source-proven exact planar surface within the existing optional budget; unproved surfaces keep the standard path. Workflow visual tests close their page before the Host. Installed-Chrome regressions pass; strict first-model/maximum-input acceptance and current-head pinned CI remain separate and open. |
 | [6653051473](https://github.com/Caismis/rustX/pull/517#issuecomment-6653051473) | The sampled SVG and its focus transition have been removed. Coarse-to-final adoption captures the owned arrow identity and restores that arrow only if the document body still owns focus after mounting. Camera-derived actions initialize before immediate keyboard input. Actual component/OrbitControls regressions cover untouched/aligned arrows, canvas focus, external controls and external focus moved during adoption. |

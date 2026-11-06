@@ -20,7 +20,10 @@ export function WorkspaceControls({ client, host, workspaceId, children }: { cli
   const { actor } = useSettingsTarget(client, workspaceId ? workspaceSettingsTarget(workspaceId) : userSettingsTarget, host, !!workspaceId);
   const source = useSelector(actor, s => s.context.observation);
   const error = useSelector(actor, s => s.context.readError);
-  return <SettingsActorContext value={actor}><SourceContext value={source}>{<ApprovalScope source={source}>{children}</ApprovalScope>}{error && <span role="alert">{error}<Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-workspace')}</Button></span>}</SourceContext></SettingsActorContext>;
+  const settled = useSelector(actor, s => s.matches({ authority: { attached: 'idle' } }));
+  const diagnostic = settled && source?.target.kind === 'workspace' && !source.prospective_approval_mode
+    ? source.prospective_diagnostic ?? tx('workspace:workspace-controls.permissions-unavailable') : undefined;
+  return <SettingsActorContext value={actor}><SourceContext value={source}>{<ApprovalScope source={source}>{children}</ApprovalScope>}{(error || diagnostic) && <span role="alert">{error || diagnostic}<Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-workspace')}</Button></span>}</SourceContext></SettingsActorContext>;
 }
 function useWorkspaceApproval(source?: SourceSettings) {
   const actor = useSettingsActor();
