@@ -30,7 +30,7 @@ async function fixture(listWorkspaces: ProductHostWorkspaces['listWorkspaces'] =
       maxActive = Math.max(maxActive, ++active);
       readWaiters.get(reads.length)?.(); return gate.promise.finally(() => { --active; });
     }),
-    adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
+    adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), selectWorkspace: async () => {}, reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
   };
   const client = { onAuthorityRetired: () => () => {}, onDispose: () => () => {}, recheckAdmissions: () => {}, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
   const navigation = routeFixture(client);

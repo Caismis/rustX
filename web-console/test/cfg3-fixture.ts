@@ -43,5 +43,5 @@ export function cfg3Host(subject: ReturnType<typeof cfg3Client>): import('../src
       }
       if(operation.kind==='reconcile') await subject.client.request({method:'configuration/reconcile',params:{target}},'configuration_receipt');
       return {kind:operation.kind,projection:await read(target)};
-    }, adoptWorkspace:async()=>{},renameWorkspace:async()=>{},reorderWorkspace:async()=>{},removeWorkspace:async()=>{},resolveWorkspace:async(id)=>({cwd:'/workspace/'+id}),classifyLocations:async(cwds)=>cwds.map(()=>({authorized:true})) };
+    }, adoptWorkspace:async()=>{},renameWorkspace:async()=>{},selectWorkspace: async () => {}, reorderWorkspace:async()=>{},removeWorkspace:async()=>{},resolveWorkspace:async(id)=>({cwd:'/workspace/'+id}),classifyLocations:async(cwds)=>cwds.map(()=>({authorized:true})) };
 }

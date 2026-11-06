@@ -19,10 +19,22 @@ it('uses latest native activity rather than catalog, pinned or Workspace order',
 it('inherits the current registered Workspace before a more recent one', () => {
   const f = fixture(); expect(preferredWorkspace(f.associations, f.state, 'A')).toBe('A');
 });
+it('restores the explicit preference before native recency, while ignoring a removed registration', () => {
+  const f = fixture();
+  expect(preferredWorkspace(f.associations, f.state, undefined, 'A')).toBe('A');
+  expect(preferredWorkspace(f.associations, f.state, undefined, 'removed')).toBe('B');
+  expect(preferredWorkspace(f.associations, f.state, 'B', 'A')).toBe('B');
+});
 it('keeps Host order for equal activity and for registered Workspaces with no known Sessions', () => {
   const f = fixture(); f.state.sessions = f.state.sessions.map(session => ({ ...session, updated_at: '2026-11-01T00:00:00Z' })).reverse();
   expect(preferredWorkspace(f.associations, f.state)).toBe('A');
   f.state.sessions = []; expect(preferredWorkspace(f.associations, f.state)).toBe('A');
+});
+it('uses the durable Host preference when a new browser origin has no local choice', () => {
+  const f = fixture(); f.associations.catalog!.preferredWorkspace = 'A';
+  expect(preferredWorkspace(f.associations, f.state)).toBe('A');
+  f.associations.catalog!.preferredWorkspace = 'removed';
+  expect(preferredWorkspace(f.associations, f.state)).toBe('B');
 });
 it('ignores removed registrations and classification for a different native cwd', () => {
   const f = fixture(); f.state.sessions = f.state.sessions.map(session => session.id === 'B' ? { ...session, cwd: '/moved/B' } : session);

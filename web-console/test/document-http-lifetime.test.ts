@@ -18,7 +18,7 @@ async function serve(previewDocument: NonNullable<ProductHostWorkspaces['preview
   const unexpected = async (): Promise<never> => { throw new Error('Unexpected Workspace metadata operation'); };
   const host: ProductHostWorkspaces = { previewDocument, readDelivery, observeDelivery: observation,
     listWorkspaces: async () => ({ ...scope, workspaces: [], picker: { kind: 'unavailable', reason: 'fixture' } }),
-    adoptWorkspace: unexpected, renameWorkspace: unexpected, reorderWorkspace: unexpected, removeWorkspace: unexpected,
+    adoptWorkspace: unexpected, renameWorkspace: unexpected, selectWorkspace: async () => {}, reorderWorkspace: unexpected, removeWorkspace: unexpected,
     resolveWorkspace: unexpected, classifyLocations: unexpected };
   const handler = workspaceHandler(host);
   server = createServer((req, res) => { void handler(req, res); });

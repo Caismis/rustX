@@ -110,9 +110,15 @@ attachment grants no Product Host filesystem authority. See [connection security
 
 The Product Host retains all Workspace navigation/authorization decisions. Only
 explicit exact roots are authorized; descendants are not implicitly admitted.
-Native configuration resolution remains separate from Host navigation authorization. Dev Host names/order/registrations are
-intentionally ephemeral for each composition. Persistent operator-owned Host
-metadata belongs to a separately managed Host, not launcher scratch.
+Native configuration resolution remains separate from Host navigation authorization.
+Dev Host registrations, names, order and the manually selected Workspace persist
+in `$XDG_STATE_HOME/rustx/web/<profile>/workspaces.json` (defaulting to
+`~/.local/state`). The profile hashes the canonical Workspace root set and opaque
+forwarded native arguments; location handles hash canonical root paths. Restarting
+with the same launch profile preserves registration identity even when native/Web
+ports or CLI root order change. The browser remembers an accepted selection
+immediately, while the Host persists it independently of the browser origin and
+before any message is sent. This metadata grants no new native authority.
 
 ## Ownership and shutdown
 
@@ -134,8 +140,7 @@ delivering a kill signal alone is not treated as settlement.
 
 Scratch contains separate random transport, Product Host and Delivery Access tokens
 (0600), one Host config (0600), a private Web bootstrap config (0600, referencing the
-transport and Delivery Access token files), and the
-Host's ephemeral registration metadata, beneath a private temporary directory
+transport and Delivery Access token files), beneath a private temporary directory
 (0700). User configuration, runtime roots, Workspace files and persistent Host metadata
 are never launcher scratch and are never removed. Launcher SIGINT/SIGHUP/SIGTERM
 return 130/129/143;

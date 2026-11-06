@@ -33,7 +33,7 @@ function hostFixture(picker = true) {
     classifyLocations: vi.fn(async (cwds: readonly string[]) => cwds.map(cwd => ['/workspace/A', '/workspace/B'].includes(cwd) ? { authorized: true as const, workspaceId: rows.find(row => row.displayPath === cwd)?.id } : { authorized: false as const, reason: 'denied' as const })),
     resolveWorkspace: vi.fn(async id => { const row = rows.find(row => row.id === id); if (!row) throw new Error('Unauthorized'); return { cwd: row.displayPath }; }),
     renameWorkspace: vi.fn(async (_scope, id, displayName) => { rows = rows.map(row => row.id === id ? { ...row, displayName } : row); }),
-    reorderWorkspace: vi.fn(async () => {}), removeWorkspace: vi.fn(async (_scope, id) => { rows = rows.filter(row => row.id !== id); }),
+    selectWorkspace: async () => {}, reorderWorkspace: vi.fn(async () => {}), removeWorkspace: vi.fn(async (_scope, id) => { rows = rows.filter(row => row.id !== id); }),
     adoptWorkspace: vi.fn(async () => {}),
   };
   return host;

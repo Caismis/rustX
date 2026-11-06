@@ -3,9 +3,10 @@ import type { ClientView } from '../client/contracts';
 import type { AssociationSnapshot } from './associations';
 import { sameEndpoint } from './endpoint';
 
-/** Current Session first, then native activity time; Host order breaks ties.
+/** Current Session first, then the explicit preference, then native activity.
+ * Host order breaks ties when no selection or activity exists.
  * Registration/classification are display hints. Send still reauthorizes. */
-export function preferredWorkspace(associations: AssociationSnapshot, state: Pick<ClientView, 'connection' | 'endpoint' | 'sessions' | 'views'>, sessionId?: string): string | undefined {
+export function preferredWorkspace(associations: AssociationSnapshot, state: Pick<ClientView, 'connection' | 'endpoint' | 'sessions' | 'views'>, sessionId?: string, remembered?: string): string | undefined {
   const catalog = associations.catalog;
   if (state.connection !== 'connected' || associations.status !== 'ready' || !catalog || !sameEndpoint(catalog.endpoint, state.endpoint)) return;
   const registered = new Set(catalog.workspaces.map(workspace => workspace.id));
@@ -18,6 +19,8 @@ export function preferredWorkspace(associations: AssociationSnapshot, state: Pic
     const current = workspaceOf(sessionId, summary?.cwd ?? state.views[sessionId]?.settings?.cwd);
     if (current) return current;
   }
+  if (remembered && registered.has(remembered)) return remembered;
+  if (catalog.preferredWorkspace && registered.has(catalog.preferredWorkspace)) return catalog.preferredWorkspace;
   const activity = new Map<string, number>();
   const listed = new Set(state.sessions.map(session => session.id));
   for (const [id, entry] of associations.entries) {

@@ -1,3 +1,24 @@
+## Remember an unsent Workspace choice (2026-11-06)
+
+Harness `ce7073d51254c26cd63b22a60835b8f948deb447` persists the current
+blank Session before sending (`ui-workspace/src/client/navigation.ts`,
+`MainSelection` and `replaceMain`). rustX retains its native draft ownership and
+records an explicit Workspace registration preference at the picker/sidebar
+gesture. Browser preference keys use normalized endpoint identity for immediate
+reload. The scoped Product Host selection write persists a selected flag in its
+registration metadata; ordered per-page intents prevent delayed older choices
+from replacing a newer one, and the small HTTP write uses keepalive during unload.
+The local launcher retains registration metadata outside secret scratch, with
+stable canonical-root handles and a profile keyed by the root set and opaque
+native arguments. A full restart restores the preference through a fresh Host
+catalog even when native/Web ports or browser origins change. Removed
+registrations fall through to the ordinary default.
+The remembered choice precedes native activity recency. The unsent route is
+persisted too, so an older open Session cannot replace it during restoration.
+Current Session navigation remains independent. Preference writes start
+at the accepted gesture, before a possible refresh; no source bytes, paths,
+credentials, draft contents or authorization are persisted by this preference.
+
 ## Startup and New Conversation Workspace selection (2026-11-06)
 
 Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,

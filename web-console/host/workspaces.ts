@@ -41,7 +41,7 @@ export interface LocalHostConfig {
   /** Operator-owned file outside the browser and rustX runtime root. */
   metadataFile: string;
 }
-type Registration = { id: string; location: string; displayName: string };
+type Registration = { id: string; location: string; displayName: string; selected?: true };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly terminals: WorkspaceTerminals;
   private terminalObserver?: Promise<() => Promise<void>>;
@@ -59,6 +59,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private closed = false;
   private readonly authorityId = randomUUID();
   private registrations: Registration[];
+  private readonly selections = new Map<string, number>();
   private readonly roots: LocalHostConfig['roots'];
   private readonly config: LocalHostConfig;
   private readonly desktop: DesktopAdapter;
@@ -77,7 +78,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (new Set(this.roots.map(root => root.id)).size !== this.roots.length || new Set(this.roots.map(root => root.cwd)).size !== this.roots.length) throw new Error('Duplicate Host location');
     this.registrations = existsSync(config.metadataFile) ? JSON.parse(readFileSync(config.metadataFile, 'utf8')) as Registration[]
       : this.roots.map(root => ({ id: randomUUID(), location: root.id, displayName: root.displayName }));
-    if (!Array.isArray(this.registrations) || this.registrations.some(row => typeof row.id !== 'string' || typeof row.displayName !== 'string' || !this.roots.some(root => root.id === row.location))) throw new Error('Invalid Host registrations');
+    if (!Array.isArray(this.registrations) || this.registrations.some(row => !row || typeof row.id !== 'string' || typeof row.displayName !== 'string' || !this.roots.some(root => root.id === row.location) || (row.selected !== undefined && row.selected !== true))
+      || this.registrations.filter(row => row.selected).length > 1) throw new Error('Invalid Host registrations');
     this.commit(this.registrations);
   }
   private commit(rows: Registration[]) {
@@ -104,8 +106,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (!sameEndpoint(endpoint, this.config.endpoint)) throw new Error('Workspace Host belongs to a different rustX process');
   }
   async listWorkspaces(): Promise<WorkspaceCatalog> {
+    const preferredWorkspace = this.registrations.find(row => row.selected)?.id;
     return { authorityId: this.authorityId, endpoint: this.config.endpoint,
-      workspaces: this.registrations.map(row => ({ ...row, displayPath: this.roots.find(root => root.id === row.location)!.cwd })),
+      workspaces: this.registrations.map(({ id, location, displayName }) => ({ id, location, displayName, displayPath: this.roots.find(root => root.id === location)!.cwd })),
+      ...(preferredWorkspace ? { preferredWorkspace } : {}),
       picker: this.config.picker ? { kind: 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
@@ -430,6 +434,15 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const rows = this.registrations.filter(row => row.id !== id);
     rows.splice(before ? rows.findIndex(row => row.id === before) : rows.length, 0, row);
     this.commit(rows);
+  }
+  async selectWorkspace(scope: WorkspaceAuthorityScope, id: string, intent: import('../src/workspaces/host.ts').WorkspaceSelectionIntent) {
+    this.mutationScope(scope); this.registered(id);
+    if (!intent || typeof intent.client !== 'string' || !/^[a-f0-9-]{36}$/.test(intent.client)
+      || !Number.isSafeInteger(intent.sequence) || intent.sequence < 1) throw new Error('Invalid Workspace selection');
+    if (intent.sequence <= (this.selections.get(intent.client) ?? 0)) return;
+    this.commit(this.registrations.map(({ selected: _selected, ...row }) => row.id === id ? { ...row, selected: true } : row));
+    this.selections.delete(intent.client); this.selections.set(intent.client, intent.sequence);
+    while (this.selections.size > 32) this.selections.delete(this.selections.keys().next().value!);
   }
   /** Per-registration authority lane. A native configuration mutation holds its
    * registration's lane from first resolution to final reread, so removal can

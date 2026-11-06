@@ -8251,7 +8251,7 @@
       "destination": "web-console/src/workspaces/preferred.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "treatment": "Adapt Harness current-Session/most-recent-Workspace selection to native Session activity and Host-confirmed registration identities. Wait for connected catalog/classification, preserve explicit choices, and use stable Host order when no activity metadata exists. Bounded association metadata retains observed activity across list searches; no upstream Session creation or default-directory initialization is imported.",
+      "treatment": "Adapt Harness current-Session/most-recent-Workspace selection to native Session activity and Host-confirmed registration identities. Wait for connected catalog/classification, preserve explicit choices, and use stable Host order when no activity metadata exists. Bounded association metadata retains observed activity across list searches; no upstream Session creation or default-directory initialization is imported. Explicit unsent Workspace preferences are restored after current catalog validation and before native recency; browser/Host preference persistence, durable launcher registration and draft-route restoration remain rustX-owned.",
       "retained_dependencies": [
         "../client/contracts",
         "./associations",
@@ -8260,7 +8260,7 @@
       "excluded_dependencies": [
         "Cordis, Remote, upstream Workspace/Session stores, eager blank Session creation and default-directory initialization"
       ],
-      "local_sha256": "ebbe84b386a4225e49669a700882c12e7f252d738704c4ee56fb3ef3ae8f2b63"
+      "local_sha256": "541e075beb4a89550738d005591e5071c5ef50d635425fca55ac28412959494c"
     }
   ],
   "inspected_only": [

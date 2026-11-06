@@ -1,11 +1,12 @@
 import { accessSync, constants, mkdtempSync, writeFileSync, rmSync, statSync, realpathSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { LocalHostConfig } from '../../web-console/host/workspaces.ts';
 import type { Arguments } from './arguments.ts';
 import { spawnOwned, type Spawn, type OwnedChild, type ChildSpec } from './process.ts';
 import { handoff, openBrowser } from './browser.ts';
+import { workspaceRegistry } from './workspace-registry.ts';
 
 export interface WebReady { url: string; endpoint: string; tokenFile: string; deliveryTokenFile: string; hostConfigFile: string; workspaces: string[] }
 
@@ -14,6 +15,7 @@ export class Launcher {
   readonly done: Promise<number>;
   readonly #root: string;
   readonly #spawn: Spawn;
+  readonly #stateDirectory?: string;
   readonly #children: OwnedChild[] = [];
   readonly #abort = new AbortController();
   #resolveDone!: (code: number) => void;
@@ -22,8 +24,8 @@ export class Launcher {
   #started = false;
   #browserTask?: Promise<void>;
 
-  constructor(root: string, spawn: Spawn = spawnOwned) {
-    this.#root = root; this.#spawn = spawn;
+  constructor(root: string, spawn: Spawn = spawnOwned, stateDirectory?: string) {
+    this.#root = root; this.#spawn = spawn; this.#stateDirectory = stateDirectory;
     this.done = new Promise(resolve => { this.#resolveDone = resolve; });
   }
   #active() { if (this.#abort.signal.aborted) throw new Error('Development composition is settling'); }
@@ -99,8 +101,8 @@ export class Launcher {
       const deliveryTokenFile = this.#write('delivery-token', deliveryToken);
       const endpoint = await this.#ready(this.#child({ component: 'app-server', command: args.binary,
         args: ['app-server', ...args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile, '--delivery-access-token-file', deliveryTokenFile], cwd: process.cwd(), readiness: 'app-server' }));
-      const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(dirname(args.binary), 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true, metadataFile: join(this.#scratch(), 'workspaces.json'),
-        roots: args.workspaces.map((cwd, index) => ({ id: `root-${index + 1}`, cwd, displayName: basename(cwd) || cwd })) };
+      const config: LocalHostConfig = { nativeFilesystem: 'shared', terminalSupervisor: join(dirname(args.binary), 'interactive-supervisor'), endpoint, transportToken, productHostToken, picker: true,
+        ...workspaceRegistry(args.workspaces, args.forwarded, this.#stateDirectory) };
       const hostConfigFile = this.#write('host-config.json', JSON.stringify(config));
       let browserLaunchToken: string;
       do { browserLaunchToken = randomBytes(32).toString('base64url'); } while ([transportToken, productHostToken, deliveryToken].includes(browserLaunchToken));

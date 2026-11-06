@@ -7,8 +7,10 @@ import { Server, endpoint } from './fixture';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); vi.restoreAllMocks(); });
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
-async function fixture({ held = false, current = false, history = true } = {}) {
-  localStorage.clear(); server = new Server();
+async function fixture({ held = false, current = false, history = true, preservePreferences = false, hostAuthority = 'fixture-host' } = {}) {
+  if (!preservePreferences) localStorage.clear(); server = new Server();
+  const listWorkspaces = server.workspaceHost.listWorkspaces;
+  server.workspaceHost.listWorkspaces = async () => ({ ...await listWorkspaces(), authorityId: hostAuthority });
   server.summaries.set('A', { updated_at: '2026-11-01T00:00:00Z' }); server.summaries.set('B', { updated_at: '2026-11-06T00:00:00Z' });
   if (!history) server.snapshots.clear();
   const classify = gate<void>(); if (!held) classify.resolve();
@@ -55,4 +57,23 @@ it('restored Session selection takes precedence over the recent-Workspace defaul
   await waitFor(() => expect(f.ui.container.querySelector('#session-view')?.getAttribute('data-shell-route')).toBe('session'));
   expect(f.ui.container.querySelector('[data-draft-conversation]')).toBeNull();
   expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+});
+it('remembers an unsent picker choice across a fresh client and Product Host lifetime', async () => {
+  const first = await fixture();
+  await waitFor(() => expect(first.picker().textContent).toContain('Workspace B'));
+  fireEvent.click(first.picker()); fireEvent.click(await first.ui.findByRole('menuitem', { name: 'Workspace A' }));
+  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  first.ui.unmount(); server.client.disconnect();
+  const restarted = await fixture({ preservePreferences: true, hostAuthority: 'restarted-host' });
+  await waitFor(() => expect(restarted.picker().textContent).toContain('Workspace A'));
+  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+});
+it('a manual sidebar choice restores the unsent route instead of reopening an older Session', async () => {
+  const first = await fixture({ current: true });
+  fireEvent.click(await first.ui.findByRole('button', { name: 'Select Workspace Workspace A' }));
+  await waitFor(() => expect(first.picker().textContent).toContain('Workspace A'));
+  first.ui.unmount(); server.client.disconnect();
+  const restarted = await fixture({ preservePreferences: true });
+  await waitFor(() => expect(restarted.picker().textContent).toContain('Workspace A'));
+  expect(restarted.ui.container.querySelector('#session-view')?.getAttribute('data-shell-route')).toBe('new-conversation');
 });
