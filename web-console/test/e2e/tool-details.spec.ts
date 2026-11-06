@@ -11,9 +11,12 @@ for (const theme of ['light', 'dark'] as const) test(`Harness tool details: inde
   await page.evaluate(value => { document.body.toggleAttribute('data-ds-dark-theme', value === 'dark'); document.documentElement.style.colorScheme = value; }, theme);
   const call = page.locator('[data-tool-call-id="long-bash"]');
   const toggle = call.getByRole('button', { name: /^bash/ });
+  await expect(toggle).toContainText('Apply corrections and back up the document');
+  await expect(toggle).not.toContainText('printf');
   await toggle.focus();
   await page.keyboard.press('Enter');
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggle).toContainText('Apply corrections and back up the document');
   const terminal = call.locator('[data-terminal]');
   const banner = terminal.locator(':scope > div').nth(0);
   const output = terminal.locator(':scope > div').nth(1);

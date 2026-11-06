@@ -1,3 +1,13 @@
+## Bash execution-reason summaries (2026-11-06)
+
+Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-tool/.../tool-call-model.ts`, `terminal-card-model.ts`,
+`toolviews/bash-sample.tsx` and `shell/tool-bash/src/index.ts`.
+Bash rows show the first line of the authored `description`, including after
+failure; commands remain in the expanded terminal. Missing descriptions leave
+the summary empty. Native tool instructions request the execution reason before
+the command; the native invocation contract and execution authority are unchanged.
+
 ## Quiet conversation loading (2026-11-06)
 
 Read-only study of sibling Harness `ce7073d51254c26cd63b22a60835b8f948deb447`

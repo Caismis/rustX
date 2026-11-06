@@ -323,6 +323,30 @@ it('Bash description is safe collapsed text while expanded detail retains comman
  expect(view.state).toBe('running');
  expect(view.input).toBe('printf authoritative');
 });
+it.each(['running', 'success', 'failure', 'cancelled'] as const)('Bash keeps its execution reason as the row summary when %s', lifecycle => {
+ const args = JSON.stringify({ command: "python3 - <<'PY'\nimport openpyxl\nPY", description: '检查 Excel 依赖是否可用\nAdditional detail' });
+ const tool: ForegroundToolExecution = { committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'reason' }, block_index: 0 }, assembly_complete: true,
+  message_id: 'reason', block_index: 0, call_id: 'reason-call', tool_id: 'tool-bash', name: 'bash', state: lifecycle === 'running' ? { type: 'running', arguments: args }
+   : { type: 'settled', arguments: args, result: { status: lifecycle === 'success' ? { type: 'success' } : lifecycle === 'cancelled' ? { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' } : { type: 'failed', error: 'Native command failed' }, duration_ms: '1' } } };
+ const ui = render(<Tool tool={tool}/>);
+ const row = ui.getByRole('button', { expanded: false });
+ expect(row.textContent).toContain('检查 Excel 依赖是否可用');
+ expect(row.textContent).not.toContain('python3'); expect(row.textContent).not.toContain('Native command failed');
+ expect(row.textContent).not.toContain('Additional detail');
+ fireEvent.click(row);
+ expect(ui.getByRole('button', { expanded: true }).textContent).toContain('检查 Excel 依赖是否可用');
+ expect(ui.container.textContent).toContain('import openpyxl');
+ if (lifecycle === 'failure') expect(ui.container.textContent).toContain('Native command failed');
+});
+it('Bash without a description keeps the row quiet and exposes the command only in its details', () => {
+ const tool: ForegroundToolExecution = { committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'missing-description' }, block_index: 0 }, assembly_complete: true,
+  message_id: 'missing-description', block_index: 0, call_id: 'missing-description', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: JSON.stringify({ command: 'python3 generate_report.py' }), result: { status: { type: 'failed', error: 'Native error' }, duration_ms: '1' } } };
+ const ui = render(<Tool tool={tool}/>), row = ui.getByRole('button', { expanded: false });
+ expect(toolCard(tool).summary).toBe(''); expect(row.textContent).toBe('bash');
+ fireEvent.click(row);
+ expect(ui.container.textContent).toContain('python3 generate_report.py');
+ expect(ui.container.textContent).toContain('Native error');
+});
 it('image reads have a dedicated renderer and retain managed image references after replay', () => {
  const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: 'sample.png' }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'image', artifact_id: 'artifact_1' }] } } };
  expect(toolCard(tool).variant).toBe('image');

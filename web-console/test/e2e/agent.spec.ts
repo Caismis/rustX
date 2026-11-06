@@ -11,6 +11,11 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
    await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=${mode}`);
    await expect(page).toHaveTitle('Session A — rustX');
    await expect(page.getByLabel('Canonical conversation')).toBeVisible();
+   if (mode === 'tools' || mode === 'error') {
+     const bash = page.locator('[data-tool-call-id="bash-1"]').locator('[data-disclosure-row]');
+     await expect(bash).toContainText('Run native boundary tests');
+     await expect(bash).not.toContainText('cargo test --lib');
+   }
    if (mode === 'error') {
      await page.locator('[data-tool-call-id="bash-1"]').getByRole('button').click();
      await page.locator('[data-tool-call-id="edit-1"]').getByRole('button').click();
