@@ -58,6 +58,18 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
   (maximum 26). No surrounding rectangle inherits a bound. Comparator regressions
   reject neighboring sites, foreign references, excess deltas and the retired
   Start-icon allowance. The PNG reference and comparator implementation are unchanged.
+- FULL CI run `42229926383`, job `127936183721`, evidence artifact `13513095611`
+  measured a second stable capture with 602 changed pixels (maximum delta 31).
+  Its three actual graph capture checkpoints `36286`, `36291` and `36295` have
+  the same canonical viewport hash above; all five CSS resources also match.
+  It adds 92 measured sites and exceeds 192 previous per-site channel bounds.
+  The live manifest records the exact 639-site union as separate one-pixel
+  regions, each bounded by its largest actually observed delta. Each top-level
+  RGBA tuple is an actual maximum-delta exemplar from one capture; `captures`
+  preserves both complete raw observations and their PNG hashes. Tests replay
+  both, prove that the regions and bounds equal that observed union, and reject
+  unmeasured neighbors, excessive deltas and foreign-reference use. There is no
+  enclosing rectangle or global allowance; internal Chromium causes remain unproven.
 - Workflow browser acceptance waits for a reopened Model's measured card to be
   visible, dispatches its keyboard action there and checks its Inspector.
   Each multi-MiB Global/Workspace authoring case has its own normal

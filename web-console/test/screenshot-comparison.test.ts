@@ -26,6 +26,10 @@ import previousStyleManifest from './fixtures/screenshot-comparator/pre-style-sy
  * bounds, layout shifts, missing elements and dimension changes. */
 
 const noisePolicy = manifest as unknown as NoisePolicy;
+const workflowReference = 'workflow-editor-linux.png';
+const workflowCaptures = (manifest.find(entry => entry.reference === workflowReference) as unknown as {
+  captures: readonly { run: number; pngSha256: string; pixels: MeasuredNoisePixel[] }[];
+}).captures;
 const e2e = new URL('./e2e/', import.meta.url);
 const snapshotDirectories = readdirSync(e2e)
   .filter(entry => entry.endsWith('.spec.ts-snapshots'))
@@ -141,31 +145,56 @@ it('the full-width workflow editor does not inherit the retired Start-icon allow
   }
 });
 
-it('Workflow curve coverage admits only its 547 measured sites within each observed channel bound', () => {
+it('Workflow curve coverage admits exactly the observed union within each measured per-site maximum', () => {
   const name = 'workflow-editor-linux.png', expected = reference(name);
   const entry = noisePolicy.find(row => row.reference === name)!;
   const measured = entry.pixels as MeasuredNoisePixel[];
-  expect(measured).toHaveLength(547);
+  expect(workflowCaptures.map(capture => capture.pixels.length)).toEqual([547, 602]);
+  const observations = new Map<string, MeasuredNoisePixel[]>();
+  for (const capture of workflowCaptures) for (const tuple of capture.pixels) {
+    const key = `${tuple[0]},${tuple[1]}`;
+    observations.set(key, [...(observations.get(key) ?? []), tuple]);
+  }
+  expect(measured).toHaveLength(639);
+  expect(new Set(measured.map(([x, y]) => `${x},${y}`))).toEqual(new Set(observations.keys()));
   expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
   for (const [i, region] of entry.regions.entries()) {
     expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1 });
-    const [, , before, after] = measured[i];
+    const [x, y, before, after] = measured[i];
+    const captured = observations.get(`${x},${y}`)!;
+    expect(captured).toContainEqual(measured[i]);
+    expect(region.maxChannelDelta).toBe(Math.max(...captured.map(([, , before, after]) =>
+      Math.max(...before.map((channel, j) => Math.abs(after[j] - channel))))));
     expect(region.maxChannelDelta).toBe(Math.max(...before.map((channel, j) => Math.abs(after[j] - channel))));
   }
-  expect(Math.max(...entry.regions.map(region => region.maxChannelDelta))).toBe(26);
+  expect(Math.max(...entry.regions.map(region => region.maxChannelDelta))).toBe(31);
   const observed = copy(expected);
   for (const [x, y, , after] of measured) paint(observed, x, y, after);
   expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
   expect(compare(observed, 'workflow-library-workspace-linux.png', expected, noisePolicy).ok).toBe(false);
-  for (const region of [entry.regions.find(region => region.maxChannelDelta === 1)!, entry.regions.find(region => region.maxChannelDelta === 26)!]) {
+  for (const region of [entry.regions.find(region => region.maxChannelDelta === 1)!, entry.regions.find(region => region.maxChannelDelta === 31)!]) {
     const excessive = copy(expected); nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
     expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
   }
-  for (const [x, y] of [[880, 315], [900, 316], [754, 324], [880, 326], [755, 403], [0, 0]]) {
+  for (const [x, y] of [[750, 306], [751, 305], [900, 316], [900, 408], [750, 408], [0, 0]]) {
     const adjacent = copy(observed); nudge(adjacent, x, y, 1);
     const result = compare(adjacent, name, expected, noisePolicy);
     expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
   }
+});
+
+it.each(workflowCaptures)('Workflow run $run replays its complete raw capture under only its reference policy', capture => {
+  const expected = reference(workflowReference), observed = copy(expected);
+  expect(capture.pngSha256).toMatch(/^[a-f0-9]{64}$/);
+  for (const [x, y, before, after] of capture.pixels) {
+    expect(pixel(expected, x, y)).toEqual(before);
+    paint(observed, x, y, after);
+  }
+  const result = compare(observed, workflowReference, expected, noisePolicy);
+  expect(result.ok).toBe(true);
+  expect(result.totalChanged).toBe(capture.pixels.length);
+  expect(compare(observed, workflowReference, expected, []).ok).toBe(false);
+  expect(compare(observed, 'workflow-library-workspace-linux.png', expected, noisePolicy).ok).toBe(false);
 });
 
 it.each(['light', 'dark'])('the %s narrow model input corners admit only their four measured pixels within individual deltas', theme => {
