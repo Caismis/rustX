@@ -109,11 +109,23 @@ React page visibility cannot attach, detach, cancel, create, send or replay work
 
 Returning Home reads fresh Product Host authorization and current Session
 lifecycle evidence. It never issues Open. A same-authority disconnected Session
-returns as a non-executable local draft; existing lifecycle recovery can promote
-it after reconnect. Deleted, released, unauthorized or unavailable targets fall
+returns as a non-executable local draft; an uncertain or released attachment
+does not relinquish that editor's text or files. Only existing lifecycle recovery
+can establish executable controls; Home never reacquires a released claim.
+Deleted, unauthorized or unavailable targets fall
 back to an ordinary empty Home without native Session creation. Authority
 replacement clears remembered identities. A newer gesture stops the old return
 preparation, so its later authorization result cannot publish.
+
+A returned New Conversation resumes observation of its original binding's
+`FirstSubmissions` owner, including creation acknowledgements arriving during
+Home authorization. The correlated observer publishes the known Session and
+its completed attachment without creating, opening or sending again. A newer
+editor retires this observation; the old acknowledgement cannot replace it.
+Same-editor attachment and creation promotions retain its control fence as well
+as its binding. Generation, authority and exact native attachment observations
+remain the execution fences; explicit editor/Node/history replacement retires
+the prior control owner.
 
 Every external exit from Workflows passes through Shell's correlated leave
 request and `workflowSurfaceMachine`. The latest request replaces the previous
@@ -129,7 +141,10 @@ and dismisses with Escape/backdrop/toggle. Programmatic publication closes only
 geometry; dismissal never cancels committed native work. Width/collapse hints
 are browser preferences bound from `app/`; presentation has no storage access.
 Other primary pages have no Home preview track. The right-panel subtree retains
-its selected files and workbench state for return. Existing native ownership,
+its selected files, bounded document bodies and HTML browsing contexts for return.
+Page activation gates workbench interaction separately from tab-body retention;
+tab closure, target replacement and existing content budgets still retire bodies.
+Existing native ownership,
 configuration authorization, revisions/CAS and transaction convergence are unchanged.
 
 ## Exclusions and deviations

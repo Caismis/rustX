@@ -540,6 +540,12 @@ the primary Settings item resumes the previous internal selection. `Settings`
 renders that actor and sends `SELECT` / `FOCUS`, with no duplicate section state.
 Leaving the page sends `SUSPEND`, fencing owner lookup and repair inspection
 while preserving the committed target, section, detail and configuration actors.
+The retained page's `OverlayScope` owns a body-level portal container with the same
+hidden/inert activation as its inline subtree, preserving viewport overlay geometry.
+Dialogs, menus and selects share that scope. Inactive pages cannot activate
+their overlays or focus scopes; model forms remain mounted and native configuration
+writes continue settling under their existing actors. Authority replacement may
+retain internal model focus, but it cannot expose that dialog over Home.
 There is no modal visibility state or `CLOSE` event. The unit-test Settings surface composes the same machine
 and a real `ConnectionController`, so no test can reach or hide a navigation state
 the product could not.

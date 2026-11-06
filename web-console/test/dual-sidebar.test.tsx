@@ -109,19 +109,32 @@ it('primary Settings restores its exact internal target, section and detail', as
   expect(f.settings.getSnapshot().context.focus).toBe(internal.focus);
 });
 
-it.each(['deleted', 'released', 'unauthorized', 'authority replaced'] as const)('Home cannot reopen a remembered target that is %s', async reason => {
+it.each(['deleted', 'unauthorized', 'authority replaced'] as const)('Home cannot reopen a remembered target that is %s', async reason => {
   await server.attached('A');
   const host = { ...server.workspaceHost, classifyLocations: async () => [reason === 'unauthorized' ? { authorized: false as const, reason: 'denied' as const } : { authorized: true as const }] };
   const f = routeFixture(server.client, host);
   f.actor.send({ type: 'SCHEDULES' });
   const old = f.capture();
   if (reason === 'deleted') { server.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'deleted', session_id: 'A' } })); await server.client.deleteSession('A', 'revision-A'); }
-  if (reason === 'released') await server.client.release('A');
   if (reason === 'authority replaced') { server.authorityId = 'replacement'; await server.connect(); }
   const at = server.requests.length;
   f.actor.send({ type: 'HOME' }); await idle(f.actor);
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'new-conversation' });
   expect(old()).toBe(false);
+  expect(executableRequests(at)).toEqual([]);
+});
+
+it('a released native attachment leaves the retained Home editor local without reopening its Session', async () => {
+  await server.attached('A');
+  const f = routeFixture(server.client, server.workspaceHost);
+  const binding = f.actor.getSnapshot().context.binding;
+  f.actor.send({ type: 'SETTINGS' });
+  await server.client.release('A');
+  const at = server.requests.length;
+  f.actor.send({ type: 'HOME' }); await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'A' });
+  expect(f.actor.getSnapshot().context.binding).toBe(binding);
+  expect(server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation)).toBe(false);
   expect(executableRequests(at)).toEqual([]);
 });
 
@@ -241,6 +254,7 @@ it('returning Home while a cold attachment is pending keeps its draft and waits 
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
   const attach = await server.waitFor('session/attach', 2), binding = f.actor.getSnapshot().context.binding;
   const current = draftSessionCurrent(f.actor, f.actor.getSnapshot().context.draftSession!.intent);
+  const retainedOwner = f.capture();
   f.actor.send({ type: 'SETTINGS' });
   expect(current()).toBe(true);
   f.actor.send({ type: 'HOME' }); await idle(f.actor);
@@ -253,6 +267,7 @@ it('returning Home while a cold attachment is pending keeps its draft and waits 
   await waitFor(f.actor, state => state.context.route.kind === 'session');
   expect(f.actor.getSnapshot().context.binding).toBe(binding);
   expect(current()).toBe(true);
+  expect(retainedOwner()).toBe(true);
   expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === 'C')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method.startsWith('turn/'))).toEqual([]);
   f.actor.send({ type: 'DRAFT' });

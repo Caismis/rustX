@@ -23,8 +23,21 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
 - The workspace browser removes its unused collapsed-icon variant. Local source
   hashes and retained import closures are updated for every changed derived file.
 - The full-width Workflow canvas moves the former Start-icon rasterizer site.
-  Its obsolete one-pixel allowance is removed; current references require exact
+  Its obsolete one-pixel allowance is removed; Workflow references require exact
   matches. Frozen comparator fixtures retain their measured historical evidence.
+- Follow-up review separates retained local Home editors from attachment intent,
+  resumes first-submission publication by its existing binding, keeps selected
+  workbench iframe bodies within the existing budget, and scopes Settings-owned
+  portals/focus to its primary-page activation. Native operation owners are unchanged.
+- FULL CI run `42179185106`, job `127766440468`, artifact `13485828418` measured
+  exactly four rounded input-border rasterizer pixels in
+  `model-advanced-light-390-linux.png`. The live manifest records their raw RGBA
+  pairs and four one-pixel regions with individual channel bounds `1, 3, 1, 1`.
+  No global threshold or neighboring-pixel allowance is added; the original
+  reference is unchanged and comparator regressions reject excess or outside noise.
+  The strict local `Dark 390` recheck after the portal repair independently measured
+  the same four corner sites and bounds in the dark reference. Its separate manifest
+  entry records that capture's own RGBA pairs; the dark reference is also unchanged.
 
 Navigation, authoring, authorization and native lifecycle remain rustX-owned.
 

@@ -21,6 +21,7 @@ import { ConversationSeat, ConversationStatus } from './agent/ConversationSeat';
 import { ConversationQuestionPanels } from './agent/QuestionPanels';
 import { readTheme, applyTheme } from './appearance';
 import { Settings } from './settings/Settings';
+import { OverlayScope } from '../presentation/primitives/DialogSurface';
 import type { ProductHostWorkspaces } from '../workspaces/host';
 import type { WorkbenchTarget } from '../workspaces/workbench';
 import { HttpWorkspaceHost } from '../workspaces/http-host';
@@ -316,7 +317,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         openSession={id => open(id, undefined, geometry)} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={id => { createInWorkspace(id); geometry.dismissSidebar(); }} deleteSession={setDeletingSession}
         forkSession={id => shell.send({ type: 'OPEN', destination: { kind: 'fork-session', sessionId: id, sidebar: !!geometry.overlay } })} />}/>}
     rightOpen={home && previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel docked={previews.mode !== 'preview'} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={home && previews.mode !== 'collapsed'} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('artifacts:workbench.start')}>
-      <Workbench renderTaskTitle={(id, fallback) => <TaskTabTitle client={client} identity={id} fallback={fallback}/>} renderTask={id => { const task = parseTaskKey(id); return task && <div className={schedulerCss.taskTab}><TaskDetail client={client} task={task} openSession={openTaskSession}/></div>; }} renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, state.authorityRevision, selected, view?.target, workbenchTarget, fileAuthority])} closePanel={resetPresentation=>{if(resetPresentation)setWorkbenchFullscreen(false);collapsePanel();}} host={workspaceHost} previews={workbenchPreviews} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} visible={home && previews.mode === 'workbench'} floatingVisible={home && (previews.mode === 'workbench' || previews.mode === 'collapsed')} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) {setWorkbenchFullscreen(false);collapsePanel();} else setWorkbenchFullscreen(value => !value); }}/>
+      <Workbench renderTaskTitle={(id, fallback) => <TaskTabTitle client={client} identity={id} fallback={fallback}/>} renderTask={id => { const task = parseTaskKey(id); return task && <div className={schedulerCss.taskTab}><TaskDetail client={client} task={task} openSession={openTaskSession}/></div>; }} renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, state.authorityRevision, selected, view?.target, workbenchTarget, fileAuthority])} closePanel={resetPresentation=>{if(resetPresentation)setWorkbenchFullscreen(false);collapsePanel();}} host={workspaceHost} previews={workbenchPreviews} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} active={home} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) {setWorkbenchFullscreen(false);collapsePanel();} else setWorkbenchFullscreen(value => !value); }}/>
       <PreviewWorkspace openWorkbench={() => previewOwner.showWorkbench()} owner={previewOwner} snapshot={previews} focusRequest={previewFocus} returnFocus={returnPreviewFocus}/>
     </RightPanel>}
     overlay={<><SchedulerNotices client={client}/><SettingsNavigationFeedback navigation={navigationActor}/></>}>
@@ -345,9 +346,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       }
     }}/>}
     <DocumentTitle client={client} sessionId={home || settingsOpen ? view?.id : undefined}/>
-    <div className="primary-page" hidden={!settingsOpen} inert={!settingsOpen}>
+    <OverlayScope className="primary-page" active={settingsOpen}>
       <Settings visible={settingsOpen} associations={associations} navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
-    </div>
+    </OverlayScope>
     {primaryRoute.kind === 'schedules' && <TaskManagerPage client={client} newTask={() => createInWorkspace()} openSession={openTaskSession}/>}
     {primaryRoute.kind === 'workflows' && <WorkflowsSurface surface={workflows} authority={workspaceAuthority} />}
     <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>

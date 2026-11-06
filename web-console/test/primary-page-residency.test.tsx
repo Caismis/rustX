@@ -1,0 +1,203 @@
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { App } from '../src/app/App';
+import { firstSubmissions } from '../src/app/new-conversation/first-submit';
+import { Server, boundedSettings, snapshot } from './fixture';
+import { cfg3Effective, cfg3Source } from './cfg3-data';
+
+let server: Server;
+beforeEach(() => {
+  localStorage.clear();
+  server = new Server();
+  server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
+  server.handlers.set('workflow/list', () => ({ type: 'workflow_library', library: { target: { kind: 'user' }, directory: '/workflows', absent_revision: 'missing', diagnostic: null, files: [] } }));
+});
+afterEach(() => { cleanup(); server.client.disconnect(); });
+const primary = (name: string) => within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name });
+async function navigate(name: string) {
+  const control = primary(name);
+  await act(async () => fireEvent.click(control));
+  await waitFor(() => expect(control.getAttribute('aria-current')).toBe('page'));
+}
+async function mounted(selected = true) {
+  await server.attached('A');
+  render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
+  if (selected) await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+}
+
+it('an uncertain Attach across Settings retains the selected local editor without another native operation', async () => {
+  await mounted();
+  server.held.add('session/attach');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+  const attach = await server.waitFor('session/attach', 2), carrier = server.socket;
+  const editor = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  fireEvent.change(editor, { target: { value: 'Keep this while Attach needs verification' } });
+  await act(async () => fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [new File(['local'], 'uncertain.txt')] } }));
+  const incarnation = document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
+  await navigate('Settings');
+  await act(async () => { server.commit(attach, carrier); carrier.close(); });
+  await waitFor(() => expect(server.client.getSnapshot().views.B.attachmentIntent).toBe('released'));
+  const at = server.requests.length;
+  await navigate('Home');
+  expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session-draft');
+  expect(screen.getByRole('textbox', { name: 'Message' })).toBe(editor);
+  expect(editor.value).toBe('Keep this while Attach needs verification');
+  expect(screen.getByText('uncertain.txt')).toBeTruthy();
+  expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+  expect(server.requests.slice(at).filter(({ request }) => /^(turn\/|session\/(attach|detach|create|submissionIntent|uploadPrepare)$)/.test(request.method))).toEqual([]);
+});
+
+async function firstSend(hold?: 'session/attach' | 'session/subscribe') {
+  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
+  server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: {
+    ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'policy',
+    session_models: { kind: 'available', default_model: { model: 'main' }, catalog: { models: [{ model: 'main', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } },
+  } });
+  const session = { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' };
+  server.handlers.set('session/create', () => ({ type: 'session_transition', session }));
+  server.summaries.set(session.id, { cwd: '/workspace/A' });
+  server.snapshots.set(session.id, snapshot(session.id));
+  server.nodeSnapshots.set(session.active_node, server.snapshots.get(session.id)!);
+  server.held.add('session/create');
+  await mounted(false);
+  if (hold) server.held.add(hold);
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
+  await act(async () => fireEvent.click(await screen.findByRole('menuitem', { name: 'Workspace A' })));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'One original submission' } });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  const create = await server.waitFor('session/create', 1);
+  const incarnation = document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
+  return { session, create, incarnation };
+}
+
+const creationReturns = ['Settings', 'Workflows', 'Scheduled Tasks'].flatMap(page =>
+  ['published Home', 'authorizing Home', 'newer Session'].map(arrival => ({ page, arrival })));
+it.each(creationReturns)('the first creation ACK from $page follows only its retained editor at $arrival', async ({ page, arrival }) => {
+  const { session, create, incarnation } = await firstSend();
+  await navigate(page);
+  let releaseHome: (() => void) | undefined;
+  if (arrival === 'authorizing Home') {
+    const classify = server.workspaceHost.classifyLocations;
+    let reached!: () => void;
+    const entered = new Promise<void>(resolve => { reached = resolve; });
+    const held = new Promise<void>(resolve => { releaseHome = resolve; });
+    let first = true;
+    server.workspaceHost.classifyLocations = async (...args) => {
+      if (first) { first = false; reached(); await held; }
+      return classify(...args);
+    };
+    await act(async () => fireEvent.click(primary('Home')));
+    await entered;
+  } else {
+    await navigate('Home');
+    if (arrival === 'newer Session') await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+  }
+  await act(async () => server.reply(create));
+  await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe(arrival === 'newer Session' ? 'failed' : 'admitted'));
+  if (releaseHome) await act(async () => releaseHome!());
+  await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session'));
+  if (arrival !== 'newer Session') expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+  expect(screen.getByLabelText('Session title').textContent).toBe(arrival === 'newer Session' ? 'Session B' : 'Session created');
+  expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(arrival === 'newer Session' ? 0 : 1);
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(arrival === 'newer Session' ? 0 : 1);
+});
+
+const attachingReturns = ['Settings', 'Workflows', 'Scheduled Tasks'].flatMap(page =>
+  (['session/attach', 'session/subscribe'] as const).map(hold => ({ page, hold })));
+it.each(attachingReturns)('a known creation from $page retains its original Send while $hold is held across Home return', async ({ page, hold }) => {
+  const { session, create, incarnation } = await firstSend(hold);
+  await navigate(page);
+  await act(async () => server.reply(create));
+  const attachment = await server.waitFor(hold, 2);
+  await navigate('Home');
+  expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session-draft');
+  await act(async () => { server.held.delete(hold); server.reply(attachment); });
+  await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('admitted'));
+  await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session'));
+  expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+  expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+});
+
+it('primary page return preserves the selected HTML iframe instead of only its tab and cached bytes', async () => {
+  const data = new TextEncoder().encode('<input value="Local document state"><button>Count 0</button>');
+  server.workspaceHost.workbench = async (_scope, { request }) => request.kind === 'files'
+    ? { entries: [{ name: 'interactive.html', directory: false, link: false }] }
+    : request.kind === 'resolve' ? { path: request.path }
+      : request.kind === 'preview' ? { preview: { data, version: 'v1', bytes: data.length, offset: 0, eof: true } }
+        : { terminals: [], shells: [] };
+  await mounted();
+  await act(async () => fireEvent.click(document.querySelector('[data-preview-toggle]')!));
+  await act(async () => fireEvent.click(await screen.findByRole('button', { name: /Workspace files/ })));
+  await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'interactive.html' })));
+  const frame = await screen.findByTitle('HTML');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Collapse right sidebar' })));
+  await act(async () => fireEvent.click(document.querySelector('[data-preview-toggle]')!));
+  expect(screen.getByTitle('HTML')).toBe(frame);
+  for (const destination of ['Settings', 'Workflows', 'Scheduled Tasks']) {
+    await navigate(destination);
+    expect(frame.isConnected).toBe(true);
+    expect(frame.closest('[hidden]')).toBeTruthy();
+    await navigate('Home');
+    expect(screen.getByTitle('HTML')).toBe(frame);
+  }
+});
+
+it('authority replacement cannot activate a model dialog owned by the hidden Settings page', async () => {
+  const source = cfg3Source();
+  source.user.authored!.models = cfg3Effective().document.models;
+  server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(source) }));
+  await mounted();
+  await navigate('Settings');
+  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Models' })));
+  await act(async () => fireEvent.click(await screen.findByRole('row', { name: 'transport' })));
+  await act(async () => fireEvent.click(await screen.findByRole('row', { name: 'main' })));
+  const dialog = await screen.findByRole('dialog', { name: 'Model main' });
+  await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+  await act(async () => { server.authorityId = 'replacement'; await server.connect(); });
+  await waitFor(() => expect(document.querySelector('[data-primary-navigation] button[aria-label="Home"]')!.getAttribute('aria-current')).toBe('page'));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model main' })).toBeNull());
+  expect(document.querySelector('[data-settings-page]')!.closest('[hidden]')).toBeTruthy();
+  expect(document.activeElement?.closest('[hidden], [inert]')).toBeNull();
+  primary('Home').focus();
+  expect(document.activeElement).toBe(primary('Home'));
+  await navigate('Settings');
+  expect(await screen.findByRole('dialog', { name: 'Model main' })).toBeTruthy();
+  expect(server.requests.filter(row => row.request.method === 'configuration/sourceWrite')).toEqual([]);
+});
+
+it('hiding a model dialog retains its form while its admitted exact-CAS write settles', async () => {
+  const source = cfg3Source();
+  source.user.authored!.models = cfg3Effective().document.models;
+  server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(source) }));
+  server.handlers.set('configuration/sourceWrite', request => {
+    if (request.method !== 'configuration/sourceWrite' || request.params.mutation.kind !== 'config' || request.params.mutation.mutation.unit !== 'model' || !request.params.mutation.mutation.authored) throw Error('Expected authored Model write');
+    expect(request.params.expected_revision).toBe('user-1');
+    source.user.authored!.models!.main = request.params.mutation.mutation.authored;
+    source.user.revision = 'user-2';
+    return { type: 'sources_written', revision: 'user-2', configuration_revision: '1' };
+  });
+  await mounted();
+  await navigate('Settings');
+  await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Models' })));
+  await act(async () => fireEvent.click(await screen.findByRole('row', { name: 'transport' })));
+  await act(async () => fireEvent.click(await screen.findByRole('row', { name: 'main' })));
+  const field = screen.getByLabelText('Context window') as HTMLInputElement;
+  fireEvent.change(field, { target: { value: '256000' } });
+  server.held.add('configuration/sourceWrite');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save Model main' })));
+  const write = await server.waitFor('configuration/sourceWrite', 1);
+  const home = document.querySelector<HTMLButtonElement>('[data-primary-navigation] button[aria-label="Home"]')!;
+  await act(async () => fireEvent.click(home));
+  await waitFor(() => expect(home.getAttribute('aria-current')).toBe('page'));
+  expect(field.isConnected).toBe(true);
+  expect(field.closest('[hidden]')).toBeTruthy();
+  await act(async () => server.reply(write));
+  await navigate('Settings');
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save Model main' })).toHaveProperty('disabled', true));
+  expect((screen.getByLabelText('Context window') as HTMLInputElement).value).toBe('256000');
+  expect(server.requests.filter(row => row.request.method === 'configuration/sourceWrite')).toHaveLength(1);
+});

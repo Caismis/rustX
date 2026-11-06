@@ -47,6 +47,27 @@ async function noOverflow(page: Page) {
   expect(box.y + box.height).toBeLessThanOrEqual((page.viewportSize()!).height);
 }
 
+test('authority replacement hides a retained model dialog and releases its focus scope on Home', async ({ page }) => {
+  const errors = await start(page, 'Light', 1440);
+  await openSettingsPage(page, 'Models');
+  await settings(page).getByRole('row', { name: provider, exact: true }).click();
+  await settings(page).getByRole('row', { name: model, exact: true }).click();
+  await expect(editor(page).getByLabel('Context window', { exact: true })).toBeFocused();
+  const before = await writes(page);
+  await page.evaluate(() => (window as unknown as { rustxReplaceAuthority(): Promise<void> }).rustxReplaceAuthority());
+  const home = page.getByRole('button', { name: 'Home', exact: true });
+  await expect(home).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('[data-settings-page]')).toBeHidden();
+  await expect(editor(page)).toHaveCount(0);
+  await home.focus(); await expect(home).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Workflows', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(editor(page)).toBeVisible();
+  expect(await writes(page)).toBe(before);
+  expect(errors).toEqual([]);
+});
+
 for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) {
   test(`${theme} ${width}: appearance stays on one row, model basic/advanced and footer remain usable`, async ({page}) => {
     const errors = await start(page, theme, width);

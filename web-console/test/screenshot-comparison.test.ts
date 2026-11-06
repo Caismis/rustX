@@ -142,6 +142,26 @@ it('the full-width workflow editor requires an exact match after retiring the ol
   }
 });
 
+it.each(['light', 'dark'])('the %s narrow model input corners admit only their four measured pixels within individual deltas', theme => {
+  const name = `model-advanced-${theme}-390-linux.png`, expected = reference(name);
+  const entry = noisePolicy.find(row => row.reference === name)!;
+  expect(entry.regions.map(region => [region.x, region.y, region.width, region.height, region.maxChangedPixels, region.maxChannelDelta]))
+    .toEqual([[34, 348, 1, 1, 1, 1], [35, 348, 1, 1, 1, 3], [34, 349, 1, 1, 1, 1], [34, 447, 1, 1, 1, 1]]);
+  const actual = copy(expected);
+  for (const [x, y, , after] of entry.pixels as MeasuredNoisePixel[]) paint(actual, x, y, after);
+  expect(compare(actual, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+  for (const region of entry.regions) {
+    const excessive = copy(expected); nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  for (const [x, y] of [[33, 348], [36, 348], [34, 347], [34, 446], [34, 448], [0, 0]]) {
+    const outside = copy(actual); nudge(outside, x, y, 1);
+    const result = compare(outside, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+});
+
 it.each([
   ...noisePolicy.map(entry => [entry.reference, entry, reference(entry.reference), noisePolicy] as const),
   ...comparatorPolicy.map(entry => [`frozen ${entry.reference}`, entry, fixture(entry.reference), comparatorPolicy] as const),
