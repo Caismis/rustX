@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { SessionModelConfig } from '../../protocol/app-server/v72';
+import type { SessionModelConfig } from '../../protocol/app-server/v73';
 import { nextModelSelection, selectionChanges } from '../src/bindings/model-catalog';
 import { offersModelDefault, profileUnavailable, type ModelChoice, type ModelSelectionIntent } from '../src/presentation/agent/ModelSelect';
 
@@ -42,7 +42,7 @@ it('a single-Model catalog reaches every configured Profile state without switch
 });
 
 it('a same-Model Profile change keeps every independent setting; a different Model resets primary settings and keeps the Summary policy', () => {
-  const summaryModel: SessionModelConfig['summaryModel'] = { mode: 'explicit', model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 }, max_output_tokens: 64 };
+  const summaryModel: SessionModelConfig['summaryModel'] = { mode: 'explicit', model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 } };
   const configured: SessionModelConfig = {
     model: chat,
     profile: 'fast',
@@ -81,7 +81,7 @@ it('switching the primary Model agrees with the TUI `/model X` contract', () => 
   // through model_catalog_get + model_set". The TUI sends
   // `{ model, requestParams: {}, summaryModel }`; an omitted `requestParams`
   // is natively the same empty object.
-  const summaryModel: SessionModelConfig['summaryModel'] = { mode: 'explicit', model: 'summary/model-s', profile: 'compact', request_params: { summary_tag: 'keep' }, max_output_tokens: 300 };
+  const summaryModel: SessionModelConfig['summaryModel'] = { mode: 'explicit', model: 'summary/model-s', profile: 'compact', request_params: { summary_tag: 'keep' } };
   const configured: SessionModelConfig = { model: 'alpha/model-a', profile: 'on', requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel };
   const tui: SessionModelConfig = { model: 'beta/model-b', requestParams: {}, summaryModel };
   const { requestParams, ...native } = tui;

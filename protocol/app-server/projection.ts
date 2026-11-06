@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v72.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v73.ts';
 import { canonicalLocatorKey, contentSourceKey, sameContentRef } from './content-identity.ts';
 
 const cuts = new WeakMap<Snapshot, ProjectionMetadata>();
@@ -265,6 +265,9 @@ function foldOrdinaryEvent(state: Snapshot, event: Exclude<Event, {type: 'projec
     case 'interaction_audit_requested':
     case 'interaction_audit_settled': return state;
     case 'context_compaction_started': return { ...state, context: event.context };
+    case 'context_compaction_progressed': return { ...state, context: event.context };
+    case 'context_compaction_cancelled': return { ...state, context: event.context };
+    case 'context_compaction_skipped': return { ...state, context: event.context };
     case 'context_compaction_failed': return { ...state, context: event.context };
     case 'context_compacted': return { ...state, context: event.context };
     case 'agent_status_composed': return { ...state, statuses: upsert((state.statuses ?? []).filter(status => !(event.evicted_status_message_id != null && status.status_message_id === event.evicted_status_message_id) && !(event.evicted_status_locator != null && status.source_locator != null && sameCanonicalLocator(status.source_locator, event.evicted_status_locator))), event.status, statusIdentity) };

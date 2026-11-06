@@ -1,5 +1,5 @@
 import { createContext } from 'react';
-import type { SourceSettings } from '../../../../protocol/app-server/v72';
+import type { SourceSettings } from '../../../../protocol/app-server/v73';
 
 /** The authoritative projection the enclosing Settings instance currently
  * holds. Editors read native facts from it; it is never authority and is never

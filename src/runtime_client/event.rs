@@ -203,6 +203,24 @@ pub enum RuntimeClientEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attempt_id: Option<AttemptId>,
     },
+    /// A validated compaction fragment was accepted; no checkpoint is committed.
+    ContextCompactionProgressed {
+        context: RuntimeClientContextView,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<AttemptId>,
+    },
+    /// Native compaction cancellation, distinct from summary failure.
+    ContextCompactionCancelled {
+        context: RuntimeClientContextView,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<AttemptId>,
+    },
+    /// Native compaction found no eligible history; no checkpoint was committed.
+    ContextCompactionSkipped {
+        context: RuntimeClientContextView,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt_id: Option<AttemptId>,
+    },
     /// A context compaction operation failed before a semantic commit.
     ContextCompactionFailed {
         /// Authoritative context state at this lifecycle boundary.

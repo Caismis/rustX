@@ -1,6 +1,9 @@
 //! Native Summary adapter; Context retains input construction and acceptance.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use futures_util::future::BoxFuture;
 
@@ -27,6 +30,8 @@ struct Operation {
     invocation: ResolvedModelInvocation,
     timeout: ModelTimeoutPolicy,
     resource_revision: u64,
+    prompt_fallback: Arc<AtomicBool>,
+    last_call: Arc<Mutex<Option<crate::model::auxiliary::AuxiliaryCallRef>>>,
 }
 
 struct Prepared {
@@ -35,6 +40,10 @@ struct Prepared {
     timeout: ModelTimeoutPolicy,
     resource_revision: u64,
     operation_id: crate::runtime::identity::CompactionOperationId,
+    scope: Arc<AuxiliaryScope>,
+    budget: CompactionBudget,
+    prompt_fallback: Arc<AtomicBool>,
+    last_call: Arc<Mutex<Option<crate::model::auxiliary::AuxiliaryCallRef>>>,
 }
 
 struct PreAdmitted {
@@ -97,6 +106,8 @@ impl SummaryBackend for PreAdmitted {
             invocation,
             timeout,
             resource_revision,
+            prompt_fallback: Arc::new(AtomicBool::new(false)),
+            last_call: Arc::new(Mutex::new(None)),
         }))
     }
 }
@@ -126,6 +137,8 @@ impl SummaryBackend for AuxiliaryExecutor {
             invocation,
             timeout,
             resource_revision,
+            prompt_fallback: Arc::new(AtomicBool::new(false)),
+            last_call: Arc::new(Mutex::new(None)),
         }))
     }
 }
@@ -133,6 +146,18 @@ impl SummaryBackend for AuxiliaryExecutor {
 impl SummaryOperation for Operation {
     fn budget(&self) -> CompactionBudget {
         self.budget.clone()
+    }
+    fn preview(
+        &self,
+        input: &SummaryRequest,
+    ) -> Result<Option<crate::model::ModelRequest>, ContextError> {
+        prepared_request(
+            &self.invocation,
+            input,
+            self.prompt_fallback.load(Ordering::Acquire),
+            self.budget.operation_id(),
+        )
+        .map(|(_, request)| Some(request))
     }
     fn authorize_commit(
         &self,
@@ -150,6 +175,10 @@ impl SummaryOperation for Operation {
             timeout: self.timeout,
             resource_revision: self.resource_revision,
             operation_id: self.budget.operation_id().clone(),
+            scope: self.scope.clone(),
+            budget: self.budget.clone(),
+            prompt_fallback: self.prompt_fallback.clone(),
+            last_call: self.last_call.clone(),
         }))
     }
 
@@ -167,16 +196,41 @@ impl Drop for Operation {
     }
 }
 
+/// Preparation is shared by exact preflight and actual frozen execution.
+fn prepared_request(
+    invocation: &ResolvedModelInvocation,
+    input: &SummaryRequest,
+    fallback: bool,
+    operation_id: &crate::runtime::identity::CompactionOperationId,
+) -> Result<(ResolvedModelInvocation, crate::model::ModelRequest), ContextError> {
+    let invocation = input
+        .output_tokens
+        .map_or_else(|| invocation.clone(), |cap| invocation.with_output_cap(cap));
+    let format = super::output::AuxiliaryOutputFormat::JsonSchema(
+        crate::context::summary_content::response_schema(),
+    );
+    let request = input.model_request(&invocation);
+    let request = if fallback {
+        format.prepare_prompt_fallback(request, operation_id.clone())
+    } else {
+        format.prepare(request)
+    }
+    .map_err(crate::context::summarizer::summary_execution_failed)?;
+    Ok((invocation, request))
+}
+
 impl PreparedSummary for Prepared {
+    #[allow(clippy::too_many_lines)] // Preserve frozen request, settlement, lineage and fallback acceptance order.
     fn summarize(
         self: Box<Self>,
         input: SummaryRequest,
         cut: Option<ResourceReadCut>,
     ) -> BoxFuture<'static, Result<SummaryGeneration, ContextError>> {
         Box::pin(async move {
-            let request = super::output::AuxiliaryOutputFormat::Text
-                .prepare(input.model_request(&self.invocation))
-                .map_err(crate::context::summarizer::summary_execution_failed)?;
+            self.budget.check(&self.scope.cancellation)?;
+            let fallback = self.prompt_fallback.load(Ordering::Acquire);
+            let (invocation, request) =
+                prepared_request(&self.invocation, &input, fallback, &self.operation_id)?;
             let fingerprint = |value: String| {
                 AuxiliaryFingerprint::new(value)
                     .map_err(|error| ContextError::new(ContextErrorKind::Internal, error))
@@ -185,31 +239,56 @@ impl PreparedSummary for Prepared {
                 &request.invocation,
                 self.resource_revision,
             )?;
+            let input_evidence = cut
+                .as_ref()
+                .map_or(AuxiliaryInputEvidence::Temporary, |cut| {
+                    AuxiliaryInputEvidence::Compaction {
+                        output_strategy: request
+                            .response_schema
+                            .as_ref()
+                            .expect("prepared summary schema")
+                            .strategy
+                            .clone(),
+                        cut: cut.clone(),
+                        source_ranges: input
+                            .fragment
+                            .as_ref()
+                            .map_or_else(Vec::new, |f| f.ranges.clone()),
+                        previous_summary: input
+                            .previous
+                            .as_ref()
+                            .and_then(|previous| previous.generation.clone()),
+                    }
+                });
+            let prepared = self.reservation;
             let start = AuxiliaryCallStart {
-                call_id: self.reservation.call_id().clone(),
-                purpose: AuxiliaryAttribution::new("summary").expect("native bounded attribution"),
-                trigger: AuxiliaryAttribution::new("compaction")
-                    .expect("native bounded attribution"),
+                call_id: prepared.call_id().clone(),
+                purpose: AuxiliaryAttribution::new("summary").expect("bounded native attribution"),
+                trigger: AuxiliaryAttribution::new(if fallback {
+                    "compaction_prompt_fallback"
+                } else {
+                    "compaction"
+                })
+                .expect("bounded native attribution"),
                 business_source: if cut.is_some() {
                     AuxiliaryBusinessSource::Compaction {
-                        operation_id: self.operation_id,
+                        operation_id: self.operation_id.clone(),
+                        preceding_call: self.last_call.lock().expect("Summary call chain").clone(),
                     }
                 } else {
                     AuxiliaryBusinessSource::Independent
                 },
-                input: cut.map_or(AuxiliaryInputEvidence::Temporary, |cut| {
-                    AuxiliaryInputEvidence::Historical { cut }
-                }),
+                input: input_evidence,
                 semantic_input_fingerprint: fingerprint(request.semantic_input_fingerprint())?,
                 invocation_fingerprint,
                 selected_message_ids: Vec::new(),
             };
-            let completed = self
-                .reservation
+            let request_evidence = request.clone();
+            let completed = prepared
                 .submit(FrozenCall {
                     start,
                     request,
-                    invocation: self.invocation,
+                    invocation,
                     timeout: self.timeout,
                     resource_revision: self.resource_revision,
                     dispatch_check: None,
@@ -222,21 +301,69 @@ impl PreparedSummary for Prepared {
                         "native auxiliary completion unavailable",
                     )
                 })??;
+            *self.last_call.lock().expect("Summary call chain") =
+                Some(crate::model::auxiliary::AuxiliaryCallRef {
+                    conversation_id: completed.settlement.call_settled.conversation_id.clone(),
+                    call_id: completed.settlement.call.call_id.clone(),
+                    through_journal: completed.settlement.call_settled.sequence,
+                });
             tracing::debug!(usage = ?completed.usage, "observed auxiliary Summary usage subtotal");
-            let output = completed
-                .output
-                .and_then(super::output::AuxiliaryOutput::into_text)
-                .map_err(crate::context::summarizer::summary_execution_failed)?;
-            let text = accept_summary(output.text, output.refused)?;
-            let generation = crate::context::checkpoint::SummaryGenerationRef {
-                conversation_id: completed.settlement.call_settled.conversation_id.clone(),
-                call_id: completed.settlement.call.call_id.clone(),
-                through_journal: completed.settlement.call_settled.sequence,
-            };
-            Ok(SummaryGeneration {
-                text,
-                generation: Some(generation),
-            })
+            let exhausted = completed
+                .settlement
+                .request
+                .as_ref()
+                .and_then(|request| request.request_evidence.as_ref())
+                .and_then(|evidence| evidence.observed_provider_terminal.as_ref())
+                .is_some_and(|terminal| {
+                    matches!(
+                        terminal,
+                        crate::model::auxiliary::AuxiliaryObservedProviderTerminal::Completed {
+                            finish_reason: crate::model::auxiliary::AuxiliaryFinishReason::Length
+                        }
+                    )
+                });
+            if exhausted {
+                return Err(ContextError::new(
+                    ContextErrorKind::SummaryOutputExhausted,
+                    "Summary total output was exhausted before complete JSON; reasoning Profile remains unchanged",
+                ));
+            }
+            match completed.output {
+                Ok(super::output::AuxiliaryOutput::JsonSchema(value)) => {
+                    let text = crate::context::summary_content::render(value).map_err(|error| {
+                        ContextError::new(ContextErrorKind::SummaryFailed, error)
+                    })?;
+                    let generation = crate::context::checkpoint::SummaryGenerationRef {
+                        conversation_id: completed.settlement.call_settled.conversation_id.clone(),
+                        call_id: completed.settlement.call.call_id.clone(),
+                        through_journal: completed.settlement.call_settled.sequence,
+                    };
+                    Ok(SummaryGeneration {
+                        text: accept_summary(text, false)?,
+                        generation: Some(generation),
+                    })
+                }
+                Ok(super::output::AuxiliaryOutput::Text(_)) => Err(ContextError::new(
+                    ContextErrorKind::Internal,
+                    "Summary execution did not honor its structured output contract",
+                )),
+                Err(error)
+                    if cut.is_some()
+                        && !fallback
+                        && super::output::can_fallback_native_format(&request_evidence, &error) =>
+                {
+                    self.budget.charge_recovery(&self.scope.cancellation)?;
+                    // Only this operation retains the confirmed downgrade.
+                    self.prompt_fallback.store(true, Ordering::Release);
+                    // Re-price the changed instructions at Context before
+                    // another physical start. The same source remains unprocessed.
+                    Err(ContextError::new(
+                        ContextErrorKind::SummaryFormatChanged,
+                        "native Summary format downgraded to a trusted Prompt; reprice this unprocessed fragment",
+                    ))
+                }
+                Err(error) => Err(crate::context::summarizer::summary_execution_failed(error)),
+            }
         })
     }
 }

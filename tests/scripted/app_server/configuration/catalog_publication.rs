@@ -719,7 +719,7 @@ async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authori
 async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
     use crate::model::catalog::ModelRef;
     use crate::model::invocation::RequestParams;
-    use crate::model::session::{AuxiliaryModelPolicy, AuxiliaryModelView, SessionModelConfig};
+    use crate::model::session::{AuxiliaryModelView, SessionModelConfig, SummaryModelPolicy};
     use crate::runtime::conversation_runtime::InboundAdmissionError;
     use serde_json::json;
     Box::pin(bounded(async {
@@ -737,11 +737,10 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         )
         .await;
         applied(&fixture, 0).await;
-        let summary_on = |model: &str| AuxiliaryModelPolicy::Explicit {
+        let summary_on = |model: &str| SummaryModelPolicy::Explicit {
             model: ModelRef::parse(model).unwrap(),
             profile: None,
             request_params: RequestParams::new(),
-            max_output_tokens: Some(256),
         };
         let with_summary = |profile, summary| SessionModelConfig {
             title_model: crate::model::session::AuxiliaryModelPolicy::Session,
@@ -779,7 +778,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         };
         assert_eq!(
             (summary.model.to_string(), summary.max_output_tokens),
-            ("local/b".to_owned(), 256)
+            ("local/b".to_owned(), 4096)
         );
         settled(&fixture, 0).await;
 

@@ -77,6 +77,64 @@ fn text_delta(index: u32, delta: &str) -> ModelEvent {
     }
 }
 
+const VALID_SUMMARY_JSON: &str = r#"{"goal":"summary","constraints_and_preferences":[],"progress":{"done":[],"in_progress":[],"blocked":[]},"key_decisions":[],"next_steps":[],"critical_context":[]}"#;
+
+/// Check complete detached coverage against the actual projected source bodies.
+fn assert_complete_fragment(
+    request: &rustx::context::SummaryRequest,
+    sources: &[ModelInputMessage],
+) {
+    let fragment = request.fragment.as_ref().expect("detached source fragment");
+    assert!(
+        request.retired.is_empty(),
+        "fragments are not canonical messages"
+    );
+    assert_eq!(fragment.ranges.len(), sources.len());
+    let mut pieces = Vec::new();
+    for (index, (range, source)) in fragment.ranges.iter().zip(sources).enumerate() {
+        let mut rendered = String::new();
+        crate::context::summarizer::append_summary_message(source, &mut rendered);
+        assert_eq!(range.projection_index as usize, index);
+        assert_eq!(
+            range.role,
+            rustx::model::auxiliary::AuxiliarySourceRole::User
+        );
+        assert_eq!(range.byte_start, 0);
+        assert_eq!(range.byte_end as usize, rendered.len());
+        if !rendered.is_empty() {
+            pieces.push(rendered);
+        }
+    }
+    assert_eq!(fragment.text, pieces.join("\n\n"));
+}
+
+fn assert_summary_original_sources(request: &ModelRequest, expected: &[MessageBlock]) {
+    let summary = request
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            ModelInputMessage::Derived(derived)
+                if derived
+                    .transformations
+                    .contains(&rustx::model::projected::SemanticTransformation::Summary) =>
+            {
+                Some(derived)
+            }
+            _ => None,
+        })
+        .expect("the request contains a derived Summary");
+    assert_eq!(summary.sources.len(), expected.len());
+    for original in expected {
+        assert!(
+            summary
+                .sources
+                .iter()
+                .any(|source| source.conversation_id == conversation() && source.matches(original)),
+            "each retired Original retains its exact identity and digest"
+        );
+    }
+}
+
 fn done(reason: ModelFinishReason) -> ModelEvent {
     ModelEvent::Completed {
         finish_reason: reason,
@@ -529,10 +587,13 @@ fn controller_enqueue_a_and_b(
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
     tokio::spawn(async move {
-        model_parked
-            .wait_for(|is_parked| *is_parked)
-            .await
-            .expect("model parked");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            model_parked.wait_for(|is_parked| *is_parked),
+        )
+        .await
+        .expect("model park must not stall")
+        .expect("model parked");
         controller_mailbox
             .enqueue(inbound_user("msg-inbound-a", "human A", UserSource::Human))
             .expect("enqueue human A");
@@ -675,16 +736,11 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
 
     let summary_requests = summarizer.requests();
     assert_eq!(summary_requests.len(), 1);
-    assert_eq!(
-        summary_requests[0]
-            .retired
-            .iter()
-            .filter_map(ModelInputMessage::as_canonical)
-            .map(message_id_of)
-            .collect::<Vec<_>>(),
-        vec!["old", "middle"],
-        "the full frozen System authority makes the one-message candidate fail"
-    );
+    let retired = rustx::model::input::canonical_input(&[
+        user("old", "old history"),
+        user("middle", "middle history"),
+    ]);
+    assert_complete_fragment(&summary_requests[0], &retired);
     assert_eq!(
         result
             .conversation
@@ -696,6 +752,10 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
     );
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
+    assert_summary_original_sources(
+        &requests[0],
+        &[user("old", "old history"), user("middle", "middle history")],
+    );
     assert!(
         requests[0]
             .effective_system_prompt
@@ -1208,10 +1268,14 @@ async fn cancellation_before_overflow_retry_start_stops_the_retry() {
     let controller = tokio::spawn(async move {
         // Request #1 reaches its start arbitration: let it start; it ends
         // with the overflow. Compaction then commits independently.
-        pre_start.await_park(1).await;
+        tokio::time::timeout(std::time::Duration::from_secs(10), pre_start.await_park(1))
+            .await
+            .expect("first start boundary must be reached");
         pre_start.release();
         // The retry reaches the same gate: cancel before its start.
-        pre_start.await_park(2).await;
+        tokio::time::timeout(std::time::Duration::from_secs(10), pre_start.await_park(2))
+            .await
+            .expect("retry start boundary must be reached");
         controller_cancellation.cancel();
         pre_start.release();
     });
@@ -1269,7 +1333,7 @@ async fn cancellation_before_overflow_retry_start_stops_the_retry() {
 }
 
 /// Issue #12 (M9b), Finding 1: when the staged request-scoped context
-/// overflows the soft limit during model-turn preparation, the compaction
+/// exceeds admission during model-turn preparation, the compaction
 /// that makes room for it commits as its own independent durable fact. A
 /// cancellation that then wins the start arbitration keeps the committed
 /// compaction and discards the staged context without a trace: no provider
@@ -1303,7 +1367,7 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
-    let runtime = runtime_with_assembly(250, 0, 5, weighted(100, 10, 0), summarizer, assembly);
+    let runtime = runtime_with_assembly(300, 0, 5, weighted(100, 10, 0), summarizer, assembly);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
@@ -1321,11 +1385,13 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
     execution.install_start_boundary_pause(pause);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        // The staged context overflows the soft limit, so the preparation
+        // The staged context exceeds the hard limit, so the preparation
         // compaction commits before the start arbitration; the execution
         // then parks at the gate. Cancel there: the compaction stays, the
         // staged context is discarded.
-        pre_start.await_park(1).await;
+        tokio::time::timeout(std::time::Duration::from_secs(10), pre_start.await_park(1))
+            .await
+            .expect("the start boundary must be reached");
         controller_cancellation.cancel();
         pre_start.release();
     });
@@ -2245,17 +2311,37 @@ async fn expired_proactive_compaction_budget_preserves_later_overflow() {
     let mut parked = model.parked();
     let controller_clock = clock.clone();
     let controller = tokio::spawn(async move {
-        parked.wait_for(|parked| *parked).await.unwrap();
-        controller_clock.advance(300_000);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            parked.wait_for(|parked| *parked),
+        )
+        .await
+        .expect("primary request must park")
+        .unwrap();
+        controller_clock.advance(crate::context::compaction_budget::COMPACTION_MAX_DEADLINE_MILLIS);
         release.send(true).unwrap();
     });
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary".into())]);
     let mut policy = crate::scripted_suites::support::default_execution_policy();
     policy.monotonic_clock = clock;
     policy.model_timeout_policy = rustx::model::ModelTimeoutPolicy::new(
-        std::time::Duration::from_secs(600),
-        std::time::Duration::from_secs(600),
+        std::time::Duration::from_secs(14_400),
+        std::time::Duration::from_secs(14_400),
     );
+    let mut assembly = ContextAssembly::new();
+    assembly
+        .register_extension(
+            "deadline.context",
+            Some("1".into()),
+            Arc::new(|_: &rustx::context::ContributorInputSnapshot| {
+                Ok(vec![ContextProposal::UserMessage(UserMessageProposal {
+                    content: vec![UserContentBlock::Text(TextBlock {
+                        text: "staged context".into(),
+                    })],
+                })])
+            }),
+        )
+        .unwrap();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
@@ -2273,7 +2359,14 @@ async fn expired_proactive_compaction_budget_preserves_later_overflow() {
             capability.into_lease(),
             &cancellation,
             policy,
-            runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer.clone()),
+            runtime_with_assembly(
+                400,
+                0,
+                0,
+                weighted(100, 10, 0),
+                summarizer.clone(),
+                assembly,
+            ),
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
         )
@@ -2345,7 +2438,12 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
         "must not run".to_owned(),
     )]));
     let runtime = ContextRuntime::with_scripted_summarizer(
-        engine(500, 0, 0, weighted(10, 10, 0)),
+        engine(
+            500,
+            0,
+            0,
+            Arc::new(ScriptedEstimator::new(10, 10, 0).with_override("msg-user-1", 150)),
+        ),
         summarizer.clone(),
         Some(rustx::context::AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 9),
@@ -2379,7 +2477,9 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
     );
     assert!(result.event_history.iter().any(|event| matches!(
         event,
-        RuntimeEvent::CompactionFailed { error, .. } if error.contains("no complete historical prefix")
+        RuntimeEvent::CompactionFailed { error, .. } if error.contains("summary input capacity")
+            && error.contains("no positive compaction source range")
+            && error.contains("summary input limit estimate=9")
     )));
     assert!(
         !result
@@ -2397,8 +2497,8 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
 /// budget, and the provider proved that estimate wrong. Abandoning the
 /// compaction here is what makes a context overflow unrecoverable: the
 /// attempt would report the original overflow again with nothing compacted.
-/// Instead the pipeline replans the same transition against a halved summary
-/// input budget and summarizes again.
+/// Instead the pipeline repartitions the unprocessed source using the rejected
+/// request's own estimate and accepts each remaining range exactly once.
 #[tokio::test]
 async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
     let model = fake_model(vec![
@@ -2420,6 +2520,7 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
             coded_overflow_error(),
         )),
         FakeSummaryStep::Return("summary-1".to_owned()),
+        FakeSummaryStep::Return("summary-2".to_owned()),
     ]));
     let runtime = ContextRuntime::with_scripted_summarizer(
         engine(500, 0, 5, weighted(100, 10, 0)),
@@ -2431,7 +2532,12 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
         AgentExecution::new(
-            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            request(
+                "attempt-1",
+                vec![user("msg-user-1", &"x".repeat(12_000))],
+                0,
+                &model,
+            ),
             capability.into_lease(),
             &cancellation,
             crate::scripted_suites::support::default_execution_policy(),
@@ -2447,9 +2553,17 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
 
     assert_eq!(
         summarizer.requests().len(),
-        2,
+        3,
         "the rejected summary request is replanned, not abandoned"
     );
+    let calls = summarizer.requests();
+    let rejected = &calls[0].fragment.as_ref().unwrap().ranges[0];
+    let first = &calls[1].fragment.as_ref().unwrap().ranges[0];
+    let second = &calls[2].fragment.as_ref().unwrap().ranges[0];
+    assert_eq!(first.byte_start, rejected.byte_start);
+    assert!(first.byte_end < rejected.byte_end);
+    assert_eq!(second.byte_start, first.byte_end);
+    assert_eq!(second.byte_end, rejected.byte_end);
     assert!(
         result
             .event_history
@@ -2584,12 +2698,9 @@ async fn failing_status_module_is_quarantined_not_preparation_failure() {
     );
 }
 
-/// An actual proactive compaction pipeline failure still classifies as
-/// `Runtime(ContextCompactionFailed { .. })`, distinct from a preparation
-/// failure: no provider request follows, but the compaction pipeline
-/// genuinely started and failed.
+/// An optional compaction failure leaves the old admitted request runnable.
 #[tokio::test]
-async fn proactive_compaction_failure_is_context_compaction_failed() {
+async fn proactive_compaction_failure_continues_with_the_frozen_request() {
     let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "ok")),
@@ -2597,10 +2708,12 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Fail(ContextError::new(
-        ContextErrorKind::SummaryFailed,
-        "summary generation refused",
-    ))]);
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Fail(
+        ContextError::new(
+            ContextErrorKind::SummaryFailed,
+            "summary generation refused",
+        ),
+    )]));
     let initial = vec![
         user("msg-old-1", "old"),
         user("msg-old-2", "older"),
@@ -2614,7 +2727,12 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
             capability.into_lease(),
             &cancellation,
             crate::scripted_suites::support::default_execution_policy(),
-            runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer),
+            ContextRuntime::with_scripted_summarizer(
+                engine(320, 0, 0, weighted(100, 10, 0)),
+                summarizer.clone(),
+                None,
+                CompactionBudgets::new(1, 1, 1_000_000),
+            ),
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
         )
@@ -2626,8 +2744,8 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
 
     assert_eq!(
         model.requests().len(),
-        0,
-        "no provider request follows a failed proactive compaction"
+        1,
+        "the still-admissible frozen request proceeds through the normal start gate"
     );
     assert!(
         result
@@ -2643,27 +2761,18 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
             .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. })),
         "the compaction failure event carries the diagnostic"
     );
-    let RuntimeEvent::AttemptFailed { error, .. } = result.event_history.last().expect("terminal")
-    else {
-        panic!("the terminal must be an AttemptFailed");
-    };
-    let AttemptFailure::Runtime { error } = error else {
-        panic!("the terminal must be a runtime failure");
-    };
-    assert!(
-        matches!(
-            error,
-            rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }
-        ),
-        "an actual compaction pipeline failure keeps the compaction classification"
+    assert_eq!(summarizer.requests().len(), 1);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
     );
-    assert!(
-        !matches!(
-            error,
-            rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }
-        ),
-        "an actual compaction failure is not a preparation failure"
-    );
+    assert!(model.requests()[0].messages.iter().any(|message| {
+        message
+            .canonical_id()
+            .is_some_and(|id| id.as_str() == "msg-inbound-1")
+    }));
     assert_no_compaction_committed(&result);
 }
 
@@ -2680,7 +2789,10 @@ async fn no_progress_compaction_fails_without_retry() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     // 400 bytes estimate 101 tokens >= the 100-token replaced context.
-    let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("x".repeat(400))]);
+    let summarizer = FakeContextSummarizer::new(vec![
+        FakeSummaryStep::Return("x".repeat(400)),
+        FakeSummaryStep::Return("x".repeat(400)),
+    ]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
@@ -3091,10 +3203,13 @@ async fn cancel_while_summary_generation_is_pending() {
     let mut parked = parked;
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        parked
-            .wait_for(|value| *value)
-            .await
-            .expect("summarizer parked");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            parked.wait_for(|value| *value),
+        )
+        .await
+        .expect("summary park must not stall")
+        .expect("summarizer parked");
         controller_cancellation.cancel();
     });
     let result =
@@ -3236,7 +3351,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
         ],
         vec![
             FakeStep::Emit(started()),
-            FakeStep::Emit(text_delta(0, "summary")),
+            FakeStep::Emit(text_delta(0, VALID_SUMMARY_JSON)),
             FakeStep::Emit(done_with_usage(ModelFinishReason::Stop, 3)),
         ],
         vec![
@@ -3250,13 +3365,8 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     // One attempt snapshot drives both the loop and the summary: the
     // production `for_attempt` path derives the engine window and the summary
     // invocation from exactly the model the attempt was admitted with.
-    let snapshot = support::attempt_model_with_window(model.clone(), "fake-model", 500, 1);
+    let snapshot = support::attempt_model_with_window(model.clone(), "fake-model", 100_000, 1_024);
     let runtime = ContextRuntime::for_attempt(
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 5,
-            summary_output_cap: None,
-        },
         weighted(100, 10, 0),
         Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,
@@ -3400,9 +3510,8 @@ async fn m4_projection_contains_drained_batch_before_request() {
     );
 }
 
-/// Appending a drained batch may cross the proactive compaction threshold:
-/// the M4 engine compacts the projection while the inbound messages remain
-/// canonical history.
+/// A drained batch can require compaction before admission while its fresh
+/// inbound messages remain protected as canonical history.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // the full compaction-after-drain contract is asserted verbatim
 async fn m4_compaction_after_drain_preserves_canonical_inbound() {
@@ -3410,13 +3519,13 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let model = parked_two_turn_model(parked.clone());
     let tools = tool_registry_with_alpha();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    // per-message = 100, per-block = 10, window = 350:
+    // per-message = 100, per-block = 10, window = 400:
     // before the drain the projection is 100 tokens (below the threshold);
     // after the drain [u0, agent, A, B, Agent Status] is 410 tokens
-    // (at/above it), so the drained batch deterministically triggers
-    // proactive compaction while retaining the complete fresh inbound batch.
+    // (above the hard limit), so compaction must retain the complete fresh
+    // inbound batch and the staged Agent Status in its final fit.
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S".to_owned())]);
-    let runtime = runtime_with(350, 0, 0, weighted(100, 10, 0), summarizer);
+    let runtime = runtime_with(400, 0, 0, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
@@ -3445,8 +3554,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             finish_reason: ModelFinishReason::Stop,
         },
     );
-    // The drained batch pushed the projection over the threshold: exactly
-    // one proactive compaction ran.
+    // The drained batch made compaction mandatory: exactly one operation ran.
     assert_eq!(
         result
             .event_history
@@ -3457,8 +3565,8 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         "the drained batch must cross the compaction threshold exactly once"
     );
     // The Message Ledger still contains the original inbound
-    // `UserMessageBlock`s even though the active Surface was rewritten; the
-    // canonical runtime summary joins them as one more committed fact.
+    // `UserMessageBlock`s even though the active Surface was rewritten;
+    // the Summary belongs to the checkpoint, not the Message Ledger.
     // Issue #12 (M9b): the request-scoped Agent Status context commits
     // inside the durable model-turn start transaction, which is strictly
     // after the independent compaction commit, so the summary precedes the
@@ -3474,7 +3582,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             "rustx-context-attempt-1-turn-2-4".to_owned(),
             assistant_message_id(2).to_string(),
         ],
-        "the ledger preserves the drained inbound messages and gains the summary"
+        "the ledger preserves the drained inbound messages without a Summary message"
     );
     // The request continues on the compacted projection: the summary stands
     // for the older model-facing history, while the drained batch — now a
@@ -3533,8 +3641,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         serialized.contains('S'),
         "the summary reaches the projection"
     );
-    // The committed canonical summary is a derived compaction summary: no
-    // fabricated wall-clock timestamp.
+    // The checkpoint Summary is derived and has no fabricated timestamp.
     assert!(
         matches!(
             committed_summary(&result),
@@ -3593,10 +3700,13 @@ async fn m4_drain_retains_continuation_without_compaction() {
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
     let controller = tokio::spawn(async move {
-        model_parked
-            .wait_for(|is_parked| *is_parked)
-            .await
-            .expect("model parked");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            model_parked.wait_for(|is_parked| *is_parked),
+        )
+        .await
+        .expect("model park must not stall")
+        .expect("model parked");
         controller_mailbox
             .enqueue(inbound_user("msg-inbound-a", "continue", UserSource::Human))
             .expect("enqueue inbound message");
@@ -3767,7 +3877,18 @@ async fn n1_incomplete_search_settles_once_as_runtime_failure_even_after_real_ov
                 if overflow { 100_000 } else { 100 },
                 0,
                 0,
-                Arc::new(rustx::context::ClosureTokenEstimator::new(|_, _, _| 1000)),
+                Arc::new(rustx::context::ClosureTokenEstimator::new(
+                    |messages, _, _| {
+                        if messages
+                            .iter()
+                            .any(|message| matches!(message, ModelInputMessage::Derived(_)))
+                        {
+                            200_000
+                        } else {
+                            1_000
+                        }
+                    },
+                )),
             ),
             summarizer.clone(),
             None,
@@ -3850,12 +3971,7 @@ async fn n1_default_middle_candidate_commits_and_freezes_the_subsequent_primary_
         })
         .collect();
     let historical = rustx::model::input::canonical_input(&history);
-    let summary_input = rustx::context::SummaryRequest {
-        retired: historical[..2].to_vec(),
-    }
-    .model_input();
-    let summary_limit =
-        rustx::context::DefaultTokenEstimator.estimate_input(&summary_input.messages, "", &[]);
+    let recent = rustx::context::DefaultTokenEstimator.estimate_input(&historical[2..], "", &[]);
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "Earlier work summarized.".into(),
     )]));
@@ -3863,12 +3979,12 @@ async fn n1_default_middle_candidate_commits_and_freezes_the_subsequent_primary_
         engine(
             10_000,
             0,
-            0,
+            recent,
             Arc::new(rustx::context::DefaultTokenEstimator),
         ),
         summarizer.clone(),
         None,
-        CompactionBudgets::new(1, 128, summary_limit),
+        CompactionBudgets::new(1, 128, 100_000),
     );
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
@@ -3889,9 +4005,10 @@ async fn n1_default_middle_candidate_commits_and_freezes_the_subsequent_primary_
         tool_runtime.durable_store().as_ref(),
     );
     assert_eq!(summarizer.requests().len(), 1);
-    assert_eq!(summarizer.requests()[0].retired, historical[..2]);
+    assert_complete_fragment(&summarizer.requests()[0], &historical[..2]);
     assert_eq!(model.requests().len(), 1);
     let sent = &model.requests()[0];
+    assert_summary_original_sources(sent, &history[..2]);
     assert!(!sent.messages.iter().any(|item| {
         item.canonical_id()
             .is_some_and(|id| ["M1", "M2"].contains(&id.as_str()))
@@ -4115,12 +4232,6 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
     };
     last.content.extend(media);
     let historical = rustx::model::input::canonical_input(&history);
-    let summary_input = rustx::context::SummaryRequest {
-        retired: historical[..2].to_vec(),
-    }
-    .model_input();
-    let summary_limit =
-        rustx::context::DefaultTokenEstimator.estimate_input(&summary_input.messages, "", &[]);
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "Earlier work summarized.".into(),
     )]));
@@ -4133,10 +4244,10 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
         ),
         summarizer.clone(),
         None,
-        CompactionBudgets::new(1, 128, summary_limit),
+        CompactionBudgets::new(1, 128, 100_000),
     );
     let resolutions = Arc::new(AtomicUsize::new(0));
-    if let Some(owner) = upload_owner {
+    if let Some(owner) = upload_owner.clone() {
         context
             .engine
             .set_upload_resolver(Arc::new(ProductionUploadFixture {
@@ -4156,20 +4267,32 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
         )
         .await
         .unwrap();
-    let feasible: Vec<_> = (1..=129)
-        .filter(|n| {
-            let summary = rustx::context::SummaryRequest {
-                retired: historical[..*n].to_vec(),
-            }
-            .model_input();
-            oracle.estimate_model_input(&summary.messages.into(), "", &[]) <= summary_limit
-                && oracle
-                    .estimate_model_input(&historical[*n..].to_vec().into(), "", &[])
-                    .saturating_add(128)
-                    <= 9_999
-        })
-        .collect();
-    assert_eq!(feasible, vec![2]);
+    let primary_price = |n| {
+        let mut candidate = vec![crate::context::planning::minimum_summary()];
+        candidate.extend_from_slice(&historical[n..]);
+        oracle.estimate_model_input(&candidate.into(), "", &[])
+    };
+    assert!(primary_price(1) > 9_999);
+    assert!(primary_price(2) <= 9_999);
+    let recent = oracle.estimate_model_input(&historical[2..].to_vec().into(), "", &[]);
+    let summary_sources = oracle
+        .rendered_input(&historical[..2].to_vec().into())
+        .unwrap()
+        .to_vec();
+    context.engine = engine(
+        10_000,
+        0,
+        recent,
+        Arc::new(rustx::context::DefaultTokenEstimator),
+    );
+    if let Some(owner) = upload_owner {
+        context
+            .engine
+            .set_upload_resolver(Arc::new(ProductionUploadFixture {
+                calls: resolutions.clone(),
+                owner,
+            }));
+    }
     resolutions.store(0, Ordering::SeqCst);
     rustx::model::media::take_work();
     let mut execution_request = request("attempt-1", history.clone(), 1, &model);
@@ -4210,9 +4333,10 @@ async fn production_media_middle_candidate(image: bool, upload: bool) {
         "{:#?}",
         result.event_history
     );
-    assert_eq!(summarizer.requests()[0].retired, historical[..2]);
+    assert_complete_fragment(&summarizer.requests()[0], &summary_sources);
     assert_eq!(model.requests().len(), 1);
     let sent = &model.requests()[0];
+    assert_summary_original_sources(sent, &history[..2]);
     assert!(!sent.messages.iter().any(|item| {
         item.canonical_id()
             .is_some_and(|id| ["M1", "M2"].contains(&id.as_str()))

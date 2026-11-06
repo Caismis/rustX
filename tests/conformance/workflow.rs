@@ -299,10 +299,6 @@ fn models_json(emulator: &ProviderEmulator) -> String {
 const CONFIG: &str = r#"schema_version = 10
 agent_id = "agent-issue83"
 
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
-
 
 [subagents]
 max_concurrent = 4

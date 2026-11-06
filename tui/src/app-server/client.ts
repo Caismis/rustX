@@ -1,6 +1,6 @@
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
 import { ATTACHMENT_REQUEST_CAPACITY, requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
-import type { Request1 } from '../../../protocol/app-server/v72.ts';
+import type { Request1 } from '../../../protocol/app-server/v73.ts';
 /**
  * The one typed App Server client.
  *
@@ -73,7 +73,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 72;
+export const APP_SERVER_PROTOCOL_VERSION = 73;
 
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
@@ -145,7 +145,7 @@ export type DeliveryMethod = "delivery/read" | "delivery/locate";
 
 interface PendingRequest {
   readonly method: MethodName;
-  readonly expect: ResultType;
+  readonly expect: ResultType | readonly ResultType[];
   readonly effect: MethodEffect;
   resolve: (result: MethodResult) => void;
   reject: (error: Error) => void;
@@ -286,7 +286,7 @@ export class AppServerClient {
   async call<M extends Exclude<MethodName, "delivery/cancel">, T extends ResultType>(
     method: M,
     params: MethodParams<M>,
-    expect: T,
+    expect: T | readonly T[],
   ): Promise<ResultOf<T>> {
     if ('target' in params && 'session_id' in params.target && this.#deletingSessions.has(params.target.session_id) && method !== 'session/detach') {
       throw new Error('Session deletion has disabled controls. Verify its outcome before continuing.');
@@ -363,7 +363,7 @@ export class AppServerClient {
     return this.#transport.close();
   }
 
-  #request(method: MethodName, params: unknown, expect: ResultType, signal?: AbortSignal): Promise<MethodResult> {
+  #request(method: MethodName, params: unknown, expect: ResultType | readonly ResultType[], signal?: AbortSignal): Promise<MethodResult> {
     if (this.#closed !== undefined) {
       // After termination a new request fails immediately rather than waiting
       // for a peer that will never answer. Nothing was sent, so nothing is
@@ -437,7 +437,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v72 protocol message");
+      this.#fail("invalid App Server v73 protocol message");
       return;
     }
 
@@ -480,7 +480,9 @@ export class AppServerClient {
       this.#fail(`the App Server answered unknown request id ${String(record.id)}`);
       return;
     }
-    if (!isFailure(record) && record.result.type !== pending.expect) {
+    if (!isFailure(record) && (Array.isArray(pending.expect)
+      ? !pending.expect.includes(record.result.type)
+      : record.result.type !== pending.expect)) {
       this.#fail(`${pending.method} returned ${record.result.type} instead of ${pending.expect}`);
       return;
     }

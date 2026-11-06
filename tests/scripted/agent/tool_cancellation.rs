@@ -18,7 +18,7 @@ use rustx::agent::{
     AgentStatusObservation, AttemptLifecycle, LifecycleError, PreToolDecision, PreToolPolicy,
     PreToolView,
 };
-use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
+use rustx::context::{ContextRuntime, DefaultTokenEstimator};
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
 use rustx::model::event::ModelEvent;
@@ -64,11 +64,6 @@ fn request(model: &Arc<FakeModel>) -> AgentExecutionRequest {
 fn context_runtime(model: &Arc<FakeModel>) -> ContextRuntime {
     let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,

@@ -142,11 +142,6 @@ impl RuntimeInner {
                         crate::runtime::subagent::InheritedExecutionPolicy {
                             model_timeout: model_timeout_policy,
                             tool_deadline: tool_deadline_policy,
-                            context: resources
-                                .configuration()
-                                .map_or(self.context.policy, |generation| {
-                                    generation.config.context_policy()
-                                }),
                         },
                     )
                     .with_workflow_models(self.auxiliary.clone())

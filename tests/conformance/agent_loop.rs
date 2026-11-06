@@ -92,29 +92,15 @@ const FILLER_ONE_MARKER: &str = "compaction-filler-one-marker-51f0";
 const FILLER_TWO_MARKER: &str = "compaction-filler-two-marker-b27d";
 const SUMMARY_ONE_TEXT: &str = "conformance summary one: the assistant produced filler report one.";
 const SUMMARY_TWO_TEXT: &str = "conformance summary two: the assistant produced filler report two.";
+const CHUNKED_PROMPT: &str = "conformance: write the chunked compaction history";
+const CHUNKED_SUMMARY: &str = "chunked compaction kept the user's goal";
+const PRIMARY_REASONING: &str = "private-primary-reasoning-522";
+const SUMMARY_REASONING: &str = "private-summary-reasoning-522";
 
 /// The compaction window and reserve.
-///
-/// The emulator's scripted turn-one reply is ~200 KB, which the frozen
-/// `ceil(bytes / 4)` estimator values at roughly 51k tokens. Two bounds have
-/// to hold at once, and both are structural, not statistical:
-///
-/// ```text
-/// trigger:  window - reserve - output   <=  the turn-two request estimate
-/// summary:  the selected span estimate  <=  window - reserve - summary output
-/// ```
-///
-/// Both budgets carry the reserve, so both bounds are the same number here
-/// (the primary and summary output budgets are both 1k), and that number has
-/// to land between the selected span's estimate (~51k) and the whole
-/// turn-two request estimate (~56k). The difference between the two is the
-/// non-retirable request input — the Effective System Prompt, the tool
-/// definitions, and the turn-two user message — so a 56k window with a 1.5k
-/// reserve puts the shared limit at ~53.4k, roughly centred in that band
-/// with ~2.4k of margin on each side. Compaction never splits a message to
-/// get there.
+/// The emulator's scripted turn-one reply is about 200 KB; this context
+/// window exercises compaction against the provider fixture.
 const COMPACTION_CONTEXT_WINDOW: u64 = 56_000;
-const COMPACTION_RESERVE_TOKENS: u64 = 1_536;
 
 // ---------------------------------------------------------------------------
 // The composed driver
@@ -162,12 +148,12 @@ struct Setup {
     images: bool,
     /// The declared context window of every catalog model.
     context_window: u64,
-    /// The session's safety reserve.
-    reserve_tokens: u64,
-    /// Tokens of recent history kept literal.
-    keep_recent_tokens: u64,
     /// The explicit summary-model policy, when the session declares one.
     summary_model: Option<String>,
+    /// Exercise a smaller native-schema summary model and its thinking profile.
+    chunked_compaction: bool,
+    /// Select a separate Anthropic summary model with an explicit profile.
+    cross_provider_summary: bool,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
 }
@@ -179,9 +165,9 @@ impl Setup {
             instructions: None,
             images: false,
             context_window: 128_000,
-            reserve_tokens: 1_024,
-            keep_recent_tokens: 8_192,
             summary_model: None,
+            chunked_compaction: false,
+            cross_provider_summary: false,
             skill_paths: Vec::new(),
         }
     }
@@ -358,8 +344,11 @@ impl Driver {
                             return;
                         }
                     }
-                    NotificationMethod::Closed { .. }
-                    | NotificationMethod::ResyncRequired { .. } => break,
+                    ending @ (NotificationMethod::Closed { .. }
+                    | NotificationMethod::ResyncRequired { .. }) => {
+                        eprintln!("conformance attachment stopped: {ending:?}");
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -492,6 +481,7 @@ impl Driver {
             Method::CompactContext {
                 target: self.target.clone(),
                 request_id: "conformance-compact".to_owned().try_into().unwrap(),
+                instructions: None,
             },
         )
         .await
@@ -672,7 +662,15 @@ impl Driver {
             .await
             {
                 Ok(Some(record)) => record,
-                Ok(other) => panic!("the observation stream ended early: {other:?}"),
+                Ok(other) => panic!(
+                    "the observation stream ended early: {other:?}; native state: {:?}",
+                    self.snapshot().map(|(snapshot, cursor)| (
+                        cursor,
+                        snapshot
+                            .attempt
+                            .map(|attempt| (attempt.attempt_id, attempt.phase))
+                    ))
+                ),
                 Err(elapsed) => panic!(
                     "the attempt never settled ({elapsed}); {} complete records, cursor={}, owner={owner:?}",
                     observed.records.len(),
@@ -782,20 +780,35 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
     for id in [CHAT_MODEL, SECOND_MODEL, SUMMARY_MODEL] {
         let mut model = chat_model(id, window);
         model["provider"] = "emulator".into();
+        if setup.chunked_compaction && id == SUMMARY_MODEL {
+            model["context_window"] = 16_000.into();
+            model["max_output_tokens"] = 4_096.into();
+            model["capabilities"]["json_schema_output"] = true.into();
+            model["default_profile"] = "thinking".into();
+            model["profiles"] = serde_json::json!({
+                "thinking": {"request_params": "{\"reasoning_effort\":\"medium\"}"}
+            });
+        }
         models.insert(format!("emulator/{id}"), model);
     }
     for (provider, id, protocol) in [
         ("emulator", RESPONSES_MODEL, "openai_responses"),
         ("emulator-anthropic", ANTHROPIC_MODEL, "anthropic_messages"),
     ] {
-        models.insert(
-            format!("{provider}/{id}"),
-            serde_json::json!({
-                "provider": provider, "id": id, "protocol": protocol,
-                "context_window": window, "max_output_tokens": 1024,
-                "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"]}) } else { text_capabilities() },
-            }),
-        );
+        let mut model = serde_json::json!({
+            "provider": provider, "id": id, "protocol": protocol,
+            "context_window": window, "max_output_tokens": 1024,
+            "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"]}) } else { text_capabilities() },
+        });
+        if setup.cross_provider_summary && protocol == "anthropic_messages" {
+            model["context_window"] = 128_000.into();
+            model["default_profile"] = "ordinary".into();
+            model["profiles"] = serde_json::json!({
+                "ordinary": {"request_params": "{\"temperature\":0.7}"},
+                "precise": {"request_params": "{\"temperature\":0.2}"}
+            });
+        }
+        models.insert(format!("{provider}/{id}"), model);
     }
     if setup.images {
         for (id, protocol) in [
@@ -841,15 +854,17 @@ fn session_json(setup: &Setup) -> String {
     let mut model = serde_json::json!({"model": setup.model});
     if let Some(summary) = &setup.summary_model {
         model["summary_model"] = serde_json::json!({"mode": "explicit", "model": summary});
+        if setup.cross_provider_summary {
+            model["summary_model"]["profile"] = "precise".into();
+        }
     }
     let mut document = serde_json::json!({
         "agent_id": "agent-issue47",
         "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
-        "context": {
-            "reserve_tokens": setup.reserve_tokens,
-            "keep_recent_tokens": setup.keep_recent_tokens,
-        },
     });
+    if setup.chunked_compaction {
+        document["native_tools"] = serde_json::json!({"write": {"approval": "never"}});
+    }
     if let Some(instructions) = &setup.instructions {
         document["agent"]["instructions"] = serde_json::json!(instructions);
     }
@@ -1440,8 +1455,6 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
         };
         let setup = Setup {
             context_window: COMPACTION_CONTEXT_WINDOW,
-            reserve_tokens: COMPACTION_RESERVE_TOKENS,
-            keep_recent_tokens: 256,
             summary_model,
             ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
         };
@@ -1529,6 +1542,96 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
     }
 }
 
+/// A selected Anthropic Profile supplies a locally validated Prompt-schema
+/// summary for an `OpenAI` primary request through both real provider adapters.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compaction_uses_an_explicit_cross_provider_summary_profile() {
+    use rustx::events::types::RuntimeEvent as E;
+    use rustx::model::auxiliary::AuxiliaryInputEvidence;
+    use rustx::model::session::AuxiliaryModelView;
+    use rustx::model::structured::StructuredOutputStrategy;
+
+    let Some(emulator) = ProviderEmulator::start("compaction_cross_provider_summary").await else {
+        return;
+    };
+    let setup = Setup {
+        context_window: COMPACTION_CONTEXT_WINDOW,
+        summary_model: Some(format!("emulator-anthropic/{ANTHROPIC_MODEL}")),
+        cross_provider_summary: true,
+        ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
+    };
+    let driver = Driver::start(&emulator, &setup).await;
+    driver.submit(TURN_ONE);
+    let (_, first) = driver.settle().await;
+    assert!(
+        matches!(first, RuntimeClientOutcome::Completed { .. }),
+        "{first:?}"
+    );
+    driver.submit(TURN_TWO);
+    let (_, second) = driver.settle().await;
+    assert!(
+        matches!(second, RuntimeClientOutcome::Completed { .. }),
+        "{second:?}"
+    );
+
+    let (snapshot, _) = driver.snapshot().unwrap();
+    assert_eq!(snapshot.context.compaction_count, 1);
+    let frozen = snapshot.attempt.as_ref().unwrap().model.as_ref().unwrap();
+    assert_eq!(
+        frozen.primary.model.to_string(),
+        format!("emulator/{CHAT_MODEL}")
+    );
+    let AuxiliaryModelView::Explicit(summary) = &frozen.summary else {
+        panic!("the attempt must retain its explicit Summary binding")
+    };
+    assert_eq!(
+        summary.model.to_string(),
+        format!("emulator-anthropic/{ANTHROPIC_MODEL}")
+    );
+    assert_eq!(
+        summary.protocol,
+        rustx::model::ModelProtocol::AnthropicMessages
+    );
+    assert_eq!(summary.profile.as_ref().unwrap().as_str(), "precise");
+    assert_eq!(
+        summary.request_params["temperature"],
+        serde_json::json!(0.2)
+    );
+
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0]["protocol"], "openai_chat_completions");
+    assert_eq!(requests[1]["protocol"], "anthropic_messages");
+    assert_eq!(requests[1]["model"], ANTHROPIC_MODEL);
+    assert_eq!(requests[1]["body"]["temperature"], serde_json::json!(0.2));
+    assert!(requests[1]["body"].get("output_config").is_none());
+    assert!(body_text(&requests[1]).contains(COMPACTION_MARKER));
+    assert_eq!(requests[2]["protocol"], "openai_chat_completions");
+    assert!(body_text(&requests[2]).contains(SUMMARY_TEXT));
+    assert!(!body_text(&requests[2]).contains(COMPACTION_MARKER));
+
+    let journal = driver.store.read_events(None, 256).unwrap().events;
+    assert_eq!(
+        journal
+            .iter()
+            .filter(|e| matches!(e.event, E::CompactionCompleted { .. }))
+            .count(),
+        1
+    );
+    assert!(journal.iter().any(|e| matches!(
+        &e.event,
+        E::AuxiliaryCallStarted {
+            input: AuxiliaryInputEvidence::Compaction {
+                output_strategy: StructuredOutputStrategy::Prompt,
+                ..
+            },
+            ..
+        }
+    )));
+    assert!(snapshot.context.projection_head.is_some());
+    emulator.finish().await;
+}
+
 /// A transient failure crosses the real HTTP adapter, auxiliary retry writer,
 /// new physical request and normal checkpoint commit with byte-identical input.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1538,8 +1641,6 @@ async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
     };
     let setup = Setup {
         context_window: COMPACTION_CONTEXT_WINDOW,
-        reserve_tokens: COMPACTION_RESERVE_TOKENS,
-        keep_recent_tokens: 256,
         summary_model: Some(format!("emulator/{SUMMARY_MODEL}")),
         ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
     };
@@ -1587,6 +1688,337 @@ async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
     emulator.finish().await;
 }
 
+/// A smaller real summary model processes more than twelve normal fragments
+/// after an explicit native-format rejection. The operation keeps the admitted
+/// model/Profile, accounts for every physical request and activates once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
+    use rustx::durable::AuxiliaryStore;
+    use rustx::events::types::RuntimeEvent as E;
+    use rustx::model::ModelRequestOwner;
+    use rustx::model::auxiliary::{
+        AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryInputEvidence,
+        AuxiliaryRequestTerminal, AuxiliaryUsageCompleteness,
+    };
+    use rustx::model::structured::StructuredOutputStrategy;
+    use std::collections::BTreeSet;
+
+    let Some(emulator) = ProviderEmulator::start("chunked_compaction").await else {
+        return;
+    };
+    let setup = Setup {
+        context_window: 256_000,
+        summary_model: Some(format!("emulator/{SUMMARY_MODEL}")),
+        chunked_compaction: true,
+        ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
+    };
+    let driver = Driver::start(&emulator, &setup).await;
+    driver.submit(CHUNKED_PROMPT);
+
+    // This barrier is reached on the Prompt retry after the Native failure.
+    // A Session update now cannot alter any remaining call in this operation.
+    tokio::select! {
+        _ = emulator.await_gate("first-prompt-summary") => {}
+        (_, early_outcome) = driver.settle_observing(|event| {
+            if let RuntimeClientEvent::InteractionPending { interaction } = event {
+                panic!("unexpected interaction while waiting for Summary: {interaction:?}");
+            }
+        }) => {
+            let requests = emulator.requests().await;
+            panic!(
+                "Attempt settled before the first Prompt summary: {early_outcome:?}; \
+                 provider requests: {}, last model: {:?}; provider diagnostics: {}",
+                requests.len(), requests.last().map(|r| &r["model"]), emulator.diagnostics(),
+            );
+        }
+    }
+    driver
+        .model_set(SessionModelConfig::of(
+            ModelRef::parse(&format!("emulator/{SECOND_MODEL}")).unwrap(),
+        ))
+        .await
+        .expect("a later Session model selection commits");
+    emulator.release_gate("first-prompt-summary").await;
+    let (_, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+
+    let requests = emulator.requests().await;
+    let primary: Vec<_> = requests
+        .iter()
+        .filter(|r| r["model"] == CHAT_MODEL)
+        .collect();
+    let summary: Vec<_> = requests
+        .iter()
+        .filter(|r| r["model"] == SUMMARY_MODEL)
+        .collect();
+    assert!(primary.len() >= 15 && primary.len() <= 64);
+    assert!(
+        summary.len() > 13,
+        "one rejected Native and more than twelve accepted calls"
+    );
+    assert_eq!(requests.len(), primary.len() + summary.len());
+    assert_eq!(summary[0]["body"]["response_format"]["type"], "json_schema");
+    for request in &summary {
+        assert_eq!(request["body"]["reasoning_effort"], "medium");
+        assert!(!body_text(request).contains(PRIMARY_REASONING));
+        assert!(!body_text(request).contains(SUMMARY_REASONING));
+    }
+    for request in &summary[1..] {
+        assert!(
+            request["body"].get("response_format").is_none(),
+            "fallback is retained"
+        );
+    }
+    let final_primary = primary.last().unwrap();
+    let final_body = body_text(final_primary);
+    assert!(final_body.contains(CHUNKED_SUMMARY));
+    assert!(!final_body.contains("chunked-call-001"));
+    assert!(!final_body.contains(PRIMARY_REASONING));
+    assert!(!final_body.contains(SUMMARY_REASONING));
+    let messages = final_primary["body"]["messages"].as_array().unwrap();
+    let call_ids: Vec<_> = messages
+        .iter()
+        .filter_map(|m| m["tool_calls"].as_array())
+        .flatten()
+        .map(|call| call["id"].as_str().unwrap())
+        .collect();
+    let result_ids: Vec<_> = messages
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| m["tool_call_id"].as_str().unwrap())
+        .collect();
+    let calls: BTreeSet<_> = call_ids.iter().copied().collect();
+    let results: BTreeSet<_> = result_ids.iter().copied().collect();
+    assert!(!calls.is_empty(), "a recent original tool pair remains");
+    assert_eq!(calls.len(), call_ids.len(), "retained call IDs are unique");
+    assert_eq!(
+        results.len(),
+        result_ids.len(),
+        "retained result IDs are unique"
+    );
+    assert_eq!(calls, results, "every retained call has exactly its result");
+
+    let canonical = driver.canonical_history();
+    let sizes: Vec<_> = canonical
+        .iter()
+        .map(|m| serde_json::to_vec(m).unwrap().len())
+        .collect();
+    assert!(sizes.iter().all(|size| *size < 1024 * 1024));
+    assert!(sizes.iter().sum::<usize>() < 16 * 1024 * 1024);
+    assert!(canonical.iter().any(|m| {
+        serde_json::to_string(m)
+            .unwrap()
+            .contains("chunked-call-001")
+    }));
+
+    // Read the immutable native journal in bounded pages, not the live client
+    // projection. These events carry the accepted ranges and real Call IDs.
+    let mut journal = Vec::new();
+    let mut after = None;
+    loop {
+        let page = driver.store.read_events(after, 128).unwrap();
+        if page.events.is_empty() {
+            break;
+        }
+        after = page.next_sequence;
+        journal.extend(page.events);
+    }
+    let completions: Vec<_> = journal
+        .iter()
+        .filter_map(|e| match &e.event {
+            E::CompactionCompleted { operation_id, .. } => Some(operation_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(completions.len(), 1);
+    let operation = completions[0];
+    let accepted: Vec<_> = journal
+        .iter()
+        .filter_map(|e| match &e.event {
+            E::CompactionChunkAccepted {
+                operation_id,
+                accepted_fragments,
+                source_ranges,
+                generation,
+            } if operation_id == operation => {
+                Some((*accepted_fragments, source_ranges, generation))
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(accepted.len() > 12);
+    assert_eq!(accepted.len() + 1, summary.len());
+    let starts: Vec<_> = journal
+        .iter()
+        .filter_map(|e| match &e.event {
+            E::AuxiliaryCallStarted {
+                call_id,
+                business_source: AuxiliaryBusinessSource::Compaction { operation_id, .. },
+                ..
+            } if operation_id == operation => Some(call_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.len(), summary.len());
+    assert_eq!(
+        starts.iter().copied().collect::<BTreeSet<_>>().len(),
+        starts.len()
+    );
+    let physical_starts = journal
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.event,
+                E::ModelRequestStarted {
+                    owner: ModelRequestOwner::Auxiliary { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(physical_starts, summary.len());
+    assert_eq!(
+        journal
+            .iter()
+            .filter(|e| matches!(
+                &e.event,
+                E::ModelRequestStarted {
+                    owner: ModelRequestOwner::Agent { .. },
+                    ..
+                }
+            ))
+            .count(),
+        primary.len()
+    );
+    assert!(
+        journal
+            .iter()
+            .filter_map(|e| match &e.event {
+                E::ModelRequestCompleted {
+                    owner: ModelRequestOwner::Agent { .. },
+                    usage,
+                    ..
+                } => Some(usage),
+                _ => None,
+            })
+            .all(Option::is_none),
+        "summary usage never becomes primary usage"
+    );
+
+    let cut = driver.store.auxiliary_audit_cut().unwrap();
+    let mut last_range: Option<(u32, u32)> = None;
+    let mut previous_accepted = None;
+    for (index, call_id) in starts.iter().enumerate() {
+        let call = driver
+            .store
+            .load_auxiliary_call(call_id, cut)
+            .unwrap()
+            .unwrap();
+        let requests = driver
+            .store
+            .read_auxiliary_call_requests(call_id, cut, None, 2)
+            .unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "each fragment has one real physical request"
+        );
+        assert_eq!(requests[0].model, SUMMARY_MODEL);
+        let evidence = requests[0].request_evidence.as_ref().unwrap();
+        let AuxiliaryBusinessSource::Compaction {
+            operation_id,
+            preceding_call,
+        } = &call.business_source
+        else {
+            panic!("summary Call has a compaction business owner")
+        };
+        assert_eq!(operation_id, operation);
+        assert_eq!(
+            preceding_call.as_ref().map(|r| &r.call_id),
+            index.checked_sub(1).map(|i| starts[i])
+        );
+        let AuxiliaryInputEvidence::Compaction {
+            source_ranges,
+            previous_summary,
+            output_strategy,
+            ..
+        } = &call.input
+        else {
+            panic!("summary Call has native compaction provenance")
+        };
+        assert_eq!(
+            previous_summary.as_ref().map(|r| &r.call_id),
+            previous_accepted
+        );
+        if index == 0 {
+            assert_eq!(*output_strategy, StructuredOutputStrategy::Native);
+            assert_eq!(call.outcome, Some(AuxiliaryCallOutcome::Failed));
+            assert_eq!(
+                requests[0].local_terminal,
+                Some(AuxiliaryRequestTerminal::Failed)
+            );
+            assert!(evidence.usage.is_none());
+            assert_eq!(
+                evidence.usage_completeness,
+                AuxiliaryUsageCompleteness::Unreported
+            );
+            continue;
+        }
+        assert!(
+            matches!(output_strategy, StructuredOutputStrategy::PromptFallback { operation_id } if operation_id == operation)
+        );
+        assert_eq!(call.outcome, Some(AuxiliaryCallOutcome::Completed));
+        let (ordinal, accepted_ranges, generation) = accepted[index - 1];
+        assert_eq!(ordinal as usize, index);
+        assert_eq!(source_ranges, accepted_ranges);
+        let generation = generation.as_ref().expect("accepted native generation");
+        assert_eq!(&generation.call_id, *call_id);
+        assert!(!source_ranges.is_empty());
+        for range in source_ranges {
+            if let Some((prior_index, prior_end)) = last_range {
+                if range.projection_index == prior_index {
+                    assert_eq!(range.byte_start, prior_end);
+                } else {
+                    assert_eq!(range.projection_index, prior_index + 1);
+                    assert_eq!(range.byte_start, 0);
+                }
+            } else {
+                assert_eq!((range.projection_index, range.byte_start), (0, 0));
+            }
+            assert!(range.byte_end >= range.byte_start);
+            last_range = Some((range.projection_index, range.byte_end));
+        }
+        previous_accepted = Some(*call_id);
+        assert_eq!(
+            evidence.usage_completeness,
+            AuxiliaryUsageCompleteness::Partial
+        );
+        let usage = evidence.usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, None);
+        assert_eq!(usage.total_tokens, None);
+        assert_eq!(usage.output_tokens, Some(49));
+        assert_eq!(usage.details.as_ref().unwrap().reasoning_tokens, Some(13));
+    }
+    let (snapshot, _) = driver.snapshot().unwrap();
+    assert_eq!(snapshot.context.compaction_count, 1);
+    let occupancy = snapshot
+        .context
+        .occupancy
+        .as_ref()
+        .expect("primary occupancy");
+    assert!(occupancy.estimated);
+    assert_eq!(occupancy.context_window_tokens, 256_000);
+    assert!(
+        occupancy.input_tokens > 49,
+        "summary output usage is not primary occupancy"
+    );
+    emulator.finish().await;
+}
+
 // ---------------------------------------------------------------------------
 // Scenario F2 — repeated compaction through the real provider boundary
 // ---------------------------------------------------------------------------
@@ -1618,8 +2050,6 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
         };
         let setup = Setup {
             context_window: COMPACTION_CONTEXT_WINDOW,
-            reserve_tokens: COMPACTION_RESERVE_TOKENS,
-            keep_recent_tokens: 256,
             summary_model,
             ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
         };
@@ -1830,7 +2260,7 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
     // its provider request.
     let next_model = SessionModelConfig {
         title_model: AuxiliaryModelPolicy::Session,
-        summary_model: AuxiliaryModelPolicy::Session,
+        summary_model: rustx::model::session::SummaryModelPolicy::Session,
         ..SessionModelConfig::of(
             ModelRef::parse(&format!("emulator/{SECOND_MODEL}"))
                 .expect("the second model reference parses"),
@@ -2141,7 +2571,6 @@ async fn image_tool_round_trip_and_text_model_switch() {
     };
     let mut setup = Setup::new(&format!("emulator-anthropic/{ANTHROPIC_MODEL}"));
     setup.images = true;
-    setup.keep_recent_tokens = 0;
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("read the image");
     emulator.await_gate("image-admitted").await;
@@ -2467,7 +2896,6 @@ async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, P
     let mut setup = Setup::new(model);
     setup.images = true;
     if scenario == "image_coverage_overflow_retry" {
-        setup.keep_recent_tokens = setup.context_window;
         setup.summary_model = Some("emulator/summary-model".into());
     }
     let driver = Driver::start_in(root, &emulator, &setup).await;
@@ -2484,7 +2912,13 @@ async fn retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_r
     else {
         return;
     };
-    driver.submit("Read sixteen images, then one more.");
+    // The selected old prefix must be larger than the deterministic rendered
+    // JSON summary, so this overflow recovery can make actual progress while
+    // retaining the image call/result groups whose coverage is under test.
+    driver.submit(&format!(
+        "Read sixteen images, then one more. {}",
+        "Retain the image review context and its source. ".repeat(40)
+    ));
     let outcome = driver.settle().await.1;
     assert!(
         matches!(outcome, RuntimeClientOutcome::Completed { .. }),

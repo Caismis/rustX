@@ -9,7 +9,6 @@ use super::super::{common, support};
 
 use std::sync::Arc;
 
-use rustx::context::SessionContextPolicy;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, UserContentBlock};
 use rustx::model::catalog::{
@@ -215,12 +214,6 @@ const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 /// any client-visible value.
 const FIXTURE_SECRET: &str = "fixture-key-alpha";
 
-const NO_COMPACTION: SessionContextPolicy = SessionContextPolicy {
-    reserve_tokens: 0,
-    keep_recent_tokens: 0,
-    summary_output_cap: None,
-};
-
 fn one_turn_stop() -> Vec<FakeStep> {
     vec![
         FakeStep::Emit(ModelEvent::Started),
@@ -299,7 +292,6 @@ pub(super) async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, Run
         "conv_95b1a03d-ab33-7d8c-98d3-934561e7386b",
     )
     .session_model(model)
-    .context_policy(NO_COMPACTION)
     .build()
     .await
     .into_parts()
@@ -656,11 +648,10 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach");
 
-    let summary_policy = rustx::model::session::AuxiliaryModelPolicy::Explicit {
+    let summary_policy = rustx::model::session::SummaryModelPolicy::Explicit {
         model: model_ref("summary/summary-model"),
         profile: None,
         request_params: common::request_params(serde_json::json!({"summary_tag": "keep"})),
-        max_output_tokens: Some(300),
     };
     let initial = SessionModelConfig {
         model: model_ref("alpha/model-a"),
@@ -710,7 +701,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         panic!("the explicit summary policy survives the primary switch");
     };
     assert_eq!(summary.model, model_ref("summary/summary-model"));
-    assert_eq!(summary.max_output_tokens, 300);
+    assert_eq!(summary.max_output_tokens, 1024);
     assert_eq!(
         summary.request_params["summary_tag"],
         serde_json::json!("keep")

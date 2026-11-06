@@ -44,6 +44,48 @@ pub(crate) fn normalize_error(error: OpenAIError) -> ModelError {
     normalize_sdk_error(error)
 }
 
+/// Normalize a failure for the actual protocol's structured-format field.
+/// A generic bad request, or provider prose mentioning a field, is not
+/// sufficient evidence that the native output feature was rejected.
+pub(crate) fn normalize_error_for_format(error: OpenAIError, field: &str) -> ModelError {
+    let rejected_format = http_failure_of(&error).is_some_and(|failure| {
+        failure.status.as_u16() == 400
+            && is_explicit_format_rejection(
+                failure.provider_type.as_deref(),
+                failure.provider_code.as_deref(),
+                failure.provider_param.as_deref(),
+                field,
+            )
+    });
+    let mut normalized = normalize_error(error);
+    if rejected_format && normalized.kind == ModelErrorKind::InvalidRequest {
+        normalized.kind = ModelErrorKind::NativeFormatUnsupported;
+        normalized.retry_disposition = ModelRetryDisposition::Never;
+    }
+    normalized
+}
+
+pub(crate) fn is_explicit_format_rejection(
+    provider_type: Option<&str>,
+    provider_code: Option<&str>,
+    provider_param: Option<&str>,
+    expected_field: &str,
+) -> bool {
+    let rejected_field = match provider_code {
+        Some("unsupported_parameter") => provider_param == Some(expected_field),
+        Some("unsupported_value") => {
+            provider_param == Some(expected_field)
+                || matches!(
+                    (expected_field, provider_param),
+                    ("response_format", Some("response_format.type"))
+                        | ("text.format", Some("text.format.type"))
+                )
+        }
+        _ => false,
+    };
+    provider_type == Some("invalid_request_error") && rejected_field
+}
+
 /// Normalizes one SDK-variant error that carried no HTTP failure of its own.
 #[allow(clippy::too_many_lines)] // preserve one exhaustive SDK error normalization boundary
 fn normalize_sdk_error(error: OpenAIError) -> ModelError {
@@ -456,6 +498,8 @@ fn sdk_status_disposition(
         ModelErrorKind::InvalidRequest
         | ModelErrorKind::Authentication
         | ModelErrorKind::Unsupported
+        | ModelErrorKind::NativeFormatUnsupported
+        | ModelErrorKind::StructuredOutputContractViolation
         | ModelErrorKind::ContextWindowExceeded
         | ModelErrorKind::Cancelled
         | ModelErrorKind::Transport
@@ -627,7 +671,97 @@ mod tests {
             message: message.to_owned(),
             provider_code: provider_code.map(str::to_owned),
             provider_type: None,
+            provider_param: None,
         }
+    }
+
+    #[test]
+    fn only_the_protocols_explicit_native_format_rejection_is_typed() {
+        fn classify(
+            status: u16,
+            code: &str,
+            param: Option<&str>,
+            message: &str,
+            field: &str,
+        ) -> ModelErrorKind {
+            let mut failure = http_failure(status, Some(code), message);
+            failure.provider_type = Some("invalid_request_error".into());
+            failure.provider_param = param.map(str::to_owned);
+            super::normalize_error_for_format(
+                async_openai::error::OpenAIError::Boxed(Box::new(failure)),
+                field,
+            )
+            .kind
+        }
+        for field in ["response_format", "text.format"] {
+            assert_eq!(
+                classify(400, "unsupported_parameter", Some(field), "rejected", field),
+                ModelErrorKind::NativeFormatUnsupported,
+            );
+            assert_eq!(
+                classify(400, "unsupported_value", Some(field), "rejected", field),
+                ModelErrorKind::NativeFormatUnsupported,
+            );
+            let type_field = format!("{field}.type");
+            assert_eq!(
+                classify(
+                    400,
+                    "unsupported_value",
+                    Some(&type_field),
+                    "rejected",
+                    field
+                ),
+                ModelErrorKind::NativeFormatUnsupported,
+            );
+            assert_eq!(
+                classify(
+                    400,
+                    "unsupported_parameter",
+                    Some(&type_field),
+                    "rejected",
+                    field
+                ),
+                ModelErrorKind::InvalidRequest,
+            );
+            for (code, param) in [
+                ("unsupported_parameter", None),
+                ("unsupported_parameter", Some("thinking")),
+                ("invalid_request_error", Some(field)),
+            ] {
+                assert_eq!(
+                    classify(400, code, param, "rejected", field),
+                    ModelErrorKind::InvalidRequest
+                );
+            }
+            assert_eq!(
+                classify(
+                    400,
+                    "unsupported_parameter",
+                    Some(field),
+                    "maximum context length exceeded",
+                    field
+                ),
+                ModelErrorKind::ContextWindowExceeded,
+            );
+            assert_eq!(
+                classify(401, "unsupported_parameter", Some(field), "rejected", field),
+                ModelErrorKind::Authentication
+            );
+            assert_eq!(
+                classify(429, "unsupported_parameter", Some(field), "rejected", field),
+                ModelErrorKind::RateLimit
+            );
+        }
+        assert_eq!(
+            classify(
+                400,
+                "unsupported_parameter",
+                Some("text.format"),
+                "rejected",
+                "response_format"
+            ),
+            ModelErrorKind::InvalidRequest,
+        );
     }
 
     #[test]

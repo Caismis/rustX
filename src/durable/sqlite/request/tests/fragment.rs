@@ -61,6 +61,7 @@ pub(super) fn fragment_snapshot(
     let history = store.projected_history().unwrap();
     snapshot.history_cut = history.cut;
     let request = ModelRequest {
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         messages: history.messages,
@@ -435,6 +436,7 @@ fn t12_t19_canonical_fragments_preserve_reordered_repeated_and_compacted_native_
     messages.reverse();
     messages.push(messages[0].clone());
     let request = ModelRequest {
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         invocation: reordered.invocation.clone(),

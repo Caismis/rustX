@@ -436,6 +436,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
                 Method::CompactContext {
                     target: target.clone(),
                     request_id: "issue459".to_owned().try_into().unwrap(),
+                    instructions: None,
                 },
             )
             .await,

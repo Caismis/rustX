@@ -53,11 +53,6 @@ pub(crate) fn admit_agent(
             execution_policy: rustx::runtime::subagent::InheritedExecutionPolicy {
                 model_timeout: rustx::model::ModelTimeoutPolicy::default(),
                 tool_deadline: rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-                context: rustx::context::SessionContextPolicy {
-                    reserve_tokens: 8192,
-                    keep_recent_tokens: 4096,
-                    summary_output_cap: Some(1024),
-                },
             },
             approval_mode: rustx::runtime::ApprovalMode::Policy,
         };

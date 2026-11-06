@@ -1,6 +1,6 @@
 //! The checkpoint transaction is the sole historical projection mutation boundary.
 #[path = "auxiliary_lineage.rs"]
-mod auxiliary_lineage;
+pub(super) mod auxiliary_lineage;
 
 mod store;
 use super::{

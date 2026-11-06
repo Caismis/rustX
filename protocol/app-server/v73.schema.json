@@ -4450,6 +4450,16 @@
           "const": "unsupported"
         },
         {
+          "description": "The provider explicitly rejected the exact native JSON Schema field.\nThis is distinct from other unsupported features and request errors.",
+          "type": "string",
+          "const": "native_format_unsupported"
+        },
+        {
+          "description": "A completed Native structured response was not one schema-valid JSON\nobject. It excludes refusals, truncation, tools and transport failures.",
+          "type": "string",
+          "const": "structured_output_contract_violation"
+        },
+        {
           "description": "The model generated tool intent that cannot become a trustworthy\ncanonical [`ToolCall`](crate::tools::types::ToolCall).\n\nThis is a *generation* defect, not a transport defect and not a Tool\nschema rejection: the proposal never crossed `ToolCall` acceptance, so\nnothing executed, nothing was settled, and nothing entered canonical\nhistory. The Agent Loop owns the bounded corrective regeneration this\nclass authorizes; see [`MalformedToolProposalSource`] for the\nprovider-independent provenance carried alongside it.",
           "type": "string",
           "const": "malformed_tool_proposal"
@@ -6092,11 +6102,6 @@
           "description": "The effective system instructions, project guidance or Agent profile.",
           "type": "string",
           "const": "instructions"
-        },
-        {
-          "description": "The context budgeting/projection policy.",
-          "type": "string",
-          "const": "context_policy"
         },
         {
           "description": "The model-facing Tool catalog.",
@@ -8457,6 +8462,13 @@
                 },
                 "request_id": {
                   "$ref": "#/$defs/ManualCompactionRequestId"
+                },
+                "instructions": {
+                  "description": "Optional focus hints; the native owner bounds their UTF-8 bytes.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "additionalProperties": false,
@@ -12773,7 +12785,7 @@
         },
         "summaryModel": {
           "description": "The compaction summary model policy.",
-          "$ref": "#/$defs/AuxiliaryModelPolicy",
+          "$ref": "#/$defs/SummaryModelPolicy",
           "default": {
             "mode": "session"
           }
@@ -12810,6 +12822,56 @@
     "ModelProfileId": {
       "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's output default and\n`request_params`.",
       "type": "string"
+    },
+    "SummaryModelPolicy": {
+      "description": "Compaction follows the Session model or selects an independent model.\nSummary output is determined by the runtime from model capabilities.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "request_params": {
+              "type": "object",
+              "additionalProperties": true,
+              "default": {}
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "model"
+          ]
+        }
+      ]
     },
     "AuxiliaryModelPolicy": {
       "description": "A Session auxiliary invocation follows primary or selects a catalog model.",
@@ -14414,7 +14476,6 @@
         "generation",
         "document",
         "root_agent",
-        "context",
         "model_timeout",
         "tool_deadline",
         "child_capacity",
@@ -15748,29 +15809,6 @@
             "authored": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ContextLayer"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "unit": {
-              "type": "string",
-              "const": "context"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "unit"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "authored": {
-              "anyOf": [
-                {
                   "$ref": "#/$defs/TimeoutLayer"
                 },
                 {
@@ -16385,7 +16423,7 @@
         "summary_model": {
           "anyOf": [
             {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+              "$ref": "#/$defs/SummaryModelAuthoring"
             },
             {
               "type": "null"
@@ -16458,6 +16496,54 @@
           "required": [
             "mode",
             "tokens"
+          ]
+        }
+      ]
+    },
+    "SummaryModelAuthoring": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParams",
+              "default": {}
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "model"
           ]
         }
       ]
@@ -16657,73 +16743,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "ContextLayer": {
-      "type": "object",
-      "properties": {
-        "reserve_tokens": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "keep_recent_tokens": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "summary_output_cap": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SummaryOutput"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "SummaryOutput": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "model_limit"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "tokens": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "mode": {
-              "type": "string",
-              "const": "limit"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode",
-            "tokens"
-          ]
-        }
-      ]
     },
     "TimeoutLayer": {
       "type": "object",
@@ -17777,6 +17796,20 @@
           "required": [
             "type"
           ]
+        },
+        {
+          "description": "No eligible historical material was available to compact.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "context_compaction_skipped"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -27636,6 +27669,17 @@
             }
           ]
         },
+        "compaction_progress": {
+          "description": "Latest accepted fragment, scoped to the currently active operation.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientCompactionProgress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "compaction_in_progress": {
           "description": "Whether the runtime currently owns a context-compaction operation.\nThis is live operation state, not inferred from token usage.",
           "type": "boolean"
@@ -27684,6 +27728,14 @@
           "description": "False until coordinator state is restored and maintenance released.",
           "type": "boolean"
         },
+        "skipped": {
+          "description": "A confirmed native no-op, distinct from a committed checkpoint.",
+          "type": "boolean"
+        },
+        "cancelled": {
+          "description": "Native cancellation released this command without a checkpoint.",
+          "type": "boolean"
+        },
         "error": {
           "description": "Exact pre-commit failure diagnostic, if released unsuccessfully.",
           "type": [
@@ -27694,7 +27746,115 @@
       },
       "additionalProperties": false,
       "required": [
-        "released"
+        "released",
+        "skipped",
+        "cancelled"
+      ]
+    },
+    "RuntimeClientCompactionProgress": {
+      "description": "Native accepted work for the currently active Compaction operation.",
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/CompactionOperationId"
+        },
+        "accepted_fragments": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "source_ranges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuxiliarySourceRange"
+          }
+        },
+        "generation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryGenerationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "accepted_fragments",
+        "source_ranges"
+      ]
+    },
+    "CompactionOperationId": {
+      "description": "One compaction operation, allocated before its lifecycle facts.",
+      "type": "string"
+    },
+    "AuxiliarySourceRange": {
+      "description": "A half-open byte range in the deterministic rendered text of one selected\nprojection occurrence, rather than an offset in canonical JSON. Empty\nrendered occurrences use `[0, 0)` and still identify their coverage.",
+      "type": "object",
+      "properties": {
+        "projection_index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "role": {
+          "$ref": "#/$defs/AuxiliarySourceRole"
+        },
+        "byte_start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "byte_end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "projection_index",
+        "role",
+        "byte_start",
+        "byte_end"
+      ]
+    },
+    "AuxiliarySourceRole": {
+      "description": "Model-visible role of one projected source occurrence.",
+      "type": "string",
+      "enum": [
+        "user",
+        "assistant",
+        "tool"
+      ]
+    },
+    "SummaryGenerationRef": {
+      "description": "Exact auxiliary Summary Call that generated one retained checkpoint.\n\nThis is source execution provenance, not an input-identity inference. The\nsource Conversation and original inclusive Journal cut remain stable across\nrepeated Clone/Fork operations.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "through_journal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "call_id",
+        "through_journal"
       ]
     },
     "CapabilityView": {
@@ -30428,6 +30588,90 @@
           ]
         },
         {
+          "description": "A validated compaction fragment was accepted; no checkpoint is committed.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_progressed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
+          ]
+        },
+        {
+          "description": "Native compaction cancellation, distinct from summary failure.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_cancelled"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
+          ]
+        },
+        {
+          "description": "Native compaction found no eligible history; no checkpoint was committed.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "attempt_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_skipped"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
+          ]
+        },
+        {
           "description": "A context compaction operation failed before a semantic commit.",
           "type": "object",
           "properties": {
@@ -32747,9 +32991,6 @@
         "root_agent": {
           "$ref": "#/$defs/AgentProfileDocument"
         },
-        "context": {
-          "$ref": "#/$defs/ContextPolicyDocument"
-        },
         "model_timeout": {
           "$ref": "#/$defs/ModelTimeoutPolicyDocument"
         },
@@ -32807,7 +33048,6 @@
         "generation",
         "document",
         "root_agent",
-        "context",
         "model_timeout",
         "tool_deadline",
         "child_capacity",
@@ -33043,16 +33283,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/AgentProfileLayer"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "context": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ContextLayer"
             },
             {
               "type": "null"
@@ -33408,37 +33638,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "ContextPolicyDocument": {
-      "description": "The static current-runtime context policy document.\n\nThere is deliberately no context window here: the window belongs to the\nselected model and is derived per attempt from that attempt's immutable\nmodel snapshot.",
-      "type": "object",
-      "properties": {
-        "reserveTokens": {
-          "description": "Tokens permanently reserved out of whichever model window is in\nforce.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "keepRecentTokens": {
-          "description": "Tokens of recent conversation history kept uncompressed.",
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        },
-        "summaryOutputCap": {
-          "description": "The summary/output safety cap applied to the summary invocation\nthrough the runtime-owned protected max-output field.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0,
-          "maximum": 4294967295
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "reserveTokens",
-        "keepRecentTokens"
-      ]
     },
     "ModelTimeoutPolicyDocument": {
       "description": "The resolved native model request timeout policy.\n\nMilliseconds keep the configuration human-readable while the runtime\nreceives a typed [`ModelTimeoutPolicy`] containing only finite\n[`Duration`] values.",

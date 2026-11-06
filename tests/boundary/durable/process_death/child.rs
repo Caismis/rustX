@@ -1321,7 +1321,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                     vec![
                         FakeStep::ParkUntilReleased(receiver),
                         started(),
-                        text("compact summary"),
+                        text(r#"{"goal":"compact summary","constraints_and_preferences":[],"progress":{"done":[],"in_progress":[],"blocked":[]},"key_decisions":[],"next_steps":[],"critical_context":[]}"#),
                         done(ModelFinishReason::Stop),
                     ],
                     vec![
@@ -1334,11 +1334,13 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 true,
             )
             .await;
-            child.submit("go");
+            // Retire substantial original input without making generated
+            // output periodic enough to trigger the generation guard.
+            child.submit(&format!("go: {}", WIDE_TEXT.repeat(8)));
             child.log.wait_settled(1).await;
             rendezvous("settled");
             let runtime = child.runtime().clone();
-            let compaction = tokio::spawn(async move { runtime.compact_context(None).await });
+            let compaction = tokio::spawn(async move { runtime.compact_context(None, None).await });
             child.wait_model_parked().await;
             rendezvous("summary-in-flight");
             release.send_replace(true);

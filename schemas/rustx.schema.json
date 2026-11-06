@@ -422,33 +422,6 @@
         }
       ]
     },
-    "ContextLayer": {
-      "additionalProperties": false,
-      "properties": {
-        "keep_recent_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer"
-          ]
-        },
-        "reserve_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer"
-          ]
-        },
-        "summary_output_cap": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SummaryOutput"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
     "CredentialSource": {
       "description": "The declared source of one provider credential.\n\nThe syntax is exactly two forms and is never extended implicitly: a\nliteral string, or `$ENV_VAR`.",
       "type": "string"
@@ -697,7 +670,7 @@
         "summary_model": {
           "anyOf": [
             {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
+              "$ref": "#/$defs/SummaryModelAuthoring"
             }
           ]
         },
@@ -955,13 +928,13 @@
       },
       "type": "object"
     },
-    "SummaryOutput": {
+    "SummaryModelAuthoring": {
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
             "mode": {
-              "const": "model_limit",
+              "const": "session",
               "type": "string"
             }
           },
@@ -974,18 +947,27 @@
           "additionalProperties": false,
           "properties": {
             "mode": {
-              "const": "limit",
+              "const": "explicit",
               "type": "string"
             },
-            "tokens": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelProfileId"
+                }
+              ]
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
             }
           },
           "required": [
             "mode",
-            "tokens"
+            "model"
           ],
           "type": "object"
         }
@@ -1116,13 +1098,6 @@
       "anyOf": [
         {
           "$ref": "#/$defs/ApprovalMode"
-        }
-      ]
-    },
-    "context": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ContextLayer"
         }
       ]
     },

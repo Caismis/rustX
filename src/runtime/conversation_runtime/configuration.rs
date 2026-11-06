@@ -714,8 +714,7 @@ impl ConversationRuntime {
             .ok_or("candidate has no configuration")?;
         let model = SessionModelState::new(generation.models.clone(), selection)
             .map_err(|error| error.to_string())?;
-        validate_model_context(&generation.config.context_policy(), &model)
-            .map_err(|error| error.message)?;
+        validate_model_context(&model).map_err(|error| error.message)?;
         let preview = Arc::new(RuntimeResourceSnapshot::from_prepared(
             old.revision().next(),
             resources.clone(),
@@ -744,8 +743,7 @@ impl ConversationRuntime {
         let model = current
             .carry(binding.configuration.models.clone(), selection)
             .map_err(|error| error.to_string())?;
-        validate_model_context(&binding.configuration.config.context_policy(), &model)
-            .map_err(|error| error.message)?;
+        validate_model_context(&model).map_err(|error| error.message)?;
         if let Some(capability) = &mut candidate.capability {
             capability.set_context_profile(
                 &binding.configuration.config.agent,
@@ -783,8 +781,7 @@ impl ConversationRuntime {
                 old_model.config().clone(),
             )
             .map_err(|error| error.to_string())?;
-        validate_model_context(&binding.configuration.config.context_policy(), &model)
-            .map_err(|error| error.message)?;
+        validate_model_context(&model).map_err(|error| error.message)?;
         let preview = Arc::new(old.with_context_binding(&binding)?);
         Ok(PreparedConfiguration {
             owner: self.inner.configuration_owner.clone(),

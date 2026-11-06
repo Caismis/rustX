@@ -97,6 +97,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/compact",
     description: "Manually compact canonical conversation context while the runtime is idle.",
+    argumentHint: "[instructions]",
   },
   {
     name: "/debug",

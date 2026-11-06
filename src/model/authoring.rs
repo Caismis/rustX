@@ -161,7 +161,9 @@ mod tests {
         MapCredentialEnvironment, ModelCatalog, ModelCatalogError, ModelRef,
     };
     use crate::model::invocation::{ModelBindingRegistry, ModelSelection};
-    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
+    use crate::model::session::{
+        AuxiliaryModelPolicy, SessionModelConfig, SessionModelState, SummaryModelPolicy,
+    };
     use serde_json::json;
 
     const CATALOG: &str = r#"
@@ -319,7 +321,14 @@ request_params = '{"thinking":{"type":"disabled"}}'
                             max_output_tokens: None,
                         }
                     });
-                    config.summary_model = policy.clone();
+                    config.summary_model =
+                        auxiliary.map_or(SummaryModelPolicy::Session, |profile| {
+                            SummaryModelPolicy::Explicit {
+                                model: config.model.clone(),
+                                profile: profile.map(ModelProfileId::new),
+                                request_params: serde_json::Map::new(),
+                            }
+                        });
                     config.title_model = policy.clone();
                     config.classification_model = Box::new(policy.clone());
                     config.btw_model = Box::new(policy);

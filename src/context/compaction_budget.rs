@@ -14,8 +14,14 @@ use crate::runtime::monotonic::MonotonicClock;
 
 /// Absolute operation eligibility, including preparation and persistence waits.
 pub const COMPACTION_DEADLINE_MILLIS: u64 = 300_000;
-/// Maximum confirmed or unresolved physical starts across all re-planning.
-pub const COMPACTION_START_LIMIT: u8 = 12;
+/// Maximum normal physical starts admitted by one bounded source plan.
+pub(crate) const MAX_PLANNED_SUMMARY_STARTS: usize = 256;
+/// Maximum exceptional recovery actions, shared by all re-entry and retries.
+pub const COMPACTION_RECOVERY_LIMIT: usize = 12;
+/// Extra elapsed time per planned start after the first.
+pub const COMPACTION_PER_START_MILLIS: u64 = 30_000;
+/// Absolute ceiling from original operation creation, independent of re-entry.
+pub const COMPACTION_MAX_DEADLINE_MILLIS: u64 = 7_200_000;
 /// Maximum input-budget reductions across all carryover degradation.
 pub const COMPACTION_SHRINK_LIMIT: u8 = 3;
 
@@ -52,9 +58,27 @@ impl CompactionBudget {
     pub fn new(id: CompactionOperationId, clock: Arc<dyn MonotonicClock>) -> Self {
         Self(Arc::new(Operation {
             id,
-            authority: AuxiliaryAuthority::new(clock, COMPACTION_START_LIMIT),
+            authority: AuxiliaryAuthority::new_planned(clock),
             state: Arc::default(),
         }))
+    }
+
+    /// Admit the conservative finite normal-work bound before any Summary start.
+    /// Re-entry may reuse a smaller or equal bound, but cannot expand it.
+    ///
+    /// # Errors
+    /// Rejects empty or oversized plans, deadline expiry, or attempted expansion.
+    pub fn admit_work(&self, planned_bound: usize) -> Result<(), ContextError> {
+        self.0.authority.admit_work(planned_bound)
+    }
+
+    /// Charge an exceptional semantic replan, fallback, or reduction.
+    ///
+    /// # Errors
+    /// Rejects cancellation, expiry, or exhausted recovery. Before plan
+    /// admission this records the charge without granting a physical start.
+    pub fn charge_recovery(&self, cancellation: &CancellationSignal) -> Result<(), ContextError> {
+        self.0.authority.charge_recovery(cancellation)
     }
 
     /// A later checkpoint operation in the same logical business owner keeps
@@ -73,12 +97,18 @@ impl CompactionBudget {
         cancellation: &CancellationSignal,
     ) -> Result<(), ContextError> {
         self.check(cancellation)?;
-        if !self.0.authority.has_remaining_start() {
+        if self.remaining_starts() == 0 {
             return Err(exhausted(
-                "compaction exhausted its 12 physical request starts",
+                "compaction exhausted its admitted physical request starts",
             ));
         }
         Ok(())
+    }
+
+    /// Remaining admitted physical starts, including charged recovery slots.
+    #[must_use]
+    pub(crate) fn remaining_starts(&self) -> usize {
+        self.0.authority.remaining_starts()
     }
 
     /// The business operation shared by every child Call.
@@ -129,6 +159,8 @@ impl CompactionBudget {
     }
 
     /// Charges and retains one input reduction atomically across all re-entry.
+    /// `maximum` comes from the rejected request's complete input estimate;
+    /// the resulting limit must exclude that exact known-rejected request.
     ///
     /// # Errors
     /// Refuses cancellation, expiry or a fourth shrink.
@@ -138,6 +170,7 @@ impl CompactionBudget {
         &self,
         configured: u64,
         minimum: u64,
+        maximum: u64,
         cancellation: &CancellationSignal,
     ) -> Result<u64, ContextError> {
         self.check(cancellation)?;
@@ -146,13 +179,13 @@ impl CompactionBudget {
             return Err(exhausted("compaction exhausted its three input shrinks"));
         }
         let limit = counts.summary_input_limit.unwrap_or(configured);
-        if limit <= minimum {
+        if limit <= minimum || maximum < minimum {
             return Err(exhausted(
-                "compaction reached its minimum Summary input limit",
+                "no smaller Summary request fits the remaining input limit",
             ));
         }
         counts.shrinks += 1;
-        let reduced = (limit / 2).max(minimum);
+        let reduced = (limit / 2).max(minimum).min(maximum);
         counts.summary_input_limit = Some(reduced);
         Ok(reduced)
     }
@@ -183,14 +216,22 @@ mod tests {
         CancellationSignal,
     ) {
         let clock = Arc::new(ManualMonotonicClock::new());
-        (
-            CompactionBudget::new(CompactionOperationId::new("operation"), clock.clone()),
-            clock,
-            CancellationSignal::new(),
-        )
+        let budget = CompactionBudget::new(CompactionOperationId::new("operation"), clock.clone());
+        let cancellation = CancellationSignal::new();
+        admit_one_with_recoveries(&budget, &cancellation);
+        (budget, clock, cancellation)
     }
 
-    fn counts(budget: &CompactionBudget) -> (u8, u8, u8) {
+    // Existing accounting tests exercise twelve physical slots with the
+    // original five-minute clock: one normal slot and eleven charged recoveries.
+    fn admit_one_with_recoveries(budget: &CompactionBudget, cancellation: &CancellationSignal) {
+        budget.admit_work(1).unwrap();
+        for _ in 0..11 {
+            budget.charge_recovery(cancellation).unwrap();
+        }
+    }
+
+    fn counts(budget: &CompactionBudget) -> (usize, usize, u8) {
         let counts = budget.0.state.lock().unwrap();
         {
             let (committed, reserved) = budget.0.authority.counts();
@@ -241,6 +282,89 @@ mod tests {
     }
 
     #[test]
+    fn planned_chunks_and_recovery_have_separate_bounded_allowances() {
+        let clock = Arc::new(ManualMonotonicClock::new());
+        let budget = CompactionBudget::new(CompactionOperationId::new("chunks"), clock);
+        let cancel = CancellationSignal::new();
+        assert!(
+            budget
+                .reserve_start(RequestId::new("unplanned"), &cancel)
+                .is_err()
+        );
+        budget.admit_work(20).unwrap();
+        for index in 0..20 {
+            drop(
+                budget
+                    .reserve_start(RequestId::new(format!("chunk-{index}")), &cancel)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(budget.remaining_starts(), 0);
+        assert!(
+            budget
+                .reserve_start(RequestId::new("unplanned-extra"), &cancel)
+                .is_err()
+        );
+        for index in 0..COMPACTION_RECOVERY_LIMIT {
+            budget.charge_recovery(&cancel).unwrap();
+            drop(
+                budget
+                    .reserve_start(RequestId::new(format!("recovery-{index}")), &cancel)
+                    .unwrap(),
+            );
+        }
+        assert!(budget.charge_recovery(&cancel).is_err());
+        assert_eq!(counts(&budget), (0, 32, 0));
+    }
+
+    #[test]
+    fn rejected_request_bound_can_shrink_far_below_half_the_old_limit() {
+        let (budget, _, cancellation) = budget();
+        assert_eq!(budget.summary_input_limit(2_800), 2_800);
+        assert_eq!(
+            budget
+                .shrink_summary_input_limit(2_800, 1, 199, &cancellation)
+                .unwrap(),
+            199
+        );
+        assert_eq!(budget.summary_input_limit(2_800), 199);
+        assert!(
+            budget
+                .shrink_summary_input_limit(199, 1, 0, &cancellation)
+                .is_err()
+        );
+        assert_eq!(counts(&budget).2, 1);
+    }
+
+    #[test]
+    fn plan_and_deadline_are_bounded_and_never_renewed_by_reentry() {
+        let clock = Arc::new(ManualMonotonicClock::new());
+        clock.advance(50);
+        let budget = CompactionBudget::new(CompactionOperationId::new("original"), clock.clone());
+        assert!(budget.admit_work(0).is_err());
+        assert!(budget.admit_work(MAX_PLANNED_SUMMARY_STARTS + 1).is_err());
+        clock.advance(1000);
+        budget.admit_work(20).unwrap();
+        let deadline = 50 + COMPACTION_DEADLINE_MILLIS + 19 * COMPACTION_PER_START_MILLIS;
+        assert_eq!(budget.deadline_millis(), deadline);
+        let later = budget.next_operation(CompactionOperationId::new("later"));
+        later.admit_work(10).unwrap();
+        assert!(later.admit_work(21).is_err());
+        assert_eq!(later.deadline_millis(), deadline);
+        clock.advance(deadline - clock.now_millis());
+        assert_eq!(
+            later.admit_work(20).unwrap_err().kind,
+            ContextErrorKind::AuxiliaryDeadlineExceeded
+        );
+        let max = CompactionBudget::new(CompactionOperationId::new("max"), clock.clone());
+        max.admit_work(MAX_PLANNED_SUMMARY_STARTS).unwrap();
+        assert_eq!(
+            max.deadline_millis(),
+            clock.now_millis() + COMPACTION_MAX_DEADLINE_MILLIS
+        );
+    }
+
+    #[test]
     fn exact_repeated_receipts_and_later_operation_ids_never_renew_the_live_owner_budget() {
         let (budget, clock, cancellation) = budget();
         let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
@@ -261,7 +385,7 @@ mod tests {
         }
         assert_eq!(counts(&budget), (1, 0, 0));
         budget
-            .shrink_summary_input_limit(64_000, 4096, &cancellation)
+            .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
             .unwrap();
         clock.advance(20_000);
         let later = budget.next_operation(CompactionOperationId::new("next-checkpoint"));
@@ -284,6 +408,7 @@ mod tests {
             CompactionBudget::new(CompactionOperationId::new("independent-manual"), clock);
         assert_eq!(independent.deadline_millis(), 320_000);
         assert_eq!(counts(&independent), (0, 0, 0));
+        independent.admit_work(1).unwrap();
         independent.check_start(&cancellation).unwrap();
     }
 
@@ -348,7 +473,7 @@ mod tests {
             assert_eq!(
                 budget
                     .clone()
-                    .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                    .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
                     .unwrap(),
                 expected
             );
@@ -360,7 +485,7 @@ mod tests {
         }
         assert_eq!(
             budget
-                .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
                 .unwrap_err()
                 .kind,
             ContextErrorKind::CompactionBudgetExceeded
@@ -374,19 +499,21 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Compare confirmed, rolled back and unresolved starts under one original authority.
     fn mixed_sqlite_receipts_rollback_unknown_and_waiter_loss_share_one_reentry_budget() {
         let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
         let clock = Arc::new(ManualMonotonicClock::new());
         clock.advance(37_000);
         let budget = CompactionBudget::new(CompactionOperationId::new("mixed"), clock.clone());
         let cancellation = CancellationSignal::new();
+        admit_one_with_recoveries(&budget, &cancellation);
 
         for reentry in 0..3 {
             let child = budget.clone();
             assert!(child.same_operation(&budget));
             assert_eq!(child.deadline_millis(), 337_000);
             child
-                .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
                 .unwrap();
 
             // A structurally valid Request for an unstarted Call is rejected
@@ -403,7 +530,10 @@ mod tests {
                 AuxiliaryWriteFailure::KnownNotCommitted { .. }
             ));
             reservation.reject(&failure).unwrap();
-            assert_eq!(counts(&child), (2 * reentry, 2 * reentry, reentry + 1));
+            assert_eq!(
+                counts(&child),
+                (2 * reentry, 2 * reentry, u8::try_from(reentry + 1).unwrap())
+            );
 
             let direct = start_call(&store);
             let reservation = child
@@ -453,7 +583,11 @@ mod tests {
             drop(reservation);
             assert_eq!(
                 counts(&child),
-                (2 * (reentry + 1), 2 * (reentry + 1), reentry + 1)
+                (
+                    2 * (reentry + 1),
+                    2 * (reentry + 1),
+                    u8::try_from(reentry + 1).unwrap()
+                )
             );
             clock.advance(99_999);
         }
@@ -470,7 +604,7 @@ mod tests {
         );
         assert_eq!(
             budget
-                .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
                 .unwrap_err()
                 .kind,
             ContextErrorKind::CompactionBudgetExceeded
@@ -503,7 +637,12 @@ mod tests {
                                     RequestId::new(format!("race-{index}")),
                                     &cancellation,
                                 ),
-                                child.shrink_summary_input_limit(64_000, 4096, &cancellation),
+                                child.shrink_summary_input_limit(
+                                    64_000,
+                                    4096,
+                                    u64::MAX,
+                                    &cancellation,
+                                ),
                             ))
                         })
                         .expect("spawn budget contender")
@@ -584,6 +723,7 @@ mod tests {
         clock.advance(17);
         let budget = CompactionBudget::new(CompactionOperationId::new("late"), clock.clone());
         let cancellation = CancellationSignal::new();
+        admit_one_with_recoveries(&budget, &cancellation);
         let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
         let request = start_call(&store);
         let pending = budget
@@ -600,7 +740,7 @@ mod tests {
         assert!(futures_util::poll!(reentry_wait.as_mut()).is_pending());
         child.check(&cancellation).unwrap();
         child
-            .shrink_summary_input_limit(64_000, 4096, &cancellation)
+            .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
             .unwrap();
         drop(
             child
@@ -625,7 +765,7 @@ mod tests {
                 .reserve_start(RequestId::new("expired"), &cancellation)
                 .unwrap_err(),
             child
-                .shrink_summary_input_limit(64_000, 4096, &cancellation)
+                .shrink_summary_input_limit(64_000, 4096, u64::MAX, &cancellation)
                 .unwrap_err(),
         ] {
             assert_eq!(error.kind, ContextErrorKind::AuxiliaryDeadlineExceeded);

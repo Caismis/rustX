@@ -162,7 +162,17 @@ pub(super) fn call_audit_at_tx(
         selected_message_ids: selected_message_ids.clone(),
     };
     validate_call_start_input(&start_projection)?;
-    validate_call_start_authority_tx(connection, conversation_id, &start_projection)?;
+    let admission_frontier = call.started_sequence.checked_sub(1).ok_or_else(|| {
+        ConversationStoreError::InvalidReference(
+            "auxiliary Call start has an invalid Journal sequence".into(),
+        )
+    })?;
+    validate_call_start_authority_tx(
+        connection,
+        conversation_id,
+        &start_projection,
+        admission_frontier,
+    )?;
     require_audit_fact(
         connection,
         call.started_sequence,

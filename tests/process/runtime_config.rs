@@ -82,13 +82,12 @@ fn dependencies() -> LocalRuntimeDependencies {
 
 fn config_json(
     model: &str,
-    reserve_tokens: u64,
     timezone: &str,
     environment_value: &str,
     builtin_tools: &[&str],
     _include_old_mcp: bool,
 ) -> String {
-    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
+    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-issue96", "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
             "todo": {"enabled": true},
             "agent_status": {
                 "enabled": true,
@@ -173,7 +172,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     write_skill(&skills_root, "old-skill", "Old current resource");
     std::fs::write(
         &config_path,
-        config_json("local/model-a", 11, "UTC", "v1", &["read"], true),
+        config_json("local/model-a", "UTC", "v1", &["read"], true),
     )
     .expect("config v1");
     let startup = paths(root.path(), &config_path);
@@ -233,7 +232,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     .expect("new project instructions");
     std::fs::write(
         &config_path,
-        config_json("local/model-c", 22, "Asia/Shanghai", "v2", &[], false),
+        config_json("local/model-c", "Asia/Shanghai", "v2", &[], false),
     )
     .expect("config v2");
 
@@ -265,7 +264,6 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         runtime.model_view().configured.model.to_string(),
         "local/model-b"
     );
-    assert_eq!(runtime.context_config().policy.reserve_tokens, 22);
     assert_eq!(
         runtime
             .context_config()
@@ -418,7 +416,7 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     std::fs::create_dir_all(&skills_root).expect("Skill root");
     std::fs::write(
         &config_path,
-        config_json("local/model-a", 11, "UTC", "v1", &["read"], false),
+        config_json("local/model-a", "UTC", "v1", &["read"], false),
     )
     .expect("valid config");
     let startup = paths(root.path(), &config_path);
@@ -430,10 +428,6 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
 
     let invalid = br#"agent_id = "agent-issue96"
 conversation_id = "historical"
-
-[context]
-reserve_tokens = 1
-keep_recent_tokens = 1
 
 
 [agent]
@@ -454,7 +448,7 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
 
     std::fs::write(
         &config_path,
-        config_json("local/missing", 11, "UTC", "invalid-first-boot", &[], false),
+        config_json("local/missing", "UTC", "invalid-first-boot", &[], false),
     )
     .expect("invalid first config");
     assert!(
@@ -470,7 +464,7 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
 
     std::fs::write(
         &config_path,
-        config_json("local/model-a", 11, "UTC", "corrected", &[], false),
+        config_json("local/model-a", "UTC", "corrected", &[], false),
     )
     .expect("corrected config");
     let product = (startup)
@@ -498,7 +492,7 @@ async fn commented_configuration_documents_compose_a_runtime() {
     let config_path = root.path().join("rustx.toml");
     let source = format!(
         "# Authored runtime and Provider/Model definitions share one document.\n{}",
-        config_json("local/model-a", 11, "UTC", "comments", &["read"], false)
+        config_json("local/model-a", "UTC", "comments", &["read"], false)
     );
     std::fs::write(&config_path, source).unwrap();
     let startup = paths(root.path(), &config_path);
@@ -641,7 +635,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // that quietly substituted built-in defaults could not pass.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-ext256", "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
@@ -695,7 +689,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // The deliberate divergence with the prospective configuration surface.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-ext256", "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
         .unwrap(),
     )
     .expect("config v2");

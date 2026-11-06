@@ -21,12 +21,11 @@ use super::super::{common, support};
 
 use std::sync::Arc;
 
-use rustx::context::SessionContextPolicy;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, UserContentBlock};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelProfileId, ModelRef, ProviderId};
 use rustx::model::invocation::ModelBindingRegistry;
-use rustx::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
+use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
 use rustx::runtime_client::{
@@ -198,6 +197,19 @@ fn one_turn_stop() -> Vec<FakeStep> {
     ]
 }
 
+/// A schema-valid Summary response with the goal retained as fixture evidence.
+fn summary_json(goal: &str) -> String {
+    serde_json::json!({
+        "goal": goal,
+        "constraints_and_preferences": [],
+        "progress": { "done": [], "in_progress": [], "blocked": [] },
+        "key_decisions": [],
+        "next_steps": [],
+        "critical_context": [],
+    })
+    .to_string()
+}
+
 /// A turn that assembles one tool call, parks, and only then completes.
 fn parked_tool_turn(
     call: &ScriptedCall,
@@ -225,7 +237,7 @@ const ALPHA_CALL: ScriptedCall = ScriptedCall {
 };
 
 /// Builds the runtime under test over an explicit session model authority.
-async fn runtime(model: SessionModelState, policy: SessionContextPolicy) -> RuntimeClientHost {
+async fn runtime(model: SessionModelState) -> RuntimeClientHost {
     let mut tools = ToolRegistry::new();
     FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok")).register(&mut tools);
     support::runtime_client_fixture::RuntimeClientFixture::builder(
@@ -233,19 +245,11 @@ async fn runtime(model: SessionModelState, policy: SessionContextPolicy) -> Runt
     )
     .tools(tools)
     .session_model(model)
-    .context_policy(policy)
     .build()
     .await
     .into_parts()
     .1
 }
-
-/// The unconstrained context policy: no compaction is ever possible.
-const NO_COMPACTION: SessionContextPolicy = SessionContextPolicy {
-    reserve_tokens: 0,
-    keep_recent_tokens: 0,
-    summary_output_cap: None,
-};
 
 /// Submits one inbound message and returns the attachment/subscription pair
 /// used to observe the runtime.
@@ -297,10 +301,10 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
         .output(2048)
         .params(serde_json::json!({"temperature": 0.9, "provider_tag": "beta"}));
 
-    let host = runtime(
-        session_model(&[&alpha, &beta], SessionModelConfig::of(alpha.reference())),
-        NO_COMPACTION,
-    )
+    let host = runtime(session_model(
+        &[&alpha, &beta],
+        SessionModelConfig::of(alpha.reference()),
+    ))
     .await;
     let (attachment, subscription) = attach(&host);
 
@@ -404,10 +408,10 @@ async fn a_model_update_before_admission_is_observed_by_that_attempt() {
     let alpha = Provider::new(ALPHA, "model-a", vec![one_turn_stop()]);
     let beta = Provider::new(BETA, "model-b", vec![one_turn_stop()]).output(2048);
 
-    let host = runtime(
-        session_model(&[&alpha, &beta], SessionModelConfig::of(alpha.reference())),
-        NO_COMPACTION,
-    )
+    let host = runtime(session_model(
+        &[&alpha, &beta],
+        SessionModelConfig::of(alpha.reference()),
+    ))
     .await;
     let (attachment, subscription) = attach(&host);
 
@@ -472,10 +476,10 @@ async fn a_transient_retry_after_live_selection_keeps_the_admitted_invocation() 
     let beta = Provider::new(BETA, "model-b", vec![one_turn_stop()])
         .output(999)
         .params(serde_json::json!({"temperature": 0.9}));
-    let host = runtime(
-        session_model(&[&alpha, &beta], SessionModelConfig::of(alpha.reference())),
-        NO_COMPACTION,
-    )
+    let host = runtime(session_model(
+        &[&alpha, &beta],
+        SessionModelConfig::of(alpha.reference()),
+    ))
     .await;
     let (attachment, subscription) = attach(&host);
     submit(&attachment, 1, "retry me");
@@ -546,7 +550,7 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
                 FakeStep::Emit(ModelEvent::Started),
                 FakeStep::Emit(ModelEvent::TextDelta {
                     block_index: ContentBlockIndex::new(0),
-                    text: "compact summary".to_owned(),
+                    text: summary_json("compact summary"),
                 }),
                 FakeStep::Emit(ModelEvent::Completed {
                     finish_reason: ModelFinishReason::Stop,
@@ -559,14 +563,10 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     .window(4_000)
     .output(256);
 
-    let host = runtime(
-        session_model(&[&alpha, &beta], SessionModelConfig::of(alpha.reference())),
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 200,
-            summary_output_cap: Some(128),
-        },
-    )
+    let host = runtime(session_model(
+        &[&alpha, &beta],
+        SessionModelConfig::of(alpha.reference()),
+    ))
     .await;
     let (attachment, subscription) = attach(&host);
 
@@ -616,7 +616,7 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     assert_eq!(beta_requests[0].continuation, None);
     assert_eq!(
         beta_requests[0].max_output_tokens(),
-        128,
+        256,
         "the summary safety cap flows through the protected max-output field"
     );
     assert_eq!(
@@ -647,7 +647,7 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
                 FakeStep::Emit(ModelEvent::Started),
                 FakeStep::Emit(ModelEvent::TextDelta {
                     block_index: ContentBlockIndex::new(0),
-                    text: "compact summary".to_owned(),
+                    text: summary_json("compact summary"),
                 }),
                 FakeStep::Emit(ModelEvent::Completed {
                     finish_reason: ModelFinishReason::Stop,
@@ -661,14 +661,10 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     .output(300)
     .params(serde_json::json!({"temperature": 0.25, "provider_tag": "alpha"}));
 
-    let host = runtime(
-        session_model(&[&alpha], SessionModelConfig::of(alpha.reference())),
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 200,
-            summary_output_cap: Some(100),
-        },
-    )
+    let host = runtime(session_model(
+        &[&alpha],
+        SessionModelConfig::of(alpha.reference()),
+    ))
     .await;
     let (attachment, subscription) = attach(&host);
     // The first turn fits the 4 000-token window; the second pushes the
@@ -717,8 +713,8 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     );
     assert_eq!(
         summary.max_output_tokens(),
-        100,
-        "only the documented context summary output cap differs"
+        300,
+        "the automatic summary budget preserves this model output limit"
     );
     assert_eq!(requests[2].max_output_tokens(), 300);
 }
@@ -765,7 +761,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::Emit(ModelEvent::TextDelta {
                 block_index: ContentBlockIndex::new(0),
-                text: "frozen summary".to_owned(),
+                text: summary_json("frozen summary"),
             }),
             FakeStep::Emit(ModelEvent::Completed {
                 finish_reason: ModelFinishReason::Stop,
@@ -781,23 +777,14 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
 
     let initial = SessionModelConfig {
         title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-        summary_model: AuxiliaryModelPolicy::Explicit {
+        summary_model: SummaryModelPolicy::Explicit {
             model: summary.reference(),
             profile: None,
             request_params: rustx::model::RequestParams::new(),
-            max_output_tokens: None,
         },
         ..SessionModelConfig::of(alpha.reference())
     };
-    let host = runtime(
-        session_model(&[&alpha, &summary, &decoy], initial),
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 20,
-            summary_output_cap: None,
-        },
-    )
-    .await;
+    let host = runtime(session_model(&[&alpha, &summary, &decoy], initial)).await;
     let (attachment, subscription) = attach(&host);
 
     submit(&attachment, 1, "start");
@@ -808,11 +795,10 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
         id: RequestId::new(2),
         config: Box::new(SessionModelConfig {
             title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            summary_model: SummaryModelPolicy::Explicit {
                 model: decoy.reference(),
                 profile: None,
                 request_params: rustx::model::RequestParams::new(),
-                max_output_tokens: None,
             },
             ..SessionModelConfig::of(alpha.reference())
         }),
@@ -904,7 +890,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::Emit(ModelEvent::TextDelta {
                 block_index: ContentBlockIndex::new(0),
-                text: text.to_owned(),
+                text: summary_json(text),
             }),
             FakeStep::Emit(ModelEvent::Completed {
                 finish_reason: ModelFinishReason::Stop,
@@ -929,26 +915,23 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         profile: Some(ModelProfileId::new(primary)),
         request_params: common::request_params(serde_json::json!({"seed": null})),
         title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-        summary_model: AuxiliaryModelPolicy::Explicit {
+        summary_model: SummaryModelPolicy::Explicit {
             model: summary.reference(),
             profile: Some(ModelProfileId::new(summary_profile)),
             request_params: common::request_params(serde_json::json!({"summary_seed": [null]})),
-            max_output_tokens: None,
         },
         ..SessionModelConfig::of(alpha.reference())
     };
-    let host = runtime(
-        session_model(&[&alpha, &summary], selected("high", "brief")),
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 20,
-            summary_output_cap: None,
-        },
-    )
+    let host = runtime(session_model(
+        &[&alpha, &summary],
+        selected("high", "brief"),
+    ))
     .await;
     let (attachment, subscription) = attach(&host);
 
-    submit(&attachment, 1, "start");
+    // A real structured Summary has a nontrivial minimum rendered size;
+    // retain enough source content for the committed replacement to shrink.
+    submit(&attachment, 1, &"retained original fact ".repeat(200));
     await_parked(&alpha.handle).await;
     // Session selection commits, while the running Attempt retains High.
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
@@ -993,7 +976,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     // The compaction summary used the admitted Summary profile.
     let summaries = summary.handle.requests();
     assert_eq!(summaries.len(), 1);
-    assert_eq!(summaries[0].max_output_tokens(), 256);
+    assert_eq!(summaries[0].max_output_tokens(), 1024);
     assert_eq!(
         serde_json::Value::Object(summaries[0].request_params().clone()),
         serde_json::json!({"summary_tag": "brief", "summary_seed": [null]})
@@ -1274,18 +1257,15 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rejected_model_update_changes_nothing() {
     let alpha = Provider::new(ALPHA, "model-a", vec![one_turn_stop()]);
-    // A model whose whole window is consumed by the policy reserve.
+    // The catalog accepts 99 < 100, but output plus the automatic five-token
+    // safety margin cannot fit the selected model's window.
     let tiny = Provider::new(BETA, "tiny", vec![one_turn_stop()])
-        .window(500)
-        .output(100);
-    let host = runtime(
-        session_model(&[&alpha, &tiny], SessionModelConfig::of(alpha.reference())),
-        SessionContextPolicy {
-            reserve_tokens: 1_000,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
-    )
+        .window(100)
+        .output(99);
+    let host = runtime(session_model(
+        &[&alpha, &tiny],
+        SessionModelConfig::of(alpha.reference()),
+    ))
     .await;
     let (attachment, subscription) = attach(&host);
     host.projection_settled().await;
@@ -1312,26 +1292,24 @@ async fn a_rejected_model_update_changes_nothing() {
         // An unresolvable explicit summary model.
         SessionModelConfig {
             title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            summary_model: SummaryModelPolicy::Explicit {
                 model: ModelRef::parse("alpha/missing").expect("reference"),
                 profile: None,
                 request_params: rustx::model::RequestParams::new(),
-                max_output_tokens: None,
             },
             ..SessionModelConfig::of(alpha.reference())
         },
         // A protected wire key in the explicit summary overrides.
         SessionModelConfig {
             title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            summary_model: SummaryModelPolicy::Explicit {
                 model: alpha.reference(),
                 profile: None,
                 request_params: common::request_params(serde_json::json!({"stream": false})),
-                max_output_tokens: None,
             },
             ..SessionModelConfig::of(alpha.reference())
         },
-        // A model whose window cannot run under the session context policy.
+        // A model whose window cannot accommodate its output and safety margin.
         SessionModelConfig {
             model: tiny.reference(),
             ..SessionModelConfig::of(alpha.reference())

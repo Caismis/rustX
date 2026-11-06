@@ -53,6 +53,8 @@ pub enum ContextErrorKind {
     /// would cover no additional canonical unit and the projected estimate
     /// would not strictly decrease. This is the central anti-loop invariant.
     NoProgress,
+    /// No structurally eligible historical source exists to retire.
+    NoEligibleHistory,
     /// Summary generation failed (a model-backed summarizer refusal, a tool
     /// request, a model failure, or a scripted fake failure).
     SummaryFailed,
@@ -65,6 +67,10 @@ pub enum ContextErrorKind {
     /// budget instead of abandoning the conversation to the overflow that
     /// triggered it.
     SummaryInputTooLarge,
+    /// One operation-local format downgrade changed the complete request cost.
+    SummaryFormatChanged,
+    /// A completed physical request exhausted total output before a valid JSON summary.
+    SummaryOutputExhausted,
     /// Native auxiliary capacity was unavailable before admission.
     AuxiliaryBusy,
     /// The native lifecycle commit boundary was occupied before admission.

@@ -3,7 +3,7 @@
 //! A `RuntimeManifest` is the deterministic, immutable description of one
 //! attempt: agent identity and instructions, the catalog model reference and
 //! its selected Model Profile, the capability set at a specific
-//! monotonic revision, and context and execution limits. An attempt
+//! monotonic revision, and execution limits. An attempt
 //! snapshots one manifest when it starts, and that snapshot is immutable for
 //! the attempt's lifetime.
 //!
@@ -41,8 +41,6 @@ pub struct RuntimeManifest {
     pub model: ModelManifest,
     /// The capability set at a monotonic revision.
     pub capabilities: CapabilitiesManifest,
-    /// Context token reservation defaults.
-    pub context: ContextManifest,
     /// Attempt execution limits.
     pub limits: AttemptLimitsManifest,
 }
@@ -122,24 +120,6 @@ pub struct McpBinding {
     pub server_id: McpServerId,
 }
 
-/// Context token configuration.
-///
-/// The model context window is runtime-owned configuration, never a
-/// hard-coded per-model catalog in the context engine. The effective soft
-/// input limit of a request is
-/// `context_window_tokens - reserve_tokens - max_output_tokens` (checked,
-/// impossible configurations are rejected), where `max_output_tokens` is the
-/// runtime-resolved generation budget of that request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContextManifest {
-    /// The model context window in tokens.
-    pub context_window_tokens: u64,
-    /// Tokens permanently reserved out of the model context window.
-    pub reserve_tokens: u64,
-    /// Tokens of recent conversation history kept uncompressed.
-    pub keep_recent_tokens: u64,
-}
-
 /// Attempt execution limits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttemptLimitsManifest {
@@ -154,9 +134,8 @@ pub struct AttemptLimitsManifest {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentManifest, AttemptLimitsManifest, CapabilitiesManifest, ContextManifest,
-        MANIFEST_SCHEMA_VERSION, McpBinding, ModelManifest, RuntimeManifest, SkillBinding,
-        ToolBinding,
+        AgentManifest, AttemptLimitsManifest, CapabilitiesManifest, MANIFEST_SCHEMA_VERSION,
+        McpBinding, ModelManifest, RuntimeManifest, SkillBinding, ToolBinding,
     };
     use crate::model::catalog::{ModelProfileId, ModelRef};
     use crate::model::types::ModelProtocol;
@@ -193,11 +172,6 @@ mod tests {
                 mcp: vec![McpBinding {
                     server_id: McpServerId::new("mcp-fs"),
                 }],
-            },
-            context: ContextManifest {
-                context_window_tokens: 131_072,
-                reserve_tokens: 16_384,
-                keep_recent_tokens: 20_000,
             },
             limits: AttemptLimitsManifest {
                 max_turns: 64,

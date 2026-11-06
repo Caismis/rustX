@@ -263,6 +263,8 @@ impl WorkflowRuntime {
         };
         let request = format
             .prepare(ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: Some(
                     crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES,
@@ -302,10 +304,10 @@ impl WorkflowRuntime {
         })?;
         let input_limit = crate::context::ContextConfig {
             context_window_tokens: invocation.context_window(),
-            reserve_tokens: context.execution_policy().context.reserve_tokens,
+            reserve_tokens: crate::context::policy::automatic_margin(invocation.context_window()),
             keep_recent_tokens: 0,
         }
-        .soft_input_limit(invocation.max_output_tokens())
+        .admissible_input_limit(invocation.max_output_tokens())
         .map_err(|_| failure(node, failed("Model configuration has no input budget")))?;
         if crate::context::DefaultTokenEstimator.estimate_frozen_request(&request) > input_limit {
             return Err(failure(

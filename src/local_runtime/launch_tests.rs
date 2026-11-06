@@ -728,7 +728,7 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
 #[test]
 fn cfg235_prospective_values_and_origins_equal_runtime_resolution() {
     let f = Fixture::new();
-    f.project(json!({"context":{"reserve_tokens":8192},"environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
+    f.project(json!({"environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
     let prospective = analyze(&f.request, &f.host).unwrap();
     let runtime = f.resolve();
     assert_eq!(prospective.config(), runtime.config());
@@ -1852,17 +1852,16 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     f.role(false, "role", json!({"description":"new"}), "Project body");
     let builtin = f.resolve();
     assert_eq!(builtin.config.agent_id.as_str(), "rustx");
-    assert_eq!(builtin.config.context.reserve_tokens, 1024);
     assert_eq!(
         builtin.config.native_tools.to_policies(),
         crate::tools::NativeToolPolicies::default()
     );
     assert_eq!(builtin.provenance["agent_id"], Origin::Builtin);
     f.mcp(true, json!({"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}}));
-    f.user(json!({"agent_id": "user", "context": {"reserve_tokens":2000,"keep_recent_tokens":6000}, "environment": {"USER_ENTRY":"one","REPLACED":"old"},  "subagents": {}, "agent": {"model": {"model":"host/one", "profile":"custom"}, "tools": {"builtin": ["read","bash"]}}}));
+    f.user(json!({"agent_id": "user", "environment": {"USER_ENTRY":"one","REPLACED":"old"},  "subagents": {}, "agent": {"model": {"model":"host/one", "profile":"custom"}, "tools": {"builtin": ["read","bash"]}}}));
     f.mcp(false, json!({"service":{"command":"new-command"}}));
     f.project(
-        json!({"context": {"reserve_tokens":3000}, "environment": {"REPLACED":"new"},  "subagents": {}, "agent": {"model": {"model":"host/two"}, "tools": {"builtin": []}}}),
+        json!({"environment": {"REPLACED":"new"},  "subagents": {}, "agent": {"model": {"model":"host/two"}, "tools": {"builtin": []}}}),
     );
     let resolved = f.resolve();
     assert!(matches!(
@@ -1870,11 +1869,6 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
         Origin::Workspace { .. }
     ));
     assert_eq!(resolved.config.agent_id.as_str(), "user");
-    assert_eq!(resolved.config.context.reserve_tokens, 3000);
-    assert_eq!(
-        resolved.config.context.keep_recent_tokens,
-        super::config::ContextPolicyDocument::default().keep_recent_tokens
-    );
     assert!(resolved.config.agent.tools.builtin.is_empty());
     assert_eq!(resolved.config.environment.len(), 2);
     assert_eq!(resolved.config.environment["REPLACED"], "new");
@@ -1891,14 +1885,6 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
         source.overridden.as_ref().unwrap(),
         &f.host.config_directory.join(".agents/agents/role.toml")
     );
-    assert!(matches!(
-        resolved.provenance["context.keep_recent_tokens"],
-        Origin::Workspace { .. }
-    ));
-    assert!(matches!(
-        resolved.provenance["context.reserve_tokens"],
-        Origin::Workspace { .. }
-    ));
     f.request.model = Some("host/one".into());
     let cli = f.resolve();
     assert_eq!(cli.session_model().model.to_string(), "host/one");
@@ -1935,7 +1921,11 @@ fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
     f.project(
         json!({"agent":{"skills":[]}, "context":{"summary_output_cap":{"mode":"model_limit"}}}),
     );
-    assert_eq!(f.resolve().config.context.summary_output_cap, None);
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("remove the obsolete [context]")
+    );
     std::fs::write(
         f.host.launch_directory.join("rustx.toml"),
         " ".repeat(1024 * 1024 + 1),
@@ -2251,11 +2241,11 @@ agents = ["role", "role"]
             .contains("duplicate")
     );
     f.user(json!({"context": {"unknown":true}, "agent": {"model": {"model":"host/one"}}}));
-    f.project(json!({"context":{"reserve_tokens":7}}));
+    f.project(json!({"environment":{"PROJECT_ENTRY":"value"}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
-            .contains("unknown field")
+            .contains("remove the obsolete [context]")
     );
     f.user(json!({"subagents": {}, "agent": {"model": {"model":"host/one"}, "agents": ["role","role"]}}));
     f.project(json!({"subagents":{}}));
@@ -3055,7 +3045,7 @@ mod session_resolution {
     #[test]
     fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice() {
         use crate::model::catalog::ModelProfileId;
-        use crate::model::session::AuxiliaryModelPolicy;
+        use crate::model::session::SummaryModelPolicy;
         let f = Fixture::new();
         let path = f.host.config_directory.join("rustx.toml");
         let mut catalog: serde_json::Value =
@@ -3072,11 +3062,10 @@ mod session_resolution {
             .request_params
             .insert("custom".into(), json!("secret-model-parameter"));
         model.max_output_tokens = Some(1024);
-        model.summary_model = AuxiliaryModelPolicy::Explicit {
+        model.summary_model = SummaryModelPolicy::Explicit {
             model: ModelRef::parse("host/two").unwrap(),
             profile: None,
             request_params: serde_json::Map::default(),
-            max_output_tokens: Some(512),
         };
         for selected in [
             model,

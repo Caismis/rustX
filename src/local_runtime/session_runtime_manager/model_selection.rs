@@ -79,7 +79,10 @@ impl SessionRuntimeManager {
             ModelSelectionInput::Configuration(selection) => *selection,
             ModelSelectionInput::Catalog(choice) => candidate.catalog_selection(&choice)?,
         };
-        let candidate = runtime.resolve_model_selection(candidate, selection.clone())?;
+        let candidate = crate::runtime::ConversationRuntime::resolve_model_selection(
+            candidate,
+            selection.clone(),
+        )?;
         #[cfg(test)]
         owner
             .configuration

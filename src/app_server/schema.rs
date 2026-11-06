@@ -82,6 +82,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     .to_owned()
                     .try_into()
                     .expect("bounded UUID correlation"),
+                instructions: None,
             },
         })),
         ProtocolMessage::Request(Box::new(Request {
@@ -1574,9 +1575,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v72.schema.json", "v72.ts"]);
+        assert_eq!(generations, ["v73.schema.json", "v73.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v72.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v73.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

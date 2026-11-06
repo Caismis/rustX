@@ -184,12 +184,41 @@ impl Execution {
                 "invalid auxiliary frozen ownership or continuation/tool authority",
             ));
         }
+        super::output::validate_prepared(request, &self.start.business_source)
+            .map_err(|error| not_started(&error.message))?;
+        if let Some(crate::model::structured::PreparedResponseSchema {
+            strategy:
+                crate::model::structured::StructuredOutputStrategy::PromptFallback { operation_id },
+            ..
+        }) = &request.response_schema
+            && (self.record.scope.compaction_operation.as_ref() != Some(operation_id)
+                || !matches!(&self.start.input, crate::model::AuxiliaryInputEvidence::Compaction { output_strategy: crate::model::structured::StructuredOutputStrategy::PromptFallback { operation_id: evidence_id }, .. } if evidence_id == operation_id))
+        {
+            return Err(not_started(
+                "Summary fallback is not owned by the admitted Compaction scope",
+            ));
+        }
+        if let crate::model::AuxiliaryInputEvidence::Compaction {
+            output_strategy, ..
+        } = &self.start.input
+            && request
+                .response_schema
+                .as_ref()
+                .map(|schema| &schema.strategy)
+                != Some(output_strategy)
+        {
+            return Err(not_started(
+                "Summary strategy evidence disagrees with its frozen request",
+            ));
+        }
+        super::output::authorize_prepared(&mut self.request, &self.start.business_source)
+            .map_err(|error| not_started(&error.message))?;
+        let request = &self.request;
         crate::model::adapter::validation::validate_request(
             request,
             self.invocation.adapter().protocol(),
         )
         .map_err(|error| not_started(&error.message))?;
-        super::output::validate_prepared(request).map_err(|error| not_started(&error.message))?;
         if request.response_schema.is_some() {
             use crate::context::tokens::{DefaultTokenEstimator, TokenEstimator};
             let input = DefaultTokenEstimator.estimate_frozen_request(request);
@@ -256,6 +285,10 @@ impl Execution {
             let Some(delay) = retry else {
                 return Ok(());
             };
+            self.record
+                .scope
+                .authority
+                .charge_recovery(&self.record.cancellation)?;
             if !self.record.scope.authority.has_remaining_start() {
                 return Ok(());
             }

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { checkpointSnapshot, transitionFacts, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v72';
+import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v73';
 import capture from './fixtures/incremental-native.json';
 import { checkpoint, interaction, snapshot } from './fixture';
 
@@ -45,6 +45,9 @@ it('every Session event variant has an explicit transition or documented domain 
   apply({ type: 'interaction_audit_settled', transcript_cursor: '9', audit: { ...audit, settlement: { type: 'approved' } } });
   expect(state).toBe(beforeAudit); // Durable decorated entries arrive in read_domains_updated.
   apply({ type: 'context_compaction_started', context: { compaction_in_progress: true, compaction_count: 0 } }); expect(state.context?.compaction_in_progress).toBe(true);
+  apply({ type: 'context_compaction_progressed', context: { compaction_in_progress: true, compaction_count: 1 } }); expect(state.context?.compaction_count).toBe(1);
+  apply({ type: 'context_compaction_cancelled', context: { compaction_in_progress: false, compaction_count: 1 } }); expect(state.context?.compaction_in_progress).toBe(false);
+  apply({ type: 'context_compaction_skipped', context: { compaction_in_progress: false, compaction_count: 0, manual_compaction: { request_id: 'compact_empty', released: true, skipped: true, cancelled: false, error: null } } }); expect(state.context?.manual_compaction?.skipped).toBe(true); expect(state.context?.latest_compaction).toBeUndefined();
   apply({ type: 'context_compaction_failed', context: { compaction_in_progress: false, compaction_count: 0 }, error: 'native failure' }); expect(state.context?.compaction_in_progress).toBe(false);
   apply({ type: 'context_compacted', context: { compaction_in_progress: false, compaction_count: 3 } }); expect(state.context?.compaction_count).toBe(3);
   apply({ type: 'job_updated', position:0, job: { job_id: 'e', tool_id: 'bash', tool_name: 'bash', state: 'succeeded' } }); expect(state.jobs?.[0].job_id).toBe('e');
@@ -83,7 +86,7 @@ it('every Session event variant has an explicit transition or documented domain 
     read_domains_updated: true, trace_changed: true, goal_changed: true, workflows_updated: true,
     attempt_started: true, attempt_settled: true, attempt_turn_updated: true, attempt_usage_updated: true,
     interaction_pending: true, interaction_settled: true, interaction_removed: true, interaction_audit_requested: true, interaction_audit_settled: true,
-    context_compaction_started: true, context_compaction_failed: true, context_compacted: true,
+    context_compaction_started: true, context_compaction_progressed: true, context_compaction_cancelled: true, context_compaction_skipped: true, context_compaction_failed: true, context_compacted: true,
     assistant_message_started: true,
     tool_call_started: true, tool_call_assembled: true, assistant_publication_settled: true, assistant_publication_deferred_settled: true,
     tool_execution_started: true, tool_execution_progress: true, tool_execution_settled: true, message_committed: true,

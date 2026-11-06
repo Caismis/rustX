@@ -188,11 +188,10 @@ chat_reasoning_replay = "omit"
     )
     .unwrap();
     let mut model = SessionModelConfig::of(ModelRef::parse("local/model").unwrap());
-    model.summary_model = crate::model::session::AuxiliaryModelPolicy::Explicit {
+    model.summary_model = crate::model::session::SummaryModelPolicy::Explicit {
         model: ModelRef::parse("local/summary").unwrap(),
         profile: None,
         request_params: crate::model::invocation::RequestParams::new(),
-        max_output_tokens: None,
     };
     let reviewer = NamedAgentDefinition::new(
         SubagentName::parse("reviewer").unwrap(),

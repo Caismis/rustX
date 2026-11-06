@@ -54,6 +54,10 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     const openMcp = async () => {
       if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
       await openSettingsPage(page, 'MCP servers');
+      // The selected tab can precede the authoritative source reread and the
+      // retained editor's mount after reconnect. Inspect its Back button only
+      // after the actual MCP page, list or editor, is present.
+      await expect(settings.locator('[data-mcp-page]')).toBeVisible();
       const back = settings.getByRole('button', { name: '← MCP servers', exact: true });
       if (await back.isVisible()) await back.click();
       await openSettingsPage(page, 'MCP servers');

@@ -2,7 +2,6 @@
 use super::engine::assemble_context_input;
 use crate::context::engine::{CompactionBudgets, CompactionConstraints};
 use crate::context::{ContextEngine, ContextError, ContextErrorKind};
-#[cfg(test)]
 use crate::model::ModelInputMessage;
 use crate::model::{SelectedModelInput, projected::ModelMessageView};
 use crate::runtime::CancellationSignal;
@@ -42,7 +41,7 @@ pub(crate) async fn summary_prefix(
     cancellation: &CancellationSignal,
 ) -> Result<usize, ContextError> {
     cancellation_point(cancellation).await?;
-    let mut limit = engine.soft_input_limit(budgets.primary_output_budget)?;
+    let mut limit = engine.admissible_input_limit(budgets.primary_output_budget)?;
     if let Some(correction) = constraints.estimate_correction {
         limit = correction.apply(limit);
     }
@@ -55,10 +54,10 @@ pub(crate) async fn summary_prefix(
             positions.entry(id).or_insert(index);
         }
     }
-    let min = match constraints.must_cover_through {
+    let mut min = match constraints.must_cover_through {
         Some(id) => positions.get(id).map(|index| index + 1).ok_or_else(|| {
             failure(
-                ContextErrorKind::NoProgress,
+                ContextErrorKind::MalformedHistory,
                 "required continuation anchor is absent from historical projection",
             )
         })?,
@@ -87,10 +86,27 @@ pub(crate) async fn summary_prefix(
         .copied()
         .min()
         .unwrap_or(input.len());
+    if max == 0 && !protected.is_empty() {
+        return Err(failure(
+            ContextErrorKind::NoEligibleHistory,
+            "protected Fresh Inbound or current Context begins before any eligible historical source",
+        ));
+    }
+    let Some(first_new) = input.iter().take(max).position(|message| !matches!(
+        message,
+        ModelInputMessage::Derived(derived)
+            if derived.transformations.contains(&crate::model::projected::SemanticTransformation::Summary)
+    )) else {
+        return Err(failure(
+            ContextErrorKind::NoEligibleHistory,
+            "the active history contains only an existing summary and no new eligible source",
+        ));
+    };
+    // Rewriting an existing Summary alone does not retire any new source.
+    min = min.max(first_new + 1);
     let mut pending = BTreeMap::<String, usize>::new();
     let mut pending_count = 0;
     let mut boundaries = Vec::new();
-    let mut transcript = String::new();
     for (i, message) in input.iter().enumerate().take(max) {
         if i % 64 == 0 {
             cancellation_point(cancellation).await?;
@@ -119,10 +135,9 @@ pub(crate) async fn summary_prefix(
             }
             _ => {}
         }
-        super::summarizer::append_summary_message(message, &mut transcript);
         let n = i + 1;
         if n >= min && pending_count == 0 {
-            boundaries.push((n, transcript.len()));
+            boundaries.push(n);
         }
     }
     let complete = assemble_context_input(
@@ -134,6 +149,10 @@ pub(crate) async fn summary_prefix(
     .map_err(|e| failure(ContextErrorKind::MalformedHistory, &e))?;
     let monotone = engine.supports_monotone_compaction(&complete);
     drop(complete);
+    // Historical progress is judged on the whole projected history, without
+    // request-only or staged inputs. The candidate uses the same accounting
+    // path as the final checkpoint validation.
+    let history_before = engine.estimate_model_input(input, "", &[]);
     let mut search = Search {
         engine,
         input,
@@ -141,22 +160,21 @@ pub(crate) async fn summary_prefix(
         tools,
         constraints,
         cancellation,
-        transcript: &transcript,
         boundaries: &boundaries,
         cache: BTreeMap::new(),
     };
     let eligible = boundaries.len();
+    if eligible == 0 {
+        return Err(failure(
+            ContextErrorKind::NoEligibleHistory,
+            "no complete eligible historical source remains before protected input or the continuation constraint",
+        ));
+    }
     let selected = if monotone && eligible > 0 {
-        // Summary fits form an initial interval; primary fits a final one.
-        let upper = search
-            .partition(|cost| cost.summary <= budgets.summary_input_limit)
-            .await?;
+        // Primary fit chooses retirement; summary capacity chooses chunks later.
+        let upper = eligible;
         let lower = search
-            .partition(|cost| {
-                cost.primary
-                    .saturating_add(u64::from(budgets.summary_output_budget))
-                    > limit
-            })
+            .partition(|cost| cost.primary > limit || cost.history >= history_before)
             .await?;
         if lower >= upper {
             None
@@ -176,12 +194,7 @@ pub(crate) async fn summary_prefix(
         let examined = eligible.min(MAX_GENERIC_CANDIDATES);
         for index in (0..eligible).rev().take(examined) {
             let cost = search.cost(index).await?;
-            if cost.summary <= budgets.summary_input_limit
-                && cost
-                    .primary
-                    .saturating_add(u64::from(budgets.summary_output_budget))
-                    <= limit
-            {
+            if cost.primary <= limit && cost.history < history_before {
                 fallback = Some(index);
                 if cost.recent >= engine.config().keep_recent_tokens {
                     preferred = Some(index);
@@ -202,37 +215,102 @@ pub(crate) async fn summary_prefix(
     };
     cancellation_point(cancellation).await?;
     let Some(index) = selected else {
+        let best = search
+            .cache
+            .values()
+            .map(|cost| cost.primary)
+            .min()
+            .unwrap_or(u64::MAX);
+        // A synthetic price is proof only when the estimator certifies this
+        // Summary shape as its lower bound. Monotone prefix deletion alone
+        // does not establish that property for arbitrary estimators.
+        let fit_witness = search.cache.values().any(|cost| cost.primary <= limit);
+        let kind = if !engine.supports_summary_floor() {
+            ContextErrorKind::SearchIncomplete
+        } else if fit_witness {
+            ContextErrorKind::NoProgress
+        } else {
+            ContextErrorKind::CannotFit
+        };
         return Err(failure(
-            if max == 0 {
-                ContextErrorKind::NoProgress
-            } else {
-                ContextErrorKind::CannotFit
-            },
-            "no complete historical prefix satisfies summary, primary and core-retention budgets",
+            kind,
+            &format!(
+                "no synthetic Summary candidate both satisfies primary fit and demonstrates historical reduction; {}",
+                primary_fit_evidence(engine, input, prompt, tools, constraints, best, limit)
+            ),
         ));
     };
     // A proof narrows search, never replaces authoritative whole-candidate pricing.
     let cost = search.cost(index).await?;
-    if cost.summary > budgets.summary_input_limit
-        || cost
-            .primary
-            .saturating_add(u64::from(budgets.summary_output_budget))
-            > limit
-    {
+    if cost.primary > limit || cost.history >= history_before {
         return Err(failure(
             ContextErrorKind::Internal,
             "estimator violated its monotone compaction contract",
         ));
     }
     cancellation_point(cancellation).await?;
-    Ok(boundaries[index].0)
+    Ok(boundaries[index])
+}
+
+/// Independent labeled estimates for diagnostics only. They are never added
+/// together or used to infer feasibility for an arbitrary estimator.
+#[allow(clippy::too_many_arguments)] // Each value names a separate frozen request authority.
+pub(super) fn primary_fit_evidence(
+    engine: &ContextEngine,
+    input: &SelectedModelInput,
+    prompt: &str,
+    tools: &[ModelToolDefinition],
+    constraints: &CompactionConstraints<'_>,
+    complete: u64,
+    limit: u64,
+) -> String {
+    let mut protected_ids: BTreeSet<_> =
+        constraints.protected_context_ids.iter().cloned().collect();
+    if let Some(fresh) = constraints.fresh_inbound {
+        protected_ids.extend(fresh.message_ids().iter().cloned());
+    }
+    let mut protected = SelectedModelInput::default();
+    for message in input {
+        if message
+            .canonical_id()
+            .is_some_and(|id| protected_ids.contains(id))
+        {
+            protected.push(message.clone());
+        }
+    }
+    for message in constraints.staged_request_context {
+        protected.push(ModelInputMessage::Canonical(message.clone()));
+    }
+    let fixed = (!prompt.is_empty() || !tools.is_empty())
+        .then(|| engine.estimate_model_input(&SelectedModelInput::default(), prompt, tools));
+    let protected =
+        (!protected.is_empty()).then(|| engine.estimate_model_input(&protected, "", &[]));
+    let carryover = constraints.carryover.map(|value| {
+        let mut selected = SelectedModelInput::default();
+        selected.push(ModelInputMessage::RequestOnly(
+            crate::model::RequestOnlyModelContext::UnresolvedOutputCarryover(value.clone()),
+        ));
+        engine.estimate_model_input(&selected, "", &[])
+    });
+    let describe = |value: Option<u64>| match value {
+        None => "not present".to_owned(),
+        Some(u64::MAX) => "unavailable".to_owned(),
+        Some(value) => value.to_string(),
+    };
+    format!(
+        "complete candidate estimate={}, primary input limit estimate={limit}; independent estimates: fixed System Prompt/Tools={}, protected Fresh Inbound/current Context={}, request-only carryover={}; these estimates are not additive or provider usage",
+        describe(Some(complete)),
+        describe(fixed),
+        describe(protected),
+        describe(carryover)
+    )
 }
 
 #[derive(Clone, Copy)]
 struct Cost {
-    summary: u64,
     primary: u64,
     recent: u64,
+    history: u64,
 }
 struct Search<'a, 'c> {
     engine: &'a ContextEngine,
@@ -241,8 +319,7 @@ struct Search<'a, 'c> {
     tools: &'a [ModelToolDefinition],
     constraints: &'a CompactionConstraints<'c>,
     cancellation: &'a CancellationSignal,
-    transcript: &'a str,
-    boundaries: &'a [(usize, usize)],
+    boundaries: &'a [usize],
     cache: BTreeMap<usize, Cost>,
 }
 impl Search<'_, '_> {
@@ -251,14 +328,18 @@ impl Search<'_, '_> {
         if let Some(cost) = self.cache.get(&index) {
             return Ok(*cost);
         }
-        let (n, end) = self.boundaries[index];
-        let summary = super::summarizer::summary_model_input(&self.transcript[..end]);
-        let summary_tokens = self
-            .engine
-            .estimate_model_input(&summary.messages.into(), "", &[]);
+        let n = self.boundaries[index];
+        let mut remaining = self.input.range(n..self.input.len());
+        // Price the shortest rendered Summary shape in the primary accounting
+        // path, including its message wrapper. It is a candidate witness, not
+        // a lower bound on an arbitrary estimator's price for other Summaries.
+        // Summary output tokens belong to another model and cannot be added
+        // as primary input tokens.
+        remaining.insert(0, minimum_summary());
+        let history = self.engine.estimate_model_input(&remaining, "", &[]);
         cancellation_point(self.cancellation).await?;
         let planned = assemble_context_input(
-            &self.input.range(n..self.input.len()),
+            &remaining,
             self.constraints.staged_request_context,
             self.constraints.carryover,
             self.constraints.carryover_anchor,
@@ -273,9 +354,9 @@ impl Search<'_, '_> {
                 .estimate_model_input(&self.input.range(n..self.input.len()), "", &[]);
         cancellation_point(self.cancellation).await?;
         let cost = Cost {
-            summary: summary_tokens,
             primary,
             recent,
+            history,
         };
         self.cache.insert(index, cost);
         Ok(cost)
@@ -294,6 +375,33 @@ impl Search<'_, '_> {
         }
         Ok(low)
     }
+}
+
+pub(crate) fn minimum_summary() -> ModelInputMessage {
+    let text = super::summary_content::render(serde_json::json!({
+        "goal": "x",
+        "constraints_and_preferences": ["x"],
+        "progress": {"done": ["x"], "in_progress": ["x"], "blocked": ["x"]},
+        "key_decisions": ["x"],
+        "next_steps": ["x"],
+        "critical_context": ["x"]
+    }))
+    .expect("the minimum Summary satisfies the internal domain contract")
+    .trim_end()
+    .to_owned();
+    ModelInputMessage::Derived(crate::model::projected::DerivedModelMessage {
+        message: crate::model::projected::ProjectedMessage::User {
+            content: vec![crate::message::types::UserContentBlock::Text(
+                crate::message::content::TextBlock { text },
+            )],
+            source: crate::message::types::UserSource::Runtime,
+            kind: crate::model::projected::ProjectedUserKind::CompactionContext,
+            timestamp: None,
+        },
+        sources: Vec::new(),
+        checkpoint_sources: Vec::new(),
+        transformations: vec![crate::model::projected::SemanticTransformation::Summary],
+    })
 }
 #[cfg(test)]
 thread_local! { static COPIED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }

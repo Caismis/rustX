@@ -44,6 +44,35 @@ fn has_tool_start(durable: &Durable) -> bool {
     durable.has_event(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
 }
 
+fn assert_one_summary_with_retained_originals(durable: &Durable) {
+    let projected = durable.store().projected_history().unwrap();
+    assert_eq!(
+        projected
+            .messages
+            .iter()
+            .filter(|message| matches!(message, crate::model::ModelInputMessage::Derived(_)))
+            .count(),
+        1,
+        "one independently durable Derived summary"
+    );
+    let retained: Vec<_> = projected
+        .messages
+        .iter()
+        .filter_map(|message| message.canonical_id().cloned())
+        .collect();
+    let expected: Vec<_> = durable
+        .canonical()
+        .iter()
+        .skip(1)
+        .map(|message| message.id().clone())
+        .collect();
+    assert_eq!(
+        retained, expected,
+        "the recent canonical tail is retained exactly"
+    );
+    assert_eq!(projected.messages.len(), retained.len() + 1);
+}
+
 /// The canonical model-visible message shapes, in order.
 fn shapes(messages: &[MessageBlock]) -> Vec<&'static str> {
     messages
@@ -1740,11 +1769,7 @@ fn compaction_checkpoint_receipt_and_activation_are_atomic() {
         1,
         "exactly one compaction fact"
     );
-    assert_eq!(
-        durable.store().projected_history().unwrap().messages.len(),
-        1,
-        "the model sees one independently durable Derived summary"
-    );
+    assert_one_summary_with_retained_originals(&durable);
     let ledger_after = shapes(&durable.canonical());
     assert_eq!(
         &ledger_after[..ledger_before.len()],
@@ -3075,10 +3100,7 @@ fn the_transcript_pages_every_durable_owner_after_process_death() {
     process.wait_reached("after:commit_projection");
     process.sigkill();
     let durable = compacted.durable();
-    assert_eq!(
-        durable.store().projected_history().unwrap().messages.len(),
-        1
-    );
+    assert_one_summary_with_retained_originals(&durable);
     assert!(durable.store().projection_head().unwrap().is_some());
     assert!(
         durable.transcript().len() > 1,

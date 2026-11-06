@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointReadCut, RuntimeClientDeliveryHead } from '../../../../protocol/app-server/v72';
+import type { CheckpointReadCut, RuntimeClientDeliveryHead } from '../../../../protocol/app-server/v73';
 import { deliveryHead, deliveryItemKey, deliveryPage, readDeliveryMetadata } from '../../../../protocol/app-server/delivery-observation';
 import { latestTurnDeliveries, type DeliveryBatch } from '../../bindings/present';
 import { observationSourceIdentity, readObservationValue, useObservationSource } from './ObservationSource';

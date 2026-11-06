@@ -611,6 +611,31 @@ impl ResolvedModelInvocation {
         self.effective_output_tokens
     }
 
+    /// Admitted model capability, distinct from primary generation defaults.
+    #[must_use]
+    pub const fn output_capability(&self) -> u32 {
+        self.model_max_output_tokens
+    }
+
+    /// Explicit provider-native reasoning allocation frozen in this Profile.
+    /// The caller must reserve additional output for the visible response.
+    /// `None` does not imply reasoning is disabled.
+    ///
+    /// # Errors
+    /// Rejects an enabled Anthropic thinking budget that is missing, below 1024,
+    /// nonintegral, or outside the supported output token domain.
+    pub fn reasoning_output_minimum(&self) -> Result<Option<u32>, String> {
+        reasoning_output_minimum(self.protocol, &self.request_params)
+    }
+
+    /// Summary policy derives its own wire budget while retaining the frozen
+    /// model, Profile, reasoning controls and credentials. Primary is unchanged.
+    pub(crate) fn automatic_summary_base(&self) -> Self {
+        let mut invocation = self.clone();
+        invocation.effective_output_tokens = self.model_max_output_tokens;
+        invocation
+    }
+
     /// The resolved runtime generation-safety policy of this invocation.
     ///
     /// This is the **policy-resolution seam**: it decides what the runtime's
@@ -742,6 +767,81 @@ impl ResolvedModelInvocation {
             capabilities: &self.capabilities,
             declared_capabilities: &self.declared_capabilities,
         }
+    }
+}
+
+pub(crate) fn reasoning_output_minimum(
+    protocol: ModelProtocol,
+    params: &RequestParams,
+) -> Result<Option<u32>, String> {
+    if protocol != ModelProtocol::AnthropicMessages {
+        return Ok(None);
+    }
+    let Some(thinking) = params.get("thinking") else {
+        return Ok(None);
+    };
+    if thinking.get("type").and_then(serde_json::Value::as_str) != Some("enabled") {
+        return Ok(None);
+    }
+    thinking
+        .get("budget_tokens")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .filter(|value| *value >= 1024)
+        .map(Some)
+        .ok_or_else(|| {
+            "enabled Anthropic thinking requires budget_tokens between 1024 and u32::MAX".into()
+        })
+}
+
+#[cfg(test)]
+mod reasoning_minimum_tests {
+    use super::{ModelProtocol, RequestParams, reasoning_output_minimum};
+    use serde_json::json;
+
+    #[test]
+    fn only_explicit_valid_anthropic_enabled_budget_is_a_minimum() {
+        let mut params = RequestParams::new();
+        params.insert(
+            "thinking".into(),
+            json!({"type":"enabled","budget_tokens":8192}),
+        );
+        assert_eq!(
+            reasoning_output_minimum(ModelProtocol::AnthropicMessages, &params).unwrap(),
+            Some(8192)
+        );
+        assert_eq!(
+            reasoning_output_minimum(ModelProtocol::OpenAiResponses, &params).unwrap(),
+            None
+        );
+        for bad in [
+            json!(null),
+            json!(0),
+            json!(500),
+            json!(1023),
+            json!(-1),
+            json!(1.5),
+            json!(u64::MAX),
+        ] {
+            params.insert(
+                "thinking".into(),
+                json!({"type":"enabled","budget_tokens":bad}),
+            );
+            assert!(reasoning_output_minimum(ModelProtocol::AnthropicMessages, &params).is_err());
+        }
+        params.insert(
+            "thinking".into(),
+            json!({"type":"enabled","budget_tokens":1024}),
+        );
+        assert_eq!(
+            reasoning_output_minimum(ModelProtocol::AnthropicMessages, &params).unwrap(),
+            Some(1024)
+        );
+        params.insert("thinking".into(), json!({"type":"adaptive"}));
+        assert_eq!(
+            reasoning_output_minimum(ModelProtocol::AnthropicMessages, &params).unwrap(),
+            None
+        );
     }
 }
 

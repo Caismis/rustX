@@ -2165,7 +2165,10 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
             owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
             ..
         } => true,
-        RuntimeEvent::ModelRequestStarted { .. }
+        RuntimeEvent::CompactionSkipped { .. }
+        | RuntimeEvent::CompactionCancelled { .. }
+        | RuntimeEvent::CompactionChunkAccepted { .. }
+        | RuntimeEvent::ModelRequestStarted { .. }
         | RuntimeEvent::ModelRequestCompleted { .. }
         | RuntimeEvent::ModelRequestFailed { .. }
         | RuntimeEvent::AuxiliaryCallStarted { .. }
