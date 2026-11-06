@@ -55,8 +55,12 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
       await openSettingsPage(page, 'MCP servers');
       const back = settings.getByRole('button', { name: '← MCP servers', exact: true });
+      const create = settings.getByRole('button', { name: '＋ New', exact: true });
+      // Reconnecting can restore the retained editor after the tabpanel mounts.
+      // Wait for its actual surface before deciding whether to return to the list.
+      await expect(back.or(create).first()).toBeVisible();
       if (await back.isVisible()) await back.click();
-      await openSettingsPage(page, 'MCP servers');
+      await expect(create).toBeVisible();
     };
     await openModel('open');
     await model.getByLabel('Context window').fill('250000');

@@ -73,6 +73,9 @@ of an individual waiting candidate.
 
 ## 6. Validation
 
+The matrix below records the initial implementation through `28bb6d4fd`.
+Subsequent PR review corrections and their validation are described in section 9.
+
 Completed commands and final counts are recorded below. Cargo build, lint,
 generation and tests are serialized: tests that spawn their own executable must
 not run while another Cargo invocation replaces that executable. Final Rust
@@ -267,8 +270,9 @@ strace -f -yy -e trace=openat,getdents64,read \
 
 ## 9. Delivery and CI
 
-Branch: `codex/ui-experience`. The implementation is committed and pushed directly
-on this branch; no pull request is created, as requested.
+Branch: `codex/ui-experience`, submitted as
+[PR #539](https://github.com/Caismis/rustX/pull/539).
+The historical runs below establish the implementation baseline before PR review.
 
 Implementation commit:
 [`fe3aa5ba5f1476789ed6b81754c316d0128f2ac5`](https://github.com/Caismis/rustX/commit/fe3aa5ba5f1476789ed6b81754c316d0128f2ac5).
@@ -292,9 +296,10 @@ The [third FULL CI run](https://github.com/Caismis/rustX/actions/runs/4221855909
 exposed the Office launcher-loss issue described above. The final implementation,
 including that fix and its deterministic regression test, is
 [`28bb6d4fd63f86ff2ec61a0e0947f6ac6edfa7a5`](https://github.com/Caismis/rustX/commit/28bb6d4fd63f86ff2ec61a0e0947f6ac6edfa7a5).
-No Rust implementation changed after the fully tested `9120fd5c4` revision.
+For that baseline delivery, no Rust implementation changed after the fully tested
+`9120fd5c4` revision.
 
-The [final FULL CI run](https://github.com/Caismis/rustX/actions/runs/42221459145)
+The [baseline FULL CI run](https://github.com/Caismis/rustX/actions/runs/42221459145)
 **passed on attempt 2** for that exact implementation revision. All 15 selected
 jobs succeeded, including Merge verification and complete 655-case browser
 coverage. The three skipped jobs are alternative FAST-profile lanes, replaced
@@ -303,5 +308,48 @@ also passed on both Linux and macOS.
 
 [Raw CI evidence](measurements/validation-ci.json) records both run identities,
 the implementation SHA, job conclusions, platform counts and the unchanged
-manual shard rerun. The concluding delivery commit only adds documentation and
-validation evidence; the verified implementation remains `28bb6d4fd`.
+manual shard rerun. The baseline evidence commit only adds documentation and
+validation evidence for implementation `28bb6d4fd`.
+
+### PR #539 review corrections (2026-11-07)
+
+The PR now also includes immutable publication of inert Skill catalogs for later
+invocation overrides and atomic file replacement in floating Workbench panes.
+The next review identified four behavior defects and an outdated test fixture:
+
+- A continuous Trace history page now updates every crossed gap boundary using
+  the same rules as live refresh. Only a real left-boundary connection or native
+  history exhaustion closes the requested gap. Resident records and their
+  immutable read cuts remain protected. Two 32-record multi-gap cases exercise
+  both history and live intervals, superseded reads and complete recovery.
+- A cancelled Office request stops waiting for Host-owned converter startup after
+  its parser has retired. The Host retains the reusable startup owner; started
+  rendering still holds admission until physical process retirement. Gated tests
+  cover released admission, repeated cancellation, successful reuse and Host close.
+- PDF zoom uses one finite, cached reference-page geometry read independent of
+  cancellable bitmap rendering. A real preview/owner regression cancels page 1,
+  displays page 20 and exercises Zoom, percentage selection and Fit width. No
+  offscreen bitmap scan was added.
+- Hidden direct Skill entries invalidate collection admission because they count
+  toward its 1,024-entry budget. Hidden subtrees and assets remain ignored. The
+  notification-gated regression crosses 1,024 → 1,025 → 1,024, edits SKILL.md while
+  its candidate watch is absent, and verifies the latest definition after rearm.
+- The real-child settlement fixture now prepares context candidates through
+  `prepare_context_configuration` over a configured runtime. It retains the
+  original child-ownership, supersession and exactly-once settlement assertions;
+  no production compatibility path was introduced for the old invalid fixture.
+
+All five failures were reproduced before their respective fixes. Focused checks
+passed: 188 Rust watcher/configuration checks, 48 Trace checks, 38 PDF/view-state
+checks and 22 Office/Host lifecycle checks. Independent reviewers found no remaining
+blocking findings in these fixes. A response-loss browser helper also waits for
+the restored MCP editor or list before leaving the retained editor; its existing
+native-write, no-replay and recovered-value assertions remain unchanged.
+
+The complete Web suite passed with 4,088 tests and 4 existing skips. Web TypeScript,
+the production build, source provenance/notices, Rust formatting and strict
+all-target/all-feature Clippy also passed before publication of these corrections.
+
+Current exact-head FULL verification is recorded on
+[PR #539](https://github.com/Caismis/rustX/pull/539); the historical baseline run
+above does not certify the subsequent review changes.
