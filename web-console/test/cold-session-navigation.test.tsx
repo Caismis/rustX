@@ -54,7 +54,10 @@ for (const origin of ['session', 'workflows'] as const) for (const settlement of
     }
     const consumeA = vi.spyOn(f.sourceIntake, 'consume');
     const sourceFiles = f.sourceIntake.snapshot();
-    if (origin === 'workflows') await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Workflows' })));
+    if (origin === 'workflows') {
+      await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Workflows' })));
+      await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Home' })));
+    }
     server.held.add('session/attach');
     await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session B' })));
     const attached = await server.waitFor('session/attach', 2);
@@ -127,7 +130,7 @@ it.each(['failure', 'cancel'] as const)('cold navigation %s retains B local file
   await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['B'], 'B-local.txt')] } }));
   if (outcome === 'failure') await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: attached.id, error: { code: -32000, message: 'B preparation failed', data: { kind: 'operation_failed' } } }));
   else await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Settings' })));
-  if (outcome === 'cancel') await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Close Settings' })));
+  if (outcome === 'cancel') await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Home' })));
   expect(server.client.attachmentIntakes.lookup(f.sourceKey)).toBe(f.sourceIntake);
   expect(f.sourceIntake.snapshot()).toBe(sourceFiles);
   expect(f.editor().value).toBe('B local draft');
@@ -189,7 +192,7 @@ it.each(['immediate reconnect', 'settled disconnect and reopened Settings'] as c
   else {
     await act(async () => oldSocket.close());
     await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Settings' })));
-    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Close Settings' })));
+    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Home' })));
     server.held.delete('session/read');
     await act(async () => server.connect());
   }

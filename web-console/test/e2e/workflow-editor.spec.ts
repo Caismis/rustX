@@ -71,7 +71,7 @@ test('unknown output contracts hide out-of-scope variables and keep pending upst
     } }));
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'scope_facts').getByRole('button', { name: 'scope_facts', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
@@ -115,7 +115,7 @@ test('unfinished input schemas hide self, forward and alternate branch outputs',
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'unfinished_input').getByRole('button', { name: 'unfinished_input', exact: true }).click();
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await editor(page).getByLabel('Tool node common', { exact: true }).focus(); await editor(page).getByLabel('Tool node common', { exact: true }).press('Enter');
@@ -144,7 +144,7 @@ test('equality picker matches numeric and string bindings to the edited literal 
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'equality_types').getByRole('button', { name: 'equality_types', exact: true }).click();
     await editor(page).getByLabel('Branch node gate', { exact: true }).focus(); await editor(page).getByLabel('Branch node gate', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' }), pick = inspector.getByRole('button', { name: 'Choose a variable', exact: true });
@@ -173,7 +173,7 @@ test('display titles keep node identity and orphan metadata separate', async ({ 
     const file = join(fixture.workspaceA, '.agents/workflows/orphan_node.yaml'); writeFileSync(file, bytes);
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'orphan_node').getByRole('button', { name: 'orphan_node', exact: true }).click();
     await editor(page).getByLabel('Output node done', { exact: true }).focus(); await editor(page).getByLabel('Output node done', { exact: true }).press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
@@ -212,7 +212,7 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     }, editor: { notes, nodes: [{ address: { block: [], node: 'text' }, position: { x: 0, y: 0 } }] } }));
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'metadata_flow').getByRole('button', { name: 'metadata_flow', exact: true }).click();
     await editor(page).getByLabel('Output node done', { exact: true }).click();
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
@@ -261,7 +261,7 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     // An invalid file is listed with its native diagnostic and never replaced.
     await expect(card(page, 'broken')).toContainText('Unreadable file');
     await card(page, 'broken').getByRole('button', { name: 'broken', exact: true }).click();
@@ -298,25 +298,26 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await captureEvidence(page, '21-source-conflict', info);
 
     // Leaving with unsaved edits asks first; Keep editing stays on the file.
-    await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Home', exact: true }).click();
     const leave = page.getByRole('dialog', { name: 'Discard unsaved changes?' });
     await expect(leave).toBeVisible();
     await leave.getByRole('button', { name: 'Keep editing', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'parallel_review', exact: true })).toBeVisible();
-    // Closing every conversation view is also a navigation away from this editor.
-    await page.getByRole('button', { name: 'View options', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'Close all views', exact: true }).click();
+    // Settings is another external exit, guarded by the same editor owner.
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
     await expect(leave).toBeVisible();
     await leave.getByRole('button', { name: 'Keep editing', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'parallel_review', exact: true })).toBeVisible();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Home', exact: true }).click();
+    await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
+    await expect(page.getByLabel('Message', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'View options', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Close all views', exact: true }).click();
-    await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
     await expect(page.getByLabel('Message', { exact: true })).toBeVisible();
     expect(readFileSync(path, 'utf8')).toContain('# external edit');
 
     // Narrow viewport: the inspector becomes a bottom sheet over the canvas.
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
     await editor(page).getByLabel('Branch node decision').focus(); await editor(page).getByLabel('Branch node decision').press('Enter');
     await page.setViewportSize({ width: 390, height: 844 });
@@ -355,7 +356,7 @@ test('keyboard selection and node-move undo', async ({ page }, testInfo) => {
     writeFileSync(floats, FLOATS);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
 
     // A natively valid file whose numbers the browser would retype (1.0
     // becomes 1) opens read-only, located at the exact number.
@@ -434,7 +435,7 @@ test('object keys spelled like paths stay separate fields, and rejected field te
     writeFileSync(path, JSON.stringify(COLLIDING_FIELDS, null, 2));
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'colliding').getByRole('button', { name: 'colliding', exact: true }).click();
 
     // Native accepts the structure: the checklist has nothing to resolve.
@@ -511,7 +512,7 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page).toHaveTitle(/rustX/i);
     expect(new URL(page.url()).pathname).toBe('/');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'New Workflow', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'New Workflow' });
     await dialog.getByLabel('Workflow ID').fill('model_call');
@@ -625,7 +626,7 @@ test('large Workflow documents and oversized check schemas load, edit and save i
     // Install the large inventory after its settings capture has completed.
     writeFileSync(globalFile, documentBytes); writeFileSync(workspaceFile, documentBytes);
     await expect(page).toHaveTitle(/rustX/i);
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     for (const [scope, id, file] of [['Workspace', 'large_workspace', workspaceFile], ['Global', 'large_global', globalFile]]) {
       await page.getByRole('tab', { name: scope, exact: true }).click();
       await card(page, id).getByRole('button', { name: id, exact: true }).click();

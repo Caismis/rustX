@@ -103,18 +103,20 @@ it('an authoritatively attached destination commits synchronously and supersedes
   expect(mutations(f.server).filter(request => request.method === 'session/attach')).toHaveLength(3);
   expect(mutations(f.server).filter(request => request.method !== 'session/attach')).toHaveLength(0);
 });
-for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'rustX')]) it(`Settings ${target.kind} preserves the selected Session owner while retiring only sidebar closure`, async () => {
+for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'rustX')]) it(`Settings ${target.kind} opens a page while the selected cold Session continues natively`, async () => {
   const f = await fixture(), controls = f.capture(); f.server.held.add('session/attach');
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
   const request = await f.server.waitFor('session/attach', 3);
-  const pending = f.actor.getSnapshot().context.pending;
   f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target } });
   expect(f.settings.getSnapshot().context.target).toEqual(target); expect(controls()).toBe(false);
-  expect(f.actor.getSnapshot().context.pending).toBe(pending);
-  expect(f.actor.getSnapshot().context.dismissedSidebar).toBe(pending);
+  expect(f.actor.getSnapshot().context.pending).toBeUndefined();
+  expect(f.actor.getSnapshot().context.home).toEqual({ kind: 'session-draft', sessionId: 'C' });
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'settings' });
   f.server.reply(request); await f.server.client.waitForAttachment('C', () => true); await idle(f.actor);
-  expect(f.actor.getSnapshot().context.publication?.sidebar).toBe(false);
-  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' }); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(false);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'settings' });
+  f.actor.send({ type: 'HOME' }); await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' });
+  expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(false);
   expect(f.server.client.isAttachmentControlCurrent('A', f.server.client.getSnapshot().views.A.attachmentObservation)).toBe(true);
   expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
 });
@@ -148,7 +150,7 @@ it('a newer selection and explicit cancellation still retire a dismissed cold ta
 
 it('idle Settings and overlay dismissal preserve committed controls; publication replaces only old controls', async () => {
   const f = await fixture(), controls = f.capture();
-  f.actor.send({ type: 'SIDEBAR.DISMISS' }); f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } }); f.settings.send({ type: 'CLOSE' });
+  f.actor.send({ type: 'SIDEBAR.DISMISS' }); f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } }); f.settings.send({ type: 'SUSPEND' });
   expect(controls()).toBe(true);
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: true } });
   const next = f.capture(); f.actor.send({ type: 'SIDEBAR.DISMISS' }); expect(next()).toBe(true); expect(controls()).toBe(false);
@@ -215,12 +217,12 @@ it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native dr
     f.server.reply(cold); await idle(f.actor);
   }
   expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-  expect(f.actor.getSnapshot().context.route).toEqual(destination === 'Settings' ? { kind: 'new-conversation', workspaceId: 'workspace-a' } : { kind: 'session', sessionId: destination === 'newer cold Session' ? 'C' : 'B' });
+  expect(f.actor.getSnapshot().context.route).toEqual(destination === 'Settings' ? { kind: 'settings' } : { kind: 'session', sessionId: destination === 'newer cold Session' ? 'C' : 'B' });
   expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
   expect(firstSubmissions(f.server.client).draft(binding)?.session?.id).toBe('A-created');
   expect(f.server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(destination === 'Settings' ? 1 : 0);
   if (destination === 'Settings') {
-    f.settings.send({ type: 'CLOSE' });
+    f.settings.send({ type: 'SUSPEND' });
     f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-b' });
     expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'new-conversation', workspaceId: 'workspace-b' });
     expect(String(f.actor.getSnapshot().context.binding)).not.toBe(binding);

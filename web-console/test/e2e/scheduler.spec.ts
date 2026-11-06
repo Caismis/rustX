@@ -9,8 +9,8 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
     await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
     const prefix = `scheduler-${locale}-${width}${theme === 'dark' ? '-dark' : ''}`;
     await page.goto(origin + '/test/fixtures/scheduler.html?locale=' + locale + '&theme=' + theme);
-    if (width === 390) await page.getByRole('button', { name: zh ? '打开侧边栏' : 'Expand Sidebar' }).click();
-    await page.getByRole('button', { name: zh ? '自动化任务' : 'Automation tasks', exact: true }).click();
+    if (width === 390) await page.getByRole('button', { name: zh ? '主页' : 'Home' }).click();
+    await page.getByRole('button', { name: zh ? '计划任务' : 'Scheduled Tasks', exact: true }).click();
     const title = zh ? '检查仓库最新变更' : 'Review repository changes';
     await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible();
     await expectStableScreenshot(page, prefix + '-list.png');
@@ -37,7 +37,7 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
 test('structured time controls preserve the selected IANA zone and submit the exact native rule', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
   await page.goto(origin + '/test/fixtures/scheduler.html?locale=en');
-  await page.getByRole('button', { name: 'Automation tasks', exact: true }).click();
+  await page.getByRole('button', { name: 'Scheduled Tasks', exact: true }).click();
   await page.getByRole('button', { name: /Review repository changes/ }).click();
   await page.getByRole('button', { name: 'Repeat', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Once', exact: true }).click();

@@ -82,7 +82,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await page.getByRole('button', { name: 'Toggle Workspace A' }).click();
     await page.screenshot({ path: 'test-results/workspaces-desktop.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+    await page.getByRole('button', { name: 'Home' }).click();
     await page.getByRole('button', { name: 'Select Workspace Workspace A' }).scrollIntoViewIfNeeded();
     await expect(page.locator(`button[data-session-id="${id}"]`)).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

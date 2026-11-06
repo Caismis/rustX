@@ -6,26 +6,32 @@ export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('menuitem', { name: 'Close view', exact: true }).hover();
   await page.locator(`[role="menuitem"][data-menu-item-id="close:${id}"]`).click();
 }
-export async function closeSettings(page: Page) {
-  const close = page.getByRole('button', { name: 'Close Settings', exact: true });
-  if (await close.isVisible()) await close.click();
+/** Leave a primary page through the authoritative Home route. */
+export async function returnHome(page: Page) {
+  const home = page.getByRole('button', { name: 'Home', exact: true });
+  if (await home.getAttribute('aria-current') !== 'page') {
+    await home.click();
+    await expect(home).toHaveAttribute('aria-current', 'page');
+  }
 }
 export async function chooseWorkspace(page: Page, label: string) {
-  await closeSettings(page);
-  await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
+  await returnHome(page);
+  if (!await page.getByRole('button', { name: 'New Conversation', exact: true }).isVisible()) await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await page.getByRole('button', { name: 'New Conversation', exact: true }).click();
   await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
   await page.getByRole('menuitem', { name: label, exact: true }).click();
 }
 /** Enter Workspace Settings from the exact Workspace object action. */
 export async function openWorkspaceSettings(page: Page, label: string) {
-  await closeSettings(page);
+  await returnHome(page);
+  if (!await page.getByRole('button', { name: `Select Workspace ${label}`, exact: true }).isVisible()) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.getByRole('button', { name: `Select Workspace ${label}`, exact: true }).hover();
   await page.getByRole('button', { name: `Workspace actions for ${label}`, exact: true }).click();
   await page.getByRole('menuitem', { name: 'Workspace settings', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Settings', exact: true })).toBeVisible();
 }
 export async function connectionAction(page: Page, action: 'Disconnect' | 'Reconnect') {
-  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
   const previous = await settings.isVisible() ? await selectedSettingsPage(page) : undefined;
   await openConnectionSettings(page);
   await page.getByRole('region', { name: 'Connection Settings', exact: true }).getByRole('button', { name: action, exact: true }).click();
@@ -33,23 +39,29 @@ export async function connectionAction(page: Page, action: 'Disconnect' | 'Recon
   if (previous) {
     await settings.getByRole('button', { name: 'Back to Advanced', exact: true }).click();
     await openSettingsPage(page, previous);
-  } else await closeSettings(page);
+  } else await returnHome(page);
 }
 /** Connection is the Advanced sub-surface of the global client's Settings. */
 export async function openConnectionSettings(page: Page) {
-  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
   if (!await settings.isVisible()) await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(settings).toBeVisible();
+  const user = settings.getByRole('button', { name: 'Open User Settings', exact: true });
+  if (await user.isVisible()) await user.click();
   if (!await settings.getByRole('region', { name: 'Connection Settings', exact: true }).isVisible()) {
     await openSettingsPage(page, 'Advanced');
-    await settings.getByRole('button', { name: 'Connection', exact: true }).click();
+    // Section selection resumes its retained detail. A prior Connection visit
+    // may already be displayed after the section transition settles.
+    if (!await settings.getByRole('region', { name: 'Connection Settings', exact: true }).isVisible()) await settings.getByRole('button', { name: 'Connection', exact: true }).click();
   }
+  await expect(settings.getByRole('region', { name: 'Connection Settings', exact: true })).toBeVisible();
 }
 /** The Settings page selector the panel currently shows. A wide panel shows
  * the vertical page rail; a narrow panel hides it and shows the section menu
  * trigger instead. Which one is decided by the panel's own width in CSS, so a
  * test asks the rendered page rather than assuming it from the viewport. */
 export function settingsSectionMenu(page: Page) {
-  return page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('button', { name: /^Settings page: / });
+  return page.getByRole('region', { name: 'Settings', exact: true }).getByRole('button', { name: /^Settings page: / });
 }
 /** The primary Settings page currently selected. */
 export async function selectedSettingsPage(page: Page): Promise<string> {
@@ -57,7 +69,7 @@ export async function selectedSettingsPage(page: Page): Promise<string> {
   if (await menu.isVisible()) return (await menu.getAttribute('aria-label'))!.replace(/^Settings page: /, '');
   return page.getByRole('tablist', { name: 'Settings pages', exact: true }).getByRole('tab', { selected: true }).innerText();
 }
-/** Select one of the six primary Settings pages the way a user can on the
+/** Select an authorized Settings section the way a user can on the
  * rendered layout: its rail tab on a wide panel, or its row in the section
  * menu on a narrow one. Either way the selection is the navigation owner's,
  * and the menu hands focus back to its trigger. */
@@ -98,7 +110,13 @@ export async function connectRemote(page: Page, endpoint: string, token: string,
   if (deliveryToken) await page.getByLabel('Delivery Access token (optional, enables side questions)').fill(deliveryToken);
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('.connection-status')).toHaveText('Connected');
-  await closeSettings(page);
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  // Fixture setup leaves both the section and its retained detail at known
+  // roots. Later primary-page navigation is free to resume its exact detail.
+  const back = page.getByRole('button', { name: 'Back to Advanced', exact: true });
+  if (await back.isVisible()) await back.click();
+  await openSettingsPage(page, 'General');
+  await returnHome(page);
 }
 export async function selectedSessionId(page: Page) {
   return (await page.locator('button[data-session-id][aria-current="page"]').getAttribute('data-session-id'))!;
@@ -139,8 +157,8 @@ export async function openEmptySession(page: Page, fixture: { endpoint: string; 
     if (!fixture.automaticTitles) await remote.renameSession(id, 'New session');
   }
   finally { await remote.shutdown(); }
-  await closeSettings(page);
-  const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+  await returnHome(page);
+  const expand = page.getByRole('button', { name: 'Home', exact: true, expanded: false });
   const wasCollapsed = await expand.isVisible();
   if (wasCollapsed) await expand.click();
   await page.getByRole('button', { name: 'View options', exact: true }).click();

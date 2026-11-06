@@ -6,7 +6,7 @@ import { expectStableScreenshot } from './screenshot';
 const fixture = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/settings.html`;
 const provider = 'enterprise-inference-gateway-eu-central-primary-with-an-exceptionally-long-provider-identity';
 const model = 'enterprise-reasoning-model-2026-09-long-context-preview-with-an-exceptionally-long-identity';
-const settings = (page: Page) => page.getByRole('dialog', { name: 'Settings', exact: true });
+const settings = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
 const editor = (page: Page) => page.getByRole('dialog', { name: `Model ${model}`, exact: true });
 const writes = (page: Page) => page.evaluate(() => (window as unknown as {rustxNativeRequests: () => {method:string}[]}).rustxNativeRequests().filter(request => request.method === 'configuration/sourceWrite').length);
 

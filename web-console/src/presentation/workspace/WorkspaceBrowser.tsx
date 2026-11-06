@@ -10,13 +10,13 @@ import type { DraftConversation, GroupNode, SessionNode } from './types';
 import css from './WorkspaceBrowser.module.css';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
-export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sessions, selected, draft, query, search, open, rename, fork, remove, pin, copyId, closeView, closeAllViews,
+export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected, draft, query, search, open, rename, fork, remove, pin, copyId, closeView, closeAllViews,
   selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, refresh, previous, next, notices, renderSession = (_node, render) => render(_node) }: {
   draft?: DraftConversation;
   unclassified?: readonly string[];
   renderSession?: (node: SessionNode, render: (node: SessionNode) => ReactNode) => ReactNode;
   workspaceSettings?: (id: string, label: string) => void;
-  wide: boolean; expand: () => void; groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
+  groups: readonly GroupNode[]; sessions: readonly SessionNode[]; selected?: string;
   query: string; search: (text: string) => void; open: (id: string) => void; rename: (id: string) => void;
   closeView?: (id: string) => void;
   pin?: (id: string) => void; copyId?: (id: string) => void;
@@ -40,25 +40,25 @@ export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sess
   // Tab stop of its own; Tab from it enters its rows.
   const tree = useRef<HTMLDivElement>(null);
   const row = (node: SessionNode) => renderSession(node, node => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onPin={pin} onCopyId={copyId} flat={flat || !!query} menuFocusOwner={tree} t={tx} />);
-  return <section className={clsx(css.root, !wide && css.rail)} aria-label={tx('workspace:workspace-browser.workspaces-and-sessions')}>
+  return <section className={css.root} aria-label={tx('workspace:workspace-browser.workspaces-and-sessions')}>
     <div className={css.sectionHeader}>
-      {wide && <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>{flat ? tx('workspace:workspace-browser.sessions') : tx('workspace:workspace-browser.workspaces')}</span>}
-      {wide && <div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}><div className={clsx(css.search, searchExpanded && css.searchExpanded)} onClick={() => { setSearchExpanded(true); searchInput.current?.focus(); }}>
+      {<span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>{flat ? tx('workspace:workspace-browser.sessions') : tx('workspace:workspace-browser.workspaces')}</span>}
+      {<div className={clsx(css.searchSlot, searchExpanded && css.searchSlotExpanded)}><div className={clsx(css.search, searchExpanded && css.searchExpanded)} onClick={() => { setSearchExpanded(true); searchInput.current?.focus(); }}>
         <button type="button" className={css.searchButton} aria-label={tx('workspace:workspace-browser.search-sessions')} aria-expanded={searchExpanded} onClick={() => setSearchExpanded(true)}><IconSearchOutline16 size={searchExpanded ? 11 : 14} /></button>
         <input ref={searchInput} className={css.searchInput} aria-label={tx('workspace:workspace-browser.search-session-metadata')} placeholder={tx('workspace:workspace-browser.search-sessions-2')} maxLength={256} value={query} tabIndex={searchExpanded ? 0 : -1} onChange={e => search(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { search(''); setSearchExpanded(false); } }} />
         {searchExpanded && <button type="button" className={css.clearButton} aria-label={tx('workspace:workspace-browser.clear-search')} onClick={e => { e.stopPropagation(); search(''); setSearchExpanded(false); }}><IconCloseFill14 /></button>}
       </div></div>}
-      <div className={clsx(css.headerActions, wide && searchExpanded && css.headerActionsHidden)}>
-        {wide && <Menu open={menu} onClose={() => setMenu(false)} autoFocus listClassName={css.viewOptionsMenu} anchor={<button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-browser.view-options')} onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>}
+      <div className={clsx(css.headerActions, searchExpanded && css.headerActionsHidden)}>
+        {<Menu open={menu} onClose={() => setMenu(false)} autoFocus listClassName={css.viewOptionsMenu} anchor={<button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-browser.view-options')} onClick={() => setMenu(!menu)}><IconEllipsisOutline16 /></button>}
           items={[{ id: 'group', label: flat ? tx('workspace:workspace-browser.grouped-view') : tx('workspace:workspace-browser.flat-view') }, { id: 'refresh', label: tx('workspace:workspace-browser.refresh-list') },
             ...(closeView && sessions.some(node => node.viewOpen) ? [{ id: 'close-view', label: tx('workspace:workspace-browser.close-view'), submenu: sessions.filter(node => node.viewOpen).map(node => ({ id: `close:${node.id}`, label: node.title })) }] : []),
             ...(closeAllViews ? [{ id: 'close-views', label: tx('workspace:workspace-browser.close-all-views') }] : [])]}
           onSelect={id => { setMenu(false); if (id === 'group') setFlat(!flat); else if (id === 'close-views') closeAllViews?.(); else if (id.startsWith('close:')) closeView?.(id.slice(6)); else refresh(); }} />}
-        {addWorkspace && <Tooltip label={tx('workspace:workspace-navigation.add-workspace')}><button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-navigation.add-workspace')} onClick={addWorkspace}><IconProjectAddOutline16 size={wide ? 16 : 18} /></button></Tooltip>}
+        {addWorkspace && <Tooltip label={tx('workspace:workspace-navigation.add-workspace')}><button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-navigation.add-workspace')} onClick={addWorkspace}><IconProjectAddOutline16 size={16} /></button></Tooltip>}
       </div>
     </div>
-    {!wide && <button type="button" className={css.searchButton} aria-label={tx('workspace:workspace-browser.search-sessions')} onClick={() => { expand(); setSearchExpanded(true); }}><IconSearchOutline16 size={18} /></button>}
-    <div className={css.listArea}>{wide && <div className={clsx(css.treeBody, css.wide)}><div ref={tree} className={css.list} role="tree" aria-label={tx('workspace:workspace-browser.session-browser')} tabIndex={-1}>
+
+    <div className={css.listArea}>{<div className={clsx(css.treeBody, css.wide)}><div ref={tree} className={css.list} role="tree" aria-label={tx('workspace:workspace-browser.session-browser')} tabIndex={-1}>
       {notices}
       {query ? sessions.map(node => renderSession(node, node => <SearchResultItem key={node.id} result={{ ...node, workspace: groups.find(group => group.sessions.some(session => session.id === node.id))?.label ?? '' }} currentId={selected} onOpen={open} t={tx} />)) : flat || groups.length === 0 ? <>{draftRow}{sessions.map(row)}</> : groups.map(group => <div className={css.groupSection} key={group.key} data-workspace-group={group.key}>
         <ProjectRowItem group={{ ...group, expanded: !collapsed.includes(group.key) }} menuFocusOwner={tree} t={tx}
@@ -71,6 +71,6 @@ export function WorkspaceBrowser({ unclassified = [], wide, expand, groups, sess
       {!flat && !query && groups.length > 0 && unclassified.length > 0 && <section aria-label={tx('workspace:association.unclassified')}><p>{tx('workspace:association.unclassified')}</p>{sessions.filter(session => unclassified.includes(session.id)).map(row)}</section>}
       {!sessions.length && (!draft || !!query) && <p className={css.empty}>{query ? tx('workspace:workspace-browser.no-matching-sessions') : tx('workspace:workspace-browser.no-sessions-yet')}</p>}
     </div><div className={css.fade} /></div>}</div>
-    {wide && (previous || next) && <div><button className={css.sessionOverflowButton} disabled={!previous} onClick={previous}>{tx('workspace:workspace-browser.previous')}</button><button className={css.sessionOverflowButton} disabled={!next} onClick={next}>{tx('workspace:workspace-browser.next')}</button></div>}
+    {(previous || next) && <div><button className={css.sessionOverflowButton} disabled={!previous} onClick={previous}>{tx('workspace:workspace-browser.previous')}</button><button className={css.sessionOverflowButton} disabled={!next} onClick={next}>{tx('workspace:workspace-browser.next')}</button></div>}
   </section>;
 }

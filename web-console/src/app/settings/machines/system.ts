@@ -39,7 +39,7 @@ function authorityLifetime(transport: ClientView): string {
  * It exists because presentation lifetime, transaction lifetime and App Server
  * authority lifetime are three different things:
  *
- * - a Settings dialog opens and closes many times;
+ * - Settings views can mount and unmount repeatedly;
  * - an editing transaction and a definitive acknowledgement must outlive the
  *   dialog that started them;
  * - an authority replacement must retire everything the old authority owned so

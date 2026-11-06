@@ -24,7 +24,7 @@ async function chooseCurrentModel(page: Page, model: string) {
 }
 
 async function openExistingSession(page: Page, id: string, width: number) {
-  const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+  const expand = page.getByRole('button', { name: 'Home', exact: true });
   if (await expand.isVisible()) await expand.click();
   await page.locator(`button[data-session-id="${id}"]`).click();
   await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
@@ -219,7 +219,7 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       // attach must restore both authorities, with no mutation replay.
       await page.reload();
       await connectRemote(page, fixture.endpoint, fixture.token);
-      const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+      const expand = page.getByRole('button', { name: 'Home', exact: true });
       if (await expand.isVisible()) await expand.click();
       await page.locator(`button[data-session-id="${sessionId}"]`).click();
       // Let the native attachment publish its route before dismissing the

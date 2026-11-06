@@ -145,8 +145,9 @@ credentials or resource definitions. See [Web Settings](../docs/web-settings.md)
 
 ## Harness browser presentation (#345)
 
-The Sidebar uses the upstream compact project/Session rows, hover cards, menus,
-search results and collapsed rail. **New Conversation** opens the center draft route. Workspace selection stays
+The Home secondary sidebar uses the upstream compact project/Session rows,
+hover cards, menus and search results. Collapsing it leaves only the separate
+permanent primary navigation rail. **New Conversation** opens the center draft route. Workspace selection stays
 browser draft state until first submit; only that submit creates a native Session.
 Project title selection changes navigation context; its chevron expands/collapses
 rows. **View options** switches Flat/Grouped view and refreshes the native list.

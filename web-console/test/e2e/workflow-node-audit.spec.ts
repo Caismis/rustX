@@ -208,7 +208,7 @@ for (const width of [1440, 390])
         await connectRemote(page, fixture.endpoint, fixture.token);
         await openEmptySession(page, fixture, 'Workspace A');
         await page
-          .getByRole('navigation', { name: 'Global panels' })
+          .getByRole('navigation', { name: 'Primary navigation' })
           .getByRole('button', { name: 'Workflows', exact: true })
           .click();
         await page.getByRole('button', { name: 'all_nodes', exact: true }).click();

@@ -237,8 +237,8 @@ test('native distant reading rail, detached/latest follow and measured width in 
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await openSettingsPage(page, 'General');
-    await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-    await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+    await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+    await page.getByRole('button', { name: '主页', exact: true }).click();
     // As in Harness, a narrow reading column has no rail.
     await expect(page.getByRole('navigation',{name:'轮次导航'})).toBeHidden();
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

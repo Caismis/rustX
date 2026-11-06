@@ -3,7 +3,7 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 import { mcpStartupGate, startupToolSchema, startupWait } from '../../../tui/test/support/mcp-startup-gate';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, connectionAction } from './shell-actions';
+import { connectRemote, connectionAction, returnHome } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 
@@ -26,7 +26,7 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click();
     await page.locator(`button[data-session-id="${source.id}"]`).click();
     await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
     const sourceTarget = await wire.attachedTarget(source.id);
@@ -39,16 +39,17 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     const sourceUploads = wire.requests.filter(row => row.method === 'session/uploadPrepare');
     expect(sourceUploads).toHaveLength(1);
     expect(sourceUploads[0].params.target).toEqual(sourceTarget);
-    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click();
     if (origin === 'workflows') {
-      await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Workflows', exact: true })).toBeVisible();
+      await returnHome(page);
+      if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click();
     }
-    if (width === 390 && origin === 'workflows') await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
     await page.locator(`button[data-session-id="${target.id}"]`).click();
     await startupWait(() => gate!.reached, cancellation.signal);
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
-    if (width === 390) await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 370, y: 400 } });
+    if (width === 390) await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 320, y: 400 } });
     await expect(page.locator('main')).not.toHaveAttribute('inert');
     await expect(editor).toBeEnabled(); await expect(editor).toHaveValue('');
     await expect(page.getByText('A-owned.txt', { exact: true })).toHaveCount(0);

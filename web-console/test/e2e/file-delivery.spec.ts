@@ -157,8 +157,8 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-    await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+    await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+    await page.getByRole('button', { name: '主页', exact: true }).click();
     await card('source.rs').getByRole('button', { name: '在侧边栏预览 source.rs', exact: true }).click();
     const chinese = page.getByRole('complementary', { name: '预览', exact: true });
     await expect(chinese.locator('pre')).toBeVisible();

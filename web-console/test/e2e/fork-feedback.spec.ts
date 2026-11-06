@@ -23,8 +23,8 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       const repair = page.getByLabel(zh ? '配置修复' : 'Configuration repair', { exact: true });
       if (await repair.isVisible()) {
@@ -54,9 +54,9 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       const child = wire.responses.find(row => row.method === 'session/fork')!.result.session.id;
       await expect(fork).not.toHaveAttribute('aria-busy', 'true');
       await expect(status).toHaveCount(0);
-      if (width === 390) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click();
+      if (width === 390) await page.getByRole('button', { name: '主页', exact: true }).click();
       await expect(page.locator(`button[data-session-id="${child}"]`)).toHaveAttribute('aria-current', 'page');
-      if (width === 390) await page.getByRole('button', { name: '关闭导航', exact: true }).click({ position: { x: width - 20, y: 400 } });
+      if (width === 390) await page.getByRole('button', { name: '关闭导航', exact: true }).click({ position: { x: width - 56 - 20, y: 400 } });
       await expect(page.getByText('Completed fork answer.', { exact: true })).toBeVisible();
       await expect(page.locator('.chat-reading-surface').getByText('Fork source', { exact: true })).toHaveCount(1);
       await expect(page.getByLabel(zh ? '会话标题' : 'Session title', { exact: true })).toHaveText('New session (1)');

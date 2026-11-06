@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openWorkspaceSettings, openSettingsPage, closeSettings } from './shell-actions';
+import { connectRemote, openWorkspaceSettings, openSettingsPage, returnHome } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { transitionFacts } from '../../../protocol/app-server/projection';
 
@@ -38,7 +38,7 @@ test('Harness New Conversation, permission, model, native process and Models con
     await shot('01-new-conversation-desktop-dark');
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
-    await expect(page.locator('[data-sidebar-wide]')).toHaveAttribute('data-sidebar-wide', 'false');
+    await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
     await noOverflow(); await shot('02-new-conversation-mobile-dark');
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
@@ -140,7 +140,7 @@ test('Harness New Conversation, permission, model, native process and Models con
     await shot('11-models-desktop');
     await page.setViewportSize({ width: 390, height: 844 }); await noOverflow(); await shot('12-models-mobile');
     expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()).violations).toEqual([]);
-    await closeSettings(page); await noOverflow();
+    await returnHome(page); await noOverflow();
     expect(errors).toEqual([]); passed = true;
   } finally { await fixture.stop(passed); }
 });

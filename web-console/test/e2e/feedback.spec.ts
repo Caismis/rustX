@@ -21,8 +21,8 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       await editor.fill('Fork source'); await editor.press('Enter');
       await expect(page.getByText('Completed fork answer.', { exact: true })).toBeVisible();

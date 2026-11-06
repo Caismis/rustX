@@ -1,3 +1,33 @@
+## Issue #536 — dual-sidebar navigation shell
+
+The approved Codex-style navigation hierarchy informs original rustX composition;
+no Codex branding, assets, routing framework or runtime is imported. The existing
+Harness pin and all immutable upstream hashes below remain unchanged.
+Earlier issue records describe their historical presentation; the #536 contract
+supersedes their collapsed-sidebar and modal-Settings geometry.
+
+- `presentation/sidebar/HomeSidebar` replaces `SidebarRoot`: retained Harness
+  brand/new-conversation/workspace geometry, without the obsolete collapsed rail
+  or duplicate global destinations. Its moved inventory records preserve lineage.
+- `presentation/sidebar/PrimaryNavigationRail` is original rustX composition over
+  existing tokens, icons and Tooltip; Shell supplies the selected destination.
+- The right-panel fullscreen bounds leave the primary rail accessible, including
+  narrow windows and platform titlebar insets. Preview chips retain shared
+  dockkit dimensions within their available strip width, keeping keyboard focus
+  fully visible when rail and header controls reduce that space.
+- `presentation/layout/AppFrame` and `columns` adapt the measured Harness shell to
+  a permanent rail plus conditional Home sidebar and right-panel tracks.
+- `presentation/settings/SettingsRoot` and `app/settings/Settings` retain internal
+  section navigation and configuration editors as a page, removing top-level
+  modal geometry, focus containment and dismissal. Transient dialogs stay shared.
+- The workspace browser removes its unused collapsed-icon variant. Local source
+  hashes and retained import closures are updated for every changed derived file.
+- The full-width Workflow canvas moves the former Start-icon rasterizer site.
+  Its obsolete one-pixel allowance is removed; current references require exact
+  matches. Frozen comparator fixtures retain their measured historical evidence.
+
+Navigation, authoring, authorization and native lifecycle remain rustX-owned.
+
 ## Issue #518 — automatic Session configuration commit
 
 Read-only references, inspected outside rustX and never vendored:
@@ -1314,8 +1344,8 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
 | `ui-theme/src/styles/design-platform.css` | `presentation/theme/design-platform.css` | A |
 | `ui-theme/src/styles/corner-shape.css` | `presentation/theme/corner-shape.css` | A |
 | `ui-layout/src/client/columns.ts` | `presentation/layout/columns.ts` | A |
-| `ui-sidebar/src/client/SidebarRoot.tsx` | `presentation/sidebar/SidebarRoot.tsx` | B |
-| `ui-sidebar/src/client/SidebarRoot.module.css` | `presentation/sidebar/SidebarRoot.module.css` | B |
+| `ui-sidebar/src/client/SidebarRoot.tsx` | `presentation/sidebar/HomeSidebar.tsx` | B |
+| `ui-sidebar/src/client/SidebarRoot.module.css` | `presentation/sidebar/HomeSidebar.module.css` | B |
 | `ui-workspace/src/client/rows/Rows.tsx` | `presentation/workspace/Rows.tsx` | B |
 | `ui-workspace/src/client/rows/Rows.module.css` | `presentation/workspace/Rows.module.css` | B |
 | `ui-workspace/src/client/rows/WorkspaceBrowser.module.css` | `presentation/workspace/WorkspaceBrowser.module.css` | B |
@@ -1332,22 +1362,22 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
   come from the current upstream sheets. `reset.css` supplies rustX's browser root
   sizing and accessible focus outline. The old token file and accent overrides
   were deleted. `data-ds-dark-theme` is a styling marker, not product branding.
-- AppFrame retains the measured three-column grid and pointer-captured drag
-  handle. The pure upstream column solver retains 280px default / 264–420px
-  Sidebar, 56px rail, 1024px auto-collapse, 400px protected center and 300px minimum
-  right panel. Explicit React render seats replace Cordis slots/layout stores.
-  Local widths and expansion are disposable, not persisted preferences.
-- SidebarRoot retains brand/new/global/region/footer DOM, 150ms fade/unmount,
-  frozen expanded width during collapse, rail glyphs and scrollbar linger.
-  rustX `rX`/wordmark replaces upstream product artwork. Global Connection and
-  Settings callbacks are supplied by the product composition root.
+- AppFrame adapts the measured grid and pointer-captured drag handle to four
+  tracks: permanent 56px primary rail, optional 280px default / 264–420px Home
+  sidebar, 400px protected center and optional 300px minimum right panel.
+  Explicit React render seats replace Cordis slots/layout stores. Browser
+  width/collapse preferences are owned by `app/`, with a 1024px overlay breakpoint.
+- HomeSidebar retains the brand/new/Workspace geometry and scrollbar linger.
+  rustX `rX`/wordmark replaces upstream product artwork. The separate original
+  primary rail owns global destinations supplied by product composition.
 - WorkspaceBrowser and Rows retain tree/header/search/hover/menu geometry.
   Native metadata search uses upstream contextual search rows; it does not claim
   conversation-content search. Project hover cards omit unavailable creation time.
   Schedule, provisional Session, archive and browser reorder paths are removed.
   Session Delete opens native revision-checked preview, never a local archive.
   Additional labelled buttons expose row gestures to keyboard users.
-- Settings retains the mask/panel/navigation/content frame. Sections and bodies
+- Settings retains the navigation/content vocabulary as an independent page,
+  removing the mask, modal focus containment and close lifecycle. Sections and bodies
   are adapter seats for existing CFG3 editors. A narrow Settings panel replaces
   the rail with a section menu (#393; the earlier horizontal section strip is
   deleted). No Settings Controller, mirror, source cache or publication
