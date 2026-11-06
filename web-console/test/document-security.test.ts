@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { OfficePreviewCache } from '../host/documents/cache';
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
 const converter = vi.hoisted(() => vi.fn());
@@ -18,7 +19,7 @@ it.each(['docx', 'pptx'] as const)('%s active or external package content fails 
     let reads = 0;
     await expect(deriveDocument({ extension, source: { kind: 'artifact', artifact_id: 'immutable-id' },
       target: { session_id: 's', conversation_id: 'c', runtime_incarnation: '1', attachment_id: 'a' },
-    }, async () => { reads++; return { data: Uint8Array.from(bytes) }; }, new AbortController().signal)).rejects.toThrow('archive_rejected');
+    }, async () => { reads++; return { data: Uint8Array.from(bytes) }; }, new AbortController().signal, new OfficePreviewCache())).rejects.toThrow('archive_rejected');
     expect(reads).toBe(1); expect(converter).not.toHaveBeenCalled();
   }
 });

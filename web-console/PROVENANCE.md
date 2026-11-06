@@ -1,3 +1,21 @@
+## Office preview latency and Harness alignment (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,
+`ui-sidebar-documentpreview/src/client/office/{cache.ts,OfficeBody.tsx}`,
+`pdf/{pdf.tsx,document.ts,PdfBody.module.css}` and
+`document/office-to-pdf/src/{index,queue}.ts`.
+The Office preview uses the same Office-to-PDF/continuous-page presentation:
+opening the PDF exposes its page count immediately; viewport-local pages render
+without a preliminary all-page geometry scan. Quiet 3:4 placeholders become
+actual page geometry after rendering. Existing rustX zoom, native worker and
+bitmap budgets, cancellation, and tab reading metadata remain the owners.
+Successful conversions use a Host-owned bounded LRU keyed by extension and
+source SHA-256, following Harness's content-addressed PDF reuse. Each caller
+still reads its authorized current source and rechecks it before publication;
+retained bytes confer no path, Session or delivery authority. Host close clears
+the cache. The existing platform converter isolation and physical settlement
+remain in place; the Harness Cordis/Remote stack is not introduced.
+
 ## Trace location and live continuation (2026-11-06)
 
 Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`

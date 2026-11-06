@@ -40,3 +40,41 @@ for (const locale of ['en', 'zh'] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+for (const width of [1440, 390]) test(`Office first page does not wait for later PDF pages (${width})`, async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await page.setViewportSize({ width, height: 1000 });
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    const pending: (() => void)[] = [];
+    let released = false;
+    window.Worker = class extends NativeWorker {
+      postMessage(message: any, options?: Transferable[] | StructuredSerializeOptions) {
+        const send = () => { if (Array.isArray(options)) super.postMessage(message, options); else super.postMessage(message, options); };
+        if (!released && message?.action === 'GetPage' && message.data?.pageIndex > 0) {
+          pending.push(send); return;
+        }
+        send();
+      }
+    };
+    Object.assign(window, { pdfPageGate: { count: () => pending.length, release() { released = true; pending.splice(0).forEach(send => send()); } } });
+  });
+  await page.goto(`${origin}/test/fixtures/workbench.html`);
+  await expect(page).toHaveTitle('Session A — rustX');
+  await page.locator('[data-preview-toggle]').click();
+  const panel = page.locator('[data-workbench]');
+  await panel.getByRole('button', { name: /^Workspace files/ }).click();
+  await panel.getByRole('button', { name: 'docs', exact: true }).click();
+  await panel.getByRole('button', { name: 'slides.pptx', exact: true }).click();
+  await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('slide 1');
+  await expect(panel.locator('[data-pdf-page="1"] canvas')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).pdfPageGate.count())).toBeGreaterThan(0);
+  await page.screenshot({ path: info.outputPath(`office-first-page-${width}.png`) });
+  await page.evaluate(() => (window as any).pdfPageGate.release());
+  await panel.locator('[data-pdf-page="2"]').scrollIntoViewIfNeeded();
+  await expect(panel.locator('[data-pdf-page="2"] .textLayer')).toContainText('slide 2');
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

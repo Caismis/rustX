@@ -34,9 +34,13 @@ it.each(['cgroup', 'input cleanup'] as const)('%s failure: Host capacity spans c
     cleaned.release(); await rejected;
     expect((await host.previewDocument(scope, request)).preview).toEqual({ kind: 'pdf', data: new TextEncoder().encode('%PDF-next') });
     expect(boundary.sandbox).toHaveBeenCalledTimes(2);
+    // Exercise physical settlement with new content, rather than the now
+    // successfully cached first Artifact's conversion.
+    boundary.read.mockResolvedValue({ data: Uint8Array.from(readFileSync(new URL('./fixtures/documents/linked.docx', import.meta.url))) });
+    const next = { ...request, source: { kind: 'artifact' as const, artifact_id: 'artifact_2' } };
     if (failure === 'cgroup') boundary.sandbox.mockRejectedValueOnce(new OfficeSettlementError());
     else boundary.cleanup.mockRejectedValueOnce(new Error('input cleanup denied'));
-    await expect(host.previewDocument(scope, request)).rejects.toThrow('converter_unavailable');
-    await expect(host.previewDocument(scope, request)).rejects.toThrow('capacity');
+    await expect(host.previewDocument(scope, next)).rejects.toThrow('converter_unavailable');
+    await expect(host.previewDocument(scope, next)).rejects.toThrow('capacity');
   } finally { closed.release(); cleaned.release(); host.close(); rmSync(directory, { recursive: true, force: true }); }
 });

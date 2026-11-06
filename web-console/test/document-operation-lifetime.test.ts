@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { OfficePreviewCache } from '../host/documents/cache';
 import { EventEmitter } from 'node:events';
 import { afterEach, expect, it, vi } from 'vitest';
 const boundary = vi.hoisted(() => ({ create: vi.fn() }));
@@ -15,7 +16,7 @@ it.each(['cancel', 'timeout', 'failure'] as const)('parser %s retains settlement
   const bytes = Buffer.from('bounded source'), signal = new AbortController();
   const request: DocumentRequest = { extension: 'docx', target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: '1' }, source: { kind: 'artifact', artifact_id: 'id' } };
   let settled = false;
-  const result = deriveDocument(request, async () => ({ data: Uint8Array.from(bytes) }), signal.signal).finally(() => { settled = true; });
+  const result = deriveDocument(request, async () => ({ data: Uint8Array.from(bytes) }), signal.signal, new OfficePreviewCache()).finally(() => { settled = true; });
   const rejected = expect(result).rejects.toThrow(mode === 'timeout' ? 'parser_timeout' : mode === 'failure' ? 'parser_failure' : 'obsolete');
   await entered.promise;
   if (mode === 'cancel') signal.abort();
@@ -29,7 +30,7 @@ it.each(['cancel', 'timeout', 'failure'] as const)('parser %s retains settlement
 });
 it('authorization and source budget are checked before any parser worker exists', async () => {
   const request: DocumentRequest = { extension: 'docx', target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: '1' }, source: { kind: 'artifact', artifact_id: 'id' } };
-  await expect(deriveDocument(request, async () => { throw new Error('revoked'); }, new AbortController().signal)).rejects.toThrow('revoked');
-  await expect(deriveDocument(request, async () => ({ data: new Uint8Array(256 * 1024 + 1) }), new AbortController().signal)).rejects.toThrow('too_large');
+  await expect(deriveDocument(request, async () => { throw new Error('revoked'); }, new AbortController().signal, new OfficePreviewCache())).rejects.toThrow('revoked');
+  await expect(deriveDocument(request, async () => ({ data: new Uint8Array(256 * 1024 + 1) }), new AbortController().signal, new OfficePreviewCache())).rejects.toThrow('too_large');
   expect(boundary.create).not.toHaveBeenCalled();
 });

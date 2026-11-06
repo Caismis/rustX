@@ -7379,13 +7379,14 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "62398432150c88965ad970a2bfab21aa1ac3f6908ebbd1c57ab53beb145c4b97",
       "destination": "web-console/src/app/components/documents/PdfPreview.tsx",
-      "treatment": "Continuous PDF/Office page presentation adapted to the existing bounded native document owner, tab metadata and locale adapter. Active page deadlines belong to the serialized PDF owner rather than queued page components. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
+      "treatment": "Continuous PDF/Office page presentation adapted to the existing bounded native document owner, tab metadata and locale adapter. Active page deadlines belong to the serialized PDF owner rather than queued page components. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged. Office preview follows Harness document-ready and visible-page rendering; no eager whole-document page geometry scan.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../client/pdf-document",
         "../../../client/pdf-limits",
         "../../../locale/react",
         "../../../presentation/right-panel/preview-view-state",
+        "../../../presentation/right-panel/use-view-scroll",
         "../workbench-documents/zoom/ZoomViewport",
         "../workbench-documents/zoom/types",
         "./PdfPreview.module.css",
@@ -7395,7 +7396,15 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "552431a9666bcb3903c155dd1d36acfb07ddd7353b652fc34e11f73549ba8119"
+      "local_sha256": "940a104c4fc40ef941aa567b0195adbbf0f543a487e6f34371bbd2822da15e8e",
+      "additional_sources": [
+        {
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/pdf.tsx",
+          "upstream_sha256": "62398432150c88965ad970a2bfab21aa1ac3f6908ebbd1c57ab53beb145c4b97",
+          "treatment": "Ports Harness document-ready continuous pages and viewport-local PDF page rendering. rustX retains its native worker, bitmap budgets, cancellation, source authority and scroll ownership."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/PdfBody.module.css",
@@ -7408,7 +7417,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "fd1970ea94923dde849c9002ff6b7a8eddca1609caac50ba52f1aa16c4c3ba59"
+      "local_sha256": "a08bdf48714134dd94f784f5ea289fb91cc00565adebc9cf7d54ae8cdbc037f8"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/document.ts",
@@ -7428,7 +7437,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "772c6805ec88e127b75c556d9c2d06aee16805c742aaab5d12f6889638f82ee0"
+      "local_sha256": "cece5d68ce19ba2191bcebe6b3ab9489f2747d70051fc0e68704ae71c6b8abea"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/assets.ts",

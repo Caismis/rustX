@@ -5,18 +5,19 @@ import { createHash } from 'node:crypto';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 import { convertOffice } from './converter.ts';
 import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview.ts';
+import type { OfficePreviewCache } from './cache.ts';
 
 type SourceBytes = { data: Uint8Array; file?: DocumentResult['file']; version?: string };
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-export async function deriveDocument(request: DocumentRequest, read: () => Promise<SourceBytes>, signal: AbortSignal): Promise<DocumentResult> {
-  return deriveBytes(request.extension, read, request.source.kind === 'artifact' ? 256 * 1024 : FILE_PREVIEW_LIMITS.officeBytes, signal);
+export async function deriveDocument(request: DocumentRequest, read: () => Promise<SourceBytes>, signal: AbortSignal, cache: OfficePreviewCache): Promise<DocumentResult> {
+  return deriveBytes(request.extension, read, request.source.kind === 'artifact' ? 256 * 1024 : FILE_PREVIEW_LIMITS.officeBytes, signal, cache);
 }
 
 /** Workspace paths are admitted by the Host; they never become retained native deliveries. */
-export async function deriveWorkspaceOffice(extension: 'docx' | 'pptx', read: () => Promise<SourceBytes>, signal: AbortSignal): Promise<DocumentResult> {
-  return deriveBytes(extension, read, FILE_PREVIEW_LIMITS.officeBytes, signal);
+export async function deriveWorkspaceOffice(extension: 'docx' | 'pptx', read: () => Promise<SourceBytes>, signal: AbortSignal, cache: OfficePreviewCache): Promise<DocumentResult> {
+  return deriveBytes(extension, read, FILE_PREVIEW_LIMITS.officeBytes, signal, cache);
 }
-async function deriveBytes(extension: DocumentRequest['extension'], read: () => Promise<SourceBytes>, max: number, signal: AbortSignal): Promise<DocumentResult> {
+async function deriveBytes(extension: DocumentRequest['extension'], read: () => Promise<SourceBytes>, max: number, signal: AbortSignal, cache: OfficePreviewCache): Promise<DocumentResult> {
   const source = await read();
   signal.throwIfAborted();
   if (source.data.byteLength > max) throw new Error('too_large');
@@ -28,6 +29,18 @@ async function deriveBytes(extension: DocumentRequest['extension'], read: () => 
     if (digest(bytes) !== sourceDigest) throw new Error('source_changed');
     return bytes;
   };
+  const reauthorize = async () => {
+    signal.throwIfAborted();
+    const current = await read(); decode(current);
+    if (!sameSessionFile(current.file, source.file) || current.version !== source.version) throw new Error('source_changed');
+    signal.throwIfAborted();
+  };
+  const key = `${extension}:${sourceDigest}`;
+  const cached = cache.get(key);
+  if (cached) {
+    await reauthorize();
+    return { digest: sourceDigest, file: source.file, preview: { kind: 'pdf', data: Uint8Array.from(cached) } };
+  }
   const worker = new Worker(new URL('./worker.ts', import.meta.url), {
     execArgv: [], env: {},
     workerData: { bytes, extension },
@@ -49,14 +62,9 @@ async function deriveBytes(extension: DocumentRequest['extension'], read: () => 
   } finally { cleanup(); await worker.terminate(); worker.removeAllListeners(); }
   // Admission/parse never grants authority for conversion or publication. An
   // exact reread checks mutable bytes, mapping, root and attachment again.
-  const reauthorize = async () => {
-    signal.throwIfAborted();
-    const current = await read(); decode(current);
-    if (!sameSessionFile(current.file, source.file) || current.version !== source.version) throw new Error('source_changed');
-    signal.throwIfAborted();
-  };
   await reauthorize();
   const pdf = await convertOffice(bytes, extension, signal);
   await reauthorize();
+  cache.retain(key, pdf);
   return { digest: sourceDigest, file: source.file, preview: { kind: 'pdf', data: Uint8Array.from(pdf) } };
 }

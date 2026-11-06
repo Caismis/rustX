@@ -66,20 +66,6 @@ export class PdfDocumentOwner {
   private renderTimer?: ReturnType<typeof setTimeout>;
   private readonly presentations = new Map<HTMLCanvasElement, { container: HTMLDivElement; pixels: number }>();
   private rendering?: HTMLCanvasElement;
-  private sizes?: Promise<readonly PdfPageSize[]>;
-  /** Finite geometry lets every page hold its place while bitmaps remain viewport-local. */
-  get pageSizes(): Promise<readonly PdfPageSize[]> {
-    return this.sizes ??= this.document.then(async document => {
-      const sizes: PdfPageSize[] = [];
-      for (let number = 1; number <= document.numPages; number++) {
-        if (this.retired) throw new Error('obsolete');
-        const page = await document.getPage(number);
-        try { if (this.retired) throw new Error('obsolete'); sizes.push(this.pageSize(page)); }
-        finally { page.cleanup(); }
-      }
-      return sizes;
-    });
-  }
   private pageSize(page: Awaited<ReturnType<PDFDocumentProxy['getPage']>>): PdfPageSize {
     const { width, height } = page.getViewport({ scale: 96 / 72 });
     // Admission stays in PDF points; CSS uses the same 96/72 conversion as DSH.
@@ -129,7 +115,7 @@ export class PdfDocumentOwner {
     // The owner observes terminal rejection even when closed before a consumer subscribes.
     void this.document.catch(() => {});
   }
-  render(number: number, zoom: number, canvas: HTMLCanvasElement, container: HTMLDivElement, signal: AbortSignal): Promise<void> {
+  render(number: number, zoom: number, canvas: HTMLCanvasElement, container: HTMLDivElement, signal: AbortSignal): Promise<PdfPageSize> {
     if (this.retired || signal.aborted) return Promise.reject(new Error('obsolete'));
     if (!this.presentations.has(canvas)) this.presentations.set(canvas, { container, pixels: canvas.width * canvas.height });
     const current = () => { signal.throwIfAborted(); if (this.retired) throw new Error('obsolete'); };
@@ -192,6 +178,7 @@ export class PdfDocumentOwner {
           context.drawImage(buffer, 0, 0);
           container.replaceChildren(layer);
           this.presentations.set(canvas, { container, pixels: width * height });
+          return size;
         } finally {
           buffer.width = buffer.height = 0;
           if (this.rendering === buffer) this.rendering = undefined;
@@ -204,7 +191,7 @@ export class PdfDocumentOwner {
     this.tail = work;
     // Cancellation of a queued page settles immediately; its retired queue seat
     // remains serialized until prior rendering has actually finished.
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<PdfPageSize>((resolve, reject) => {
       const abort = () => reject(signal.reason);
       signal.addEventListener('abort', abort, { once: true });
       void work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));

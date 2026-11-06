@@ -104,9 +104,8 @@ it('terminal retirement clears the selected page backing store and text nodes', 
 });
 it('keeps finite page geometry while releasing independent offscreen bitmaps', async () => {
   const pdf = owner(), a = view(), b = view();
-  expect(await pdf.pageSizes).toEqual(Array.from({ length: 3 }, () => ({ width: 600, height: 800 })));
-  expect(page.render).not.toHaveBeenCalled();
-  await pdf.render(1, 1, a.canvas, a.layer, a.signal.signal);
+  await pdf.document; expect(document.getPage).not.toHaveBeenCalled();
+  expect(await pdf.render(1, 1, a.canvas, a.layer, a.signal.signal)).toEqual({ width: 600, height: 800 });
   await pdf.render(2, 1, b.canvas, b.layer, b.signal.signal);
   expect([a.canvas.width, b.canvas.width]).toEqual([600, 600]);
   pdf.release(a.canvas);
@@ -116,8 +115,7 @@ it('keeps finite page geometry while releasing independent offscreen bitmaps', a
 it('preserves PDF-point admission while bounding the fitted CSS raster separately', async () => {
   page.getViewport.mockImplementation(({ scale }: { scale: number }) => ({ width: 3500 * scale, height: 1000 * scale, scale }));
   const pdf = owner(), v = view();
-  expect((await pdf.pageSizes)[0].width).toBeGreaterThan(4096);
-  await pdf.render(1, 0.25, v.canvas, v.layer, v.signal.signal);
+  expect((await pdf.render(1, 0.25, v.canvas, v.layer, v.signal.signal)).width).toBeGreaterThan(4096);
   expect(v.canvas.width).toBeLessThan(4096);
   expect(v.canvas.width * v.canvas.height).toBeLessThanOrEqual(4 * 1024 * 1024);
 });
@@ -164,7 +162,7 @@ it.each(['bridge', 'load'] as const)('failed %s construction detaches old handle
 it('does not count healthy pages waiting for the serialized render slot against their active deadline', async () => {
   vi.useFakeTimers(); document.numPages = 2;
   page.render.mockImplementation(() => ({ promise: new Promise<void>(resolve => setTimeout(resolve, 8000)), cancel: vi.fn() }));
-  const ui = render(createElement(PdfPreview, { bytes: new Uint8Array([1]), signal: new AbortController().signal, viewState: {}, onViewStateChange() {}, retry() {} }));
+  const ui = render(createElement(PdfPreview, { bytes: new Uint8Array([1]), signal: new AbortController().signal, viewState: { pdfZoom: { kind: 'fixed', scale: 1 } }, onViewStateChange() {}, retry() {} }));
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   expect(page.render).toHaveBeenCalledTimes(1);
   await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
@@ -196,4 +194,18 @@ it('cancels a queued page immediately without starting it or disturbing the acti
   expect(page.render).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(1);
   held.resolve(); await first; await vi.advanceTimersByTimeAsync(0);
   expect(page.render).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('opens the first page of a long document without requesting offscreen page geometry', async () => {
+  vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });
+  document.numPages = 100;
+  document.getPage.mockImplementation(async (number: number) => {
+    if (number !== 1) throw Error('Offscreen page must remain unread');
+    return page;
+  });
+  const ui = render(createElement(PdfPreview, { bytes: new Uint8Array([1]), signal: new AbortController().signal, viewState: { pdfZoom: { kind: 'fixed', scale: 1 } }, onViewStateChange: () => {}, retry: () => {} }));
+  await vi.waitFor(() => expect(ui.container.querySelector('canvas')?.width).toBe(600));
+  expect(ui.container.querySelectorAll('[data-pdf-page]')).toHaveLength(100);
+  expect(document.getPage).toHaveBeenCalledExactlyOnceWith(1);
+  expect(ui.queryByRole('alert')).toBeNull();
 });
