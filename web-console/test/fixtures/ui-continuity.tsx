@@ -58,7 +58,7 @@ if (deferredReading) {
 server.handlers.set('workflow/list', request => { if (request.method !== 'workflow/list') throw Error('library'); return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'empty', files: [], diagnostic: null } }; });
 await server.attached('A');
 if (scene === 'first') {
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   server.held.add('session/attach');
 }
 const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;
@@ -181,7 +181,7 @@ function Continuity() {
   if (descriptorScene) return <main style={{ width: 740, margin: '24px auto' }}><JournalSourceProvider presentationOwner={toolPresentation} source={{ client: server.client, target: server.client.target('A'), cut: () => server.client.getSnapshot().views.A.checkpoint?.read_cut, owned: () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation) }}><AgentTranscript snapshot={toolsStage === 6 ? toolsContinuingDeferred : toolsStage === 5 ? toolsContinuing : toolsStage === 4 ? toolsDeferredReply : toolsStage === 3 ? toolsDurable : toolsStage === 2 ? toolsHydrated : toolsStage === 1 ? toolsCanonical : toolsLive} compactions={toolsCompactions}/></JournalSourceProvider></main>;
   if (scene === 'tools' || scene === 'tools-compaction') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={toolsStage === 2 ? toolsDurable : toolsStage === 1 ? toolsCanonical : toolsLive} compactions={toolsCompactions}/></main>;
   if (scene === 'workflow') return <main style={{ width: 740, margin: '24px auto' }}><WorkflowRunPanel run={{ ...completedWorkflow, instances: workflowHydrated ? completedWorkflow.instances : completedWorkflow.instances.slice(0, 2) }}/></main>;
-  if (scene === 'tasks') return <main style={{ width: 740, height: 700, margin: '24px auto' }}><TaskManagerPage client={tasksFixture.server.client} newTask={() => {}} openSession={() => {}}/></main>;
+  if (scene === 'tasks') return <main style={{ width: 740, height: 700, margin: '24px auto' }}><TaskManagerPage client={tasksFixture.server.client} host={tasksFixture.server.workspaceHost} authority={new WorkspaceAuthority(tasksFixture.server.workspaceHost)} openSession={() => {}}/></main>;
   if (scene === 'preview') return <main style={{ width: 740, height: 500, margin: '24px auto' }}><ArtifactPreview artifact={{ source: previewSource, name: 'example.ts', image: false }} resources={previewLease} viewState={{ viewer: 'code' }} onViewStateChange={() => {}} onDownload={() => {}}/></main>;
   return <main style={{ width: 740, margin: '24px auto' }}>
     <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : current.checkpoint?.collections.find(row => row.domain === 'todos.tasks'))}/>

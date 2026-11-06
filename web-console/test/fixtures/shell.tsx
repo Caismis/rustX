@@ -71,7 +71,7 @@ if (cold) {
   server.held.add('session/attach'); server.held.add('turn/start');
   await server.connect();
 } else await server.attached('A', 'B');
-localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
+localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
 
 // Isolated fixture controls, never reachable from the production application.
 let replacedAttach: { socket: typeof server.socket; response: import('../../../protocol/app-server/v72').Response } | undefined;

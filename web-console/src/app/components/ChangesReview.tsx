@@ -21,14 +21,14 @@ export function ChangeComparison({request,index,visible=true,preview=false}: {re
   },[request.client,request.owned,identity,current,visible,retry]);
   const comparison=state.comparison, file=request.summary.files[index];
   if(!current)return <p>{tx('artifacts:changes.missing')}</p>;
-  return <div className={css.comparison} data-change-comparison>
-    {preview && <p className={css.path}>{file.display}</p>}
+  return <div className={`${css.comparison}${preview ? ` ${css.preview}` : ''}`} data-change-comparison>
+    {preview && (!comparison || comparison.binary || comparison.oversized || !comparison.hunks.length) && <p className={css.path} title={file.path}>{file.path}</p>}
     {state.error ? <p role="alert">{tx('artifacts:changes.error')} <Button size="sm" onClick={()=>setRetry(value=>value+1)}>{tx('artifacts:changes.retry')}</Button></p>
       : comparison===undefined ? <p role="status">{tx('artifacts:changes.loading')}</p>
       : comparison===null ? <p>{tx('artifacts:changes.missing')}</p>
       : comparison.binary ? <p>{tx('artifacts:changes.binary-diff')}</p>
       : comparison.oversized ? <p>{tx('artifacts:changes.oversized-diff')}</p>
-      : <DiffBlock diffs={comparison.hunks.map(hunk=>({path:`${file.display}:${hunk.new_start}`,oldText:hunk.old_text,newText:hunk.new_text}))} maxLines={preview?16:500} labels={{
+      : <DiffBlock filePreviewPath={preview ? file.path : undefined} diffs={comparison.hunks.map(hunk=>({path:`${file.display}:${hunk.new_start}`,oldText:hunk.old_text,newText:hunk.new_text}))} maxLines={preview?16:500} labels={{
         copy:tx('artifacts:changes.copy'),copied:tx('artifacts:changes.copied'),collapseAria:tx('artifacts:changes.collapse'),collapse:tx('artifacts:changes.collapse'),
         expandAria:n=>tx('artifacts:changes.more-lines',{count:n}),expand:n=>tx('artifacts:changes.more-lines',{count:n}),files:()=>tx('artifacts:changes.title',{count:1}),
       }}/>}

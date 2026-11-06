@@ -6,7 +6,7 @@ import { PREVIEW_POLICY } from '../../client/preview-policy';
 import { useTranslation } from '../../locale/react';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
-import { IconCloseFill14, IconFolderOpenOutline16, IconPanelLeftOutline16 } from '../../presentation/primitives/icons';
+import { IconCloseFill14, IconFolderOpenOutline16, IconPanelLeftOutline16, IconQuestionOutline14 } from '../../presentation/primitives/icons';
 import { FullscreenGlyph, ExitFullscreenGlyph } from './WorkbenchIcons';
 import dockCss from '../../presentation/dockkit/components/dockkit.module.css';
 import { SplitGlyph } from '../../presentation/dockkit/components/TabPanel';
@@ -33,8 +33,8 @@ function focusTab(tab: HTMLElement | null | undefined) {
 }
 
 /** One keyed body tree; only pane selection/visibility changes its lease. */
-export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, openWorkbench }: {
-  owner: PreviewWorkspaceOwner; snapshot: PreviewWorkspaceSnapshot; focusRequest: number; returnFocus: () => void; openWorkbench?: () => void;
+export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, openWorkbench, openSideQuestion }: {
+  owner: PreviewWorkspaceOwner; snapshot: PreviewWorkspaceSnapshot; focusRequest: number; returnFocus: () => void; openWorkbench?: () => void; openSideQuestion?: () => void;
 }) {
   const tx = useTranslation(), root = useRef<HTMLDivElement>(null), pendingFocus = useRef<number | undefined>(undefined);
   const width = snapshot.width;
@@ -74,7 +74,7 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, o
       {reason && <span id={separatorId} className={css.reason}>{reason}</span>}
       <div className={css.panes} data-preview-split={split || undefined}>
         {workspace.panes.map((pane, index) => {
-          const shown = split || pane.id === workspace.activePane, chrome = split ? index === 1 : shown, selected = workspace.tabs.find(tab => tab.id === pane.selected)!;
+          const shown = split || pane.id === workspace.activePane, chrome = split ? index === 1 : shown;
           return <div key={pane.id} className={css.paneGroup} style={split ? { flex: `${index === 0 ? clampSplit(workspace.ratio, width) : 1 - clampSplit(workspace.ratio, width)} 1 0` } : undefined} hidden={!shown}>
             {index === 1 && split && visible && <Divider width={width} ratio={workspace.ratio} commit={ratio => owner.setRatio(ratio)} retireFocus={() => {
               const current = owner.getSnapshot();
@@ -95,7 +95,7 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, o
                   event.preventDefault(); focusTab(tabs[next]);
                 }}>
                   {workspace.tabs.filter(tab => tab.pane === pane.id).map(tab => <div className={`${dockCss.tab} ${css.tabItem} ${tab.id === pane.selected ? dockCss.tabActive : ''}`} key={tab.id} data-preview-occurrence={tab.id}>
-                    <button type="button" className={`${dockCss.tabTitle} ${css.tab}`} id={`preview-tab-${tab.id}`} data-preview-tab={tab.id} role="tab" aria-selected={tab.id === pane.selected} aria-controls={`preview-body-${pane.id}`} tabIndex={tab.id === pane.selected ? 0 : -1} title={tab.artifact.name} onClick={() => owner.selectTab(tab.id)}><FileTypeIcon path={tab.artifact.name} size={16}/><span>{tab.artifact.name}</span></button>
+                    <button type="button" className={`${dockCss.tabTitle} ${css.tab}`} id={`preview-tab-${tab.id}`} data-preview-tab={tab.id} role="tab" aria-selected={tab.id === pane.selected} aria-controls={`preview-body-${tab.id}`} tabIndex={tab.id === pane.selected ? 0 : -1} title={tab.artifact.name} onClick={() => owner.selectTab(tab.id)}><FileTypeIcon path={tab.artifact.name} size={16}/><span>{tab.artifact.name}</span></button>
                     <button type="button" className={dockCss.tabClose} aria-label={tx('artifacts:workspace.close-tab', { p0: tab.artifact.name })} title={tx('artifacts:workspace.close-tab', { p0: tab.artifact.name })} onClick={() => close(tab.id)}><span aria-hidden="true"><IconCloseFill14/></span></button>
                   </div>)}
                 </div>
@@ -103,6 +103,7 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, o
                   {pane.id === workspace.activePane && <Tooltip label={reason ?? tx('artifacts:workspace.split')} side="bottom"><button type="button" className={`${dockCss.iconButton} ${css.split}`} aria-label={tx('artifacts:workspace.split')} aria-disabled={!!reason} aria-describedby={reason ? separatorId : undefined} onClick={() => { if (!reason) { owner.split(); pendingFocus.current = owner.getSnapshot().workspace?.panes.find(p => p.id === owner.getSnapshot().workspace?.activePane)?.selected; } }}><SplitGlyph/></button></Tooltip>}
                   {workspace.panes.length === 2 && <Tooltip label={tx('artifacts:workspace.move')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('artifacts:workspace.move')} onClick={() => { pendingFocus.current = pane.selected; owner.move(pane.selected); }}>⇄</button></Tooltip>}
                   {chrome && <>
+                    {openSideQuestion && <Tooltip label={tx('agent:btw.title')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('agent:btw.title')} onClick={openSideQuestion}><IconQuestionOutline14/></button></Tooltip>}
                     {workspace.panes.length === 2 && !split && <Tooltip label={tx('artifacts:workspace.switch-pane')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('artifacts:workspace.switch-pane')} onClick={() => focusPane(workspace.panes.find(other => other.id !== workspace.activePane)!)}>⇄</button></Tooltip>}
                     {openWorkbench && <Tooltip label={tx('artifacts:workbench.start')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx('artifacts:workbench.start')} onClick={openWorkbench}><span aria-hidden="true"><IconFolderOpenOutline16/></span></button></Tooltip>}
                     <Tooltip label={tx(workspace.fullscreen ? 'artifacts:workspace.restore' : 'artifacts:workspace.fullscreen')} side="bottom"><button type="button" className={dockCss.iconButton} aria-label={tx(workspace.fullscreen ? 'artifacts:workspace.restore' : 'artifacts:workspace.fullscreen')} onClick={() => owner.toggleFullscreen(flushSync)}>{workspace.fullscreen ? <ExitFullscreenGlyph/> : <FullscreenGlyph/>}</button></Tooltip>
@@ -110,9 +111,12 @@ export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, o
                   </>}
                 </div>
               </div>
-              <div className={css.body} id={`preview-body-${pane.id}`} role="tabpanel" aria-labelledby={`preview-tab-${pane.selected}`}>
-                {shown && snapshot.leases.get(selected.id) && <ArtifactPreview key={selected.id} artifact={selected.artifact} resources={snapshot.leases.get(selected.id)!} viewState={selected.view} onViewStateChange={patch => owner.updateView(selected.id, patch)} onDownload={() => void owner.download(selected.artifact)} />}
-              </div>
+              {workspace.tabs.filter(tab => tab.pane === pane.id && snapshot.leases.has(tab.id)).map(tab => {
+                const bodyVisible = visible && shown && tab.id === pane.selected;
+                return <div key={tab.id} className={css.body} id={`preview-body-${tab.id}`} role="tabpanel" aria-labelledby={`preview-tab-${tab.id}`} hidden={!bodyVisible} inert={!bodyVisible}>
+                  <ArtifactPreview visible={bodyVisible} artifact={tab.artifact} resources={snapshot.leases.get(tab.id)!} viewState={tab.view} onViewStateChange={patch => owner.updateView(tab.id, patch)} onDownload={() => void owner.download(tab.artifact)} />
+                </div>;
+              })}
             </section>
           </div>;
         })}

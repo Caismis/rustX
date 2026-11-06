@@ -154,7 +154,7 @@ it.each([false, true])('preserves unsaved fields through App Workbench reconnect
     return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'empty', files: [], diagnostic: null } };
   });
   await server.client.attach('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
   fireEvent.click(await screen.findByRole('button', { name: '1 automation task' }));
   const original = await screen.findByRole('textbox', { name: 'Automation task name' });

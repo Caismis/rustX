@@ -1,0 +1,75 @@
+{
+  "implementation": "fbf0a875c27f2b39529793fb032919eb56940797",
+  "base": "5bb7962f824790792e633270b1cea1bad84abdff",
+  "measuredLocalDate": "2026-11-04",
+  "timezone": "Asia/Shanghai",
+  "playwright": "1.63.0",
+  "three": "0.187.0",
+  "sourceSha256": {
+    "web-console/src/app/components/documents/geometry/GeometryPreview.module.css": "3ecd947815f6b504f9dcb83b69e783409b4e7687f9b63a2f1429d5cf28d04cf7",
+    "web-console/src/app/components/documents/geometry/GeometryPreview.tsx": "74790f990ccc09562737c6145efa6503d0854b42f9836b2d725df13a8e88314f",
+    "web-console/src/app/components/documents/geometry/GeometryViewGlyph.tsx": "3d0405736bda59c685482ea0e5b3fa5492f3e18718044adbf346c55a811dea42",
+    "web-console/src/app/components/documents/geometry/axes.ts": "c959c4fd59f3c5f16937a880f567bd9306f900b3232c4998da8e6848eedf4a59",
+    "web-console/src/app/components/documents/geometry/limits.ts": "5e8bd54ba2877a716ae59d98984218d1d686ad7d88764f611b214d1d8ede1076",
+    "web-console/src/app/components/documents/geometry/outline-data.ts": "a3a992972e07b9a61b2cfa8d4084354bbf97cd42f1e31f52690683c101909568",
+    "web-console/src/app/components/documents/geometry/outline-worker.ts": "563759d3c959169fa3e2c02097e9511859d1ff2676a343beb2b8a8a3b91d9440",
+    "web-console/src/app/components/documents/geometry/outlines.ts": "61d12b5fa62b5fc816bce8fb5e433a0d25c6a0dd8d1dcb04578ca818093f73aa",
+    "web-console/src/app/components/documents/geometry/structure.ts": "38a3c6e6b8861ce75cab987f97ce07f094f161c06ff6f0021fb0274accd7ab6d",
+    "web-console/src/app/components/documents/geometry/viewport.ts": "c0a4cae6f1bf45dfdc628cc07cab51943d24e428200f28d4d3a877129ae4868d",
+    "web-console/src/locale/dictionaries/geometry.ts": "27dd7a148cd0066a4e6532ff4da616b9c442002d7affdf57d5e6925cdd81432e",
+    "web-console/src/presentation/right-panel/preview-view-state.ts": "92fd8a9e44af16569164da9e6c733d87d0d67a5f577f542bf00f253043f8a88c",
+    "web-console/test/e2e/geometry-roadmap.spec.ts": "c3f7819248107d0910f49ebb6145662b92456b35b73085f15aa63672ed2b524d",
+    "web-console/test/geometry-outlines.test.ts": "4655d795942c4aa308c7e03aebd000c349639fbd32675a5b2ed8f61a7c0d879f",
+    "web-console/test/geometry-structure.test.ts": "8a1f300bb2f1f1d39dfda80a7e799d77f32fd256d293340790bd152cf8f35628",
+    "web-console/test/geometry-view.test.tsx": "e67ce6302039813590c2e4e8ee7ea05e64caa173832aa636c069da74d7eb027d",
+    "web-console/test/geometry-viewport.test.ts": "59099fbb3b5a5b9db0dd5dd3993ade6762074b4db4f1a5c83617f0ee8d97abfc"
+  },
+  "imageSha256": {
+    "interaction-structure.png": "8409ca6a8628e32671ab8e93cb25e47bb69bd49ec2afc7a2a4ad5696605e97ee",
+    "interaction-structure-zh-dark.png": "da62bf80548136bfc104b8e6dab57577c3bc5fe72da97a39e4cb717a168608bc",
+    "interaction-silhouette.png": "caddbf66c738140c5fcc14117495a17b0db8a533891c11645213aa5173ff03a7"
+  },
+  "sourceTransport": "Production fixture with deterministic browser-host sources; real App Server/Host sidebar covered by two separate functional tests.",
+  "pinnedBrowser": {
+    "image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+    "cpuQuota": 2,
+    "memoryLimitBytes": 2147483648,
+    "memoryPeakBytes": 1295929344,
+    "oom": 0,
+    "oomKill": 0,
+    "memoryScope": "Cumulative dedicated browser-container peak across preliminary and final functional/capture/document runs, including server and page cache. Not per-model JS/Worker heap, GPU allocations or browser RSS."
+  },
+  "installedBrowser": {
+    "name": "Microsoft Edge",
+    "version": "156.0.4314.58",
+    "cpuQuota": null,
+    "memoryLimitBytes": null,
+    "role": "Separate functional/resource smoke and diagnostic hardware lane; not screenshot-reference authority."
+  },
+  "features": {
+    "defaultOutlines": true,
+    "axisNavigation": "Direct axis lines and signed labels; no separate HTML buttons",
+    "cadUnitCaption": "mm / \u6beb\u7c73"
+  },
+  "measurement": {
+    "contextsPerWorkloadPerLane": 1,
+    "samplesPerPhase": 5,
+    "percentiles": "Nearest rank; P95 is maximum of five.",
+    "camera": "Reset to Isometric before each off/on phase.",
+    "clock": "Test runner monotonic clock, whole eight-step drag plus two rAFs and Playwright forwarding.",
+    "preparation": "Button action through logical outline-ready state, including actionability/polling; not GPU completion or independently observed presentation.",
+    "limits": "Diagnostic off/on pairs after initial default-on setup, in one page, fixed phase order and no independent cache flush. Not cold outline startup, an interaction SLA or statistical speedup proof."
+  },
+  "checks": {
+    "webPassed": 4044,
+    "webPlatformSkipped": 4,
+    "pinnedGeometryAndSidebarPassed": 27,
+    "pinnedSharedDocumentsPassed": 5,
+    "installedEdgePassed": 21,
+    "diagnosticCaptureCasesPerLane": 2,
+    "typecheck": "passed",
+    "productionBuild": "passed",
+    "i18n": "passed",
+    "provenance": "passed"
+  }
+}

@@ -108,3 +108,11 @@
   font: var(--dsw-font-markdown-code-block);
   color: var(--dsw-alias-label-tertiary);
 }
+
+/* Hover file review shares diff rows without nesting a second card or footer. */
+.preview { margin: 0; background: transparent; }
+.previewHeader { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 16px; padding: 12px 14px; border-bottom: 1px solid var(--dsw-alias-border-l3); }
+.previewPath { max-height: 66px; overflow: auto; min-width: 0; overflow-wrap: anywhere; font: var(--dsw-font-xs-13); font-weight: 600; }
+.previewCopy { position: static; border: 0; padding: 0; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; font: var(--dsw-font-xs-13); white-space: nowrap; }
+.previewCopy:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 3px; }
+.preview .body { font-size: 13px; line-height: 22px; }

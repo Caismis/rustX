@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { dataNodesDocument } from '../workflow-data-document';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote,openEmptySession,choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -54,6 +54,6 @@ for(const width of [1440,390])test.describe(`Template panel ${width}`,()=>{
       const saved=parse(readFileSync(file,'utf8'));expect(saved.block.nodes.left).toMatchObject({template:source,variables:{question:{type:'reference',path:['args','query']},importance:{type:'reference',path:['args','priority']}}});
       await page.getByRole('button',{name:'返回工作流',exact:true}).first().click();await page.getByRole('button',{name:'template',exact:true}).click();await card.focus();await card.press('Enter');await expect(code.locator('.cm-line')).toHaveText(source.split('\n'));
       expect(errors).toEqual([]);
-    }finally{await fixture.stop(false);}
+    }finally{await stopDogfoodPage(page, fixture, false);}
   });
 });

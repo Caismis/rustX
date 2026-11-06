@@ -6,7 +6,7 @@ import { expect, test, type Page, type Locator } from '@playwright/test';
 import { mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { captureEvidence, expectStableScreenshot } from './screenshot';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
@@ -98,7 +98,7 @@ test('unknown output contracts hide out-of-scope variables and keep pending upst
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('unfinished input schemas hide self, forward and alternate branch outputs', async ({ page }) => {
@@ -129,7 +129,7 @@ test('unfinished input schemas hide self, forward and alternate branch outputs',
     const common = page.getByRole('dialog', { name: 'Choose a variable' }).getByRole('button', { name: /^common \/ value ·/ });
     await expect(common).toBeEnabled(); await expect(common).toContainText('Available here');
     expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('equality picker matches numeric and string bindings to the edited literal type', async ({ page }) => {
@@ -160,7 +160,7 @@ test('equality picker matches numeric and string bindings to the edited literal 
     await expect(text).toBeEnabled(); await expect(text).toContainText('Compatible type'); await text.click();
     await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('display titles keep node identity and orphan metadata separate', async ({ page }) => {
@@ -188,7 +188,7 @@ test('display titles keep node identity and orphan metadata separate', async ({ 
     await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     expect(readFileSync(file, 'utf8')).toBe(bytes);
     expect((await fixture.control('requests')).requests).toHaveLength(0); expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('incomplete candidate variable picking and file-owned keyboard positions preserve notes through save and copy', async ({ page }, info) => {
@@ -248,7 +248,7 @@ test('incomplete candidate variable picking and file-owned keyboard positions pr
     expect(errors).toEqual([]);
   } finally {
     if (rpcErrors.length) await info.attach('workflow-rpc-errors', { body: JSON.stringify(rpcErrors, null, 2), contentType: 'application/json' });
-    await fixture.stop(false);
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -328,7 +328,7 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await expect(predicates).toHaveCount(2);
     for (const predicate of await predicates.all()) await expect(predicate).toHaveValue('boolean');
     await expectStableScreenshot(page, 'workflow-editor-narrow.png');
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 const FLOATS = `description: Floats a browser would retype.
@@ -370,11 +370,13 @@ test('keyboard selection and node-move undo', async ({ page }, testInfo) => {
     // Keyboard: focus an existing node, activate it, edit it in the inspector.
     await card(page, 'parallel_review').getByRole('button', { name: 'parallel_review', exact: true }).click();
     const ready = editor(page).getByLabel('Output node ready');
+    await expect(ready).toBeVisible();
     await ready.focus();
     await page.keyboard.press('Enter');
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
     await expect(inspector.getByRole('textbox', { name: 'Node title', exact: true })).toHaveValue('ready');
     // Moving and changing the display title keep the same node identity and layout.
+    await ready.click({ trial: true, position: { x: 40, y: 20 } });
     const initial = (await ready.boundingBox())!;
     await page.mouse.move(initial.x + 40, initial.y + 20);
     await page.mouse.down();
@@ -390,6 +392,7 @@ test('keyboard selection and node-move undo', async ({ page }, testInfo) => {
     // One completed drag is one document step: Undo reverts it before the
     // older title edit. The complete document reaches the file only on Save.
     const decision = editor(page).getByLabel('Branch node decision');
+    await decision.click({ trial: true, position: { x: 40, y: 20 } });
     const start = (await decision.boundingBox())!;
     await page.mouse.move(start.x + 40, start.y + 20);
     await page.mouse.down();
@@ -420,7 +423,7 @@ test('keyboard selection and node-move undo', async ({ page }, testInfo) => {
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
     await expect(page.getByRole('dialog', { name: 'Discard unsaved changes?' })).toBeVisible();
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('object keys spelled like paths stay separate fields, and rejected field text is kept unsent', async ({ page }) => {
@@ -467,7 +470,7 @@ test('object keys spelled like paths stay separate fields, and rejected field te
     await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
 
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 /** Issue #496: one Model node, one native output union, real source CAS and
@@ -592,10 +595,10 @@ test('new Model → Text → check/save/reopen → default and custom JSON Schem
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
-test('large Workflow documents and oversized check schemas load, edit and save in both scopes', async ({ page }, info) => {
+for (const scope of ['Workspace', 'Global'] as const) test(`large Workflow documents and oversized check schemas load, edit and save in ${scope} scope`, async ({ page }, info) => {
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = [];
   const frames: number[] = [];
@@ -626,27 +629,30 @@ test('large Workflow documents and oversized check schemas load, edit and save i
     writeFileSync(globalFile, documentBytes); writeFileSync(workspaceFile, documentBytes);
     await expect(page).toHaveTitle(/rustX/i);
     await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
-    for (const [scope, id, file] of [['Workspace', 'large_workspace', workspaceFile], ['Global', 'large_global', globalFile]]) {
-      await page.getByRole('tab', { name: scope, exact: true }).click();
-      await card(page, id).getByRole('button', { name: id, exact: true }).click();
-      const done = editor(page).getByLabel('Output node done', { exact: true });
-      await done.focus(); await done.press('Enter');
-      const inspector = page.getByRole('complementary', { name: 'Inspector' });
-      await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill(`Large ${scope} result`);
-      await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
-      await page.getByRole('button', { name: 'Save File', exact: true }).click();
-      // Await the transfer/commit/reread lifecycle before checking its result;
-      // document admission does not impose a five-second save latency contract.
-      await page.getByRole('button', { name: 'Save File', exact: true }).waitFor({ state: 'visible' });
-      await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
-      expect(parse(readFileSync(file, 'utf8')).block.nodes.code.code).toBe(code.code);
-      expect(parse(readFileSync(file, 'utf8')).block.nodes.contract.result.schema).toEqual(schema);
-      await page.screenshot({ path: info.outputPath(`large-${scope.toLowerCase()}.png`) });
-      await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
-    }
+    // Keep both large files in the inventory; each authority's authoring lifecycle
+    // gets its own fixture and test budget.
+    const [id, file] = scope === 'Workspace' ? ['large_workspace', workspaceFile] : ['large_global', globalFile];
+    await page.getByRole('tab', { name: scope, exact: true }).click();
+    await card(page, id).getByRole('button', { name: id, exact: true }).click();
+    const done = editor(page).getByLabel('Output node done', { exact: true });
+    await done.focus(); await done.press('Enter');
+    const inspector = page.getByRole('complementary', { name: 'Inspector' });
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).fill(`Large ${scope} result`);
+    await inspector.getByRole('textbox', { name: 'Node title', exact: true }).press('Enter');
+    await page.getByRole('button', { name: 'Save File', exact: true }).click();
+    // Await the transfer/commit/reread lifecycle before checking its result;
+    // document admission does not impose a five-second save latency contract.
+    await page.getByRole('button', { name: 'Save File', exact: true }).waitFor({ state: 'visible' });
+    await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+    const saved = parse(readFileSync(file, 'utf8'));
+    expect(saved.block.nodes.code.code).toBe(code.code);
+    expect(saved.block.nodes.contract.result.schema).toEqual(schema);
+    expect(saved.editor.nodes).toContainEqual(expect.objectContaining({ address: { block: [], node: 'done' }, title: `Large ${scope} result` }));
+    await page.screenshot({ path: info.outputPath(`large-${scope.toLowerCase()}.png`) });
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
     expect(Math.max(...frames)).toBeLessThanOrEqual(1_048_576);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

@@ -1,0 +1,119 @@
+{
+  "variant": "Upstream 0.0.23 assets and 15-second parent import deadline; new adapter/resource changes already present",
+  "captures": [
+    {
+      "workload": "step-200mb",
+      "source": {
+        "bytes": 200761968,
+        "sha256": "0bcf7e5313f6b770cd7028360ddb5a88312c3ee8a22c1892421d366bdcf6f81b"
+      },
+      "outcome": "error",
+      "firstModelOpportunityMs": null,
+      "error": "Preview timed out. Try a smaller model.",
+      "interactions": [],
+      "maximumInteractionMs": null,
+      "imports": [],
+      "phases": [
+        {
+          "name": "geometry:cad-code-compile",
+          "ms": 230
+        },
+        {
+          "name": "geometry:cad-code-wait",
+          "ms": 230.09999999403954
+        }
+      ],
+      "beforeClose": {
+        "workers": 0,
+        "contexts": 0,
+        "buffers": 0,
+        "textures": 0,
+        "urls": 0
+      },
+      "method": "Original STEP with genuine geometry; fixture source preloaded before demand, then authorized range assembly. Trusted input -> model submission -> GPU fence -> next rAF proxy. Native source transfer and physical presentation are not certified.",
+      "afterClose": {
+        "workers": 0,
+        "contexts": 0,
+        "buffers": 0,
+        "textures": 0,
+        "urls": 0
+      }
+    },
+    {
+      "workload": "step-200mb",
+      "source": {
+        "bytes": 200761968,
+        "sha256": "0bcf7e5313f6b770cd7028360ddb5a88312c3ee8a22c1892421d366bdcf6f81b"
+      },
+      "outcome": "error",
+      "firstModelOpportunityMs": null,
+      "error": "Preview timed out. Try a smaller model.",
+      "interactions": [],
+      "maximumInteractionMs": null,
+      "imports": [],
+      "phases": [
+        {
+          "name": "geometry:cad-code-compile",
+          "ms": 224.69999998807907
+        },
+        {
+          "name": "geometry:cad-code-wait",
+          "ms": 224.79999999701977
+        }
+      ],
+      "beforeClose": {
+        "workers": 0,
+        "contexts": 0,
+        "buffers": 0,
+        "textures": 0,
+        "urls": 0
+      },
+      "method": "Original STEP with genuine geometry; fixture source preloaded before demand, then authorized range assembly. Trusted input -> model submission -> GPU fence -> next rAF proxy. Native source transfer and physical presentation are not certified.",
+      "afterClose": {
+        "workers": 0,
+        "contexts": 0,
+        "buffers": 0,
+        "textures": 0,
+        "urls": 0
+      }
+    },
+    {
+      "workload": "step-200mb",
+      "source": {
+        "bytes": 200761968,
+        "sha256": "0bcf7e5313f6b770cd7028360ddb5a88312c3ee8a22c1892421d366bdcf6f81b"
+      },
+      "outcome": "error",
+      "firstModelOpportunityMs": null,
+      "error": "Preview timed out. Try a smaller model.",
+      "interactions": [],
+      "maximumInteractionMs": null,
+      "imports": [],
+      "phases": [
+        {
+          "name": "geometry:cad-code-wait",
+          "ms": 232.20000000298023
+        },
+        {
+          "name": "geometry:cad-code-compile",
+          "ms": 232.09999999403954
+        }
+      ],
+      "beforeClose": {
+        "workers": 0,
+        "contexts": 0,
+        "buffers": 0,
+        "textures": 0,
+        "urls": 0
+      },
+      "method": "Original STEP with genuine geometry; fixture source preloaded before demand, then authorized range assembly. Trusted input -> model submission -> GPU fence -> next rAF proxy. Native source transfer and physical presentation are not certified.",
+      "afterClose": {
+        "workers": 0,
+        "contexts": 0,
+        "buffers": 0,
+        "textures": 0,
+        "urls": 0
+      }
+    }
+  ]
+}

@@ -21,7 +21,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); server.client.disconnect(); localStorage.clear(); });
 async function mount(ids = ['A', 'B']) {
   await server.attached(...ids);
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ids }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ids, route: ids[0] ? { kind: 'session', sessionId: ids[0] } : { kind: 'new-conversation' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
 }
 const row = (id: string) => document.querySelector<HTMLButtonElement>(`button[data-session-id="${id}"]`)!;
@@ -449,14 +449,14 @@ it('deletion shows the catalog title and impact, never raw identity/CAS, while s
 it('unlisted restored views cannot strand the finite view capacity', async () => {
   await server.connect();
   const missing = Array.from({ length: 32 }, (_, i) => `missing-${i}`);
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: missing }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: missing, route: { kind: 'new-conversation' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   await select('A');
   expect(screen.getByRole('alert').textContent).toContain('32 Session views');
   const before = methods().length;
   fireEvent.click(screen.getByRole('button', { name: 'View options' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })));
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual([]);
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!).openViews).toEqual([]);
   expect(missing.every(id => server.client.getSnapshot().views[id].attachmentIntent === 'released')).toBe(true);
   expect(methods().slice(before)).toEqual([]); // No controller exists to release.
   await select('A');
@@ -485,7 +485,7 @@ it('reviewing a notice restores capacity at the 64-diagnostic limit without repl
     await act(async () => { server.socket.close(); await lost; await server.connect(); });
   }
   expect(server.client.getSnapshot().uncertain).toHaveLength(64);
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   await expect(server.client.request({ method: 'session/name', params: { session_id: 'A', name: 'Blocked' } }, 'session')).rejects.toThrow();
   expect(methods().filter(method => method === 'session/name')).toHaveLength(64);

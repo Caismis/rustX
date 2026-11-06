@@ -8,6 +8,7 @@ import type { ProductHostWorkspaces } from '../workspaces/host';
 import type { PreviewArtifact } from './components/ArtifactPreview';
 import type { PreviewViewState } from '../presentation/right-panel/preview-view-state';
 import { PreviewContentCache } from '../client/preview-content';
+import { viewersForArtifact } from './components/workbench-documents/definitions';
 
 export interface PreviewScope { sessionId: string; generation: number; authorityRevision: number | undefined; hostRevision: number; target: AttachmentTarget }
 export function samePreviewScope(a: PreviewScope, b: PreviewScope) {
@@ -57,6 +58,7 @@ export class PreviewWorkspaceOwner {
   private sourceSubscriptions = new Map<number, () => void>();
   private resourceScope?: PreviewScope;
   private leases = new Map<number, FilePreviewLease>();
+  private bodyOrder: number[] = [];
   private listeners = new Set<() => void>();
   private snapshot: PreviewWorkspaceSnapshot = { mode: 'collapsed', leases: new Map(), geometryEpoch: 0, width: 0 };
   private problem?: PreviewProblem;
@@ -108,7 +110,7 @@ export class PreviewWorkspaceOwner {
   private current() { return this.selected ? this.sessions.get(this.selected) : undefined; }
   private retireResources() {
     for (const lease of this.leases.values()) lease.dispose();
-    this.leases.clear(); this.coordinator = undefined; this.resourceScope = undefined;
+    this.leases.clear(); this.bodyOrder = []; this.coordinator = undefined; this.resourceScope = undefined;
   }
   private resources(scope: PreviewScope) {
     let owner = this.coordinators.get(scope.sessionId);
@@ -125,12 +127,22 @@ export class PreviewWorkspaceOwner {
   private reconcile() {
     const workspace = this.current();
     const visible = workspace && this.mode === 'preview'
-      ? workspace.panes.filter(pane => splitFits(this.width) || pane.id === workspace.activePane).map(pane => pane.selected) : [];
-    for (const [id, lease] of this.leases) if (!visible.includes(id)) { lease.dispose(); this.leases.delete(id); }
+      ? workspace.panes.filter(pane => splitFits(this.width) || pane.id === workspace.activePane)
+        .sort((a, b) => Number(b.id === workspace.activePane) - Number(a.id === workspace.activePane)).map(pane => pane.selected) : [];
+    const admitted = [...visible, ...(visible.length && workspace ? this.bodyOrder.filter(id => {
+      const tab = workspace.tabs.find(tab => tab.id === id);
+      if (visible.includes(id) || !tab || !this.leases.has(id)) return false;
+      const choices = viewersForArtifact(tab.artifact);
+      const viewer = tab.view.viewer && choices.includes(tab.view.viewer) ? tab.view.viewer : choices[0];
+      return viewer === 'geometry';
+    }) : [])].slice(0, PREVIEW_POLICY.activeBodies);
+    this.bodyOrder = admitted;
+    // Abort every displaced owner before acquiring a replacement resource.
+    for (const [id, lease] of this.leases) if (!admitted.includes(id)) { lease.dispose(); this.leases.delete(id); }
     if (workspace && visible.length) {
       this.resourceScope = workspace.scope;
       this.coordinator ??= this.resources(workspace.scope);
-      for (const id of visible) if (!this.leases.has(id)) {
+      for (const id of admitted) if (!this.leases.has(id)) {
         const tab = workspace.tabs.find(tab => tab.id === id)!;
         this.leases.set(id, this.coordinator.acquire(id, tab.artifact.source));
       }
@@ -200,17 +212,20 @@ export class PreviewWorkspaceOwner {
     else this.replace(next);
   }
   split() {
-    const w = this.current(); if (!w || w.panes.length >= PREVIEW_POLICY.panes || w.tabs.length < 2 || !splitFits(this.width)) return;
+    let w = this.current(); if (!w || w.panes.length >= PREVIEW_POLICY.panes || w.tabs.length < 2 || !splitFits(this.width)) return;
     const selected = w.panes[0].selected, newPane = ++this.paneSequence;
     this.leases.get(selected)?.dispose(); this.leases.delete(selected);
+    // Retirement can synchronously save the final geometry camera pose.
+    w = this.current(); if (!w?.tabs.some(tab => tab.id === selected)) return;
     const next = this.without(w, selected);
     this.replace({ ...next, tabs: w.tabs.map(tab => tab.id === selected ? { ...tab, pane: newPane } : tab), panes: [...next.panes, { id: newPane, selected }], activePane: newPane, ratio: .5 });
   }
   move(id: number) {
-    const w = this.current(), tab = w?.tabs.find(tab => tab.id === id);
+    let w = this.current(); const tab = w?.tabs.find(tab => tab.id === id);
     if (!w || !tab || w.panes.length !== 2) return;
     const other = w.panes.find(pane => pane.id !== tab.pane)!;
     this.leases.get(id)?.dispose(); this.leases.delete(id);
+    w = this.current(); if (!w?.tabs.some(tab => tab.id === id)) return;
     const next = this.without(w, id);
     this.replace({ ...next, tabs: w.tabs.map(tab => tab.id === id ? { ...tab, pane: other.id } : tab), activePane: other.id,
       panes: next.panes.map(pane => pane.id === other.id ? { ...pane, selected: id } : pane) });
@@ -219,7 +234,10 @@ export class PreviewWorkspaceOwner {
   updateView(id: number, patch: Partial<PreviewViewState>) {
     const w = this.current(); if (!w?.tabs.some(tab => tab.id === id)) return;
     // A body can flush its last scroll position while hidden, never after occurrence deletion.
-    this.replace({ ...w, tabs: w.tabs.map(tab => tab.id === id ? { ...tab, view: { ...tab.view, ...patch } } : tab) });
+    this.sessions.set(w.scope.sessionId, { ...w, tabs: w.tabs.map(tab => tab.id === id ? { ...tab, view: { ...tab.view, ...patch } } : tab) });
+    // Inert metadata cannot change body admission. In particular, an abort-time
+    // final camera flush must not reacquire panes inside synchronous retirement.
+    this.publish(false);
   }
   toggleFullscreen(commitPresentation: (publish: () => void) => void) {
     const w = this.current(); if (!w) return;

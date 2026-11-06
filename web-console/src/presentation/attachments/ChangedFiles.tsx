@@ -18,7 +18,7 @@ export function ChangedFiles({changes, openReview, preview}: {changes:Changes;op
     <span className={css.tile}>{single ? <FileTypeIcon path={single.path} size={20}/> : <FileTypeIcon kind="code" size={20}/>}</span>
     <span className={css.titles}><span className={css.title}>{title}</span><span className={css.stat}><span className={css.statCounts}>{counts(single ?? changes)}</span><span className={css.previewHint}>{tx('artifacts:changes.open-review')}</span></span></span>
   </button>;
-  const hover = (anchor:ReactNode,index:number) => <HoverCard anchor={anchor} content={preview(index)} openDelayMs={500} copyLabel={tx('artifacts:changes.copy')} copiedLabel={tx('artifacts:changes.copied')}/>;
+  const hover = (anchor:ReactNode,index:number) => <HoverCard variant="file-change" anchor={anchor} content={preview(index)} openDelayMs={500} copyLabel={tx('artifacts:changes.copy')} copiedLabel={tx('artifacts:changes.copied')}/>;
   return <div className={css.card} data-changed-files data-single={!!single || undefined}>
     {single ? hover(header,0) : header}
     {!single && <ul className={css.list}>{rows.map((file,index)=><li key={index}>{hover(<button type="button" className={css.row} title={file.path} aria-label={tx('artifacts:changes.view-diff',{name:file.display})} onClick={()=>openReview(index)}><span className={css.path}>{file.display}</span><span className={css.counts}>{counts(file)}</span></button>,index)}</li>)}</ul>}
