@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { writeFileSync } from 'node:fs';
+import { statSync, writeFileSync } from 'node:fs';
 import { instrument, resources } from './geometry-observation';
 import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview';
 
@@ -60,7 +60,8 @@ for (const workload of [
   });
   const canvas = page.locator('[data-geometry-format] canvas'), box = (await canvas.boundingBox())!;
   const contentReads = () => page.evaluate(name => (window as any).geometryContract.reads.filter((read: any) => read.name === name && !read.probe).length, workload.name);
-  const expectedReads = workload.id.startsWith('stl') ? Math.ceil(12_250_084 / FILE_PREVIEW_LIMITS.pageBytes) : 2;
+  const sourceBytes = workload.id.startsWith('stl') ? 12_250_084 : statSync(new URL('../fixtures/geometry/bracket-array.step', import.meta.url)).size;
+  const expectedReads = Math.ceil(sourceBytes / FILE_PREVIEW_LIMITS.pageBytes);
   expect(await contentReads()).toBe(expectedReads);
   const activity = async (button: 'left' | 'right') => {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);

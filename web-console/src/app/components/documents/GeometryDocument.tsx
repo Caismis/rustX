@@ -22,10 +22,11 @@ export function GeometryDocument(props: GeometryDocumentProps) {
   const locale = useLocale(), [Viewer, setViewer] = useState(() => loaded), [failed, setFailed] = useState(false);
   useEffect(() => {
     if (Viewer || props.signal.aborted) return;
+    setFailed(false);
     let active = true;
     void loadGeometry().then(component => { if (active && !props.signal.aborted) setViewer(() => component); }, () => { if (active && !props.signal.aborted) setFailed(true); });
     return () => { active = false; };
-  }, [Viewer, props.signal]);
+  }, [Viewer, props.signal, props.copyId]);
   const t = locale.active === 'zh' ? zh : en;
   // Suspense's fallback throttle delayed resolved code by ~300 ms in production.
   // The explicit module state starts the admitted import as soon as code arrives.

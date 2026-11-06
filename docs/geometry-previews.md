@@ -237,8 +237,20 @@ boundaries and shading; the renderer additionally requires at most one CSS pixel
 of projected error. Near views that exceed this limit draw the original geometry.
 This is a display approximation, not a replacement for the admitted model.
 
-Large binary STL is processed in fixed 786,432-vertex chunks from the already
-owned source buffer. Shared chunk borders remain locked until an attribute-aware
+Large binary STL first attempts exact retriangulation of consecutive axis-planar,
+constant-normal runs in the already owned source buffer. Every source triangle
+must have the same nonzero robust orientation within its run. A fixed-capacity
+directed-edge table cancels opposite edges; the complete remaining boundary must
+be one simple convex cycle. Its winding number proves complete coverage without
+a floating-point area tolerance. Positions and normals retain their original
+source bits. All runs must certify within the existing output and time budgets;
+an unproved run abandons the entire candidate. No sampled prefix is published.
+The exact result has zero surface error and does not replace final geometry or
+picking. Holes, curved faces and other uncertified inputs use the standard
+simplifier, loaded only when needed.
+
+That standard path processes fixed 786,432-vertex chunks from the same owned
+source buffer. Shared chunk borders remain locked until an attribute-aware
 join removes their redundant triangulation. Other jobs copy at most 16 MiB of
 attributes in total. Output is bounded to 200,000 unique triangles and 20 MiB,
 including original position/normal vertex IDs. The receiver independently checks
@@ -406,6 +418,7 @@ The following are per visible body unless stated otherwise:
 | Aggregate renderer contexts / import Workers | 2 / 2, additionally restricted by existing visible-body ownership |
 | Submitted GPU frames / owned fences | 1 per visible body, 2 aggregate |
 | Optional surface input / decoded STL chunk | 16 MiB total copied input, or one 786,432-vertex position chunk from the owned raw STL; no full decoded-model copy |
+| Exact STL boundary work | 16,384 fixed hash slots, at most 8,192 live edges, 32-probe limit; output source IDs share the existing surface-output bound |
 | Optional surface output / error / Worker budget | 200,000 unique triangles / 20 MiB including provenance; relative error at most 0.002, projected error at most 1 CSS pixel; 2 seconds within the original deadline |
 | Exact small-assembly batch input | At most 16 MiB per body, including repeated occurrences; original attributes/materials and all triangles retained |
 | Optional outline unique input triangles / copied attributes and indices | 100,000 / 16 MiB per body |

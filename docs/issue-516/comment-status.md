@@ -1,8 +1,10 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-05, Asia/Shanghai, through review comment 6653051473 and the
-requested first-image/navigation policy. The review covers remaining owned-axis
-and sampled-view focus during adoption;
+Checked on 2026-11-06, Asia/Shanghai, through review comment 6654200365 and the
+requested first-image/navigation policy. The latest repairs cover failed-module
+Refresh recovery, contiguous-read assertions, bounded exact STL preparation and
+Workflow fixture shutdown. Details and validation limits are in
+[the review/CI repair report](review-ci-repairs.md);
 the inline-thread list was empty. This is an implementation inventory, not a public reply or an
 acceptance of the remaining latency budget. The current implementation and
 verification are recorded in [the whole-model LOD report](lod-validation.md).
@@ -35,6 +37,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6654200365](https://github.com/Caismis/rustX/pull/517#issuecomment-6654200365) | Copy-ID changes retry a failed viewer import in the same artifact pane, with late-result fencing and a real Refresh regression. CAD expected reads follow actual fixture size. Large binary STL can prepare a complete, source-proven exact planar surface within the existing optional budget; unproved surfaces keep the standard path. Workflow visual tests close their page before the Host. Installed-Chrome regressions pass; strict first-model/maximum-input acceptance and current-head pinned CI remain separate and open. |
 | [6653051473](https://github.com/Caismis/rustX/pull/517#issuecomment-6653051473) | The sampled SVG and its focus transition have been removed. Coarse-to-final adoption captures the owned arrow identity and restores that arrow only if the document body still owns focus after mounting. Camera-derived actions initialize before immediate keyboard input. Actual component/OrbitControls regressions cover untouched/aligned arrows, canvas focus, external controls and external focus moved during adoption. |
 | [6651081728](https://github.com/Caismis/rustX/pull/517#issuecomment-6651081728) | Each admitted whole-model tier refreshes clipping/navigation bounds without changing the active camera or gesture. Final adoption keeps the same canvas attached and preserves its keyboard focus, while external focus remains untouched. Real Three.js/OrbitControls regressions cover distant geometry, both projections, active gestures, focus, keyboard input and disposal. The browser regression also checks focused adoption. |
 | [6641379632](https://github.com/Caismis/rustX/pull/517#issuecomment-6641379632) | Manual outlines wait for the same import/surface retirement barrier as automatic requests. Only the latest preference can start a Worker; Off and disposal cancel queued work. A real-owner two-pane regression first reached four live Workers, then passed with a peak of two. A component regression preserves explicit Off after surface settlement. Worker/GPU boundaries are controlled in these deterministic tests; browser retirement is checked separately. |

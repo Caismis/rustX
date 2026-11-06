@@ -1,4 +1,5 @@
 import { GEOMETRY_LIMITS as L } from './limits';
+import { exactPreview } from './exact-preview';
 import type { GeometryFormat } from './format';
 import type { GeometryModel, GeometryPreviewData } from './model';
 
@@ -84,12 +85,23 @@ function refineJoined(data: GeometryPreviewData, simplifier: typeof import('mesh
 }
 
 export async function preparePreviews(jobs: PreviewJob[], deadline: number) {
-  const { MeshoptSimplifier: simplifier } = await import('meshoptimizer/simplifier');
-  if (!simplifier.supported) return [];
-  await simplifier.ready;
+  let simplifier: typeof import('meshoptimizer/simplifier').MeshoptSimplifier | undefined;
   const previews: { mesh: number; data: GeometryPreviewData }[] = []; let used = 0, triangles = 0;
   for (const job of jobs) {
     if (performance.now() > deadline) break;
+    if (job.raw) {
+      const exact = exactPreview(job.raw, deadline, Math.min(L.previewTriangles - triangles, Math.floor((L.previewBytes - used) / 96)));
+      if (exact) {
+        used += exact.sourceVertices.length * 32; triangles += exact.sourceVertices.length / 3;
+        previews.push({ mesh: job.mesh, data: exact }); job.raw = undefined; continue;
+      }
+    }
+    if (performance.now() > deadline) break;
+    if (!simplifier) {
+      ({ MeshoptSimplifier: simplifier } = await import('meshoptimizer/simplifier'));
+      if (!simplifier.supported) break;
+      await simplifier.ready;
+    }
     let data: GeometryPreviewData | undefined;
     if (job.raw) {
       const view = new DataView(job.raw.buffer, job.raw.byteOffset, job.raw.byteLength), vertices = view.getUint32(80, true) * 3;
