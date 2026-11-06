@@ -121,35 +121,43 @@ async function prepare(input: { client: AppServerClient; host: ProductHostWorksp
     if (submission?.session) route = { kind: 'session-draft', sessionId: submission.session.id };
     const empty: Prepared = { pending, route: { kind: 'new-conversation' } };
     try {
-      const native = client.getSnapshot();
       if (route.kind === 'new-conversation') {
-        if (route.workspaceId) {
+        const native = client.getSnapshot();
+        const workspaceId = route.workspaceId;
+        if (workspaceId) {
           const observation = await input.workspaces.observe(signal);
           if (!observation.current() || !native.endpoint || !sameEndpoint(observation.catalog.endpoint, native.endpoint)
-            || !observation.catalog.workspaces.some(row => row.id === route.workspaceId)) return empty;
-          const resolved = await input.host.resolveWorkspace(route.workspaceId, native.endpoint);
+            || !observation.catalog.workspaces.some(row => row.id === workspaceId)) return empty;
+          const resolved = await input.host.resolveWorkspace(workspaceId, native.endpoint);
           const [location] = await input.workspaces.classify([resolved.cwd], native.endpoint, observation, signal);
           if (!observation.current() || !location.authorized) return empty;
         }
-        return { pending, route };
+        // Creation may finish while Workspace authorization is suspended.
+        // Revalidate that Session against fresh lifecycle state before Home,
+        // including deletion that settled during the same authorization wait.
+        const created = firstSubmissions(client).draft(String(destination.binding))?.session;
+        if (!created) return { pending, route };
+        route = { kind: 'session-draft', sessionId: created.id };
       }
-      const view = native.views[route.sessionId];
+      const native = client.getSnapshot();
+      const sessionId = route.sessionId;
+      const view = native.views[sessionId];
       if (!view || view.deleting || view.deletionRecovery) return empty;
       // Attachment intent is native execution authority, not ownership of the
       // retained local editor. Uncertain settlement can release that intent.
       // A disconnected Home is a local draft/recovery surface, never executable.
       // Reconnect and attachment admission remain exclusively lifecycle-owned.
-      if (native.connection !== 'connected') return { pending, route: { kind: 'session-draft', sessionId: route.sessionId } };
-      const summary = view.summary ?? native.sessions.find(row => row.id === route.sessionId)
-        ?? await client.readSessionSummary(route.sessionId);
+      if (native.connection !== 'connected') return { pending, route: { kind: 'session-draft', sessionId } };
+      const summary = view.summary ?? native.sessions.find(row => row.id === sessionId)
+        ?? await client.readSessionSummary(sessionId);
       const cwd = summary?.cwd ?? view.settings?.cwd;
       if (!cwd || !native.endpoint) return empty;
       const observation = await input.workspaces.observe(signal);
       const [location] = await input.workspaces.classify([cwd], native.endpoint, observation, signal);
-      const latest = client.getSnapshot().views[route.sessionId];
+      const latest = client.getSnapshot().views[sessionId];
       if (!observation.current() || !location.authorized || !latest || latest.deleting || latest.deletionRecovery) return empty;
-      const executable = client.isAttachmentControlCurrent(route.sessionId, latest.attachmentObservation);
-      return { pending, route: { kind: executable ? 'session' : 'session-draft', sessionId: route.sessionId }, observation: executable ? latest.attachmentObservation : undefined };
+      const executable = client.isAttachmentControlCurrent(sessionId, latest.attachmentObservation);
+      return { pending, route: { kind: executable ? 'session' : 'session-draft', sessionId }, observation: executable ? latest.attachmentObservation : undefined };
     } catch {
       // A remembered identity cannot substitute for fresh authorization.
       return empty;

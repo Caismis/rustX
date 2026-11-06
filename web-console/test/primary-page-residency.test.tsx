@@ -328,3 +328,23 @@ it('hiding a model dialog retains its form while its admitted exact-CAS write se
   expect((screen.getByLabelText('Context window') as HTMLInputElement).value).toBe('256000');
   expect(server.requests.filter(row => row.request.method === 'configuration/sourceWrite')).toHaveLength(1);
 });
+
+it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('a late created Session deleted during %s Home authorization is not restored', async page => {
+  const { session, create, incarnation } = await firstSend();
+  await navigate(page);
+  const releaseHome = await holdHomeAuthorization();
+  try {
+    await act(async () => server.reply(create));
+    await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('admitted'));
+    server.handlers.set('session/delete', () => ({ type: 'deletion', result: { status: 'deleted', session_id: session.id } }));
+    await act(async () => { await server.client.deleteSession(session.id, 'revision-created'); });
+    expect(server.client.getSnapshot().views[session.id]).toBeUndefined();
+    await act(async () => releaseHome());
+    await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('new-conversation'));
+    expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).not.toBe(incarnation);
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', '');
+    expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  } finally { releaseHome(); }
+});

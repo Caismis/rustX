@@ -119,7 +119,10 @@ preparation, so its later authorization result cannot publish.
 
 A returned New Conversation resumes observation of its original binding's
 `FirstSubmissions` owner, including creation acknowledgements arriving during
-Home authorization. The correlated observer publishes the known Session and
+Home authorization. If creation finishes during that wait, Home re-reads the
+binding and validates the Session against fresh lifecycle and Workspace evidence;
+a Session deleted during authorization returns to the ordinary empty Home.
+The correlated observer publishes the known Session and
 its completed attachment without creating, opening or sending again. A newer
 editor retires this observation; the old acknowledgement cannot replace it.
 The observer also follows native readiness: an already-admitted owner can stay

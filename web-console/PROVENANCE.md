@@ -35,6 +35,8 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
   retains publication interest; native attachment proof still gates its route.
   Discard clears the first input rather than the known Session. A fresh editor
   gesture still fences the old publication and cannot be overridden by resync.
+  Creation that settles during Home authorization is re-read and validated with
+  fresh Session lifecycle evidence, so an already-deleted target is not restored.
 - FULL CI run `42179185106`, job `127766440468`, artifact `13485828418` measured
   exactly four rounded input-border rasterizer pixels in
   `model-advanced-light-390-linux.png`. The live manifest records their raw RGBA
@@ -56,8 +58,9 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
   (maximum 26). No surrounding rectangle inherits a bound. Comparator regressions
   reject neighboring sites, foreign references, excess deltas and the retired
   Start-icon allowance. The PNG reference and comparator implementation are unchanged.
-- Workflow browser acceptance dispatches a reopened Model's keyboard action to
-  its exact card. Each multi-MiB Global/Workspace authoring case has its own normal
+- Workflow browser acceptance waits for a reopened Model's measured card to be
+  visible, dispatches its keyboard action there and checks its Inspector.
+  Each multi-MiB Global/Workspace authoring case has its own normal
   test budget while retaining native save/reread and bounded-frame assertions.
 
 Navigation, authoring, authorization and native lifecycle remain rustX-owned.
