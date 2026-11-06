@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 const boundary = vi.hoisted(() => ({ failures: [] as ((code: string) => void)[], dispose: vi.fn() }));
 vi.mock('../src/client/pdf-document', () => ({ PdfDocumentOwner: class {
   document = new Promise<never>(() => {});
+  firstPageSize = this.document.then(() => ({ width: 600, height: 800 }));
   dispose = boundary.dispose;
   constructor(_bytes: Uint8Array, fail: (code: string) => void) { boundary.failures.push(fail); }
 } }));

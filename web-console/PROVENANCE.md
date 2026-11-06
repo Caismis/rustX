@@ -1,3 +1,14 @@
+## PDF reference geometry and cancellable page rendering (2026-11-07)
+
+Document zoom now reads one cached, finite first-page geometry from the existing
+PDF.js metadata API, independently of viewport-owned bitmap rendering. Scrolling
+away while page 1 renders leaves Zoom, its percentage menu and Fit width usable
+on later pages. The document page count still appears immediately; no all-page
+geometry scan or extra offscreen bitmap work is introduced. The load watchdog
+covers reference metadata, and document retirement fences late geometry results.
+Tests exercise the real preview, zoom viewport and resource owner through first
+bitmap cancellation and page 20 rendering, metadata limits/timeouts and teardown.
+
 ## Independent review: floating navigator replacement (2026-11-06)
 
 The pane navigator now replaces content through a single DockKit intent built

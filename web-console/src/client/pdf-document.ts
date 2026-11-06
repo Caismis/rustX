@@ -60,6 +60,18 @@ export class PdfDocumentOwner {
     if (!this.ready) throw new Error('obsolete');
     return this.ready;
   }
+  private initialSize?: Promise<PdfPageSize>;
+  /** Document zoom needs one finite reference page, independently of bitmap visibility. */
+  get firstPageSize(): Promise<PdfPageSize> {
+    if (this.retired) throw new Error('obsolete');
+    return this.initialSize ??= this.document.then(async document => {
+      // PDF.js already shares getPage promises. Geometry requests no operator
+      // list, text or canvas and must not clean up a concurrently rendering page.
+      const page = await document.getPage(1);
+      if (this.retired) throw new Error('obsolete');
+      return this.pageSize(page);
+    });
+  }
   private retired = false;
   private tail: Promise<unknown> = Promise.resolve();
   private cancelPage?: () => void;
@@ -204,6 +216,7 @@ export class PdfDocumentOwner {
     this.tail = Promise.resolve();
     const loading = this.loading, worker = this.worker;
     this.loading = undefined; this.ready = undefined; this.worker = undefined;
+    this.initialSize = undefined;
     // The supplied native worker is terminated immediately. PDF.js may never
     // receive its Terminate ACK, so release public DOM filter resources here.
     // disableFontFace avoids installing document fonts into application state.

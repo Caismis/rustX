@@ -12,6 +12,7 @@ const boundary = vi.hoisted(() => ({ owners: [] as OwnerRecord[] }));
 vi.mock('../src/client/pdf-document', () => ({ PdfDocumentOwner: class {
   resolveDocument!: (document: { numPages: number }) => void;
   document = new Promise<{ numPages: number }>(resolve => { this.resolveDocument = resolve; });
+  firstPageSize = this.document.then(() => ({ width: 800, height: 1200 }));
   renders: RenderRecord[] = [];
   release(canvas: HTMLCanvasElement) { const record = this.renders.find(record => record.canvas === canvas); if (record) { canvas.width = canvas.height = 0; record.layer.replaceChildren(); } }
   dispose = vi.fn(() => { for (const record of this.renders) this.release(record.canvas); });

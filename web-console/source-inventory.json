@@ -7386,7 +7386,7 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "62398432150c88965ad970a2bfab21aa1ac3f6908ebbd1c57ab53beb145c4b97",
       "destination": "web-console/src/app/components/documents/PdfPreview.tsx",
-      "treatment": "Continuous PDF/Office page presentation adapted to the existing bounded native document owner, tab metadata and locale adapter. Active page deadlines belong to the serialized PDF owner rather than queued page components. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged. Office preview follows Harness document-ready and visible-page rendering; no eager whole-document page geometry scan.",
+      "treatment": "Continuous PDF/Office page presentation adapted to the existing bounded native document owner, tab metadata and locale adapter. Active page deadlines belong to the serialized PDF owner rather than queued page components. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged. Office preview follows Harness document-ready and visible-page rendering; no eager whole-document page geometry scan. PDF review: document-owned first-page metadata supplies finite zoom reference geometry independently of cancellable viewport bitmaps; retain lazy pages, load watchdog and terminal resource ownership.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../client/pdf-document",
@@ -7404,7 +7404,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "a39a48524516cdf6aa4169acb174ca56b3301613cdb2fb50d4d473cf1f3ef101",
+      "local_sha256": "925eddb4d7c65e6f6b8f8dd8cb8df1dc41cc43f2723de56ad44f431f556aa1f4",
       "additional_sources": [
         {
           "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -7432,7 +7432,7 @@
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "580881e2d93332089f2eb6f4a7851fd03e78fcfcdd876901bd49b5f2d7380936",
       "destination": "web-console/src/client/pdf-document.ts",
-      "treatment": "Page geometry, raster scaling and atomic bitmap publication adapted within the existing native PDF worker, page/text limits and resource retirement owner. Start render watchdogs only on slot admission, clear them on cancellation/disposal, and promptly retire queued cancellations. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged.",
+      "treatment": "Page geometry, raster scaling and atomic bitmap publication adapted within the existing native PDF worker, page/text limits and resource retirement owner. Start render watchdogs only on slot admission, clear them on cancellation/disposal, and promptly retire queued cancellations. File preview loading: shared browser spreadsheet parsing and selected-sheet retention, independent PDF input budgets, and paged text presentation; native rustX delivery authority remains unchanged. PDF review: document-owned first-page metadata supplies finite zoom reference geometry independently of cancellable viewport bitmaps; retain lazy pages, load watchdog and terminal resource ownership.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../shared/file-preview.ts",
@@ -7445,7 +7445,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "cece5d68ce19ba2191bcebe6b3ab9489f2747d70051fc0e68704ae71c6b8abea"
+      "local_sha256": "71a43f7d0d5c7583544424d948807de66e2c6f4f492690d6cd36aabb6b795c9d"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/assets.ts",

@@ -38,7 +38,7 @@ export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8
     const { bytes, signal } = props;
     if (signal.aborted) return;
     let live = true, owner: PdfDocumentOwner | undefined;
-    const fail = (code: string) => { clearTimeout(timer); if (live) { setError(code); owner?.dispose(); } };
+    const fail = (code: string) => { clearTimeout(timer); if (live) { live = false; setError(code); owner?.dispose(); } };
     const timer = setTimeout(() => fail('parser_timeout'), PDF_LIMITS.loadWatchdogMs);
     const retire = () => { live = false; clearTimeout(timer); owner?.dispose(); };
     signal.addEventListener('abort', retire, { once: true });
@@ -48,7 +48,11 @@ export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8
       const owned = owner;
       // As in Harness, opening the document exposes its page count immediately.
       // Only viewport-local pages enter the renderer; there is no all-pages scan.
-      void owned.document.then(document => { clearTimeout(timer); if (live) setLoaded({ bytes, owner: owned, pages: document.numPages }); }, cause => fail(documentFailure(cause)));
+      void owned.document.then(document => { if (live) setLoaded({ bytes, owner: owned, pages: document.numPages }); }, cause => fail(documentFailure(cause)));
+      // Reference geometry belongs to the document rather than page 1's
+      // cancellable render. Scrolling away before its bitmap finishes must not
+      // leave later pages without zoom controls or a fit-width reference.
+      void owned.firstPageSize.then(size => { clearTimeout(timer); if (live) setPageWidth(size.width); }, cause => fail(documentFailure(cause)));
     } catch (cause) { fail(documentFailure(cause)); }
     return () => { signal.removeEventListener('abort', retire); retire(); };
   }, [props.bytes, props.signal, props.maxBytes]);
@@ -58,13 +62,13 @@ export default function PdfPreview(props: PreviewViewStateProps & { bytes: Uint8
     labels={{ controls: tx('artifacts:document.zoom'), menu: tx('artifacts:document.zoom'), out: tx('artifacts:workbench.zoom-out'), into: tx('artifacts:workbench.zoom-in'), fitWidth: tx('artifacts:workbench.fit-width'), value: percent => `${percent}%` }}
     signal={props.signal} scrollportRef={attachScroll} onPreference={setPreference} onRenderZoom={setRenderZoom}>
     <section className={css.body} data-pdf-preview>{Array.from({ length: loaded.pages }, (_, index) => <PdfPage key={index} owner={loaded.owner} page={index + 1} zoom={renderZoom} root={reading.ref} signal={props.signal}
-      onWidth={index === 0 ? setPageWidth : undefined} onGeometry={reading.restore}/>)}</section>
+      onGeometry={reading.restore}/>)}</section>
   </ZoomViewport>;
 }
 
-const PdfPage = memo(function PdfPage({ owner, page, zoom, root, signal, onWidth, onGeometry }: {
+const PdfPage = memo(function PdfPage({ owner, page, zoom, root, signal, onGeometry }: {
   owner: PdfDocumentOwner; page: number; zoom: number; root: React.RefObject<HTMLElement | null>; signal: AbortSignal;
-  onWidth?: (width: number) => void; onGeometry: () => void;
+  onGeometry: () => void;
 }) {
   const tx = useTranslation(), host = useRef<HTMLDivElement>(null), canvas = useRef<HTMLCanvasElement>(null), text = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(page === 1), [ready, setReady] = useState(false), [error, setError] = useState(''), [attempt, retry] = useState(0);
@@ -92,10 +96,10 @@ const PdfPage = memo(function PdfPage({ owner, page, zoom, root, signal, onWidth
     signal.addEventListener('abort', retire, { once: true });
     setError('');
     void owner.render(page, zoom, bitmap, layer, abort.signal).then(size => {
-      if (!abort.signal.aborted) { setSize(previous => previous?.width === size.width && previous.height === size.height ? previous : size); onWidth?.(size.width); setReady(true); }
+      if (!abort.signal.aborted) { setSize(previous => previous?.width === size.width && previous.height === size.height ? previous : size); setReady(true); }
     }, cause => { if (!abort.signal.aborted) setError(documentFailure(cause)); });
     return () => { signal.removeEventListener('abort', retire); abort.abort(); };
-  }, [owner, page, visible, zoom, signal, attempt, onWidth]);
+  }, [owner, page, visible, zoom, signal, attempt]);
   useEffect(() => () => { owner.release(canvas.current!); }, [owner]);
   return <div ref={host} className={css.page} data-pdf-page={page}>
     {!size && !error && <div className={css.unmeasured} role={visible ? 'status' : undefined} aria-label={visible ? tx('artifacts:document.loading') : undefined}/>}
