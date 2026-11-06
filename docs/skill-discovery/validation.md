@@ -90,15 +90,17 @@ were reused; this change's crate artifacts and binaries were rebuilt independent
 | Real-child process conformance | Passed: all 45 Subagent integration tests, including the 2 GiB no-copy provider-gate check |
 | `cargo test --all-features --no-fail-fast` | Passed: 5,965 tests, 0 failures, 20 existing ignored tests |
 | App Server protocol generation and TypeScript contracts | Passed; regenerated files have zero drift |
-| Web Console TypeScript and Vitest | Passed again after startup ordering correction: 4,068 tests, 4 skipped |
+| Web Console TypeScript and Vitest | Passed again after the final renderer follow-up: 4,068 tests, 4 skipped |
 | Selected rendered browser regressions | Passed: 82 tests with strict pixel comparison; original deadlines and cold-start counters retained |
+| Workflow editor and Harness/native detail parity | Passed after renderer follow-up: 17 tests, including native 256-node startup, semantic port edits and all 8 paired detail presentations |
 | Resource revision regressions after macOS fixture correction | Passed: 8 Linux tests; macOS case runs in FULL CI |
 | Terminal Console TypeScript and Jest | Passed: 1,320 tests, 1 skipped |
 | CI controller Python tests | Passed: 64 tests |
 | Runtime benchmark controller Python tests | Passed: 37 tests |
 | `git diff --check` | Passed |
 
-The final full run contains 5,277 passing library/in-crate tests, 679 passing
+The final full run on `9120fd5c410fd3a398201c0b5f289c50cd345caf` contains
+5,277 passing library/in-crate tests, 679 passing
 external integration tests and 9 passing doctests. Per-target counts, elapsed
 times and the exact command are retained in
 [the test summary](measurements/validation-tests.json).
@@ -144,10 +146,21 @@ geometry assertion was updated for that confirmed row; x positions and font
 metrics remain exact. 31 affected image references were regenerated with the
 existing stable-capture helper, then checked by the separate normal run.
 
-The unchanged 256-node Workflow capacity test also passed locally under its
-original 10-second budgets: render 8,849.4 ms, layout 919.1 ms. It had exceeded
-the render budget in the initial CI run, so the final FULL run must verify it
-again. No Workflow implementation or capacity threshold was changed.
+The 256-node Workflow capacity test exposed duplicate initial measurements:
+every mounted node forced a complete internals update, although React Flow's
+ResizeObserver already batches initial measurement. The renderer now explicitly
+updates node internals only after semantic definition edits. The native compiler
+and layout engine are unchanged. Under the original 10-second budgets, local
+render time changed from 8,849.4 ms to 975.1 ms; organize layout measured 919.1 ms
+before and 935.2 ms after. These are single-run observations from the same pinned
+browser and host, retained in [the raw startup comparison](measurements/render-startup-before-after.json).
+The full 17-case follow-up includes field/port editing and connection behavior.
+
+Harness/native detail screenshots now park the pointer at the same idle location
+before each capture. This removes differing copy-toolbar hover states caused by
+the two ledger rows opening the same panel at different positions. Exact pixel
+comparison and its empty noise policy remain unchanged; failures now attach both
+images for inspection.
 
 Rendered QA covers pinned Chromium on Linux; native macOS behavior is separately
 covered by FULL CI. The Browser plugin remains optional for future in-app visual
@@ -228,5 +241,11 @@ valid semantic frontmatter edits and proves body edits remain inert.
 
 The follow-up commit contains that fixture correction, startup restoration
 ordering, reviewed silent-loading image references and this validation evidence.
-A fresh FULL workflow is dispatched on the follow-up revision; its final status
-and exact verified commit will be recorded here after completion.
+Follow-up implementation revision:
+[`9120fd5c410fd3a398201c0b5f289c50cd345caf`](https://github.com/Caismis/rustX/commit/9120fd5c410fd3a398201c0b5f289c50cd345caf).
+The complete local Rust suite was rerun successfully on that revision. The
+[second FULL CI run](https://github.com/Caismis/rustX/actions/runs/42211680619)
+passed Linux, protocol, client and Host checks, but exposed the two browser issues
+described above. Its macOS full lane is still running. The renderer/hover
+follow-up is being committed on the same branch and will receive a fresh FULL
+run. The final report update will be documentation-only.
