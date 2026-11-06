@@ -270,11 +270,14 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     }
   }, [client, shell, endpoint, preferences, state.connection, settingsOpen]);
   useEffect(() => {
+    // Restore saved views before choosing a draft: selecting a Workspace owns
+    // real preparation, even while its loading UI stays silent.
+    if (!endpoint || state.connection !== 'connected' || settingsOpen || !preferencesApplied.current) return;
     const context = shell.getSnapshot().context;
     if (context.control !== routeState.context.control || context.route.kind !== 'new-conversation' || context.route.workspaceId || context.pending) return;
     const workspaceId = preferredWorkspace(associations.getSnapshot(), client.getSnapshot(), context.draftWorkspaceSession, workspaceSelection.read(client.getSnapshot().endpoint));
     if (workspaceId) shell.send({ type: 'DRAFT.WORKSPACE', workspaceId });
-  }, [associations, workspaceAssociations, workspaceSelection, client, shell, routeState.context.control, center]);
+  }, [associations, workspaceAssociations, workspaceSelection, client, shell, routeState.context.control, center, endpoint, state.connection, settingsOpen]);
   useEffect(() => {
     try {
       // Persist only safe navigation. Never the token, drafts, snapshots or requests.

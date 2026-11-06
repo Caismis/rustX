@@ -580,14 +580,22 @@ mod case_insensitive_tests {
         let volume = crate::local_runtime::case_insensitive_volume::CaseInsensitiveVolume::new();
         let root = volume.path().join(".agents");
         std::fs::create_dir_all(root.join("Skills/guide")).unwrap();
-        std::fs::write(root.join("Skills/guide/SKILL.md"), b"A").unwrap();
+        let path = root.join("Skills/guide/SKILL.md");
+        let definition = "---\nname: guide\ndescription: A\n---\n";
+        std::fs::write(&path, definition).unwrap();
         assert_eq!(
             std::fs::read(root.join("skills/guide/SKILL.md")).unwrap(),
-            b"A",
+            definition.as_bytes(),
             "the loaders' fixed path resolves to `Skills`"
         );
         let initial = revision(&root);
-        std::fs::write(root.join("Skills/guide/SKILL.md"), b"B").unwrap();
+        std::fs::write(&path, format!("{definition}changed live body")).unwrap();
+        assert_eq!(revision(&root), initial, "body edits remain inert");
+        std::fs::write(
+            &path,
+            definition.replace("description: A", "description: B"),
+        )
+        .unwrap();
         assert_ne!(revision(&root), initial);
     }
 }

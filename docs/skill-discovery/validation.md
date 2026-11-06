@@ -87,14 +87,21 @@ were reused; this change's crate artifacts and binaries were rebuilt independent
 | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
 | `cargo build --all-features --bins --examples` | Passed |
 | Focused all-feature Skill/revision/watcher/coordinator/child/automatic-commit tests | 217 checks passed; the two real-Workflow checks were rerun with matching isolated binaries |
-| Real-child process conformance | Covered by the final all-feature run below |
-| `cargo test --all-features --no-fail-fast` | Pending final serialized run |
+| Real-child process conformance | Passed: all 45 Subagent integration tests, including the 2 GiB no-copy provider-gate check |
+| `cargo test --all-features --no-fail-fast` | Passed: 5,965 tests, 0 failures, 20 existing ignored tests |
 | App Server protocol generation and TypeScript contracts | Passed; regenerated files have zero drift |
-| Web Console TypeScript and Vitest | Passed: 4,068 tests, 4 skipped |
+| Web Console TypeScript and Vitest | Passed again after startup ordering correction: 4,068 tests, 4 skipped |
+| Selected rendered browser regressions | Passed: 82 tests with strict pixel comparison; original deadlines and cold-start counters retained |
+| Resource revision regressions after macOS fixture correction | Passed: 8 Linux tests; macOS case runs in FULL CI |
 | Terminal Console TypeScript and Jest | Passed: 1,320 tests, 1 skipped |
 | CI controller Python tests | Passed: 64 tests |
 | Runtime benchmark controller Python tests | Passed: 37 tests |
 | `git diff --check` | Passed |
+
+The final full run contains 5,277 passing library/in-crate tests, 679 passing
+external integration tests and 9 passing doctests. Per-target counts, elapsed
+times and the exact command are retained in
+[the test summary](measurements/validation-tests.json).
 
 The new regression coverage includes every standard definition field, canonical
 dependency metadata, malformed/unterminated/cancelled prefixes, deterministic
@@ -104,6 +111,47 @@ watch changes, overflow/coalescing, unused dependency conflicts, frozen children
 Native Read runtime semantics and physical cancellation settlement. Existing
 automatic configuration, lifecycle and Tool authorization suites remain intact.
 No sleep establishes the new concurrency assertions.
+
+### Rendered startup QA
+
+The flow under test is: connect or restore saved views → choose the intended
+Session or New Conversation Workspace → type, submit, reconnect or refresh →
+retain the intended draft and exact native admission. Browser plugin not
+available; the repository Playwright workflow uses its pinned Linux x86_64
+Chromium container, with host fixtures at `http://127.0.0.1:5273` and
+`http://127.0.0.1:5274`. Desktop 1440px and mobile 390px, light/dark and English/
+Chinese states were exercised.
+
+| Check | Result and evidence |
+| --- | --- |
+| Page identity / meaningful screen | Passed: fixture titles, route attributes, editor and navigation assertions. |
+| Framework overlay | Passed: existing Vite-overlay absence assertions. |
+| Console health | Passed: workspace/default and reconnect cases retain empty relevant page-error/console-error lists. |
+| Screenshots | Passed: 82-case normal run uses exact pixel comparison after reviewing the intended silent-loading differences; no noise masks were added. |
+| Interaction proof | Passed: native cold attach, first Send, reconnect, default Workspace, unsent manual choice, reload and fresh-page restoration. |
+
+Initial CI exposed a startup ordering race: automatic default-Workspace selection
+could prepare an unrelated draft before saved-view restoration, especially while
+Connection Settings was open. `App.tsx` now lets saved-view restoration finish
+first. Cold navigation fixtures explicitly restore their intended source view;
+the original zero/one/six-peer assertions remain unchanged. The existing default-
+Workspace tests still prove automatic Home selection and unsent choice persistence.
+
+Reviewed references remove the earlier temporary welcome and “Queued · updating”
+cards. A single confirmed queued item now shows its native row/actions, rather
+than an optimistic duplicate collapsed into a pending count. The narrow footer
+geometry assertion was updated for that confirmed row; x positions and font
+metrics remain exact. 31 affected image references were regenerated with the
+existing stable-capture helper, then checked by the separate normal run.
+
+The unchanged 256-node Workflow capacity test also passed locally under its
+original 10-second budgets: render 8,849.4 ms, layout 919.1 ms. It had exceeded
+the render budget in the initial CI run, so the final FULL run must verify it
+again. No Workflow implementation or capacity threshold was changed.
+
+Rendered QA covers pinned Chromium on Linux; native macOS behavior is separately
+covered by FULL CI. The Browser plugin remains optional for future in-app visual
+inspection.
 
 ## 7. Measurements and reproduction
 
@@ -116,6 +164,10 @@ sections, then measures first discovery and an identical second discovery
 overhead, **not physical device I/O**. CPU and peak RSS cover the process,
 including fixture setup/cleanup, from `/usr/bin/time -v`. These single-run debug
 observations are not a statistical latency distribution or portable speedup.
+To reproduce the baseline, copy this unchanged benchmark harness into an isolated
+checkout of the baseline revision; the harness is new, while the measured library
+comes from that revision. Give each checkout its own Cargo target directory so
+another worktree cannot replace its executables.
 
 | Case | Revision | First discovery (ms) | Rescan (ms) | rchar delta (bytes) | CPU user + system (s) | Peak RSS (KiB) |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -163,5 +215,18 @@ strace -f -yy -e trace=openat,getdents64,read \
 ## 9. Delivery and CI
 
 Branch: `codex/ui-experience`. The implementation is committed and pushed directly
-on this branch; no pull request is created, as requested. Implementation revision
-and final full-verification status will be recorded after the final local run.
+on this branch; no pull request is created, as requested.
+
+Implementation commit:
+[`fe3aa5ba5f1476789ed6b81754c316d0128f2ac5`](https://github.com/Caismis/rustX/commit/fe3aa5ba5f1476789ed6b81754c316d0128f2ac5).
+The local full suite and follow-up local checks pass. The initial
+[FULL CI run](https://github.com/Caismis/rustX/actions/runs/42203691573) passed
+Linux contracts/boundaries, protocol, TUI, Web/Host/launcher and macOS desktop
+adapter checks. It exposed the obsolete macOS raw-byte revision fixture and the
+rendered regressions described above. The case-insensitive fixture now compares
+valid semantic frontmatter edits and proves body edits remain inert.
+
+The follow-up commit contains that fixture correction, startup restoration
+ordering, reviewed silent-loading image references and this validation evidence.
+A fresh FULL workflow is dispatched on the follow-up revision; its final status
+and exact verified commit will be recorded here after completion.

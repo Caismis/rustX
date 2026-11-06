@@ -125,6 +125,8 @@ done
 ```
 
 Baseline revision: `eae92389c01abb2b214c0222070dabd84f38ba2f`.
+Copy the same harness into that isolated baseline checkout and use separate Cargo
+target directories for the two revisions.
 Raw JSON and time outputs are under [measurements](skill-discovery/measurements).
 These are local debug-build observations, not a portable fixed speedup claim.
 Structural counters and syscall traces establish zero asset reads independently

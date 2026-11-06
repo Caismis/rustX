@@ -139,8 +139,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
           });
         });
         expect(labels).toEqual([
-          { text:'native/coder', x:143.453125, y:271, width:70.78125, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
-          { text:'deliberate', x:218.234375, y:271, width:20.765625, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
+          { text:'native/coder', x:143.453125, y:309, width:70.78125, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
+          { text:'deliberate', x:218.234375, y:309, width:20.765625, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
         ]);
       }
       await expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
@@ -168,6 +168,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start']);
     await page.evaluate(() => window.composerFixture.running(true));
     await expect(primary).toHaveAccessibleName('Stop'); await shot('running-empty');
+    await expect(stack).not.toContainText('updating');
     await input.fill('Queue the next review.');
     await expect(primary).toHaveAccessibleName('Queue'); await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
     await shot('running-draft');
