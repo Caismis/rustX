@@ -4,7 +4,7 @@ import { test, expect, type Locator, type Page, type TestInfo } from '@playwrigh
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
@@ -148,8 +148,7 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     await page.screenshot({ path: info.outputPath('parallel-node-picker-mobile.png') });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -178,8 +177,7 @@ test('reconnects ordinary edges to the real Start without replacing its other su
     await expect(panel(page).getByRole('button', { name: 'model', exact: true })).toBeVisible();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -214,8 +212,7 @@ test('renames input fields and edits optional array items through the field dial
     expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array', items: { type: 'boolean' } });
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -246,8 +243,7 @@ test('refuses destination-only finite schema collisions without adopting extra p
     }
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -272,8 +268,7 @@ test('discovers every matching display title together with original field paths'
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -328,8 +323,7 @@ test('uses the same visible duplicate transaction from Inspector and canvas for 
     }
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -388,8 +382,7 @@ test('authors structured required output, nested contracts and repeated downstre
     await expect(structuredDialog(page)).toContainText('risk');
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -423,8 +416,7 @@ test('measures the native 256-node nested fixture and one metadata-only organize
     await info.attach('bounded-scene-measurements', { path: measurements, contentType: 'application/json' });
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });
 
@@ -451,7 +443,6 @@ test('appends siblings from connected canvas handles instead of inserting into t
     await expect(next.getByRole('button', { name: 'Branch', exact: true })).toBeVisible();
     await expect(canvas(page).locator('.react-flow__edge')).toHaveCount(5);
   } finally {
-    try { await page.close(); }
-    finally { await fixture.stop(false); }
+    await stopDogfoodPage(page, fixture, false);
   }
 });

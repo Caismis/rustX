@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
 import { startWorkspaceHost } from './workspace-host.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -225,4 +226,14 @@ timezone = "UTC"
       },
     };
   } catch (error) { app?.kill(); provider.kill(); rmSync(directory, { recursive: true, force: true }); throw new Error(`${String(error)}\n${providerErrors}`); }
+}
+
+/** Retire the browser proxy before the Host it forwards to. Already running
+ * Node route callbacks must finish while their Host and native owner are live. */
+export async function stopDogfoodPage(page: Page, fixture: Pick<Awaited<ReturnType<typeof startDogfood>>, 'stop'>, check = true) {
+  try { await page.unrouteAll({ behavior: 'wait' }); }
+  finally {
+    try { await page.close(); }
+    finally { await fixture.stop(check); }
+  }
 }

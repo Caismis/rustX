@@ -2,7 +2,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { rootBlock } from '../workflow-root';
@@ -92,7 +92,7 @@ for (const definition of definitions) test(`renamed ${definition.type}, Start an
     expect(saved.block.edges).toEqual([{ from: 'start', to: 'subject' }, ...exits.map(port => ({ from: 'subject', to: 'done', ...(port === 'next' ? {} : { port }) }))]);
     await page.screenshot({ animations: 'disabled', path: `/tmp/rustx-node-connections-${definition.type}.png` });
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('renamed Agent route retains its identity through drag, Undo/Redo and save', async ({ page }) => {
@@ -123,7 +123,7 @@ test('renamed Agent route retains its identity through drag, Undo/Redo and save'
     expect(saved.block.edges).toEqual([{ from: 'start', to: 'subject' }, { from: 'subject', to: 'done', port: 'approve' }, { from: 'subject', to: 'done', port: 'fail' }, { from: 'subject', to: 'done', port: 'rework' }]);
     expect(errors).toEqual([]);
     await page.screenshot({ animations: 'disabled', path: '/tmp/rustx-node-connections-agent-route.png' });
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('renamed private Start, Assigner and Exit Loop retain their connection points', async ({ page }) => {
@@ -160,5 +160,5 @@ test('renamed private Start, Assigner and Exit Loop retain their connection poin
     if (repeat.type === 'loop') expect(repeat.body.edges).toEqual([{ from: 'inner_start', to: 'assign' }, { from: 'assign', to: 'finish' }]);
     await page.screenshot({ animations: 'disabled', path: '/tmp/rustx-node-connections-private.png' });
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
