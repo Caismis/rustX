@@ -263,7 +263,7 @@ function unitRevision(projection: SourceSettings, selector: RevisionSelector): s
  *   bounded by the authority lifetime and *across* generation changes, so a
  *   definitive acknowledgement
  *   settles the exact transaction that submitted it even after its editor, the
- *   whole Settings dialog, or the connection it was submitted on is gone. What
+ *   whole Settings surface, or the connection it was submitted on is gone. What
  *   such a late acknowledgement may never do is publish its generation's
  *   observation into the new one: the pending write (`submission`) and the
  *   authority of its reread to publish (`rereadReservation`) are separate
@@ -539,7 +539,7 @@ export const settingsTargetMachine = setup({
      * committed revision. It is recorded on the transaction that submitted it
      * before anything interprets the reread, and it stays a committed fact even
      * if that reread fails, if this presentation has since been detached, or if
-     * the whole Settings dialog was closed while it was in flight. */
+     * the whole Settings surface unmounted while it was in flight. */
     recordAcknowledgement: enqueueActions(({ context, event, enqueue }) => {
       const outcome = (event as unknown as { output: WriteOutcome }).output;
       const submission = context.submission!;

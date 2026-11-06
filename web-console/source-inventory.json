@@ -726,7 +726,7 @@
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "destination": "web-console/src/app/settings/Settings.tsx",
-      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied. #393: the owner, observation lifecycle and Reload live in the fixed header; distinct page icons; a designed pending state for a target with no projection; alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. PR #436: the retained workspaces/host import now resolves only to the environment-neutral contract and shared error; the concrete browser adapter and carrier dependency belong to workspaces/http-host, composed by App. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Explicit MCP diagnostics repair: per-definition Test connection actions; passive configuration refresh; existing Workspace catalog retirement invalidates evidence. Upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. #464: Advanced Auto Repair focus beside Connection. #464: Advanced reports the presented Auto Repair receipt from a current authoritative read, so the navigation machine completes a View details inspection only for the exact receipt and source it requested. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.ream baseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged.",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority WEB-RESET-03: retained native Save/CAS/reload boundary; session-scoped drafts, read-only card inspections and source scope tabs inside the sole Harness Settings shell. WEB-RESET-03 final integration: draft owner, native read fencing, appearance ownership, card inspections, scope keyboard behavior and native resource inventory. Model identity suggestions include authored definitions without resolving an overlay; Effective exposes native prepared Root capabilities. fence both read success and rejection against newer native authority WEB-13: explicit local/remote Connection section in existing Settings shell; no new Harness source adaptation. Read ordering: a Workspace write-owned reread is ordered by the identity reserved when the write operation is initiated and may replace only a projection older than the newest already accepted, and both the success and the failure of an owning-Workspace lookup are fenced by the Settings navigation epoch and App Server authority revision. Transaction settlement uses the mutation's non-sensitive revision selector, so no authored payload is retained. The displayed Settings section is owned by the Settings navigation machine; the shell holds no section state, and mutation outcomes are projected from the Settings authority actor's mutation region. #392: composes six product pages (General, Models, Agent, Tools & Permissions, Extensions, Advanced) through the navigation machine; diagnostics moved to Advanced and Connection is an Advanced sub-surface. #392 repair: renders the navigation actor's target, page and focus as they are, with no renderer fallback; Connection is reachable only where the navigation target capability admits it, never because a ConnectionController is supplied. #393: the owner, observation lifecycle and Reload live in the fixed header; distinct page icons; a designed pending state for a target with no projection; alerts share the error vocabulary. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. PR #436: the retained workspaces/host import now resolves only to the environment-neutral contract and shared error; the concrete browser adapter and carrier dependency belong to workspaces/http-host, composed by App. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Explicit MCP diagnostics repair: per-definition Test connection actions; passive configuration refresh; existing Workspace catalog retirement invalidates evidence. Upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. #464: Advanced Auto Repair focus beside Connection. #464: Advanced reports the presented Auto Repair receipt from a current authoritative read, so the navigation machine completes a View details inspection only for the exact receipt and source it requested. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.ream baseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
       "retained_dependencies": [
         "../../../../protocol/app-server/v72",
@@ -775,7 +775,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7cb0aa9d112ff10e3d038b722b9783a4c6d9108fbe5333b6386eae5b28d7ed41"
+      "local_sha256": "b079dc3afc82df4a5068a67976d8a4acaff765c525dfc5d6bbcfaf7ec09e7cab"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -1747,7 +1747,7 @@
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
       "destination": "web-console/src/presentation/layout/AppFrame.module.css",
-      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert",
+      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "d3ecfc590ff09208e9f939c2a43faaa0de1bb41ba329d79725cbe6f98790d9f8",
       "retained_dependencies": [
         "CSS modules",
@@ -1761,7 +1761,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "c92e3e57057dae47767c69f3c850e735c9fe5ff4be336b60e31059db1d507d0f",
+      "local_sha256": "ef6b43514510104eea16f0de4488f353edbb8966dd3c29381c3383b17b799933",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
@@ -1775,7 +1775,7 @@
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.tsx",
       "destination": "web-console/src/presentation/layout/AppFrame.tsx",
-      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged.",
+      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "98abc310aaf2a764fae01235278c4e363ae042102806d752f15a9f68b840675e",
       "retained_dependencies": [
         "./AppFrame.module.css",
@@ -1790,7 +1790,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "86401ea306d1558fe8401bdab0a25b579e77fe82a7759f0df1540c19b8c92b39",
+      "local_sha256": "292d8e3d8b7b6d00966b8cd0c155b71985eadd86b1a52e0e6791f582a399426a",
       "classification": "A"
     },
     {
@@ -1866,7 +1866,7 @@
       "destination": "web-console/src/presentation/layout/columns.ts",
       "upstream": "packages/client/ui-layout/src/client/columns.ts",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert",
+      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "db5e8fda5eef38ee4760e97ec15b0271f7f20639af5d936bdc78a36dd5a75e88",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1876,7 +1876,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "939bb258e7ba02168e58a240b184074bfca399222ff0ab7cf02d5ce131bcbbfd",
+      "local_sha256": "689c6fb8fe4e4c25c2181a837bbaff4114d696cfcae18f26d9aa9e0018d043f8",
       "classification": "A"
     },
     {
@@ -2369,7 +2369,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/Menu.tsx",
       "destination": "web-console/src/presentation/primitives/Menu.tsx",
-      "treatment": "A: upstream anchored menu, submenus, keyboard and pointer grace; local imports; autofocus waits for placement #393: all menu geometry is Floating UI's (@floating-ui/react-dom 2.1.9: offset, flip, shift, size, autoUpdate, fixed strategy). The hand-written portal geometry (anchor/list measurement, viewport clamping, capture-phase scroll and resize listeners), the CSS-positioned in-place list with its portal prop, and the CSS-positioned submenu card are removed. The list is always a body-portaled Floating UI surface (side/align map to one placement; getAnchorRect is a virtual reference), and each open submenu is a body-portaled Floating UI surface anchored to its own row (right-end, flipping to left-end, shifted and size-bounded, with a side-aware pointer bridge). size() publishes the room the viewport leaves as CSS custom properties that Menu.module.css combines with the design bounds. A submenu is its own keyboard layer: ArrowRight, Enter, Space or Tab on its row enter it, the arrows, Home and End walk only the focused layer, and Escape or ArrowLeft inside it return to its row. The upstream API (less portal), DOM classes, selection, disabled rows, pointer grace and focus restoration are retained; floating surfaces are React Aria top layers, Escape stops at the menu before a containing React Aria modal, and selected rows announce aria-current. #393 repair: every surface lives only while its reference is a visible interaction anchor (Floating UI hide, referenceHidden): a list whose anchor leaves layout, is detached or is clipped out closes through onClose; a submenu whose row scrolls out of its card closes. A keyboard either held goes to the trigger, the anchor's first enabled button or the nearest rendered focus container (a containing dialog), never to a hidden control or an unmounting row. #393 correction: a liveness close is not a dismissal. A list whose anchor is hidden settles a keyboard it held on the nearest containing focus owner without scrolling, never on the hidden trigger; a submenu whose row is hidden leaves the keyboard on the still-open list, never on the clipped row; Escape and ArrowLeft still return it to a visible row. #393 repair: a hidden anchor's keyboard goes to the focusOwner its host names, with no [tabindex] ancestor inference; with none named it is released, never left on a removed row or a hidden anchor. #393 repair: a submenu the keyboard holds (being entered, or focus inside its card) is never replaced or closed by passive hover; a pointer press on a parent row moves the keyboard to that row before it takes over. A placement reporting referenceHidden stops presenting its surface in the same render, and the layout phase of that commit settles the keyboard and closes the surface once, before paint. #400 focus lifecycle: portal into a containing Settings dialog scope when present; Floating UI geometry, reference-hidden settlement, keyboard behavior and owners unchanged. Header/Trajectory chrome alignment: the remembered trigger survives the close, so a split-button anchor gets the keyboard back after a selection. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
+      "treatment": "A: upstream anchored menu, submenus, keyboard and pointer grace; local imports; autofocus waits for placement #393: all menu geometry is Floating UI's (@floating-ui/react-dom 2.1.9: offset, flip, shift, size, autoUpdate, fixed strategy). The hand-written portal geometry (anchor/list measurement, viewport clamping, capture-phase scroll and resize listeners), the CSS-positioned in-place list with its portal prop, and the CSS-positioned submenu card are removed. The list is always a body-portaled Floating UI surface (side/align map to one placement; getAnchorRect is a virtual reference), and each open submenu is a body-portaled Floating UI surface anchored to its own row (right-end, flipping to left-end, shifted and size-bounded, with a side-aware pointer bridge). size() publishes the room the viewport leaves as CSS custom properties that Menu.module.css combines with the design bounds. A submenu is its own keyboard layer: ArrowRight, Enter, Space or Tab on its row enter it, the arrows, Home and End walk only the focused layer, and Escape or ArrowLeft inside it return to its row. The upstream API (less portal), DOM classes, selection, disabled rows, pointer grace and focus restoration are retained; floating surfaces are React Aria top layers, Escape stops at the menu before a containing React Aria modal, and selected rows announce aria-current. #393 repair: every surface lives only while its reference is a visible interaction anchor (Floating UI hide, referenceHidden): a list whose anchor leaves layout, is detached or is clipped out closes through onClose; a submenu whose row scrolls out of its card closes. A keyboard either held goes to the trigger, the anchor's first enabled button or the nearest rendered focus container (a containing dialog), never to a hidden control or an unmounting row. #393 correction: a liveness close is not a dismissal. A list whose anchor is hidden settles a keyboard it held on the nearest containing focus owner without scrolling, never on the hidden trigger; a submenu whose row is hidden leaves the keyboard on the still-open list, never on the clipped row; Escape and ArrowLeft still return it to a visible row. #393 repair: a hidden anchor's keyboard goes to the focusOwner its host names, with no [tabindex] ancestor inference; with none named it is released, never left on a removed row or a hidden anchor. #393 repair: a submenu the keyboard holds (being entered, or focus inside its card) is never replaced or closed by passive hover; a pointer press on a parent row moves the keyboard to that row before it takes over. A placement reporting referenceHidden stops presenting its surface in the same render, and the layout phase of that commit settles the keyboard and closes the surface once, before paint. #400 focus lifecycle: portal into a containing Settings dialog scope when present; Floating UI geometry, reference-hidden settlement, keyboard behavior and owners unchanged. Header/Trajectory chrome alignment: the remembered trigger survives the close, so a split-button anchor gets the keyboard back after a selection. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e7e71f29eb88b9c11516b19ea3e9e49012fd348a995d1ebac11c23e75474c571",
       "retained_dependencies": [
         "./DialogSurface",
@@ -2389,7 +2389,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "accc85f465f9c9edbd10708ae47a68884783f6c11ac455d01a85d848baea5ae1",
+      "local_sha256": "d776e5d8753a3dbae435df0c4a0cfbf11e955b5a8ad349053d74701a2b09d806",
       "classification": "B",
       "additional_sources": [
         {
@@ -2632,7 +2632,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
       "destination": "web-console/src/presentation/primitives/icons/index.tsx",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #454: Harness IconDeliverDocRegular artwork added as IconDeliverDocOutline14. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #454: Harness IconDeliverDocRegular artwork added as IconDeliverDocOutline14. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "0808f16b575502111c00b08181a68da4d065eb6008fd1da4076d458b324bdf78",
       "retained_dependencies": [
         "./props.ts"
@@ -2645,7 +2645,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ea6a9021df80bc7063c8e64a8a4b84ab330154ac6f9a1a6b4580851a6cb57e86",
+      "local_sha256": "9474f2337b29c3584fad079ca9c82ea2129f13f9402d9ea93aa554d28a62e3de",
       "classification": "A",
       "additional_sources": [
         {
@@ -2736,7 +2736,7 @@
       "destination": "web-console/src/presentation/right-panel/RightPanel.tsx",
       "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection WEB-RESET-03: accessible close label follows the supplied occupant; same single right-panel seat. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Preview sidebar alignment: two 38px rows, shared dockkit file chips and icon chrome; header visibility is independent of docked layout.",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection WEB-RESET-03: accessible close label follows the supplied occupant; same single right-panel seat. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Preview sidebar alignment: two 38px rows, shared dockkit file chips and icon chrome; header visibility is independent of docked layout. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "718c0b7d21d48d32dba1676c91c9715c524a6ed23d9fdbe29d7b2c24bce55c60",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2750,14 +2750,14 @@
         "./SidebarRight.module.css",
         "react"
       ],
-      "local_sha256": "e8e26dba98a8bebdf30cf0c8e66a052e977217a5dfe95eb3a9c63a4186c33b9b",
+      "local_sha256": "cd1eed213e59ee1db19c4756969696c069e2da0d5b3b4e282486316cb78fcb92",
       "classification": "B"
     },
     {
       "destination": "web-console/src/presentation/right-panel/SidebarRight.module.css",
       "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "faa7ed08b9e57e8e97bb5f5f728b0e7f172daf6fe0a72432c001b3345038330e",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2766,7 +2766,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "a0e08221a9b86238098853b3ee43d6f921bc64860e0e84d6a1d1a738f1ceab9e",
+      "local_sha256": "b8f66c755cbbf8b7c47cfec94d58ea26241c30d44a9ddf201f8553aec2c86302",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2774,9 +2774,9 @@
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/presentation/settings/SettingsContent.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles.",
+      "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "62f4bb0e59d557e83b9e7f5d895c5650629e0d8f93985987348c26c1edef350d",
+      "local_sha256": "8a506de2ce4af831e8101f7494f51d535efcf1a136e31fbd52c132ca3ce0a4a4",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2809,7 +2809,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.module.css",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint. #393: the panel is 1000px bounded by the viewport, min(820px, viewport − 48px) high, r24, and a size container; rail 216px. Narrow layout is an @container query on the panel's own width; the horizontal strip rules are deleted, and the modal shell keeps only its viewport bound on a media query. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation WEB-RESET-03: bounded category labels hidden in horizontal narrow navigation. #392: the mask moves onto the React Aria overlay and the dialog/tab roots gain layout classes. #392 repair: the horizontal page strip is laid out from React Aria data-orientation; only the narrow panel geometry stays on the breakpoint. #393: the panel is 1000px bounded by the viewport, min(820px, viewport − 48px) high, r24, and a size container; rail 216px. Narrow layout is an @container query on the panel's own width; the horizontal strip rules are deleted, and the modal shell keeps only its viewport bound on a media query. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "52a665b2c19ce30b35811c7b8b4c73e4ee94342d86e8e6fec77e61e1ced5738b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2818,7 +2818,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "c0970a7ba9da731902b2fc3b5c81098fc9589693bff50b9c3654a5c9f134a46c",
+      "local_sha256": "bfe4c00b3cfac19605104bb26e48da8897c41e01cba40908482447b39a15d08f",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2826,7 +2826,7 @@
       "destination": "web-console/src/presentation/settings/SettingsRoot.tsx",
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership. #392: the overlay, focus containment/restoration and vertical page tabs are React Aria Components (ModalOverlay/Modal/Dialog/Tabs) styled by the retained upstream classes; the hand-written focus trap and portal are removed. #392 repair: page tab orientation follows the viewport (vertical rail, horizontal narrow strip) so arrow-key semantics match the visual axis; the render-time missing-page fallback is removed because navigation admits only listed pages. The selected tab keeps itself inside a horizontal strip once it is committed as selected, including selections that do not move focus. #393: one grid frame (rail, fixed header, one scrolling options pane) with the header outside React Aria Tabs; distinct page glyphs from the existing icon family; the narrow panel replaces the rail with a section menu on the shared Menu primitive. The viewport media-query store, horizontal tab orientation and strip-scrolling tab label are deleted. The section menu no longer passes the removed Menu portal prop. #393 repair: the section menu closes through the shared Menu when the container query takes its trigger out of layout; the panel holds no breakpoint state. #393 repair: names the Settings dialog as the section menu's focus owner. #393 repair: when the focused rail tab or closed section trigger leaves layout, the keyboard moves to the other presentation's control for the selected page, triggered by the browser's focus fixup, with no breakpoint state. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter WEB-RESET-03: optional native section group labels; unchanged single modal geometry, focus and close ownership. #392: the overlay, focus containment/restoration and vertical page tabs are React Aria Components (ModalOverlay/Modal/Dialog/Tabs) styled by the retained upstream classes; the hand-written focus trap and portal are removed. #392 repair: page tab orientation follows the viewport (vertical rail, horizontal narrow strip) so arrow-key semantics match the visual axis; the render-time missing-page fallback is removed because navigation admits only listed pages. The selected tab keeps itself inside a horizontal strip once it is committed as selected, including selections that do not move focus. #393: one grid frame (rail, fixed header, one scrolling options pane) with the header outside React Aria Tabs; distinct page glyphs from the existing icon family; the narrow panel replaces the rail with a section menu on the shared Menu primitive. The viewport media-query store, horizontal tab orientation and strip-scrolling tab label are deleted. The section menu no longer passes the removed Menu portal prop. #393 repair: the section menu closes through the shared Menu when the container query takes its trigger out of layout; the panel holds no breakpoint state. #393 repair: names the Settings dialog as the section menu's focus owner. #393 repair: when the focused rail tab or closed section trigger leaves layout, the keyboard moves to the other presentation's control for the selected page, triggered by the browser's focus fixup, with no breakpoint state. #400 focus lifecycle: Settings uses bounded Base UI Dialog behavior; Harness styling and native/product ownership retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "7ce55121345e28bed96b01c2e08641162d7bee4569083bad46b98c1574577ecb",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2837,7 +2837,6 @@
       ],
       "retained_dependencies": [
         "../../locale/react",
-        "../primitives/DialogSurface",
         "../primitives/Menu",
         "../primitives/icons",
         "./SettingsRoot.module.css",
@@ -2846,14 +2845,14 @@
         "react",
         "react-aria-components"
       ],
-      "local_sha256": "629643e38a2ccff4345816ec796f79e9f6a151fa4950e76187abf472fe442fe9",
+      "local_sha256": "b687e75f778d13c55dac7f3aa01319178f87eed885624d945661d20b1143c413",
       "classification": "B"
     },
     {
-      "destination": "web-console/src/presentation/sidebar/SidebarRoot.module.css",
+      "destination": "web-console/src/presentation/sidebar/HomeSidebar.module.css",
       "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "6eaadd716ab135e0d08696f11e979449c14734b38b94ae65408601bdf5ff8393",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2862,15 +2861,15 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "da44af031e265eb6210d420ee85fc4eb70bc239cabeeff82108725dfb11efa13",
+      "local_sha256": "d957e84356fbaf90f29e6fb190c7b7bd6ec920dd05330f95a4e55a1ceba9076c",
       "retained_dependencies": [],
       "classification": "B"
     },
     {
-      "destination": "web-console/src/presentation/sidebar/SidebarRoot.tsx",
+      "destination": "web-console/src/presentation/sidebar/HomeSidebar.tsx",
       "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "7ffff715e71603e04412d574dd6b67d2d450609d62fe2d187cb7580233396243",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2881,14 +2880,13 @@
       ],
       "retained_dependencies": [
         "../../locale/react",
-        "../layout/AppFrame",
         "../primitives/Tooltip",
         "../primitives/icons",
-        "./SidebarRoot.module.css",
+        "./HomeSidebar.module.css",
         "clsx",
         "react"
       ],
-      "local_sha256": "1900cff12c303b8d5c652cada5fa1601f45a6ecfb0cd5419c2de28e876ea6014",
+      "local_sha256": "c4e9f4c01fd1236d962beaee5b507e1bddf03a8a43e6455f6dba6fccdb3ed633",
       "classification": "B",
       "additional_sources": [
         {
@@ -3120,7 +3118,7 @@
       "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.module.css",
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "95190edcbe40455651e26aaf0b42b1c952bd45dd6777179de5fc179153c2d5d3",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -3129,7 +3127,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "23fb45142ac6f65dc85604fb059d01b83f7b6d9389283ea25383f679cd8f429a",
+      "local_sha256": "a25e1239ef8593625777541461c30d5295701980a4606323a26c6741946c6169",
       "retained_dependencies": [],
       "classification": "B",
       "additional_sources": [
@@ -3145,7 +3143,7 @@
       "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.tsx",
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. #393: no longer passes the removed Menu portal prop. #393 repair: the Session tree is the programmatically focusable owner of its row action menus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded.",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection; WEB-12 review repair: passes presentation-only Close view callback to open Sidebar rows. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. #393: no longer passes the removed Menu portal prop. #393 repair: the Session tree is the programmatically focusable owner of its row action menus. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "861c3a98489e6ddb7c9383c514a0af7ce59eedd03317b09d51063b0c69c6c775",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -3165,7 +3163,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "d8f1292967d08cae438ea3aed094553ddbcecb4b8c38b3786775f9908b19104a",
+      "local_sha256": "c8bf0dee2b999b27d590819f0b3e1cef46e08e1d860f086c182419cc4d8d4598",
       "classification": "B",
       "additional_sources": [
         {
@@ -3185,7 +3183,7 @@
     {
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
       "destination": "web-console/src/workspaces/WorkspaceNavigation.tsx",
-      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Issue #433 review repair: consume the shared owner current-demand status instead of aggregating retained historical entries; no new upstream reuse or dependencies. #436 metadata dispatch repair: retain the opened dialog Product Host mutation scope, send it for add/rename/unregister and independently fence display settlement; native Session rename remains separate. #436 contract hardening: bind Sidebar metadata intent capture to the exact catalog that rendered the action, matching the Composer; no new upstream reuse or dependencies. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. PR #458 navigation ownership: catalog search supersedes preparation/read continuations without revoking committed controls or acquiring route ownership. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Issue #487: client contract, error and first-submission owner import paths only; upstream reference unchanged. Scheduler UI alignment: mandatory App Server v63 imports and native task navigation; original upstream baseline retained. UI experience: silent background association reads; failures retain their existing notice.",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers; WEB-12 removes ordinary diagnostic counters/lifecycle labels while preserving native controls and authoritative refs; WEB-12 review repair: Sidebar-only selection/close callbacks, native display-title projection and Session-scoped uncertainty. Native authority unchanged. Explicit Sidebar Close all views also releases unlisted/restored browser views without cancelling native work. Issue #406: current App Server v27 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v27 imports; upstream reference unchanged. Issue #433 review repair: consume the shared owner current-demand status instead of aggregating retained historical entries; no new upstream reuse or dependencies. #436 metadata dispatch repair: retain the opened dialog Product Host mutation scope, send it for add/rename/unregister and independently fence display settlement; native Session rename remains separate. #436 contract hardening: bind Sidebar metadata intent capture to the exact catalog that rendered the action, matching the Composer; no new upstream reuse or dependencies. New conversation sidebar: show only the current browser draft, pinned above native sessions, without allocating a native identity; native creation acknowledgement retains ownership. PR #458 navigation ownership: catalog search supersedes preparation/read continuations without revoking committed controls or acquiring route ownership. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. Session-list alignment: DSH row/menu/rename geometry and interaction patterns; browser-scoped pin preference, native completed-response Fork and permanent deletion retain rustX ownership. Archive is excluded. Issue #487: client contract, error and first-submission owner import paths only; upstream reference unchanged. Scheduler UI alignment: mandatory App Server v63 imports and native task navigation; original upstream baseline retained. UI experience: silent background association reads; failures retain their existing notice. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
       "retained_dependencies": [
         "../app/scheduler/copy",
@@ -3248,7 +3246,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "83cc8e6dfae35d0792af81855682d63ff9a10cead74926cec842f6da08e08c2c"
+      "local_sha256": "b6025cceaf1ce5b96a861c088cd6a80cf0b5e7dec9ddddd4e3ec5f866f172197"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -4078,7 +4076,7 @@
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "c2b370dae452142ff1c3e00777ffd90562447998006e50c7976c1137da3f512f",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #433 review repair: English and Chinese browser-evidence acknowledgement and historical deletion outcome copy; no additional upstream reuse. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. MCP finite diagnostics: localized connectivity result and cleanup-state tooltips. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. #464: Auto Repair copy (en, zh). #464 review: receipt changes worded from schema objects, positions and native Tool names only, never authored keys. #464 review: an empty repair level is reported, never claimed as no repair needed. Reconciled native auto-repair and typed projections under App Server v48. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.aseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #433 review repair: English and Chinese browser-evidence acknowledgement and historical deletion outcome copy; no additional upstream reuse. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. MCP finite diagnostics: localized connectivity result and cleanup-state tooltips. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. #464: Auto Repair copy (en, zh). #464 review: receipt changes worded from schema objects, positions and native Tool names only, never authored keys. #464 review: an empty repair level is reported, never claimed as no repair needed. Reconciled native auto-repair and typed projections under App Server v48. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.aseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "destination": "web-console/src/locale/dictionaries/settings.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -4102,7 +4100,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "48f6dc7113046004b9925c6a8c0dcd2c6c0b9beab743d6525144a55cc05ce239"
+      "local_sha256": "7883a6db856aab4f644436d47b52da8bfcf4c20e341839c3eb714a36e6ceb945"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4162,7 +4160,7 @@
       "upstream": "packages/client/ui-sidebar/src/client/locales.ts",
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
       "upstream_sha256": "0e97e11d42a1cbf7e7a4bfc7cff1dc6253db82005bb0f9d3fb35902229085019",
-      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed.",
+      "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery. Issue #410: typed en/zh feature dictionary; legacy English-only workspace translator removed. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "destination": "web-console/src/locale/dictionaries/sidebar.ts",
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -4173,7 +4171,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "2bf28d46458e8a26f42525c1b74a735ff3dec92176b19b567df8e426afc0c8b6"
+      "local_sha256": "b7b120e2a058940afeb8de35033024ee7fee312e0d0f49505fc73b995ef16590"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -4551,7 +4549,7 @@
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "1edeb3ea847d7e37b8f443741e3e270e6fcad2fd25458a20e2f1c36e967cb75b",
       "classification": "B",
-      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls. Latest main integration: preserve native preview identity, MCP startup and selected-Workspace ownership as applicable. Combined App Server v63 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Review request ownership ends when its last docked or floating content tab closes. Scheduler UI alignment: mandatory App Server v63 imports and native task navigation; original upstream baseline retained. Independent PR review: atomically replace preview content in its current docked or floating seat using existing reversible operations; preserve floating geometry, independent open copies, focus and closed-reader disposal.",
+      "treatment": "Harness start-page capsule layout adapted to registered Workspace or native Session-scoped Product Host file browsing and PTY tabs; no upstream stores, RPC or execution authority retained. Restored tab-strip navigation, guide replacement, shell menu and bounded two-pane controls. Latest main integration: preserve native preview identity, MCP startup and selected-Workspace ownership as applicable. Combined App Server v63 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Review request ownership ends when its last docked or floating content tab closes. Scheduler UI alignment: mandatory App Server v63 imports and native task navigation; original upstream baseline retained. Independent PR review: atomically replace preview content in its current docked or floating seat using existing reversible operations; preserve floating geometry, independent open copies, focus and closed-reader disposal. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../client/preview-policy",
@@ -4586,7 +4584,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "7d127d597cf7fdb7752cd06d22125e676cb3210dcc0aedad5d86a6389f941f05",
+      "local_sha256": "d7596aec3e01f5a3797151ef3aecf29dd41411b3d2dc204ef28560c1f9781620",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -6089,14 +6087,14 @@
       "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.module.css",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "2062ebe9808edbaf4f9c197859140b6881a8b531493605a6f07dd77dd8c2f25f",
-      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned.",
+      "treatment": "Harness sidebar docking and document presentation port. Host admission, native execution and document resource lifetimes remain rustX-owned. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "destination": "web-console/src/presentation/right-panel/PreviewPanel.module.css",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "ed40d5b7516e1f7840bbe426383b99dfa9792ac1c5917077b8cc7145729e9100"
+      "local_sha256": "06d0305b136995c6acfcb251111b16093f6a40c7f9c67c368144928afd9aef36"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/bootstrap.ts",

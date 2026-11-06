@@ -179,8 +179,8 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       await page.setViewportSize({ width, height: 1000 });
       // Establish the reading baseline after the measured responsive columns
       // finish reflowing; a transient narrow sidebar width is not that baseline.
-      const sidebar = width === 390 ? 56 : 280;
-      await expect(page.locator('[data-harness-frame]')).toHaveCSS('grid-template-columns', `${sidebar}px ${width - sidebar}px 0px`);
+      const sidebar = width === 390 ? 0 : 280;
+      await expect(page.locator('[data-harness-frame]')).toHaveCSS('grid-template-columns', `56px ${sidebar}px ${width - 56 - sidebar}px 0px`);
       await page.getByRole('button', { name: 'Preview sample.pdf in sidebar', exact: true }).scrollIntoViewIfNeeded();
       await page.getByRole('button', { name: 'Preview sample.pdf in sidebar', exact: true }).focus();
       const scroll = await page.locator('[data-conversation-scroll]').first().evaluate(el => el.scrollTop);
@@ -191,7 +191,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
       // Worker/URL cleanup can complete while AppFrame's existing grid-track
       // transition is still resizing Chat. Assert its final seat, then the
       // unchanged reading position published by ChatViewport's layout frame.
-      await expect(page.locator('[data-harness-frame]')).toHaveCSS('grid-template-columns', `${sidebar}px ${width - sidebar}px 0px`);
+      await expect(page.locator('[data-harness-frame]')).toHaveCSS('grid-template-columns', `56px ${sidebar}px ${width - 56 - sidebar}px 0px`);
       await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(scroll, 0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
@@ -202,13 +202,13 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1'); await close();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
-    await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
     await open('sample.pdf'); await expect(panel.locator('[data-pdf-page="1"] .textLayer')).toContainText('page 1');
     await page.screenshot({ animations: 'disabled', path: info.outputPath('pdf-dark.png') });
     await info.attach('pdf-dark', { path: info.outputPath('pdf-dark.png'), contentType: 'image/png' }); await close();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-    await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+    await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+    await page.getByRole('button', { name: '主页', exact: true }).click();
     await expandDeliveries(); await page.getByRole('button', { name: '在侧边栏预览 sample.xlsx', exact: true }).click();
     await expect(page.locator('[data-excel-preview] .fortune-sheet-container')).toBeVisible();
     await page.screenshot({ animations: 'disabled', path: info.outputPath('workbook-chinese.png') });

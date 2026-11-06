@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
 import type { SessionLocation } from '../src/workspaces/host';
@@ -41,6 +41,23 @@ it('classification arriving after a manual Workspace choice preserves that choic
   await waitFor(() => expect(f.picker().textContent).toContain('Workspace A'));
   expect(f.ui.getByRole('textbox', { name: 'Message' })).toBe(editor); expect((editor as HTMLTextAreaElement).value).toBe('Keep my input');
 });
+it('typing before automatic Workspace selection survives a Settings round trip and later default refinement', async () => {
+  const f = await fixture({ held: true });
+  const editor = f.ui.getByRole('textbox', { name: 'Message' });
+  const incarnation = f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
+  fireEvent.change(editor, { target: { value: 'Typed before Workspace classification' } });
+  fireEvent.click(within(f.ui.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Settings' }));
+  await act(async () => f.classify.resolve());
+  expect(server.requests.filter(row => ['session/create', 'mcp/draftPrepare'].includes(row.request.method))).toHaveLength(0);
+  fireEvent.click(within(f.ui.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Home' }));
+  await waitFor(() => expect(f.picker().textContent).toContain('Workspace B'));
+  expect(f.ui.getByRole('textbox', { name: 'Message' })).toBe(editor);
+  expect((editor as HTMLTextAreaElement).value).toBe('Typed before Workspace classification');
+  expect(f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  const preparation = await server.waitFor('mcp/draftPrepare', 1);
+  expect(preparation.params).toMatchObject({ cwd: '/workspace/B' });
+});
 it('New Conversation retains the current Session origin until classification can select its Workspace', async () => {
   const f = await fixture({ held: true, current: true });
   fireEvent.click(f.ui.getAllByRole('button', { name: 'New Conversation' })[0]);
@@ -48,6 +65,21 @@ it('New Conversation retains the current Session origin until classification can
   await act(async () => f.classify.resolve());
   await waitFor(() => expect(f.picker().textContent).toContain('Workspace A'));
   expect((editor as HTMLTextAreaElement).value).toBe('New conversation in A');
+});
+it('New from Scheduled Tasks inherits the retained Home Session while Workspace classification is pending', async () => {
+  const f = await fixture({ held: true, current: true });
+  fireEvent.click(within(f.ui.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Scheduled Tasks' }));
+  fireEvent.click(await f.ui.findByRole('button', { name: 'New' }));
+  const editor = f.ui.getByRole('textbox', { name: 'Message' });
+  fireEvent.change(editor, { target: { value: 'Keep the Home Workspace origin' } });
+  expect(server.requests.filter(row => ['session/create', 'mcp/draftPrepare'].includes(row.request.method))).toHaveLength(0);
+  await act(async () => f.classify.resolve());
+  await waitFor(() => expect(f.picker().textContent).toContain('Workspace A'));
+  expect(f.ui.getByRole('textbox', { name: 'Message' })).toBe(editor);
+  expect((editor as HTMLTextAreaElement).value).toBe('Keep the Home Workspace origin');
+  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  const preparation = await server.waitFor('mcp/draftPrepare', 1);
+  expect(preparation.params).toMatchObject({ cwd: '/workspace/A' });
 });
 it('an empty Session history still selects an existing registration', async () => {
   const f = await fixture({ history: false }); await waitFor(() => expect(f.picker().textContent).toContain('Workspace A'));

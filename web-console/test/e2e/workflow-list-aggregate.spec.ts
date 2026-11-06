@@ -52,7 +52,7 @@ for (const width of [1440, 390])
         await connectRemote(page, fixture.endpoint, fixture.token);
         await openEmptySession(page, fixture, 'Workspace A');
         await page
-          .getByRole('navigation', { name: 'Global panels' })
+          .getByRole('navigation', { name: 'Primary navigation' })
           .getByRole('button', { name: 'Workflows', exact: true })
           .click();
         await page.getByRole('button', { name: 'data_align', exact: true }).click();
@@ -186,8 +186,9 @@ for (const width of [1440, 390])
         await activate('merge');
         await expect(panel.getByRole('textbox', { name: 'Output name', exact: true })).toHaveCount(2);
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '工作流', exact: true }).click();
+        await activate('merge');
         const zhPanel = page.getByRole('complementary', { name: '检查器', exact: true });
         await expect(zhPanel.getByRole('switch', { name: '聚合分组', exact: true })).toBeVisible();
         await zhPanel.screenshot({ path: `/tmp/rustx-aggregate-aligned-${width}.png` });
@@ -234,7 +235,7 @@ for (const width of [1440, 390]) test(`Boolean List references remain dynamic un
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'boolean_filter', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const activate = async () => {

@@ -11,18 +11,27 @@ import type { DraftPreparations } from '../new-conversation/preparation';
 import { responseRetry, responseRetryReady, type ResponseRetry } from '../agent/response-retry';
 import { forkLatestSession } from '../commands/fork-session';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
+import type { WorkspaceAuthority } from '../../workspaces/authority';
+import type { ProductHostWorkspaces } from '../../workspaces/host';
+import { sameEndpoint } from '../../workspaces/endpoint';
+import type { WorkflowSurfaceActor } from '../workflows/machines/surface';
 
 class RetiredPreparation extends Error {}
 export type ConversationRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string } | { kind: 'session-draft'; sessionId: string };
 export interface WorkflowsRoute { kind: 'workflows' }
 export interface SchedulesRoute { kind: 'schedules' }
-export type ShellRoute = ConversationRoute | WorkflowsRoute | SchedulesRoute;
+export interface SettingsRoute { kind: 'settings' }
+export type ShellRoute = ConversationRoute | WorkflowsRoute | SchedulesRoute | SettingsRoute;
+export function isHomeRoute(route: ShellRoute): route is ConversationRoute {
+  return route.kind === 'new-conversation' || route.kind === 'session' || route.kind === 'session-draft';
+}
 function sameEditorDestination(a: ShellRoute, b: ShellRoute) {
   const from = a, to = b;
   return 'sessionId' in from && 'sessionId' in to ? from.sessionId === to.sessionId
     : from.kind === 'new-conversation' && to.kind === 'new-conversation' && from.workspaceId === to.workspaceId;
 }
 type Destination =
+  | { kind: 'home'; route: ConversationRoute; binding: number }
   | { kind: 'creation'; binding: string }
   | { kind: 'session'; sessionId: string; sidebar: boolean; command?: CommandRequest; nodeId?: string; conversationId?: string }
   | { kind: 'restore-session'; sessionId: string; sidebar: boolean; command?: CommandRequest }
@@ -31,10 +40,17 @@ type Destination =
   | { kind: 'node'; sessionId: string; nodeId: string; conversationId: string };
 interface Pending { recovery?: true; destination: Destination; route: ShellRoute; generation: number; authority: number | undefined }
 interface Prepared { warning?: string; pending: Pending; route: ShellRoute; observation?: Observation; content?: UserInputBlock[]; replay?: ResponseRetry['replay'] }
-interface Input { drafts?: DraftPreparations; client: AppServerClient; settings: SettingsNavigationActor; route?: ConversationRoute }
+interface Input { drafts?: DraftPreparations; client: AppServerClient; settings: SettingsNavigationActor; host: ProductHostWorkspaces; workspaces: WorkspaceAuthority; workflows: WorkflowSurfaceActor; route?: ConversationRoute }
+type NavigationEvent = Extract<ShellNavigationEvent, { type: 'OPEN' | 'DRAFT' | 'HOME' | 'WORKFLOWS' | 'SCHEDULES' | 'SETTINGS' }>;
+interface WorkflowLeave { event: NavigationEvent }
 export interface ShellNavigationContext extends Omit<Input, 'route'> {
-  // Draft identity survives refocusing; control identity never does.
+  // Home keeps its editor and controls across primary pages. Executable
+  // conversation transitions establish their own control identity.
   binding: number; control: object; route: ShellRoute; pending?: Pending; error?: string;
+  /** A presentation hint, revalidated before Home is published again. */
+  home: ConversationRoute;
+  leaving?: WorkflowLeave;
+  approvedLeave?: WorkflowLeave;
   retry?: ResponseRetry;
   command?: { request: CommandRequest; route: ShellRoute; generation: number };
   restored?: { conversation: string; content: UserInputBlock[] };
@@ -55,7 +71,10 @@ export type ShellNavigationEvent =
   | { type: 'CREATED'; sessionId: string; control: object; generation: number; pending?: Pending }
   | { type: 'COMMAND'; request: CommandRequest }
   | { type: 'COMMAND.CLOSE'; command: NonNullable<ShellNavigationContext['command']> }
-  | { type: 'SETTINGS'; destination: Extract<SettingsNavigationEvent, { type: 'OPEN' | 'OPEN.CONNECTION' | 'OPEN.OWNER' | 'OPEN.REPAIRS' }> }
+  | { type: 'SETTINGS'; destination?: Extract<SettingsNavigationEvent, { type: 'OPEN' | 'OPEN.CONNECTION' | 'OPEN.OWNER' | 'OPEN.REPAIRS' }> }
+  | { type: 'HOME' }
+  | { type: 'WORKFLOW.LEFT'; intent: WorkflowLeave }
+  | { type: 'WORKFLOW.CANCELLED'; intent: WorkflowLeave }
   | { type: 'WORKFLOWS' }
   | { type: 'SCHEDULES' }
   | { type: 'SIDEBAR.DISMISS' | 'DISMISS.ERROR' }
@@ -95,21 +114,82 @@ function pendingSessionDraft(context: ShellNavigationContext, pending: Pending, 
 }
 /** Disposable preparation owns publication only. Native calls below are finite
  * lifecycle commands: aborting this actor retires admission, never settlement. */
-async function prepare(input: { client: AppServerClient; pending: Pending; parent: { send(event: ShellNavigationEvent): void } }, signal: AbortSignal): Promise<Prepared> {
+async function prepare(input: { client: AppServerClient; host: ProductHostWorkspaces; workspaces: WorkspaceAuthority; pending: Pending; parent: { send(event: ShellNavigationEvent): void } }, signal: AbortSignal): Promise<Prepared> {
   const { client, pending } = input, destination = pending.destination;
   const current = () => !signal.aborted && authorityCurrent(client, pending);
+  if (destination.kind === 'home') {
+    let route = destination.route;
+    const submission = route.kind === 'new-conversation' ? firstSubmissions(client).draft(String(destination.binding)) : undefined;
+    if (submission?.session) route = { kind: 'session-draft', sessionId: submission.session.id };
+    const empty: Prepared = { pending, route: { kind: 'new-conversation' } };
+    try {
+      if (route.kind === 'new-conversation') {
+        const native = client.getSnapshot();
+        const workspaceId = route.workspaceId;
+        if (workspaceId) {
+          const observation = await input.workspaces.observe(signal);
+          if (!observation.current() || !native.endpoint || !sameEndpoint(observation.catalog.endpoint, native.endpoint)
+            || !observation.catalog.workspaces.some(row => row.id === workspaceId)) return empty;
+          const resolved = await input.host.resolveWorkspace(workspaceId, native.endpoint);
+          const [location] = await input.workspaces.classify([resolved.cwd], native.endpoint, observation, signal);
+          if (!observation.current() || !location.authorized) return empty;
+        }
+        // Creation may finish while Workspace authorization is suspended.
+        // Revalidate that Session against fresh lifecycle state before Home,
+        // including deletion that settled during the same authorization wait.
+        const created = firstSubmissions(client).draft(String(destination.binding))?.session;
+        if (!created) return { pending, route };
+        route = { kind: 'session-draft', sessionId: created.id };
+      }
+      const native = client.getSnapshot();
+      const sessionId = route.sessionId;
+      const view = native.views[sessionId];
+      if (!view || view.deleting || view.deletionRecovery) return empty;
+      // Attachment intent is native execution authority, not ownership of the
+      // retained local editor. Uncertain settlement can release that intent.
+      // A disconnected Home is a local draft/recovery surface, never executable.
+      // Reconnect and attachment admission remain exclusively lifecycle-owned.
+      if (native.connection !== 'connected') return { pending, route: { kind: 'session-draft', sessionId } };
+      const summary = view.summary ?? native.sessions.find(row => row.id === sessionId)
+        ?? await client.readSessionSummary(sessionId);
+      const cwd = summary?.cwd ?? view.settings?.cwd;
+      if (!cwd || !native.endpoint) return empty;
+      const observation = await input.workspaces.observe(signal);
+      const [location] = await input.workspaces.classify([cwd], native.endpoint, observation, signal);
+      const latest = client.getSnapshot().views[sessionId];
+      if (!observation.current() || !location.authorized || !latest || latest.deleting || latest.deletionRecovery) return empty;
+      const executable = client.isAttachmentControlCurrent(sessionId, latest.attachmentObservation);
+      return { pending, route: { kind: executable ? 'session' : 'session-draft', sessionId }, observation: executable ? latest.attachmentObservation : undefined };
+    } catch {
+      // A remembered identity cannot substitute for fresh authorization.
+      return empty;
+    }
+  }
   if (destination.kind === 'creation') {
     // Observe the native FirstSubmissions owner; this actor never creates,
-    // attaches or executes the draft. Publication arrives as correlated CREATED.
-    return await new Promise<never>((_resolve, reject) => {
+    // attaches or executes the draft. A Home return can replace publication
+    // interest while the original creation and Send continue to settle.
+    return await new Promise<Prepared>((resolve, reject) => {
       const inspect = () => {
         const flow = firstSubmissions(client).draft(destination.binding);
         if (flow?.session) input.parent.send({ type: 'CREATION.KNOWN', pending, sessionId: flow.session.id });
-        if (flow && ['failed', 'rejected', 'uncertain', 'discarded', 'paused'].includes(flow.phase)) { cleanup(); reject(flow.error ?? new Error('Conversation preparation stopped.')); }
+        // A known Session outlives recovery or discard of its first input.
+        // Neither action creates or attaches that Session again.
+        if (flow && !flow.session && ['failed', 'rejected', 'uncertain', 'discarded', 'paused'].includes(flow.phase)) { cleanup(); reject(flow.error ?? new Error('Conversation preparation stopped.')); return; }
+        // FirstSubmissions advances past attaching only after its native port
+        // has completed the handoff. Do not replace that port's control fence.
+        if (flow?.session && flow.phase !== 'attaching') {
+          const observation = client.getSnapshot().views[flow.session.id]?.attachmentObservation;
+          if (client.isAttachmentControlCurrent(flow.session.id, observation)) {
+            cleanup(); resolve({ pending, route: { kind: 'session', sessionId: flow.session.id }, observation });
+          }
+        }
       };
       const release = firstSubmissions(client).subscribe(inspect);
+      // An admitted owner is quiet while native resync can still suspend controls.
+      const releaseNative = client.subscribe(inspect);
       const retired = () => { cleanup(); reject(new Error('Conversation publication retired.')); };
-      const cleanup = () => { release(); signal.removeEventListener('abort', retired); };
+      const cleanup = () => { release(); releaseNative(); signal.removeEventListener('abort', retired); };
       signal.addEventListener('abort', retired, { once: true }); inspect();
     });
   }
@@ -172,9 +252,9 @@ async function prepare(input: { client: AppServerClient; pending: Pending; paren
  * still preserve their committed route until preparation completes. */
 export const shellNavigationMachine = setup({
   types: { context: {} as ShellNavigationContext, input: {} as Input, events: {} as ShellNavigationEvent },
-  actors: { drafts: fromCallback<ShellNavigationEvent, { owner?: DraftPreparations; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'route' | 'binding' | 'client'> }; subscribe(listener: () => void): { unsubscribe(): void } } }>(({ input }) => {
+  actors: { drafts: fromCallback<ShellNavigationEvent, { owner?: DraftPreparations; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'home' | 'binding' | 'client'> }; subscribe(listener: () => void): { unsubscribe(): void } } }>(({ input }) => {
     const follow = () => {
-      const { route, binding, client } = input.parent.getSnapshot().context;
+      const { home: route, binding, client } = input.parent.getSnapshot().context;
       const submission = route.kind === 'session-draft' ? firstSubmissions(client).session(route.sessionId) : undefined;
       if (submission?.draft.preparation && !['rejected', 'discarded'].includes(submission.phase)) {
         // A creation ACK publishes durable identity before native validated
@@ -198,8 +278,9 @@ export const shellNavigationMachine = setup({
       else if (owner.retry && responseRetryReady(owner.retry, native.views[owner.retry.view.id])) sendBack({ type: 'RETRY.OBSERVED', retry: owner.retry });
     };
     const release = input.client.subscribe(observe); observe(); return release;
-  }), prepare: fromPromise<Prepared, { client: AppServerClient; pending: Pending; parent: { send(event: ShellNavigationEvent): void } }>(({ input, signal }) => prepare(input, signal)) },
+  }), prepare: fromPromise<Prepared, { client: AppServerClient; host: ProductHostWorkspaces; workspaces: WorkspaceAuthority; pending: Pending; parent: { send(event: ShellNavigationEvent): void } }>(({ input, signal }) => prepare(input, signal)) },
   guards: {
+    workflowLeave: ({ context, event }) => context.route.kind === 'workflows' && context.approvedLeave?.event !== event,
     sameTransition: ({ context, event }) => {
       if (event.type !== 'OPEN') return false;
       const pending = context.pending?.destination, next = event.destination;
@@ -210,10 +291,19 @@ export const shellNavigationMachine = setup({
     },
     prepared: ({ context, event }) => {
       const output = (event as unknown as { output: Prepared }).output;
-      return output.pending === context.pending && authorityCurrent(context.client, output.pending)
+      const native = context.client.getSnapshot();
+      const current = output.pending.destination.kind === 'home'
+        ? native.generation === output.pending.generation && native.authorityRevision === output.pending.authority
+        : authorityCurrent(context.client, output.pending);
+      return output.pending === context.pending && current
         && (output.route.kind !== 'session' || context.client.isAttachmentObservationCurrent(output.route.sessionId, output.observation));
     },
     createdOwner: ({ context, event }) => event.type === 'CREATION.KNOWN' && context.pending === event.pending && context.pending.destination.kind === 'creation',
+    resumingCreation: ({ context }) => {
+      if (context.route.kind !== 'new-conversation' || context.client.getSnapshot().connection !== 'connected') return false;
+      const flow = firstSubmissions(context.client).draft(String(context.binding));
+      return !!flow && (flow.phase === 'creating' || !!flow.session);
+    },
     failed: ({ context, event }) => !!context.pending && authorityCurrent(context.client, context.pending) && !((event as unknown as { error: unknown }).error instanceof RetiredPreparation),
     attached: ({ context, event }) => {
       if (event.type !== 'OPEN' || event.destination.kind !== 'session' && event.destination.kind !== 'restore-session') return false;
@@ -226,7 +316,7 @@ export const shellNavigationMachine = setup({
     selectedSessionDraft: ({ context }) => selectedSessionDraft(context),
     sidebar: ({ context }) => (context.pending?.destination.kind === 'session' || context.pending?.destination.kind === 'fork-session') && !!context.pending.destination.sidebar,
     drafting: ({ context }) => context.route.kind === 'new-conversation' && (!firstSubmissions(context.client).draft(String(context.binding)) || ['rejected', 'discarded'].includes(firstSubmissions(context.client).draft(String(context.binding))!.phase)),
-    draftTargetAvailable: ({ context }) => context.route.kind !== 'new-conversation' || !firstSubmissions(context.client).draft(String(context.binding)) || ['admitted', 'rejected', 'discarded'].includes(firstSubmissions(context.client).draft(String(context.binding))!.phase),
+    draftTargetAvailable: ({ context }) => context.home.kind !== 'new-conversation' || !firstSubmissions(context.client).draft(String(context.binding)) || ['admitted', 'rejected', 'discarded'].includes(firstSubmissions(context.client).draft(String(context.binding))!.phase),
     commandRoute: ({ context }) => context.route.kind === 'session' && context.client.isAttachmentControlCurrent(context.route.sessionId, context.client.getSnapshot().views[context.route.sessionId]?.attachmentObservation),
     commandOwner: ({ context, event }) => event.type === 'COMMAND.CLOSE' && context.command === event.command,
     createdAttached: ({ context, event }) => event.type === 'CREATED' && event.pending === context.pending && context.pending?.destination.kind === 'creation' && authorityCurrent(context.client, context.pending) && event.control === context.control && event.generation === context.client.getSnapshot().generation && context.client.isAttachmentControlCurrent(event.sessionId, context.client.getSnapshot().views[event.sessionId]?.attachmentObservation),
@@ -242,6 +332,16 @@ export const shellNavigationMachine = setup({
       && sessionRecoveryCurrent(context.client, context.route.sessionId),
   },
   actions: {
+    requestLeave: assign(({ context, event, self }) => {
+      const intent = { event: event as NavigationEvent };
+      context.workflows.send({ type: 'LEAVE', proceed: () => self.send({ type: 'WORKFLOW.LEFT', intent }), cancelled: () => self.send({ type: 'WORKFLOW.CANCELLED', intent }) });
+      return { leaving: intent, approvedLeave: undefined };
+    }),
+    finishLeave: assign({ leaving: () => undefined, approvedLeave: () => undefined }),
+    cancelWorkflowLeave: ({ context }) => { if (context.leaving) context.workflows.send({ type: 'CANCEL' }); },
+    suspendSettings: ({ context }) => context.settings.send({ type: 'SUSPEND' }),
+    page: assign(({ event }) => ({ route: { kind: event.type === 'SETTINGS' ? 'settings' as const : event.type === 'WORKFLOWS' ? 'workflows' as const : 'schedules' as const }, pending: undefined, command: undefined, retry: undefined, error: undefined, dismissedSidebar: undefined })),
+    home: assign(({ context }) => ({ pending: { destination: { kind: 'home' as const, route: context.home, binding: context.binding }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, command: undefined, retry: undefined, error: undefined })),
     resumeSession: assign(({ context, event }) => {
       if (event.type !== 'SESSION.RESUME' || event.intent.destination.kind !== 'session' && event.intent.destination.kind !== 'restore-session') return {};
       // The logical editor outlives a failed or retired observation. Observe
@@ -271,7 +371,7 @@ export const shellNavigationMachine = setup({
       return { ...((destination.kind === 'restore-session' || destination.kind === 'session') ? pendingSessionDraft(context, pending, destination.sessionId) : {}), pending, retry, dismissedSidebar: undefined, command: undefined, error: undefined };
     }),
     creationKnown: assign(({ event }) => event.type === 'CREATION.KNOWN' ? { route: { kind: 'session-draft' as const, sessionId: event.sessionId }, draftSession: { sessionId: event.sessionId, intent: event.pending } } : {}),
-    create: assign(({ context, event }) => event.type === 'CREATE' ? { pending: { destination: { kind: 'creation' as const, binding: event.binding }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, command: undefined, error: undefined } : {}),
+    create: assign(({ context, event }) => ({ pending: { destination: { kind: 'creation' as const, binding: event.type === 'CREATE' ? event.binding : String(context.binding) }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, command: undefined, error: undefined })),
     retire: assign({ dismissedSidebar: () => undefined, retry: () => undefined, draftSession: () => undefined, pending: () => undefined, command: () => undefined, error: () => undefined }),
     retirePreparation: assign(({ context }) => {
       const native = context.client.getSnapshot();
@@ -286,20 +386,27 @@ export const shellNavigationMachine = setup({
     commit: assign(({ context, event }) => {
       const output = (event as unknown as { output: Prepared }).output;
       if (output.pending.destination.kind === 'fork-session') return { dismissedSidebar: undefined, pending: undefined, error: output.warning, publication: { intent: output.pending, control: context.control, sidebar: false } };
-      const control = {};
       // Refocus/admission preserves the logical editor. Explicit executable
       // Node/Branch/Retry transitions still publish a fresh editor identity.
-      const preserveDraft = (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && sameEditorDestination(context.route, output.route);
-      return { dismissedSidebar: undefined, retry: context.retry && output.replay ? { ...context.retry, replay: output.replay } : undefined, draftSession: undefined, binding: preserveDraft ? context.binding : context.binding + 1, control, route: output.route, pending: undefined, error: undefined,
+      const returning = output.pending.destination.kind === 'home';
+      const creating = output.pending.destination.kind === 'creation';
+      const preserveDraft = creating || (returning ? sameEditorDestination(context.home, output.route)
+        || context.home.kind === 'new-conversation' && 'sessionId' in output.route && firstSubmissions(context.client).draft(String(context.binding))?.session?.id === output.route.sessionId
+        : (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && sameEditorDestination(context.route, output.route));
+      // Returning or promoting the same logical editor cannot retire an
+      // admitted submission. Native proof still gates executable controls.
+      const control = preserveDraft ? context.control : {};
+      const draftSession = returning && output.route.kind === 'session-draft' ? { sessionId: output.route.sessionId, intent: { recovery: true as const, destination: { kind: 'restore-session' as const, sessionId: output.route.sessionId, sidebar: false }, route: output.route, generation: output.pending.generation, authority: output.pending.authority } } : undefined;
+      return { dismissedSidebar: undefined, retry: context.retry && output.replay ? { ...context.retry, replay: output.replay } : undefined, draftSession, binding: preserveDraft ? context.binding : context.binding + 1, control, route: output.route, pending: undefined, error: undefined,
         command: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && output.pending.destination.command ? { request: output.pending.destination.command, route: output.route, generation: output.pending.generation } : undefined,
-        restored: output.route.kind === 'session' && output.content ? { conversation: output.observation!.target.conversation_id, content: output.content } : preserveDraft && context.restored?.conversation === output.observation?.target.conversation_id ? context.restored : undefined,
+        restored: output.route.kind === 'session' && output.content ? { conversation: output.observation!.target.conversation_id, content: output.content } : preserveDraft && (returning || context.restored?.conversation === output.observation?.target.conversation_id) ? context.restored : undefined,
         publication: { intent: output.pending, control, sidebar: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && !!output.pending.destination.sidebar && context.dismissedSidebar !== output.pending } };
     }),
     attached: assign(({ context, event }) => {
       if (event.type !== 'OPEN' || event.destination.kind !== 'session' && event.destination.kind !== 'restore-session') return {};
       const route: ShellRoute = context.route.kind === 'session' && context.route.sessionId === event.destination.sessionId ? context.route : { kind: 'session', sessionId: event.destination.sessionId };
       const preserveDraft = sameEditorDestination(context.route, route);
-      const control = route === context.route ? context.control : {};
+      const control = preserveDraft ? context.control : {};
       return { dismissedSidebar: undefined, retry: undefined, draftSession: undefined, binding: preserveDraft ? context.binding : context.binding + 1, control, route, pending: undefined, error: undefined, restored: preserveDraft && context.restored?.conversation === context.client.getSnapshot().views[event.destination.sessionId]?.target?.conversation_id ? context.restored : undefined, publication: { control, sidebar: event.destination.sidebar }, command: event.destination.command ? { request: event.destination.command, route, generation: context.client.getSnapshot().generation } : undefined };
     }),
     fail: assign(({ event }) => ({ dismissedSidebar: undefined, retry: undefined, pending: undefined, error: actionError((event as unknown as { error: unknown }).error) })),
@@ -313,48 +420,52 @@ export const shellNavigationMachine = setup({
       const preserve = !submitted && (event.type === 'DRAFT.WORKSPACE' || resident && context.route.kind === 'new-conversation' && (event.workspaceId !== undefined || context.route.workspaceId === event.workspaceId));
       const route = preserve && event.type === 'DRAFT' && context.route.kind === 'new-conversation' && context.route.workspaceId === event.workspaceId ? context.route : { kind: 'new-conversation' as const, workspaceId: event.workspaceId };
       const draftWorkspaceSession = event.type === 'DRAFT' && event.workspaceId === undefined
-        ? 'sessionId' in context.route ? context.route.sessionId : context.route.kind === 'new-conversation' ? context.draftWorkspaceSession : undefined
+        ? 'sessionId' in context.home ? context.home.sessionId : context.draftWorkspaceSession
         : undefined;
       return { retry: undefined, draftSession: undefined, draftWorkspaceSession, binding: preserve ? context.binding : context.binding + 1, control: preserve ? context.control : {}, route, pending: undefined, command: undefined, restored: undefined, error: undefined };
     }),
-    created: assign(({ context, event }) => event.type === 'CREATED' ? { retry: undefined, draftSession: undefined, binding: context.binding, control: {}, route: { kind: 'session' as const, sessionId: event.sessionId }, pending: undefined, command: undefined, error: undefined } : {}),
+    created: assign(({ context, event }) => event.type === 'CREATED' ? { retry: undefined, draftSession: undefined, binding: context.binding, control: context.control, route: { kind: 'session' as const, sessionId: event.sessionId }, pending: undefined, command: undefined, error: undefined } : {}),
     command: assign(({ context, event }) => ({ retry: undefined, pending: undefined, command: event.type === 'COMMAND' && event.request ? { request: event.request, route: context.route, generation: context.client.getSnapshot().generation } : undefined })),
     retireSettings: ({ context, event }) => { if (event.type === 'AUTHORITY' && context.authority !== event.authority) context.settings.send({ type: 'RETIRE' }); },
-    settings: ({ context, event }) => { if (event.type === 'SETTINGS') context.settings.send(event.destination); },
+    settings: ({ context, event }) => { if (event.type === 'SETTINGS') context.settings.send(event.destination ?? { type: 'SUSPEND' }); },
     authority: assign(({ context, event }) => event.type === 'AUTHORITY' ? { dismissedSidebar: undefined, retry: undefined, draftWorkspaceSession: context.authority !== event.authority ? undefined : context.draftWorkspaceSession, draftSession: context.authority !== event.authority ? undefined : context.draftSession, binding: context.authority !== event.authority ? context.binding + 1 : context.binding, control: {}, generation: event.generation, authority: event.authority, pending: undefined, command: undefined, error: undefined,
-      route: context.authority !== event.authority ? { kind: 'new-conversation' as const } : context.route } : {}),
+      ...(context.authority !== event.authority ? { home: { kind: 'new-conversation' as const }, route: { kind: 'new-conversation' as const }, leaving: undefined, approvedLeave: undefined } : {}),
+    } : {}),
     dismissError: assign({ error: () => undefined }),
   },
 }).createMachine({
   id: 'shellNavigation', initial: 'idle',
   invoke: [{ id: 'nativeAuthority', src: 'authority', input: ({ context, self }) => ({ client: context.client, parent: self }) }, { id: 'draftOwnership', src: 'drafts', input: ({ context, self }) => ({ owner: context.drafts, parent: self }) }],
-  context: ({ input }) => ({ ...input, binding: 0, control: {}, route: input.route ?? { kind: 'new-conversation' }, generation: input.client.getSnapshot().generation, authority: input.client.getSnapshot().authorityRevision }),
+  context: ({ input }) => ({ ...input, binding: 0, control: {}, home: input.route ?? { kind: 'new-conversation' }, route: input.route ?? { kind: 'new-conversation' }, generation: input.client.getSnapshot().generation, authority: input.client.getSnapshot().authorityRevision }),
   // Adoption can precede the replay acknowledgement. Retire presentation on
   // either ordering without depending on a mounted Chat surface.
-  always: { guard: ({ context }) => !!context.retry && responseRetryReady(context.retry, context.client.getSnapshot().views[context.retry.view.id]), actions: assign({ retry: () => undefined }) },
+  always: [
+    { guard: ({ context }) => isHomeRoute(context.route) && context.home !== context.route, actions: assign(({ context }) => ({ home: context.route as ConversationRoute })) },
+    { guard: ({ context }) => !!context.retry && responseRetryReady(context.retry, context.client.getSnapshot().views[context.retry.view.id]), actions: assign({ retry: () => undefined }) },
+  ],
   states: {
-    idle: {},
-    preparing: { invoke: { id: 'preparation', src: 'prepare', input: ({ context, self }) => ({ client: context.client, pending: context.pending!, parent: self }),
+    idle: { always: { guard: 'resumingCreation', target: 'preparing', actions: 'create' } },
+    preparing: { invoke: { id: 'preparation', src: 'prepare', input: ({ context, self }) => ({ client: context.client, host: context.host, workspaces: context.workspaces, pending: context.pending!, parent: self }),
       onDone: [{ guard: 'prepared', target: 'idle', actions: 'commit' }, { target: 'idle', actions: 'retirePreparation' }],
       onError: [{ guard: 'failed', target: 'idle', actions: 'fail' }, { target: 'idle', actions: 'retirePreparation' }] } },
   },
   on: {
     'RETRY.OBSERVED': { guard: ({ context, event }) => context.retry === event.retry && responseRetryReady(event.retry, context.client.getSnapshot().views[event.retry.view.id]), actions: assign({ retry: () => undefined }) },
     'CREATION.KNOWN': { guard: 'createdOwner', actions: 'creationKnown' },
-    OPEN: [{ guard: 'sameTransition' }, { guard: 'attached', target: '.idle', reenter: true, actions: 'attached' }, { target: '.preparing', reenter: true, actions: 'start' }],
-    DRAFT: { guard: 'draftTargetAvailable', target: '.idle', actions: 'draft' }, 'DRAFT.WORKSPACE': { guard: 'drafting', target: '.idle', actions: 'draft' },
+    'WORKFLOW.LEFT': { guard: ({ context, event }) => context.leaving === event.intent && context.route.kind === 'workflows', actions: [assign(({ event }) => ({ approvedLeave: event.intent })), ({ event, self }) => self.send(event.intent.event)] },
+    'WORKFLOW.CANCELLED': { guard: ({ context, event }) => context.leaving === event.intent, actions: 'finishLeave' },
+    OPEN: [{ guard: 'workflowLeave', actions: 'requestLeave' }, { guard: 'sameTransition' }, { guard: 'attached', target: '.idle', reenter: true, actions: ['suspendSettings', 'finishLeave', 'attached'] }, { target: '.preparing', reenter: true, actions: ['suspendSettings', 'finishLeave', 'start'] }],
+    DRAFT: [{ guard: 'workflowLeave', actions: 'requestLeave' }, { guard: 'draftTargetAvailable', target: '.idle', actions: ['suspendSettings', 'finishLeave', 'draft'] }], 'DRAFT.WORKSPACE': { guard: 'drafting', target: '.idle', actions: 'draft' },
     CREATE: { guard: 'creating', target: '.preparing', reenter: true, actions: 'create' },
     CREATED: { guard: 'createdAttached', target: '.idle', actions: 'created' },
     COMMAND: { guard: 'commandRoute', target: '.idle', actions: 'command' },
     'COMMAND.CLOSE': { guard: 'commandOwner', actions: assign({ command: () => undefined }) },
-    // The selected cold Session already owns its local route. A modal or drawer
-    // only retires that gesture's viewport-close interest; its native readiness
-    // still promotes this exact target, without starting input or model work.
-    SETTINGS: [{ guard: 'selectedSessionDraft', actions: ['dismissSidebar', 'settings'] }, { target: '.idle', actions: ['retire', 'settings'] }],
-    // Leaving a conversation for Workflows retires its pending intent and
-    // its committed controls; it cancels no native work.
-    WORKFLOWS: { target: '.idle', actions: ['retire', assign({ route: () => ({ kind: 'workflows' as const }), control: () => ({}) })] },
-    SCHEDULES: { target: '.idle', actions: ['retire', assign({ route: () => ({ kind: 'schedules' as const }), control: () => ({}) })] },
+    // Primary routes retire disposable publication only. The Home editor,
+    // admitted native operations and configuration transactions keep their owners.
+    HOME: [{ guard: 'workflowLeave', actions: 'requestLeave' }, { guard: ({ context }) => isHomeRoute(context.route) }, { target: '.preparing', reenter: true, actions: ['suspendSettings', 'finishLeave', 'home'] }],
+    SETTINGS: [{ guard: 'workflowLeave', actions: 'requestLeave' }, { target: '.idle', actions: ['finishLeave', 'page', 'settings'] }],
+    WORKFLOWS: [{ guard: ({ context }) => context.route.kind === 'workflows', target: '.idle', actions: ['cancelWorkflowLeave', 'finishLeave', 'page'] }, { target: '.idle', actions: ['suspendSettings', 'page'] }],
+    SCHEDULES: [{ guard: 'workflowLeave', actions: 'requestLeave' }, { target: '.idle', actions: ['suspendSettings', 'finishLeave', 'page'] }],
     'SIDEBAR.DISMISS': [{ guard: 'selectedSessionDraft', actions: 'dismissSidebar' }, { guard: 'sidebar', target: '.idle', actions: 'retire' }],
     CANCEL: { guard: 'cancelling', target: '.idle', actions: 'retire' },
     AUTHORITY: { guard: 'changedAuthority', target: '.idle', actions: ['retireSettings', 'authority'] },
@@ -363,19 +474,23 @@ export const shellNavigationMachine = setup({
   },
 });
 export type ShellNavigationActor = ActorRefFrom<typeof shellNavigationMachine>;
-/** Committed controls are keyed to a route object and native connection, never
- * to the disposable preparing actor. */
+/** Committed controls belong to the retained Home owner and native connection,
+ * independently of the disposable preparing actor and visible primary page. */
 export function committedRouteCurrent(actor: ShellNavigationActor) {
   const { control, client } = actor.getSnapshot().context, generation = client.getSnapshot().generation, authority = client.getSnapshot().authorityRevision;
   return () => actor.getSnapshot().status === 'active' && actor.getSnapshot().context.control === control && client.getSnapshot().generation === generation && client.getSnapshot().authorityRevision === authority;
 }
 
-/** Local startup input interest may pass through exactly its own publication.
- * It is not an execution proof: native attachment/admission still gates I/O. */
+/** Local startup input belongs to its retained Home editor, including primary
+ * page round trips. Native attachment/admission still gates executable I/O. */
 export function draftSessionCurrent(actor: ShellNavigationActor, intent: Pending) {
-  const { client } = actor.getSnapshot().context;
+  const { client, binding, draftSession } = actor.getSnapshot().context;
+  const sessionId = draftSession?.intent === intent ? draftSession.sessionId : undefined;
   return () => {
     const context = actor.getSnapshot().context;
-    return actor.getSnapshot().status === 'active' && authorityCurrent(client, intent) && (context.pending === intent || context.publication?.intent === intent && context.publication.control === context.control);
+    const retained = sessionId !== undefined && context.binding === binding
+      && 'sessionId' in context.home && context.home.sessionId === sessionId;
+    return actor.getSnapshot().status === 'active' && authorityCurrent(client, intent)
+      && (retained || context.pending === intent || context.publication?.intent === intent && context.publication.control === context.control);
   };
 }

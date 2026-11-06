@@ -125,7 +125,7 @@ it('normal Settings opens General, while recovery Show details opens the Advance
   render(<App client={client} connection={owner} workspaceHost={a.workspaceHost} />);
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   expect(screen.getByRole('tab', { name: 'General' }).getAttribute('aria-selected')).toBe('true');
-  fireEvent.click(screen.getByRole('button', { name: 'Close Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Home' }));
   fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
   expect(screen.getByRole('tab', { name: 'Advanced' }).getAttribute('aria-selected')).toBe('true');
   expect(screen.getByRole('region', { name: 'Connection Settings' })).toBeTruthy();

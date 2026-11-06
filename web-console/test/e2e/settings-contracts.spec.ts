@@ -4,7 +4,7 @@ import { connectRemote } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { choose, closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage } from './shell-actions';
+import { choose, returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -34,13 +34,13 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
     writeFileSync(mcpFile, '[mcp_servers.implicit-http]\nurl = "https://example.invalid/mcp"\nheaders = { Authorization = "fixture-header-secret" }\n[mcp_servers.implicit-stdio]\ncommand = "fixture-not-executed"\nenv = { TOKEN = "fixture-env-secret" }\n');
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Transport token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     for (const owner of ['Root', 'Agent'] as const) {
       if (owner === 'Root') { await openSettingsPage(page, 'Models'); await expandModelAuthoring(page); }

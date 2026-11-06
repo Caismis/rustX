@@ -859,13 +859,17 @@ Failure or cancellation leaves those local files with that draft for explicit
 handling. Ordinary explicit editor replacement still uses the existing single
 editor/binding rule; returning to a former Session does not restore discarded text.
 
-Once that local Session target is selected, dismissing its sidebar or opening
-Settings retires only that gesture's viewport-close interest. Its exact pending
-preparation still owns promotion to the executable route after Attach; otherwise
-a narrow-screen user could send successfully and remain trapped in a draft.
+Once that local Session target is selected, dismissing its sidebar retires only
+that gesture's viewport-close interest. Its exact pending preparation still owns
+promotion to the executable Home route after Attach.
 The dismissed Pending identity prevents that completion from closing a newly
-reopened drawer. A newer target, explicit cancellation or authority replacement
-still retires the old publication. History/Fork preparation that has not selected
+reopened drawer. Opening another primary page retires disposable preparation,
+while retaining Home's local Session target, editor/input binding and native
+flight. A late Attach cannot replace that primary page. Returning Home validates
+fresh authorization and adopts current attachment evidence, or observes the
+original lifecycle flight without another Open. A newer conversation target,
+explicit cancellation or authority replacement still retires old publication.
+History/Fork preparation that has not selected
 its target retains its independent cancellation rules. Promotion alone sends no
 input, adopts no authored configuration and invokes no model.
 
@@ -7590,3 +7594,23 @@ rescanning unrelated package bytes. Process drain cancels the shared native
 resource-I/O authority; child and Python preparation retain their existing
 physical settlement authorities. See [the limit inventory](resource-limits.md)
 for exact ownership, costs and recovery paths.
+
+### Web primary navigation shell
+
+The Web ShellNavigationMachine owns the only committed primary route: Home
+(conversation/draft), Workflows, Scheduled Tasks or Settings. It also retains the
+last Home destination and validates Product Host authorization and Session
+lifecycle evidence before returning, without another native Open or model request.
+A permanent presentation rail reflects only that committed route. The Home
+sidebar and preview/workbench occupy conditional shell regions and retain their
+presentation state across primary pages.
+
+SettingsNavigationMachine owns only Settings-internal target, permitted section,
+detail, owner lookup and receipt inspection. Settings is a page, with no separate
+modal-open authority. Configuration transaction actors remain under their existing
+native-authority-scoped ConfigurationSystem. Workflow external navigation is
+correlated by Shell and guarded by workflowSurfaceMachine's dirty/unsettled edit
+confirmation. Replaced or cancelled leave intents cannot publish. These are Web
+presentation boundaries; Session lifecycle, native execution, authorization,
+configuration CAS, settlement and transport ownership remain unchanged. See
+[`web-console/SHELL-ARCHITECTURE.md`](../web-console/SHELL-ARCHITECTURE.md).

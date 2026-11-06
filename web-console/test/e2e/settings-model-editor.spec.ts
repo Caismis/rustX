@@ -6,7 +6,7 @@ import { expectStableScreenshot } from './screenshot';
 const fixture = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/settings.html`;
 const provider = 'enterprise-inference-gateway-eu-central-primary-with-an-exceptionally-long-provider-identity';
 const model = 'enterprise-reasoning-model-2026-09-long-context-preview-with-an-exceptionally-long-identity';
-const settings = (page: Page) => page.getByRole('dialog', { name: 'Settings', exact: true });
+const settings = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
 const editor = (page: Page) => page.getByRole('dialog', { name: `Model ${model}`, exact: true });
 const writes = (page: Page) => page.evaluate(() => (window as unknown as {rustxNativeRequests: () => {method:string}[]}).rustxNativeRequests().filter(request => request.method === 'configuration/sourceWrite').length);
 
@@ -46,6 +46,27 @@ async function noOverflow(page: Page) {
   expect(box.x + box.width).toBeLessThanOrEqual((page.viewportSize()!).width);
   expect(box.y + box.height).toBeLessThanOrEqual((page.viewportSize()!).height);
 }
+
+test('authority replacement hides a retained model dialog and releases its focus scope on Home', async ({ page }) => {
+  const errors = await start(page, 'Light', 1440);
+  await openSettingsPage(page, 'Models');
+  await settings(page).getByRole('row', { name: provider, exact: true }).click();
+  await settings(page).getByRole('row', { name: model, exact: true }).click();
+  await expect(editor(page).getByLabel('Context window', { exact: true })).toBeFocused();
+  const before = await writes(page);
+  await page.evaluate(() => (window as unknown as { rustxReplaceAuthority(): Promise<void> }).rustxReplaceAuthority());
+  const home = page.getByRole('button', { name: 'Home', exact: true });
+  await expect(home).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('[data-settings-page]')).toBeHidden();
+  await expect(editor(page)).toHaveCount(0);
+  await home.focus(); await expect(home).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Workflows', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(editor(page)).toBeVisible();
+  expect(await writes(page)).toBe(before);
+  expect(errors).toEqual([]);
+});
 
 for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) {
   test(`${theme} ${width}: appearance stays on one row, model basic/advanced and footer remain usable`, async ({page}) => {

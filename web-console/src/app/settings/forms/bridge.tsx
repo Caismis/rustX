@@ -87,7 +87,7 @@ export type DefinitionAuthoring = 'new' | 'inherited' | 'overriding' | 'authored
  * None of those live in a React component or in a TanStack Form instance.
  * They live in the unit's transaction actor, which is owned by the Settings
  * authority actor and outlives this form, the detail view it sits in, the page
- * it belongs to and the whole Settings dialog.
+ * it belongs to and the whole Settings surface.
  *
  * Rendering an inherited unit shows the native effective value while authoring
  * nothing: no draft is created, Save stays unavailable, and a no-op Save can

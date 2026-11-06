@@ -40,11 +40,10 @@ export function sessionObservation(tx: Translate, state: ClientView, id: string,
   if (!transition && state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
+export function WorkspaceNavigation({ associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, workspaceSettings }: {
   associations: WorkspaceAssociations; transition?: { sessionId: string; action: SessionTransition };
   workspaceSettings?: (id: string, label: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ShellView; endpoint: string;
-  wide: boolean; expand: () => void;
   metadataChanged: (removed?: string) => void;
   draft?: DraftConversation;
   workspace?: string; selected?: string; selectWorkspace: (id?: string) => void;
@@ -118,7 +117,7 @@ export function WorkspaceNavigation({ associations, host, client, state, transit
     containsCurrent: row.id === workspace,
     sessionCount: rows.filter(item => item.group === row.id).length, sessions: rows.filter(item => item.group === row.id).map(item => toNode(item.session)) }));
   return <>
-    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node} transition={transition?.sessionId === node.id ? transition.action : undefined}>{render}</LiveSessionNode>} wide={wide} expand={expand} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
+    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node} transition={transition?.sessionId === node.id ? transition.action : undefined}>{render}</LiveSessionNode>} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
       unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={id => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? state.sessions.find(session => session.id === id)?.generated_title?.text ?? state.sessions.find(session => session.id === id)?.preview ?? '')} pin={id => pins.toggle(id)} copyId={id => { const generation = client.getSnapshot().generation; void writeClipboard(id).then(copied => { if (generation === client.getSnapshot().generation) setToast(previous => ({ sequence: (previous?.sequence ?? 0) + 1, copied })); }); }} fork={forkSession} remove={deleteSession}
       workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => edit('add', '', '') : undefined}

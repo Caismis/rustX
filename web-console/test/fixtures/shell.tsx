@@ -16,7 +16,18 @@ import '../../src/presentation/theme/shiki.css';
 import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
 const server = new Server();
+server.handlers.set('workflow/list', request => {
+  if (request.method !== 'workflow/list') throw Error('Expected Workflow library read');
+  return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'missing', diagnostic: null, files: [] } };
+});
 for (const method of ['configuration/sourcesRead', 'session/effectiveConfiguration'] as const) server.handlers.set(method, () => { throw new RpcFailure({ code: -32000, message: 'Select Appearance to review the presentation fixture.' }); });
+if (new URL(location.href).searchParams.has('navigation')) {
+  server.handlers.delete('configuration/sourcesRead');
+  server.workspaceHost.workflowWorkspace = async (_scope, _native, _id, operation) => {
+    if (operation.kind !== 'list') throw Error(`Unexpected navigation fixture operation ${operation.kind}`);
+    return { kind: 'list', library: { target: { kind: 'workspace', directory: '/workspace' }, directory: '/workspace/.agents/workflows', absent_revision: 'missing', diagnostic: null, files: [] } };
+  };
+}
 server.snapshots.set('C', snapshot('C'));
 server.snapshots.get('A')!.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1 };
 server.snapshots.get('B')!.pending_interactions = [interaction('approval', 'B')];

@@ -57,18 +57,18 @@ test('narrow sidebar overlays the conversation without squeezing its composer', 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   const center = page.locator('main');
-  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Home' })).toBeVisible();
   const width = (await center.boundingBox())!.width;
-  await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+  await page.getByRole('button', { name: 'Home' }).click();
   await expect(page.getByRole('button', { name: 'Collapse Sidebar' })).toBeVisible();
   expect((await center.boundingBox())!.width).toBe(width);
   await expect(center).toHaveAttribute('inert', '');
   await page.getByRole('button', { name: 'Collapse Sidebar' }).press('Escape');
-  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Home' })).toBeVisible();
   await expect(center).not.toHaveAttribute('inert', '');
-  await page.getByRole('button', { name: 'Expand Sidebar' }).click();
-  await page.getByRole('button', { name: 'Close navigation' }).click({ position: { x: 370, y: 400 } });
-  await expect(page.getByRole('button', { name: 'Expand Sidebar' })).toBeVisible();
+  await page.getByRole('button', { name: 'Home' }).click();
+  await page.getByRole('button', { name: 'Close navigation' }).click({ position: { x: 320, y: 400 } });
+  await expect(page.getByRole('button', { name: 'Home' })).toBeVisible();
 });
 
 test('responsive sidebar dismissal restores interaction across breakpoint changes', async ({ page }) => {
@@ -76,7 +76,7 @@ test('responsive sidebar dismissal restores interaction across breakpoint change
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   await expect(page).toHaveTitle(/rustX/);
   const frame=page.locator('[data-harness-frame]'), center=page.locator('main');
-  const expand=page.getByRole('button',{name:'Expand Sidebar',exact:true});
+  const expand=page.getByRole('button',{name:'Home',exact:true});
   const collapse=page.getByRole('button',{name:'Collapse Sidebar',exact:true});
   const message=page.getByRole('textbox',{name:'Message',exact:true});
   await expect(collapse).toBeVisible();
@@ -90,7 +90,7 @@ test('responsive sidebar dismissal restores interaction across breakpoint change
     expect(await message.evaluate(el=>el.closest('[inert]')!==null)).toBe(true);
     if(dismissal==='toggle') await collapse.click();
     else if(dismissal==='escape') await page.keyboard.press('Escape');
-    else await page.getByRole('button',{name:'Close navigation'}).click({position:{x:370,y:400}});
+    else await page.getByRole('button',{name:'Close navigation'}).click({position:{x:320,y:400}});
     await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
     await expect(center).not.toHaveAttribute('inert','');
     await expect(page.getByRole('button',{name:'Close navigation'})).toHaveCount(0);
@@ -197,26 +197,26 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await expect(page.getByRole('tree', { name: 'Session browser' })).toContainText('Running');
   await expectStableScreenshot(page, 'desktop-expanded-light.png');
   await page.getByRole('button', { name: 'Collapse Sidebar' }).click();
-  await expect(page.locator('[data-sidebar-wide]')).toHaveAttribute('data-sidebar-wide', 'false');
+  await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
   expect((await page.locator('main').boundingBox())!.x).toBe(56);
   await expectStableScreenshot(page, 'desktop-collapsed-rail.png');
-  await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+  await page.getByRole('button', { name: 'Home' }).click();
   await page.getByRole('button', { name: 'Search Sessions', exact: true }).click();
   await page.getByLabel('Search Session metadata').fill('Session');
   await expectStableScreenshot(page, 'workspace-session-browser.png');
   await page.getByRole('button', { name: 'Clear search' }).click();
-  // Global Settings opens at General, which holds Appearance.
+  // The initial Settings target is General, which holds Appearance.
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-light.png');
   await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
   await expectStableScreenshot(page, 'settings-shell-dark.png');
-  await page.getByRole('button', { name: 'Close Settings' }).click();
+  await page.getByRole('button', { name: 'Home' }).click();
   await expectStableScreenshot(page, 'desktop-expanded-dark.png');
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator('[data-sidebar-wide]')).toHaveAttribute('data-sidebar-wide', 'false');
+  await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
   expect((await page.locator('main').boundingBox())!.x).toBe(56);
   await expectStableScreenshot(page, 'mobile-rail-dark.png');
-  await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+  await page.getByRole('button', { name: 'Home' }).click();
   await expectStableScreenshot(page, 'mobile-expanded-dark.png');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expectStableScreenshot(page, 'mobile-settings-dark.png');
@@ -354,7 +354,7 @@ test('primary sidebar navigation retires the narrow overlay without changing run
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   const frame = page.locator('[data-harness-frame]'), center = page.locator('main');
-  const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+  const expand = page.getByRole('button', { name: 'Home', exact: true });
   const composer = page.getByRole('textbox', { name: 'Message', exact: true });
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.evaluate(() => window.sessionFixture.readyNavigation());
@@ -395,10 +395,10 @@ test('idle overlay dismissal preserves the committed conversation navigation fen
   const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
   for (const dismissal of ['escape', 'backdrop', 'toggle'] as const) {
     await page.evaluate(() => window.sessionFixture.captureNavigation());
-    await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
     const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
     if (dismissal === 'escape') await collapse.press('Escape');
-    else if (dismissal === 'backdrop') await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 370, y: 400 } });
+    else if (dismissal === 'backdrop') await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 320, y: 400 } });
     else await collapse.click();
     await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
     expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
@@ -415,7 +415,7 @@ test('authoritative narrow navigation commits while a background snapshot is hel
   const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
   expect(before.views.A.authoritative && before.views.B.authoritative).toBe(true);
   const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
-  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.evaluate(() => window.sessionFixture.holdBackgroundCheckpoint());
   const snapshots = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/checkpoint').length;
   await page.locator('button[data-session-id="B"]').click();
@@ -433,22 +433,22 @@ test('authoritative narrow navigation commits while a background snapshot is hel
   await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
 });
 
-for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as const) test(departure === 'drawer' ? 'closing the narrow sidebar preserves cold C first-Send publication and its next input' : `closing ${departure} preserves cold C first-Send publication and its next input`, async ({ page }) => {
+for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as const) test(departure === 'drawer' ? 'closing the narrow sidebar preserves cold C first-Send publication and its next input' : `returning Home from ${departure} preserves cold C first-Send publication and its next input`, async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.evaluate(() => window.sessionFixture.readyNavigation());
   const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
   await page.evaluate(() => { window.sessionFixture.holdAttach(); window.sessionFixture.holdInput(); });
-  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
   await page.locator('button[data-session-id="C"]').click();
   await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'session/attach' && request.params.session_id === 'C').length)).toBe(1);
   await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
-  if (departure === 'drawer') await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 370, y: 400 } });
+  if (departure === 'drawer') await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 320, y: 400 } });
   else {
     await openFixtureSettings(page, departure === 'Workspace Settings');
-    await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
   }
   await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
   await expect(page.locator('main')).not.toHaveAttribute('inert');
@@ -489,7 +489,7 @@ for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'fail
   const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
   const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
   await editor.fill('A editor must not move to C');
-  if (outcome !== 'desktop') await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  if (outcome !== 'desktop') await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
   await page.evaluate(() => window.sessionFixture.holdAttach());
   if (outcome === 'success') await frame.evaluate(element => {
@@ -508,7 +508,7 @@ for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'fail
   await expect(page.getByRole('button', { name: 'Stop', exact: true, includeHidden: true })).toHaveCount(0);
   expect((await page.evaluate(() => window.sessionFixture.navigationFacts())).views.C.attachment).toBe('attaching');
   if (outcome === 'escape') await page.locator('button[data-session-id="C"]').press('Escape');
-  if (outcome === 'backdrop') await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 370, y: 400 } });
+  if (outcome === 'backdrop') await page.getByRole('button', { name: 'Close navigation', exact: true }).click({ position: { x: 320, y: 400 } });
   if (outcome === 'toggle') await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   if (outcome === 'breakpoint') { await page.setViewportSize({ width: 1440, height: 844 }); await expect(frame).not.toHaveAttribute('data-sidebar-overlay'); await page.setViewportSize({ width: 390, height: 844 }); }
   if (outcome === 'newer') {
@@ -525,7 +525,7 @@ for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'fail
   if (withdrawn) {
     // A new drawer opening has its own viewport interest. The old selection's
     // late ACK may promote C, but cannot close this newly opened drawer.
-    await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
     await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
   }
   if (outcome === 'replacement') { await page.evaluate(() => window.sessionFixture.replaceConnection()); await expect.poll(() => page.evaluate(() => window.sessionFixture.navigationFacts().generation)).not.toBe(before.generation); }
@@ -579,7 +579,7 @@ test('a stale retained attachment permits only a local draft before authoritativ
   const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
   expect(before.views.B.authoritative).toBe(false);
   await page.evaluate(() => window.sessionFixture.holdSnapshot());
-  await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('button[data-session-id="B"]').click();
   await expect(page.getByLabel('Session title')).toHaveText('Session B');
   await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
@@ -598,11 +598,11 @@ test('a stale retained attachment permits only a local draft before authoritativ
 });
 
 async function openFixtureSettings(page: Page, workspace: boolean) {
-  const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+  const expand = page.getByRole('button', { name: 'Home', exact: true });
   if (await expand.isVisible()) await expand.click();
   if (workspace) await openWorkspaceSettings(page, 'rustX');
   else await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const settings = page.getByRole('region', { name: 'Settings', exact: true });
   await expect(settings).toBeVisible();
   await expect(settings.getByRole('heading', { name: workspace ? 'Workspace Settings — rustX' : 'User Settings', exact: true })).toBeVisible();
   if (workspace) expect((await page.evaluate(() => window.sessionFixture.settingsTargets())).at(-1)).toBe('project');
@@ -618,7 +618,7 @@ for (const scenario of ['global', 'workspace', 'global-refusal', 'workspace-refu
   await page.evaluate(() => window.sessionFixture.readyNavigation());
   const before = await page.evaluate(() => window.sessionFixture.navigationFacts());
   const mutations = nativeMutations(await page.evaluate(() => window.sessionFixture.requests()));
-  if (!desktop) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  if (!desktop) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.getByText('Sessions outside registered Workspaces', { exact: true }).click();
   await page.evaluate(() => window.sessionFixture.holdAttach());
   await page.locator('button[data-session-id="C"]').click();
@@ -637,9 +637,9 @@ for (const scenario of ['global', 'workspace', 'global-refusal', 'workspace-refu
   // Wait for the lifecycle-owned Open to settle, not merely its attachment ACK.
   await page.evaluate(() => window.sessionFixture.waitForNavigation());
   const after = await page.evaluate(() => window.sessionFixture.navigationFacts());
-  // Settings keeps the selected C target owner. A real refusal remains a
-  // current C failure; a successful ACK promotes only C, never input or Settings.
-  expect(after.views.C.attachment).toBe(refused ? 'error' : 'attached');
+  // Settings retires disposable navigation interest while native settlement
+  // remains lifecycle-owned. A refused obsolete Open has no claim to publish.
+  expect(after.views.C.attachment).toBe(refused ? 'detached' : 'attached');
   expect(after.views.C.authoritative).toBe(!refused);
   expect(after.claims.some(target => target.session_id === 'C')).toBe(!refused);
   expect(after.views.A).toEqual(before.views.A); expect(after.views.B).toEqual(before.views.B);
@@ -647,11 +647,11 @@ for (const scenario of ['global', 'workspace', 'global-refusal', 'workspace-refu
   await expect(settings).toBeVisible();
   await expect(settings.getByRole('heading', { name: workspace ? 'Workspace Settings — rustX' : 'User Settings', exact: true })).toBeVisible();
   if (!refused) await expect(page.getByRole('alert', { includeHidden: true }).filter({ hasText: 'Navigation fixture rejected' })).toHaveCount(0);
-  await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', refused ? 'session-draft' : 'session');
-  await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
-  await expect(settings).toHaveCount(0);
-  // Settings is a modal over the selected destination. Its close neither
-  // restores A nor grants a late C ACK ownership of a newer B route.
+  await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', competing ? 'session' : 'session-draft');
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(settings).toBeHidden();
+  // Returning Home validates its retained destination; it neither restores A
+  // nor grants a late C acknowledgement ownership of a newer B route.
   await expect(page.getByLabel('Session title')).toHaveText(`Session ${competing ? 'B' : 'C'}`);
   await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', refused ? 'session-draft' : 'session');
   await expect(frame).not.toHaveAttribute('data-sidebar-overlay');
@@ -660,7 +660,7 @@ for (const scenario of ['global', 'workspace', 'global-refusal', 'workspace-refu
   const editor = page.getByRole('textbox', { name: 'Message', exact: true });
   if (refused) {
     await expect(editor).toBeDisabled();
-    await expect(page.getByRole('alert').filter({ hasText: 'Navigation fixture rejected' })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: 'Navigation fixture rejected' })).toHaveCount(0);
   } else await editor.fill('Settings leaves the selected destination editor usable');
   if (desktop) await expect(page.getByRole('button', { name: 'Collapse Sidebar', exact: true })).toBeVisible();
   expect((await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'session/submissionIntent')).toEqual([]);
@@ -672,7 +672,7 @@ for (const width of [390, 1440]) for (const destination of ['A', 'B']) test(`idl
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.evaluate(() => window.sessionFixture.readyNavigation());
   if (destination === 'B') {
-    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click();
     await page.locator('button[data-session-id="B"]').click();
     await expect(page.getByLabel('Session title')).toHaveText('Session B');
   }
@@ -683,7 +683,7 @@ for (const width of [390, 1440]) for (const destination of ['A', 'B']) test(`idl
   for (const workspace of [false, true]) {
     await openFixtureSettings(page, workspace);
     expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
-    await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
     await expect(page.getByLabel('Session title')).toHaveText(`Session ${destination}`);
     expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
     if (destination === 'A') await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
@@ -735,7 +735,7 @@ for (const width of [390, 1440]) test(`idle Settings keeps committed Stop and up
   for (const workspace of [false, true]) {
     await openFixtureSettings(page, workspace);
     expect(await page.evaluate(() => window.sessionFixture.navigationCurrent())).toBe(true);
-    await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeEnabled();
   }
   expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(before);
@@ -748,7 +748,7 @@ for (const width of [390, 1440]) test(`idle Settings keeps committed Stop and up
 
 for (const width of [390, 1440]) test(`catalog search owns preparation without revoking committed controls: ${width}px`, async ({ page }) => {
   const { before, requests, errors } = await openForkOwnershipFixture(page, width);
-  if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.getByRole('button', { name: 'Search Sessions', exact: true }).click();
   await page.evaluate(() => window.sessionFixture.holdSearch());
   const search = page.getByLabel('Search Session metadata', { exact: true });
@@ -786,7 +786,7 @@ for (const width of [390, 1440]) test(`reselecting the current Session preserves
   const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation'), revision = await page.locator('[data-editor-revision]').getAttribute('data-editor-revision');
   const requests = await page.evaluate(() => window.sessionFixture.requests()), facts = await page.evaluate(() => window.sessionFixture.navigationFacts());
   for (let click = 0; click < 2; click++) {
-    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click();
     await page.getByRole('button', { name: 'Open Session A', exact: true }).click();
     await expect(editor).toHaveValue('Authored current Session draft'); await expect(editor).toBeEditable();
     if (width === 390) await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
@@ -810,7 +810,7 @@ for (const width of [390, 1440]) test(`a native Fork seed remains authored after
   const incarnation = await page.locator('[data-editor-incarnation]').getAttribute('data-editor-incarnation'), revision = await page.locator('[data-editor-revision]').getAttribute('data-editor-revision');
   const requests = await page.evaluate(() => window.sessionFixture.requests()), facts = await page.evaluate(() => window.sessionFixture.navigationFacts());
   for (let click = 0; click < 2; click++) {
-    if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click();
     await page.getByRole('button', { name: 'Open Session A (1)', exact: true }).click(); await expect(editor).toHaveValue('Edited native Fork draft');
   }
   await expect(page.getByText('Native restored upload batch restored-batch', { exact: true })).toBeVisible();

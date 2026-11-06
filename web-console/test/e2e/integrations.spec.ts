@@ -2,7 +2,7 @@ import { formatArguments } from '../../src/app/settings/mcp/form-values';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
-  closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  returnHome, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
@@ -17,11 +17,11 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Transport token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
     // The source path is a diagnostic: it is on Advanced.
     await openSettingsPage(page, 'Advanced');
@@ -38,7 +38,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');
     await openSettingsPage(page, 'MCP servers');
@@ -96,10 +96,11 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     // A Workspace surface has no General page: appearance is set globally, from
     // the desktop layout where the Workspace object action is reachable.
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await closeSettings(page);
+    await returnHome(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
     await settings.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');
     await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();

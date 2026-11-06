@@ -109,7 +109,7 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   await settingsReady();
   // The inherited identity is reachable and reported as a redacted native fact.
   await openResourceRow('transport');
-  const dialog = screen.getByRole('dialog', { name: 'Settings' });
+  const dialog = screen.getByRole('region', { name: 'Settings' });
   const provider = screen.getByRole('form', { name: 'Provider transport' });
   const form = within(provider);
   expect(within(dialog).getByText(/Native effective Provider transport/).textContent).toContain('Literal secret (redacted)');
@@ -131,7 +131,7 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   // so document.activeElement can still name a control in the Settings layer.
   fireEvent.keyDown(listbox, { key: 'Escape' });
   expect(screen.queryByRole('listbox')).toBeNull();
-  expect(screen.getByRole('dialog', { name: 'Settings' })).toBe(dialog);
+  expect(screen.getByRole('region', { name: 'Settings' })).toBe(dialog);
   expect(screen.getByRole('form', { name: 'Provider transport' })).toBe(provider);
   expect(form.getByLabelText('Base URL')).toBe(endpoint);
   expect(endpoint.value).toBe('');

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { readdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
 import {
   compareScreenshot,
@@ -26,6 +27,10 @@ import previousStyleManifest from './fixtures/screenshot-comparator/pre-style-sy
  * bounds, layout shifts, missing elements and dimension changes. */
 
 const noisePolicy = manifest as unknown as NoisePolicy;
+const workflowReference = 'workflow-editor-linux.png';
+const workflowCaptures = (manifest.find(entry => entry.reference === workflowReference) as unknown as {
+  captures: readonly { run: number; pngSha256: string; pixels: MeasuredNoisePixel[] }[];
+}).captures;
 const e2e = new URL('./e2e/', import.meta.url);
 const snapshotDirectories = readdirSync(e2e)
   .filter(entry => entry.endsWith('.spec.ts-snapshots'))
@@ -129,19 +134,173 @@ it('A: an exact baseline passes with and without a noise policy', () => {
   }
 });
 
-it('the current workflow editor reference retains only its measured one-pixel, three-level corner allowance', () => {
+it('the captured deletion-dialog raster difference admits only its 63 measured one-level sites', () => {
+  const name = 'settings-delete-confirm-light-linux.png';
+  const entry = manifest.find(row => row.reference === name)!;
+  const expected = reference(name), actual = fixture(entry.capture!);
+  const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+  const directory = snapshotDirectories.find(path => {
+    try { return hash(readFileSync(new URL(name, path))) === entry.referenceSha256; }
+    catch { return false; }
+  });
+  expect(directory).toBeDefined();
+  expect(hash(readFileSync(new URL(entry.capture!, frozen)))).toBe(entry.captureSha256);
+  expect(entry.regions).toHaveLength(63);
+  for (const region of entry.regions) expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 1 });
+  const accepted = compare(actual, name, expected, noisePolicy);
+  expect(accepted.ok).toBe(true);
+  expect(accepted.totalChanged).toBe(63);
+  expect(compare(actual, name, expected, []).ok).toBe(false);
+  expect(compare(actual, 'another-reference.png', expected, noisePolicy).ok).toBe(false);
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  const [x, y] = measured[0]!;
+  const excessive = copy(expected); nudge(excessive, x, y, 2);
+  expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  const observed = new Set(measured.map(([px, py]) => `${px},${py}`));
+  const neighbor = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].find(([px, py]) => !observed.has(`${px},${py}`))!;
+  for (const [px, py] of [neighbor, [670, 584], [0, 0]]) {
+    const changed = copy(expected); nudge(changed, px!, py!, 1);
+    const rejected = compare(changed, name, expected, noisePolicy);
+    expect(rejected.ok).toBe(false);
+    expect(rejected.changedOutsideRegions).toBe(1);
+  }
+});
+
+it('the real CAS capture adds only its two independently bounded panel-edge observations', () => {
+  const name = 'settings-conflict-light-linux.png';
+  const entry = manifest.find(row => row.reference === name)!;
+  const captures = entry.captures as unknown as readonly { pixels: MeasuredNoisePixel[] }[];
+  expect(captures.map(capture => capture.pixels.length)).toEqual([10, 2]);
+  const actual = fixture(entry.capture!), expected = reference(name);
+  const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+  expect(hash(readFileSync(new URL(`./e2e/settings-presentation.spec.ts-snapshots/${name}`, import.meta.url)))).toBe(entry.referenceSha256);
+  expect(hash(readFileSync(new URL(entry.capture!, frozen)))).toBe(entry.captureSha256);
+  expect(entry.regions).toHaveLength(12);
+  const accepted = compare(actual, name, expected, noisePolicy);
+  expect(accepted.ok).toBe(true); expect(accepted.totalChanged).toBe(2);
+  expect(compare(actual, name, expected, []).ok).toBe(false);
+  expect(compare(actual, 'another-reference.png', expected, noisePolicy).ok).toBe(false);
+  for (const [x, y, before, after] of captures[1]!.pixels) {
+    const maximum = Math.max(...before.map((value, index) => Math.abs(value - after[index]!)));
+    const region = entry.regions.find(region => region.x === x && region.y === y)!;
+    expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: maximum });
+    const excessive = copy(expected); nudge(excessive, x, y, maximum + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  for (const [x, y] of [[1005, 410], [480, 560]]) {
+    const outside = copy(expected); nudge(outside, x!, y!, 1);
+    const rejected = compare(outside, name, expected, noisePolicy);
+    expect(rejected.ok).toBe(false); expect(rejected.changedOutsideRegions).toBe(1);
+  }
+});
+
+it('the full-width workflow editor does not inherit the retired Start-icon allowance', () => {
+  const name = 'workflow-editor-linux.png', expected = reference(name);
+  expect(compare(copy(expected), name, expected, noisePolicy).ok).toBe(true);
+  // The former Start-icon site moved with the wider canvas. Its old coordinate
+  // and adjacent pixels have no inherited tolerance, even for a one-level delta.
+  for (const [x, y] of [[786, 121], [785, 121], [787, 121], [786, 120], [786, 122], [0, 0]]) {
+    const observed = copy(expected); nudge(observed, x, y, 1);
+    const result = compare(observed, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+});
+
+it('Workflow curve coverage admits exactly the observed union within each measured per-site maximum', () => {
   const name = 'workflow-editor-linux.png', expected = reference(name);
   const entry = noisePolicy.find(row => row.reference === name)!;
-  expect(entry.regions).toEqual([{ label: 'Start panel icon corner', x: 786, y: 121, width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 3 }]);
-  expect(entry.pixels).toEqual([[786, 121, [91, 187, 140, 255], [94, 188, 142, 255]]]);
-  const observed = copy(expected); paint(observed, 786, 121, [94, 188, 142, 255]);
+  const measured = entry.pixels as MeasuredNoisePixel[];
+  expect(workflowCaptures.map(capture => capture.pixels.length)).toEqual([547, 602]);
+  const observations = new Map<string, MeasuredNoisePixel[]>();
+  for (const capture of workflowCaptures) for (const tuple of capture.pixels) {
+    const key = `${tuple[0]},${tuple[1]}`;
+    observations.set(key, [...(observations.get(key) ?? []), tuple]);
+  }
+  expect(measured).toHaveLength(639);
+  expect(new Set(measured.map(([x, y]) => `${x},${y}`))).toEqual(new Set(observations.keys()));
+  expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
+  for (const [i, region] of entry.regions.entries()) {
+    expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1 });
+    const [x, y, before, after] = measured[i];
+    const captured = observations.get(`${x},${y}`)!;
+    expect(captured).toContainEqual(measured[i]);
+    expect(region.maxChannelDelta).toBe(Math.max(...captured.map(([, , before, after]) =>
+      Math.max(...before.map((channel, j) => Math.abs(after[j] - channel))))));
+    expect(region.maxChannelDelta).toBe(Math.max(...before.map((channel, j) => Math.abs(after[j] - channel))));
+  }
+  expect(Math.max(...entry.regions.map(region => region.maxChannelDelta))).toBe(31);
+  const observed = copy(expected);
+  for (const [x, y, , after] of measured) paint(observed, x, y, after);
+  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, 'workflow-library-workspace-linux.png', expected, noisePolicy).ok).toBe(false);
+  for (const region of [entry.regions.find(region => region.maxChannelDelta === 1)!, entry.regions.find(region => region.maxChannelDelta === 31)!]) {
+    const excessive = copy(expected); nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  for (const [x, y] of [[750, 306], [751, 305], [900, 316], [900, 408], [750, 408], [0, 0]]) {
+    const adjacent = copy(observed); nudge(adjacent, x, y, 1);
+    const result = compare(adjacent, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+});
+
+it.each(workflowCaptures)('Workflow run $run replays its complete raw capture under only its reference policy', capture => {
+  const expected = reference(workflowReference), observed = copy(expected);
+  expect(capture.pngSha256).toMatch(/^[a-f0-9]{64}$/);
+  for (const [x, y, before, after] of capture.pixels) {
+    expect(pixel(expected, x, y)).toEqual(before);
+    paint(observed, x, y, after);
+  }
+  const result = compare(observed, workflowReference, expected, noisePolicy);
+  expect(result.ok).toBe(true);
+  expect(result.totalChanged).toBe(capture.pixels.length);
+  expect(compare(observed, workflowReference, expected, []).ok).toBe(false);
+  expect(compare(observed, 'workflow-library-workspace-linux.png', expected, noisePolicy).ok).toBe(false);
+});
+
+it('Settings conflict disclosure glyph edges admit only their ten measured blue-channel fringes', () => {
+  const name = 'settings-conflict-light-linux.png', expected = reference(name);
+  const entry = noisePolicy.find(row => row.reference === name)!;
+  const captures = (entry as unknown as { captures: readonly { pixels: MeasuredNoisePixel[] }[] }).captures;
+  const measured = captures[0]!.pixels;
+  const regions = entry.regions.filter(region => region.x === 243);
+  expect(measured.map(([x, y]) => [x, y])).toEqual([841, 842, 843, 844, 845, 896, 897, 898, 899, 900].map(y => [243, y]));
+  expect(regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
+  for (const region of regions) expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 4 });
+  const observed = copy(expected);
+  for (const [x, y, before, after] of measured) {
+    expect(before).toEqual([255, 255, 251, 255]);
+    expect(after).toEqual([255, 255, 255, 255]);
+    paint(observed, x, y, after);
+  }
   expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
   expect(compare(observed, name, expected, []).ok).toBe(false);
-  const excessive = copy(expected); nudge(excessive, 786, 121, 4);
+  expect(compare(observed, workflowReference, expected, noisePolicy).ok).toBe(false);
+  const excessive = copy(expected); nudge(excessive, 243, 841, 5);
   expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
-  for (const [x, y] of [[785, 121], [787, 121], [786, 120], [786, 122]]) {
-    const neighbor = copy(observed); nudge(neighbor, x, y, 1);
+  for (const [x, y] of [[242, 841], [244, 841], [243, 840], [243, 846], [243, 895], [243, 901]]) {
+    const neighbor = copy(expected); nudge(neighbor, x, y, 1);
     const result = compare(neighbor, name, expected, noisePolicy);
+    expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
+  }
+});
+
+it.each(['light', 'dark'])('the %s narrow model input corners admit only their four measured pixels within individual deltas', theme => {
+  const name = `model-advanced-${theme}-390-linux.png`, expected = reference(name);
+  const entry = noisePolicy.find(row => row.reference === name)!;
+  expect(entry.regions.map(region => [region.x, region.y, region.width, region.height, region.maxChangedPixels, region.maxChannelDelta]))
+    .toEqual([[34, 348, 1, 1, 1, 1], [35, 348, 1, 1, 1, 3], [34, 349, 1, 1, 1, 1], [34, 447, 1, 1, 1, 1]]);
+  const actual = copy(expected);
+  for (const [x, y, , after] of entry.pixels as MeasuredNoisePixel[]) paint(actual, x, y, after);
+  expect(compare(actual, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+  for (const region of entry.regions) {
+    const excessive = copy(expected); nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  for (const [x, y] of [[33, 348], [36, 348], [34, 347], [34, 446], [34, 448], [0, 0]]) {
+    const outside = copy(actual); nudge(outside, x, y, 1);
+    const result = compare(outside, name, expected, noisePolicy);
     expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
   }
 });

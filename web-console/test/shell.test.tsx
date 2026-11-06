@@ -7,22 +7,21 @@ let server: Server;
 beforeEach(() => { localStorage.clear(); server = new Server(); });
 afterEach(() => { cleanup(); server.client.disconnect(); vi.useRealTimers(); });
 it('Harness column solve preserves the center, concedes the right panel and keeps the 56px rail', () => {
-  expect(computeColumns(1440, 280, 648)).toEqual({ sidebar: 280, center: 512, rightbar: 648 });
-  expect(computeColumns(1000, 280, 648)).toEqual({ sidebar: 280, center: 400, rightbar: 320 });
-  expect(computeColumns(900, 280, 648)).toEqual({ sidebar: 280, center: 620, rightbar: 0 });
-  expect(computeColumns(390, 0, 648)).toEqual({ sidebar: 56, center: 334, rightbar: 0 });
+  expect(computeColumns(1440, 280, 648)).toEqual({ sidebar: 280, primary: 56, center: 456, rightbar: 648 });
+  expect(computeColumns(1100, 280, 648)).toEqual({ primary: 56, sidebar: 280, center: 400, rightbar: 364 });
+  expect(computeColumns(900, 280, 648)).toEqual({ primary: 56, sidebar: 280, center: 564, rightbar: 0 });
+  expect(computeColumns(390, 0, 648)).toEqual({ primary: 56, sidebar: 0, center: 334, rightbar: 0 });
 });
 it('collapse, rail expansion and Settings appearance gestures emit no native operations', async () => {
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   const baseline = server.requests.length;
-  vi.useFakeTimers();
   fireEvent.click(screen.getByRole('button', { name: 'Collapse Sidebar' }));
-  act(() => vi.advanceTimersByTime(150)); // upstream presentation transition only, never race synchronization
-  expect(document.querySelector('[data-sidebar-wide]')?.getAttribute('data-sidebar-wide')).toBe('false');
-  expect(screen.getByRole('button', { name: 'New Conversation' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Expand Sidebar' }));
-  expect(document.querySelector('[data-sidebar-wide]')?.getAttribute('data-sidebar-wide')).toBe('true');
+  expect(document.querySelector('#home-sidebar')?.hasAttribute('hidden')).toBe(true);
+  expect(screen.queryByRole('button', { name: 'New Conversation' })).toBeNull();
+  expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+  expect(document.querySelector('#home-sidebar')?.hasAttribute('hidden')).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   // Appearance lives on General, the page global Settings opens at.
   const theme = (option: string) => {

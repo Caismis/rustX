@@ -101,7 +101,7 @@
    no padding either. */
 .disclosurePanel[hidden] { padding: 0; }
 
-/* Confirmation dialog — a transient layer over the one Settings modal root,
+/* Confirmation dialog — a transient layer over the retained Settings page,
    never a second Settings tree. */
 .confirmOverlay { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-mask-1); backdrop-filter: var(--dsw-mask-blur); }
 .confirmModal { max-width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); display: flex; }

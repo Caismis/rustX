@@ -10,7 +10,7 @@ for (const [width, locale] of [[1440, 'en'], [390, 'zh']] as const) test(`tool l
   await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), locale);
   await page.goto(`${origin}/test/fixtures/startup.html?existing&trace-following`);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
-  if (zh) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click();
+  if (zh) await page.getByRole('button', { name: '主页', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('tab', { name: zh ? '轨迹' : 'Trajectory', exact: true }).click();
@@ -43,7 +43,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await page.goto(`${origin}/test/fixtures/startup.html?existing&models&trace-live`);
   await page.waitForFunction(() => (window as any).startupFixture);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
-  if (zh) await page.getByRole('button', { name: '打开侧边栏', exact: true }).click();
+  if (zh) await page.getByRole('button', { name: '主页', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('tab', { name: zh ? '轨迹' : 'Trajectory', exact: true }).click();
@@ -100,7 +100,7 @@ for (const width of [1440, 390]) test(`historical Trace keeps appending while it
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
   await page.goto(`${origin}/test/fixtures/startup.html?existing&trace-following&trace-history`);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
-  if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();

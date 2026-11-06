@@ -25,7 +25,7 @@ for (const width of [1440, 390]) test(`catalog Tool constants keep unsafe drafts
     await page.setViewportSize({ width: 1440, height: 1000 });
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'constant_drafts', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     await page.setViewportSize({ width, height: 1000 });
@@ -76,7 +76,7 @@ for (const kind of ['object', 'literal'] as const) test(`catalog JSON payloads u
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'json_payload', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const tool = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Tool node payload', { exact: true });
@@ -122,7 +122,7 @@ test('a resolved catalog preserves constructed object and array parameters with 
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'constructed_params', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const tool = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Tool node payload', { exact: true });

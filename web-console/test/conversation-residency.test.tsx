@@ -3,7 +3,7 @@ import { settingsReceipt } from './fixture';
 import { contentAdvance } from './fixture';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { ConversationHeader } from '../src/app/agent/ConversationHeader';
-import { SidebarRoot } from '../src/presentation/sidebar/SidebarRoot';
+import { HomeSidebar } from '../src/presentation/sidebar/HomeSidebar';
 import { WorkspaceNavigation } from '../src/workspaces/WorkspaceNavigation';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -232,9 +232,9 @@ vi.mock('../src/app/agent/ConversationHeader', async original => {
   return { ...module, ConversationHeader: vi.fn(module.ConversationHeader) };
 });
 
-vi.mock('../src/presentation/sidebar/SidebarRoot', async original => {
-  const module = await original<typeof import('../src/presentation/sidebar/SidebarRoot')>();
-  return { ...module, SidebarRoot: vi.fn(module.SidebarRoot) };
+vi.mock('../src/presentation/sidebar/HomeSidebar', async original => {
+  const module = await original<typeof import('../src/presentation/sidebar/HomeSidebar')>();
+  return { ...module, HomeSidebar: vi.fn(module.HomeSidebar) };
 });
 
 vi.mock('../src/workspaces/WorkspaceNavigation', async original => {
@@ -246,7 +246,7 @@ it.each(['cancelled', 'failed', 'timed_out', 'limit_exceeded'] as const)('execut
   await server.attached('A');
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
-  const calls = () => [AppFrame, SidebarRoot, WorkspaceNavigation, ConversationHeader].map(component => vi.mocked(component).mock.calls.length);
+  const calls = () => [AppFrame, HomeSidebar, WorkspaceNavigation, ConversationHeader].map(component => vi.mocked(component).mock.calls.length);
   const before = calls();
   const editor = input();
   expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();

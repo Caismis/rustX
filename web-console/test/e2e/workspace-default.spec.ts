@@ -35,7 +35,7 @@ for (const width of [1440, 390]) test(`startup and Home use registered Workspace
     await page.screenshot({ path: info.outputPath(`workspace-default-${width}.png`) });
     await picker.click(); await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
     await expect(picker).toContainText('Workspace A');
-    const showNavigation = async () => { if (width === 390) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click(); };
+    const showNavigation = async () => { if (width === 390) await page.getByRole('button', { name: 'Home', exact: true }).click(); };
     await showNavigation(); await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
     await expect(picker).toContainText('Workspace A'); await expect(input).toHaveValue('Keep typing while Workspaces load');
     await showNavigation(); await page.locator(`button[data-session-id="${a}"]`).click();
@@ -62,7 +62,7 @@ for (const width of [1440, 390]) test(`unsent manual Workspace choice survives r
     surface.on('pageerror', error => errors.push(error.message));
     surface.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   };
-  const showNavigation = async (surface: typeof page) => { if (width === 390) await surface.getByRole('button', { name: 'Expand Sidebar', exact: true }).click(); };
+  const showNavigation = async (surface: typeof page) => { if (width === 390) await surface.getByRole('button', { name: 'Home', exact: true }).click(); };
   const expectDraftA = async (surface: typeof page) => {
     await expect(surface.locator('#session-view')).toHaveAttribute('data-shell-route', 'new-conversation');
     await expect(surface.getByRole('button', { name: 'Choose Workspace', exact: true })).toContainText('Workspace A');

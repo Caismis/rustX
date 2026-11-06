@@ -57,7 +57,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
 async function openLibrary(page: Page, fixture: Awaited<ReturnType<typeof startDogfood>>) {
   await routeWorkspaceHost(page, fixture); await page.goto('/');
   await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-  await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
 }
 
 async function saveFile(page: Page) {

@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 .frame {
+  --dsh-primary-rail-width: 56px;
   position: relative; /* anchors the drag handles, which straddle column borders */
   display: grid;
   height: 100%;
@@ -59,7 +60,7 @@
 }
 
 .sidebarCol {
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 1;
   min-width: 0;
   overflow: hidden;
@@ -69,22 +70,23 @@
 
 .frame[data-sidebar-overlay] .sidebarCol {
   position: absolute;
-  inset: 0 auto 0 0;
-  z-index: 15;
+  grid-area: 1 / 1 / -1 / -1;
+  inset: 0 auto 0 var(--dsh-primary-rail-width);
+  z-index: 85;
   box-shadow: var(--dsw-elevation-prominent);
 }
 
 .sidebarBackdrop {
   position: absolute;
-  inset: 0;
-  z-index: 14;
+  inset: 0 0 0 var(--dsh-primary-rail-width);
+  z-index: 84;
   border: 0;
   padding: 0;
   background: var(--dsw-alias-bg-mask-1);
 }
 
 .centerCol {
-  grid-column: 2;
+  grid-column: 3;
   background: var(--dsw-alias-bg-base);
   min-width: 0;
   display: flex;
@@ -109,12 +111,6 @@
 :global([data-platform='darwin']) .centerCol {
   background: var(--dsw-alias-bg-base);
   border-left: 0.5px solid var(--dsw-alias-border-l3);
-}
-
-/* The darwin closed sidebar has no rail: the centre reaches the window edge,
-   where a separator would draw a seam against nothing. */
-:global([data-platform='darwin']) [data-sidebar-collapsed] .centerCol {
-  border-left: none;
 }
 
 /* Drag handles are frame children (columns clip overflow): an 8px hit strip
@@ -163,7 +159,7 @@
  * where it is. The occupant draws its own left border.
  */
 .rightbarCol {
-  grid-column: 3;
+  grid-column: 4;
   /* The panel is anchored to the full frame, including fullscreen and floats. */
   position: static;
   min-width: 0;
@@ -180,3 +176,7 @@
 .overlayLayer > * {
   pointer-events: auto;
 }
+
+.primaryCol { grid-column: 1; grid-row: 1; min-width: 0; z-index: 90; border-right: 0.5px solid var(--dsw-alias-border-l3); }
+.sidebarCol[hidden], .rightbarCol[hidden] { display: none; }
+:global([data-windows-titlebar]) .sidebarBackdrop { top: var(--dsh-windows-titlebar-height); }

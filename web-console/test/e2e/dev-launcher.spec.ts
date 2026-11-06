@@ -1,4 +1,4 @@
-import { chooseWorkspace, openConnectionSettings, closeSettings } from './shell-actions';
+import { chooseWorkspace, openConnectionSettings, returnHome } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -55,7 +55,7 @@ compat = { chat_reasoning_replay = "omit" }
     const clean = new URL('/', ready.url).href;
     await expect(page).toHaveURL(clean);
     await expect(page.getByLabel('WebSocket endpoint')).toHaveCount(0);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Transport token')).toBeHidden();
     await expect(page.getByRole('region', { name: 'Connection recovery' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Select Workspace workspace with spaces' })).toBeVisible();
     await page.screenshot({ path: test.info().outputPath('local-managed.png') });
@@ -111,14 +111,14 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
     await expect(page.getByText('Active mode: Local managed connection', { exact: true })).toBeVisible();
     await expect(page.locator('.connection-status')).toHaveText('Disconnected');
-    await closeSettings(page);
+    await returnHome(page);
     await page.getByRole('button', { name: 'Show details', exact: true }).click();
     await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab', { name: 'Advanced', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('region', { name: 'Connection Settings' })).toBeVisible();
     await page.unroute('**/__rustx/bootstrap');
     await page.getByRole('region', { name: 'Connection Settings' }).getByRole('button', { name: 'Reconnect', exact: true }).click();
     await expect(page.locator('.connection-status')).toHaveText('Connected');
-    await closeSettings(page);
+    await returnHome(page);
     expect(await page.evaluate(() => indexedDB.databases())).toEqual([]);
     expect(await page.evaluate(() => document.cookie)).not.toContain('rustx-browser');
     expect(await page.context().cookies(clean)).toEqual([]);

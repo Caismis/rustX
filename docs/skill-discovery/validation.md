@@ -350,6 +350,27 @@ The complete Web suite passed with 4,088 tests and 4 existing skips. Web TypeScr
 the production build, source provenance/notices, Rust formatting and strict
 all-target/all-feature Clippy also passed before publication of these corrections.
 
+Main then advanced to `59981112a` with the dual-sidebar navigation shell. The PR
+integrates that change rather than restoring the removed shell. Default Workspace
+resolution retains Home's origin across other primary pages, with deterministic
+coverage for pending classification, Settings return, preserved draft identity
+and no eager Session/MCP work. The merged Web suite passed 4,168 tests with 4
+existing skips. Screenshot references use the current main layout and are
+verified against the combined quiet-loading behavior under the pinned browser.
+The merged complete Rust suite passed 5,967 tests with 20 existing ignores.
+Nineteen references combine the new shell with quiet loading and Bash descriptions.
+The unchanged main deletion-confirmation image also has a measured 63-site,
+one-channel-level background raster difference; raw capture/reference hashes,
+RGBA pairs and a real captured fixture bind its exact 1x1 exceptions. Comparator
+tests keep neighboring pixels, larger deltas, foreground content and unrelated
+references strict. No global screenshot threshold or timeout was changed.
+The unchanged CAS-conflict reference has an additional two-site edge observation
+with individually measured deltas 5 and 10. Its captured PNG and raw values remain
+separate from main's prior ten-site observation; the original triangle negatives
+are retained alongside new edge/foreground/delta negatives. All 65 comparator
+checks passed, and the complete deletion/conflict/loading/read-failure browser
+scenario passed twice under the pinned authority.
+
 Current exact-head FULL verification is recorded on
 [PR #539](https://github.com/Caismis/rustX/pull/539); the historical baseline run
 above does not certify the subsequent review changes.

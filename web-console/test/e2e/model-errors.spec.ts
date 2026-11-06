@@ -20,8 +20,8 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       const sessionId = await openEmptySession(page, fixture, 'Workspace A');
       if (locale === 'zh') {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       const input = page.getByRole('textbox', { name: copy('Message', '消息'), exact: true });
       await input.fill('Authentication failure'); await input.press('Enter');
@@ -47,7 +47,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       // Remote credentials are deliberately memory-only. A fresh page reconnects
       // explicitly, then reads the same durable Session rather than retained UI.
       await page.getByRole('button', { name: copy('Settings', '设置'), exact: true }).click();
-      const settings = page.getByRole('dialog', { name: copy('Settings', '设置'), exact: true });
+      const settings = page.getByRole('region', { name: copy('Settings', '设置'), exact: true });
       const section = settings.getByRole('button', { name: locale === 'en' ? /^Settings page: / : /^设置页面：/ });
       if (await section.isVisible()) {
         await section.click();
@@ -59,8 +59,8 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await page.getByLabel(copy('Transport token', '传输令牌')).fill(fixture.token);
       await settings.getByRole('button', { name: copy('Connect', '连接'), exact: true }).click();
       await expect(page.locator('.connection-status')).toHaveText(copy('Connected', '已连接'));
-      await page.getByRole('button', { name: copy('Close Settings', '关闭设置'), exact: true }).click();
-      const expand = page.getByRole('button', { name: copy('Expand Sidebar', '打开侧边栏'), exact: true });
+      await page.getByRole('button', { name: copy('Home', '主页'), exact: true }).click();
+      const expand = page.getByRole('button', { name: copy('Home', '主页'), exact: true });
       if (await expand.isVisible()) await expand.click();
       const frame = page.locator('[data-harness-frame]');
       if (theme === 'dark') await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
