@@ -258,6 +258,21 @@ function contentIdentity(record: TraceRecord | undefined) {
       request.context_next_offset, request.context_additions, request.system_prompt, request.tool_catalog]]);
 }
 
+/** One continuous native interval can bridge or advance several retained gaps. */
+function mergeTraceGaps(gaps: readonly TraceGap[], page: TracePage, paging?: TraceGap): TraceGap[] {
+  const incoming = new Set(page.records.map(record => record.id));
+  return gaps.flatMap(gap => {
+    // A paging response connects to its requested right boundary even though
+    // that exclusive boundary is absent from the response itself. Other gaps
+    // move only when the interval actually crosses their right boundary.
+    if (gap !== paging && !incoming.has(gap.before)) return [gap];
+    if (incoming.has(gap.after)) return [];
+    const first = page.records[0]?.id;
+    if (gap !== paging && first === gap.before) return [gap];
+    return page.next_cursor == null ? [] : [{ ...gap, before: first ?? gap.before, cursor: page.next_cursor }];
+  });
+}
+
 export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = [],outerCut?:CheckpointReadCut,lifecycleOnly=false): TraceCache {
   if (!previous) return replaceTrace(page,undefined,outerCut);
   const overlap = new Set(previous.page.records.map(record => record.id));
@@ -286,15 +301,9 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
     ? repair(page.records.find(record => record.id === previous.selection!.id) ?? previous.selection)
     : undefined;
   if (previous.page.records.length === 0) return { ...previous, page, selection,readCuts:retainedCuts(readCuts,page.records,selection) };
-  const incoming = new Set(page.records.map(record => record.id));
   // Latest pages advance independently of the reading position. Keep an
   // explicit native paging boundary wherever they leave unloaded history.
-  const gaps = (previous.gaps ?? []).flatMap(gap => {
-    if (retainPage || !incoming.has(gap.before)) return [gap];
-    if (incoming.has(gap.after)) return [];
-    return page.records[0]!.id === gap.before ? [gap]
-      : page.next_cursor ? [{ ...gap, before: page.records[0]!.id, cursor: page.next_cursor }] : [];
-  });
+  const gaps = retainPage ? [...previous.gaps ?? []] : mergeTraceGaps(previous.gaps ?? [], page);
   if (!retainPage && page.records.length && !page.records.some(record => overlap.has(record.id)) && page.next_cursor) {
     gaps.push({ after: previous.page.records.at(-1)!.id, before: page.records[0]!.id, cursor: page.next_cursor });
   }
@@ -324,15 +333,10 @@ export function fillTraceGap(previous: TraceCache, gap: TraceGap, page: TracePag
   const older = previous.page.records.slice(0, boundary);
   const newer = previous.page.records.slice(boundary);
   const oldRecords = new Map(older.map(record => [record.id, record]));
-  const incoming = new Set(page.records.map(record => record.id));
   // A paging reply can predate live repairs. Retain each resident row together
   // with its own immutable field cut; the subsequent interest read repairs it.
   const records = [...merge(older, page.records.map(record => oldRecords.get(record.id) ?? record)), ...newer];
-  const joined = page.records.some(record => oldRecords.has(record.id)) || page.next_cursor == null;
-  const gaps = previous.gaps.flatMap(existing => {
-    if (existing !== gap) return incoming.has(existing.after) && incoming.has(existing.before) ? [] : [existing];
-    return joined ? [] : [{ ...gap, before: page.records[0]?.id ?? gap.before, cursor: page.next_cursor! }];
-  });
+  const gaps = mergeTraceGaps(previous.gaps, page, gap);
   return { ...previous, gaps, loading: false, error: undefined,
     readCuts: retainedCuts({ ...pageCuts(page), ...previous.readCuts }, records, previous.selection),
     page: { read_cut: null, records, next_cursor: previous.page.next_cursor } };

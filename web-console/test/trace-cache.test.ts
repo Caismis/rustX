@@ -396,6 +396,34 @@ it('native overlap closes gaps and empty live pages preserve the reading window'
   expect(bridged.page.records.map(row=>row.id)).toEqual(Array.from({length:6},(_,i)=>`trace:${i+1}`));
   expect(refreshTrace(bridged,{records:[]}).page.records).toEqual(bridged.page.records);
 });
+it.each(['history', 'live'] as const)('a %s page crossing another gap advances its boundary until all history is connected', source => {
+  const rows = (first: number, last: number) => Array.from({ length: last - first + 1 }, (_, index) => entry(first + index));
+  const oldCut = { ...rootCut(), revision: '1' }, middleCut = { ...rootCut(), revision: '2' };
+  const pagingCut = { ...rootCut(), revision: '3' };
+  let cache = replaceTrace({ records: rows(1, 2), next_cursor: 'oldest', read_cut: oldCut });
+  cache = refreshTrace(cache, { records: rows(50, 51), next_cursor: 'before-fifty', read_cut: middleCut });
+  const resident = cache.page.records.find(record => record.id === 'trace:50');
+  const last = source === 'history' ? 106 : 74;
+  cache = refreshTrace(cache, { records: rows(source === 'history' ? 75 : 65, last), next_cursor: 'newest-gap' });
+  const oldGap = cache.gaps![0]!;
+  const page = { records: rows(43, 74), next_cursor: 'before-forty-three', read_cut: pagingCut };
+  expect(page.records).toHaveLength(32);
+  cache = source === 'history' ? fillTraceGap(cache, cache.gaps![1]!, page) : refreshTrace(cache, page);
+  expect(cache.gaps).toEqual([{ after: 'trace:2', before: 'trace:43', cursor: 'before-forty-three' }]);
+  expect(cache.readCuts!['trace:50']).toBe(middleCut);
+  if (source === 'history') expect(cache.page.records.find(record => record.id === 'trace:50')).toBe(resident);
+  // An older in-flight read cannot use the obsolete boundary to close the gap.
+  expect(fillTraceGap(cache, oldGap, { records: rows(18, 49), next_cursor: 'stale-boundary' })).toBe(cache);
+  cache = fillTraceGap(cache, cache.gaps![0]!, { records: rows(11, 42), next_cursor: 'before-eleven', read_cut: pagingCut });
+  expect(cache.gaps).toEqual([{ after: 'trace:2', before: 'trace:11', cursor: 'before-eleven' }]);
+  cache = fillTraceGap(cache, cache.gaps![0]!, { records: rows(1, 10), next_cursor: null, read_cut: pagingCut });
+  cache = refreshTrace(cache, { records: rows(last - 31, last), next_cursor: 'latest-page' });
+  expect(cache.gaps).toEqual([]);
+  expect(cache.page.records.map(record => record.id)).toEqual(rows(1, last).map(record => record.id));
+  expect(cache.page.next_cursor).toBe('oldest');
+  expect(cache.readCuts!['trace:1']).toBe(oldCut);
+  expect(cache.readCuts!['trace:50']).toBe(middleCut);
+});
 it('a disjoint append keeps an in-flight detail read valid', () => {
   const pending = beginTraceDetail(selectTrace(replaceTrace({records:[entry(1)]}),'trace:1'),'trace:1');
   const live = refreshTrace(pending,{records:[entry(50)],next_cursor:'before-fifty'});
