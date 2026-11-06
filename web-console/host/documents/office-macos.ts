@@ -1,9 +1,8 @@
+import { deferred } from './deferred.ts';
 import { spawn } from 'node:child_process';
-import { access, copyFile, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import type { OfficeSandbox } from './office-sandbox.ts';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { OfficeSettlementError } from './office-cgroup.ts';
 import { FILE_PREVIEW_LIMITS } from '../../shared/file-preview.ts';
 
@@ -26,73 +25,54 @@ export function macOfficeProfile(directory: string, runtimeRoots: string[]): str
 `;
 }
 
-/** All engine descendants inherit Seatbelt and the owned process group. No network,
- * user home, workspace or Host environment is exposed to the document engine. */
-export async function runMacOfficeSandbox(directory: string, command: string[], runtimeRoots: string[], signal: AbortSignal): Promise<Buffer> {
+/** The reusable kit worker and every descendant inherit the same Seatbelt
+ * profile. The Host's per-document watchdog owns cancellation of the group. */
+export async function startMacOfficeSandbox(directory: string, command: string[], runtimeRoots: string[], signal: AbortSignal): Promise<OfficeSandbox> {
   signal.throwIfAborted();
   const profile = join(directory, 'sandbox.sb');
   await writeFile(profile, macOfficeProfile(directory, runtimeRoots), { mode: 0o600, flag: 'wx', signal });
   signal.throwIfAborted();
-  return await new Promise<Buffer>((resolveResult, reject) => {
-    const child = spawn('/usr/bin/sandbox-exec', ['-f', profile, ...command], {
-      detached: true, cwd: directory, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { PATH: '/usr/bin:/bin', HOME: directory, TMPDIR: directory, LANG: 'en_US.UTF-8' },
-    });
-    const chunks: Buffer[] = []; let size = 0, failure: Error | undefined;
-    let diagnostic = '';
-    child.stderr.on('data', (chunk: Buffer) => { diagnostic = (diagnostic + chunk.toString()).slice(0, 8192); });
-    let terminated = false;
-    const killGroup = () => {
-      if (terminated || !child.pid) return;
-      try { process.kill(-child.pid, 'SIGKILL'); terminated = true; }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ESRCH') terminated = true;
-        else { failure = new OfficeSettlementError(); failure.cause = error; }
-      }
-    };
-    const stop = (error: Error) => { failure ??= error; killGroup(); };
-    const abort = () => stop(new Error('obsolete'));
-    const timer = setTimeout(() => stop(new Error('converter_timeout')), 60000);
-    signal.addEventListener('abort', abort, { once: true });
-    if (signal.aborted) abort();
-    child.stdout.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > maximumOutput) stop(new Error('too_large'));
-      else if (!failure) chunks.push(chunk);
-    });
-    child.once('error', () => { failure ??= new Error('converter_unavailable'); });
-    child.once('close', (code, exitSignal) => {
-      clearTimeout(timer); signal.removeEventListener('abort', abort);
-      // Retire any residual descendants before releasing private files or the seat.
-      killGroup();
-      if (failure) reject(failure);
-      else if (code !== 0) reject(new Error('converter_failure', { cause: new Error(`exit=${code}, signal=${exitSignal}: ${diagnostic}`) }));
-      else resolveResult(Buffer.concat(chunks));
-    });
+  const child = spawn('/usr/bin/sandbox-exec', ['-f', profile, ...command], {
+    detached: true, cwd: directory, stdio: ['pipe', 'pipe', 'pipe'],
+    env: { PATH: '/usr/bin:/bin', HOME: directory, TMPDIR: directory, LANG: 'en_US.UTF-8' },
   });
+  child.stdin.on('error', () => {}); child.stderr.resume();
+  const closed = deferred<void>(); void closed.promise.catch(() => {});
+  let terminated = false, failure: Error | undefined, stopping = false;
+  const killGroup = () => {
+    if (terminated || !child.pid) return;
+    try { process.kill(-child.pid, 'SIGKILL'); terminated = true; }
+    catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ESRCH') terminated = true; else failure = new OfficeSettlementError(); }
+  };
+  const abort = () => { failure ??= new Error('obsolete'); stopping = true; killGroup(); };
+  signal.addEventListener('abort', abort, { once: true });
+  child.once('error', () => { failure ??= new Error('converter_unavailable'); });
+  child.once('close', code => {
+    signal.removeEventListener('abort', abort); killGroup();
+    if (failure) closed.reject(failure);
+    else if (code !== 0 && !stopping) closed.reject(new Error('converter_failure'));
+    else closed.resolve();
+  });
+  if (signal.aborted) abort();
+  return { input: child.stdin, output: child.stdout, pid: child.pid, closed: closed.promise,
+    deadline: async () => {},
+    dispose: async () => {
+      stopping = true; killGroup();
+      try { await closed.promise; } catch (cause) { if (cause instanceof OfficeSettlementError) throw cause; }
+    },
+  };
 }
 
-export async function convertMacOffice(bytes: Buffer, extension: 'docx' | 'pptx', signal: AbortSignal): Promise<Buffer> {
-  try { await access('/usr/bin/sandbox-exec', constants.X_OK); }
-  catch { throw new Error('converter_unavailable'); }
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'rustx-document-')));
-  try {
-    const entry = fileURLToPath(import.meta.resolve('@deepseek-ai/libreoffice-kit'));
-    // pnpm's sibling optional engine packages live under this installation tree.
-    const modules = await realpath(new URL('../../node_modules', import.meta.url));
-    const node = await realpath(process.execPath);
-    const worker = join(directory, 'worker.mjs');
-    await copyFile(new URL('./office-macos-worker.mjs', import.meta.url), worker);
-    await writeFile(join(directory, `source.${extension}`), bytes, { mode: 0o600, flag: 'wx', signal });
-    // POSIX file-size units are 512 bytes. Native font staging needs up to the
-    // engine's 256 MiB per-font limit; published PDF bytes have a separate bound.
-    const result = await runMacOfficeSandbox(directory,
-      ['/bin/sh', '-c', 'ulimit -f 524288; ulimit -n 128; ulimit -t 60; exec "$@"', 'rustx-office', node, worker, entry, directory, extension],
-      [modules, resolve(dirname(node), '..'), '/bin/sh'], signal);
-    if (!result.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new Error('converter_failure');
-    return result;
-  } finally {
-    try { await rm(directory, { recursive: true, force: true }); }
-    catch { throw new OfficeSettlementError(); }
-  }
+/** One-shot operator probes use the identical Seatbelt process boundary. */
+export async function runMacOfficeSandbox(directory: string, command: string[], runtimeRoots: string[], signal: AbortSignal): Promise<Buffer> {
+  const sandbox = await startMacOfficeSandbox(directory, command, runtimeRoots, signal);
+  const chunks: Buffer[] = []; let size = 0, failure: Error | undefined;
+  const timer = setTimeout(() => { failure = new Error('converter_timeout'); void sandbox.dispose(); }, 60000);
+  sandbox.output.on('data', (chunk: Buffer) => {
+    size += chunk.length;
+    if (size > maximumOutput) { failure ??= new Error('too_large'); void sandbox.dispose(); }
+    else if (!failure) chunks.push(chunk);
+  });
+  try { await sandbox.closed; if (failure) throw failure; return Buffer.concat(chunks); }
+  finally { clearTimeout(timer); }
 }

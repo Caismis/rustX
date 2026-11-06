@@ -2,8 +2,7 @@ import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, type W
 import { materializeSource } from '../../protocol/app-server/source-observation.ts';
 import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
-import { deriveWorkspaceOffice } from './documents/operation.ts';
-import { OfficePreviewCache } from './documents/cache.ts';
+import { OfficeDocuments } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
 import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
@@ -21,7 +20,6 @@ import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspa
 import type { WorkbenchCall, WorkbenchResult } from '../src/workspaces/workbench.ts';
 import { NativeFileReadError, readNativeDelivery, readNativeSource, validDeliveryLocator, validateDeliveryRead, validateDeliveryObservation } from './file-read.ts';
 
-import { deriveDocument } from './documents/operation.ts';
 import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
 import { FILE_PREVIEW_LIMITS } from '../shared/file-preview.ts';
 import { observeFile } from './file-observation.ts';
@@ -51,7 +49,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private terminalObserverEnded = false;
   private closing?: Promise<void>;
   private documentReads = new Set<AbortController>();
-  private readonly documentCache = new OfficePreviewCache();
+  private readonly documents = new OfficeDocuments();
   private fileReads = new Set<AbortController>();
   private fileObservations = new Set<AbortController>();
   private fileObservationTasks = new Set<Promise<void>>();
@@ -118,10 +116,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   close(): Promise<void> {
     this.closed = true;
-    this.documentCache.clear();
     for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations]) read.abort();
     return this.closing ??= (async () => {
-      const result = await Promise.allSettled([this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks]);
+      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks]);
       const failures = result.flatMap(item => item.status === 'rejected' ? [item.reason] : []);
       if (this.terminalFailure) failures.push(this.terminalFailure);
       if (failures.length) throw new AggregateError(failures, 'Host terminal settlement failed');
@@ -262,12 +259,12 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const abort = () => operation.abort(); signal?.addEventListener('abort', abort, { once: true });
     try {
       signal?.throwIfAborted();
-      return await deriveDocument(request, async () => {
+      return await this.documents.deriveDocument(request, async () => {
         this.mutationScope(scope); operation.signal.throwIfAborted();
         if (source.kind === 'session_file') return this.readFile(scope, { target: request.target, locator: source.locator, delivery_index: source.delivery_index, agent_id: source.agent_id }, FILE_PREVIEW_LIMITS.officeBytes, operation.signal);
         const result = await readNativeSource(this.config.endpoint, this.config.productHostToken!, request.target, source, [], operation.signal, { kind: 'bytes' }, FILE_PREVIEW_LIMITS.officeBytes);
         this.mutationScope(scope); operation.signal.throwIfAborted(); return result;
-      }, operation.signal, this.documentCache);
+      }, operation.signal);
     } catch (cause) {
       if (cause instanceof OfficeSettlementError) {
         settled = false;
@@ -349,13 +346,13 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (request.kind === 'office') {
       const path = request.path, extension = path.split('.').at(-1)?.toLowerCase();
       if (extension !== 'docx' && extension !== 'pptx') throw new Error('converter_unavailable');
-      const result = await deriveWorkspaceOffice(extension, async () => {
+      const result = await this.documents.deriveWorkspaceOffice(extension, async () => {
         this.mutationScope(scope); signal?.throwIfAborted();
         const { cwd: current } = await read();
         check(current);
         if (current !== root) throw new Error('source_changed');
         return this.workspacePreview(scope, root, path, { kind: 'bytes' }, signal ?? new AbortController().signal, FILE_PREVIEW_LIMITS.officeBytes);
-      }, signal ?? new AbortController().signal, this.documentCache);
+      }, signal ?? new AbortController().signal);
       check(root);
       if (result.preview.kind !== 'pdf') throw new Error('converter_failure');
       return { cwd: root, preview: { data: result.preview.data, version: result.digest, offset: 0, bytes: result.preview.data.byteLength, eof: true } };
