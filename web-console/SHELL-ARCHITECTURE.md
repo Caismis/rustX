@@ -125,6 +125,11 @@ editor retires this observation; the old acknowledgement cannot replace it.
 The observer also follows native readiness: an already-admitted owner can stay
 quiet while a same-claim resync suspends controls, then finish publication when
 those controls recover. Both subscriptions retire with the preparation actor.
+A known Session stays publishable while its first input is failed, uncertain or
+paused: explicit upload recovery never creates or attaches that Session again.
+Discarding that input clears its text/files while retaining the known Session.
+Failures without a Session, replacement navigation and authority retirement
+still end publication interest.
 Same-editor attachment and creation promotions retain its control fence as well
 as its binding. Generation, authority and exact native attachment observations
 remain the execution fences; explicit editor/Node/history replacement retires

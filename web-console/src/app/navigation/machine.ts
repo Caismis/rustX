@@ -163,7 +163,9 @@ async function prepare(input: { client: AppServerClient; host: ProductHostWorksp
       const inspect = () => {
         const flow = firstSubmissions(client).draft(destination.binding);
         if (flow?.session) input.parent.send({ type: 'CREATION.KNOWN', pending, sessionId: flow.session.id });
-        if (flow && ['failed', 'rejected', 'uncertain', 'discarded', 'paused'].includes(flow.phase)) { cleanup(); reject(flow.error ?? new Error('Conversation preparation stopped.')); return; }
+        // A known Session outlives recovery or discard of its first input.
+        // Neither action creates or attaches that Session again.
+        if (flow && !flow.session && ['failed', 'rejected', 'uncertain', 'discarded', 'paused'].includes(flow.phase)) { cleanup(); reject(flow.error ?? new Error('Conversation preparation stopped.')); return; }
         // FirstSubmissions advances past attaching only after its native port
         // has completed the handoff. Do not replace that port's control fence.
         if (flow?.session && flow.phase !== 'attaching') {
@@ -290,7 +292,7 @@ export const shellNavigationMachine = setup({
     resumingCreation: ({ context }) => {
       if (context.route.kind !== 'new-conversation' || context.client.getSnapshot().connection !== 'connected') return false;
       const flow = firstSubmissions(context.client).draft(String(context.binding));
-      return !!flow && !['rejected', 'discarded'].includes(flow.phase) && (flow.phase === 'creating' || !!flow.session);
+      return !!flow && (flow.phase === 'creating' || !!flow.session);
     },
     failed: ({ context, event }) => !!context.pending && authorityCurrent(context.client, context.pending) && !((event as unknown as { error: unknown }).error instanceof RetiredPreparation),
     attached: ({ context, event }) => {

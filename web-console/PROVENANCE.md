@@ -31,6 +31,10 @@ supersedes their collapsed-sidebar and modal-Settings geometry.
   portals/focus to its primary-page activation. Native operation owners are unchanged.
   Resumed creation publication observes native readiness as well as first-submit
   progress, so a settled same-claim resync wakes an already-admitted owner's route.
+  Once creation identifies a Session, recoverable first-input failure or pause
+  retains publication interest; native attachment proof still gates its route.
+  Discard clears the first input rather than the known Session. A fresh editor
+  gesture still fences the old publication and cannot be overridden by resync.
 - FULL CI run `42179185106`, job `127766440468`, artifact `13485828418` measured
   exactly four rounded input-border rasterizer pixels in
   `model-advanced-light-390-linux.png`. The live manifest records their raw RGBA

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
+import type { Request } from '../../protocol/app-server/v72';
 import { App } from '../src/app/App';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 import { Server, boundedSettings, snapshot } from './fixture';
@@ -47,7 +48,7 @@ it('an uncertain Attach across Settings retains the selected local editor withou
   expect(server.requests.slice(at).filter(({ request }) => /^(turn\/|session\/(attach|detach|create|submissionIntent|uploadPrepare)$)/.test(request.method))).toEqual([]);
 });
 
-async function firstSend(hold?: 'session/attach' | 'session/subscribe') {
+async function firstSend(hold?: 'session/attach' | 'session/subscribe', file?: File) {
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
   server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: {
     ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'policy',
@@ -64,11 +65,27 @@ async function firstSend(hold?: 'session/attach' | 'session/subscribe') {
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
   await act(async () => fireEvent.click(await screen.findByRole('menuitem', { name: 'Workspace A' })));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'One original submission' } });
+  if (file) await act(async () => fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [file] } }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   const create = await server.waitFor('session/create', 1);
   const incarnation = document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
   return { session, create, incarnation };
+}
+
+async function holdHomeAuthorization() {
+  const classify = server.workspaceHost.classifyLocations;
+  let entered!: () => void, release!: () => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let first = true;
+  server.workspaceHost.classifyLocations = async (...args) => {
+    if (first) { first = false; entered(); await held; }
+    return classify(...args);
+  };
+  await act(async () => fireEvent.click(primary('Home')));
+  await reached;
+  return release;
 }
 
 const creationReturns = ['Settings', 'Workflows', 'Scheduled Tasks'].flatMap(page =>
@@ -78,17 +95,7 @@ it.each(creationReturns)('the first creation ACK from $page follows only its ret
   await navigate(page);
   let releaseHome: (() => void) | undefined;
   if (arrival === 'authorizing Home') {
-    const classify = server.workspaceHost.classifyLocations;
-    let reached!: () => void;
-    const entered = new Promise<void>(resolve => { reached = resolve; });
-    const held = new Promise<void>(resolve => { releaseHome = resolve; });
-    let first = true;
-    server.workspaceHost.classifyLocations = async (...args) => {
-      if (first) { first = false; reached(); await held; }
-      return classify(...args);
-    };
-    await act(async () => fireEvent.click(primary('Home')));
-    await entered;
+    releaseHome = await holdHomeAuthorization();
   } else {
     await navigate('Home');
     if (arrival === 'newer Session') await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
@@ -125,17 +132,7 @@ it.each(attachingReturns)('a known creation from $page retains its original Send
 it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('an admitted creation from %s follows native readiness after Home authorization resumes during resync', async page => {
   const { session, create, incarnation } = await firstSend();
   await navigate(page);
-  const classify = server.workspaceHost.classifyLocations;
-  let entered!: () => void, releaseHome!: () => void;
-  const reached = new Promise<void>(resolve => { entered = resolve; });
-  const held = new Promise<void>(resolve => { releaseHome = resolve; });
-  let first = true;
-  server.workspaceHost.classifyLocations = async (...args) => {
-    if (first) { first = false; entered(); await held; }
-    return classify(...args);
-  };
-  await act(async () => fireEvent.click(primary('Home')));
-  await reached;
+  const releaseHome = await holdHomeAuthorization();
   let updates = 0;
   let stop = () => {};
   try {
@@ -162,6 +159,94 @@ it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('an admitted creation from
     expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
     expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
   } finally { stop(); releaseHome(); }
+});
+
+const recoveringReturns = ['Settings', 'Workflows', 'Scheduled Tasks'].flatMap(page => [false, true].map(resync => ({ page, resync })));
+it.each(recoveringReturns)('a retained upload failure from $page can recover and publish its Session (resync: $resync)', async ({ page, resync }) => {
+  server.held.add('session/uploadStatus');
+  const { session, create, incarnation } = await firstSend(undefined, new File(['local attachment'], 'recover.txt'));
+  await navigate(page);
+  const releaseHome = await holdHomeAuthorization();
+  let checkpoint: Request | undefined, recovery: Promise<unknown> | undefined;
+  const settleResync = async () => {
+    if (!checkpoint) return;
+    const request = checkpoint; checkpoint = undefined;
+    server.held.delete('session/checkpoint'); server.reply(request); await recovery;
+  };
+  try {
+    await act(async () => server.reply(create));
+    const status = await server.waitFor('session/uploadStatus', 1);
+    await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: status.id, error: { code: -32000, message: 'Ready read lost', data: { kind: 'operation_failed' } } }));
+    await waitFor(() => expect(firstSubmissions(server.client).session(session.id)).toMatchObject({ phase: 'uncertain', failedPhase: 'uploading' }));
+    if (resync) {
+      const count = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+      server.held.add('session/checkpoint');
+      await act(async () => { recovery = server.client.refresh(session.id); });
+      checkpoint = await server.waitFor('session/checkpoint', count + 1);
+    }
+    await act(async () => releaseHome());
+    await waitFor(() => expect(primary('Home').getAttribute('aria-current')).toBe('page'));
+    await act(settleResync);
+    server.held.delete('session/uploadStatus');
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Check status for recover.txt' })));
+    await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('paused'));
+    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Continue submission' })));
+    await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('admitted'));
+    expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+    expect(server.carrierTransfers).toBe(1);
+    await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session'));
+    expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+  } finally { releaseHome(); await act(settleResync); }
+});
+
+const discardedReturns = ['Settings', 'Workflows', 'Scheduled Tasks'].flatMap(page => [false, true].map(replace => ({ page, replace })));
+it.each(discardedReturns)('discarding the first input after $page follows only its retained editor when native resync settles (replace: $replace)', async ({ page, replace }) => {
+  server.held.add('session/uploadStatus');
+  const { session, create } = await firstSend(undefined, new File(['discarded attachment'], 'discard.txt'));
+  await navigate(page);
+  const releaseHome = await holdHomeAuthorization();
+  let checkpoint: Request | undefined, recovery: Promise<unknown> | undefined;
+  const settleResync = async () => {
+    if (!checkpoint) return;
+    const request = checkpoint; checkpoint = undefined;
+    server.held.delete('session/checkpoint'); server.reply(request); await recovery;
+  };
+  try {
+    await act(async () => server.reply(create));
+    const status = await server.waitFor('session/uploadStatus', 1);
+    await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: status.id, error: { code: -32000, message: 'Ready read lost', data: { kind: 'operation_failed' } } }));
+    await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('uncertain'));
+    const count = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    server.held.add('session/checkpoint');
+    await act(async () => { recovery = server.client.refresh(session.id); });
+    checkpoint = await server.waitFor('session/checkpoint', count + 1);
+    await act(async () => releaseHome());
+    await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session-draft'));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Discard first-submission draft' })));
+    expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('discarded');
+    expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session-draft');
+    expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
+    if (replace) await act(async () => fireEvent.click(screen.getByRole('button', { name: 'New Conversation' })));
+    const incarnation = document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
+    await act(settleResync);
+    expect(server.client.isAttachmentControlCurrent(session.id, server.client.getSnapshot().views[session.id].attachmentObservation)).toBe(true);
+    await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe(replace ? 'new-conversation' : 'session'));
+    expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
+    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
+    if (replace) return;
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'After discard' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+    const sent = await server.waitFor('turn/start', 1);
+    expect(sent.method === 'turn/start' && sent.params.content).toEqual([{ type: 'text', text: 'After discard' }]);
+  } finally { releaseHome(); await act(settleResync); }
 });
 
 it('primary page return preserves the selected HTML iframe instead of only its tab and cached bytes', async () => {
