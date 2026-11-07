@@ -33,18 +33,18 @@ These exclusions do not waive required in-scope behavior.
 | Check | Current result |
 | --- | --- |
 | Provider emulator locked Python 3.12 environment / pytest | 55 passed |
-| Real command/PTY/filesystem/Skills/MCP protocol boundaries | 14 passed, including final Host drain, native cleanup failure and instance-capacity cases |
+| Real command/PTY/filesystem/Skills/MCP protocol boundaries | 16 passed, including descriptor-bound watch ABA, canonical PTY EOF, Host drain, native cleanup failure and instance-capacity cases; macOS adds its native child/capacity boundary in FULL CI |
 | Native file fault/race/CAS tests | 6 passed in the full run |
 | Rust formatting and all-target/all-feature Clippy (`-D warnings`) | Passed |
-| Complete local Rust all-target/all-feature regression | 6036 passed / 20 existing ignored; subsequent shutdown/MCP refinements passed the 14 boundary and 7 native probe tests; final-head FULL CI is required below |
+| Complete local Rust all-target/all-feature regression | 6036 passed / 20 existing ignored; subsequent shutdown/MCP refinements passed the 14 boundary and 7 native probe tests; watch/PTY follow-up boundaries are included in the 16-case run; final-head FULL CI is required below |
 | CI lane coverage | Passed; Linux FULL and FAST selectors cover their required tests |
 | Generated protocol/schema/fixtures and existing client typechecks | Generated-artifact drift check and all four package typechecks passed |
 | TUI, dev and Web deterministic suites | dev: 43 passed; TUI: 1349 passed / 1 native skip; Web: 4204 passed / 4 existing skips |
 | Browser acceptance | Full local pinned run: 660 passed / 7 expectation timeouts on the shared host. Focused diagnostics reproduced intermittent timing failures; native 34-Turn history preparation passed on untouched base and candidate, and the original browser assertions passed with temporary logging (removed). No assertion, timeout or screenshot baseline was relaxed. Final-head FULL browser acceptance is required in the PR. |
 | Minimal external-client smoke | Real authenticated v75 initialize/server-info passed from outside the repository |
-| Independent code review | All initial and shutdown follow-up findings repaired and re-reviewed; no remaining P1/P2 or unintended UI/UX changes |
+| Independent code review | Initial and shutdown findings repaired; external watch/PTY findings and follow-up source-identity/child-directory cases are repaired and independently re-reviewed before the final FULL run |
 | Final-head FULL CI, including macOS and both browser shards | Required on the final PR head; exact SHA, run and verdict are recorded in the PR description |
-| Performance/resource measurements | Two baseline/candidate pairs and four native environment modes completed; raw samples and observed regressions below |
+| Performance/resource measurements | Two initial baseline/candidate pairs plus a final-source pair and repeated native environment modes completed; raw samples and observed regressions below |
 
 Native commit points, physical settlement and resource limits are specified in the
 service contract above. Lost responses never authorize command/mutation replay.
@@ -57,8 +57,9 @@ service contract above. Lost responses never authorize command/mutation replay.
 | Direct argv, no implicit credentials or model work | Buffered argv/binary/env boundary and zero-resident diagnostics; authenticated opaque/digest/JWT transport scenarios |
 | Physical process tree settlement | Connection-local identity, terminate/disconnect/timeout boundaries and native supervisor settlement suites |
 | Host shutdown ordering | Host drain cancels independent processes before waiting for their counted request owners; native process absence proves cleanup |
+| Canonical PTY EOF | Current EOF settings, nonnewline combined/split writes, pending literal-next, and raw/disabled/conflicting-setting rejection before batch effects |
 | Simultaneous PTY input/output | Raw PTY 64 KiB stdin against 128 KiB output, plus incomplete-prefix write returning unknown outcome |
-| Watch authority / quiet idle / cleanup | Native Linux root-open callback barrier, Access filtering, capacity reclamation; real filesystem watch/unwatch/root retirement |
+| Watch authority / quiet idle / cleanup | Native descriptor registration under symlink/directory restoration and capture barriers, regular-file identity assertions; Linux Access filtering and capacity reclamation; macOS immediate child writes/metadata, bounded reconciliation, refusal and native teardown; real watch/unwatch/root retirement |
 | Atomic file commit / path source identity | Native file faults, mode preservation, concurrent CAS, parent/root replacement, revocation while staging and post-commit sync uncertainty |
 | Skills bounded I/O and ownership | Disconnect barrier retains admission; 32 MiB sparse-body range, large metadata chunk reconstruction and encoded-byte catalog pagination |
 | MCP connection-scoped pagination | Public native management route walks empty continuation on one connection; cycles, oversized inventories and excess counts fail without publishing partial success or calling business resources |
@@ -88,8 +89,11 @@ upgrade together. Their presentation and UI/UX remain unchanged.
 ## Performance and physical resource evidence
 
 The untouched baseline is the merged prerequisite at `57447d2e825f914e80bbfecc68d373fcab487446`,
-built freshly with `cargo build --bins --all-features`. Candidate measurements
-use the final changed source and the same debug/all-features profile. The
+built freshly with `cargo build --bins --all-features`. The initial candidate measurements
+use source commit `2e7c58bbaf9c8495211bdb7e09dfca03d1365aa0`, before the subsequent
+watch-registration and canonical-EOF review fixes, and the same debug/all-features
+profile. They remain historical evidence for that source, not measurements of
+the follow-up implementation. The
 existing Turn harness uses twenty Turns per mode: twenty provider requests with
 zero Host Tools, forty with one Host Tool/continuation. Session names suppress
 unrelated Title requests. The new environment harness uses five warmups and
@@ -117,7 +121,7 @@ have the same measured-source digest and binary; the environment capture uses
 that same binary and records its own measured-path digest.
 Both candidate source digests and the environment source digest were verified
 against source commit `2e7c58bbaf9c8495211bdb7e09dfca03d1365aa0`; the measured binary
-hash was also verified against the final local build.
+hash was also verified against its corresponding pre-follow-up local build.
 
 The following quiet repeat values show **baseline / candidate**:
 
@@ -153,3 +157,80 @@ pages repeatedly, and peak/setup work is excluded from cycle CPU/write deltas.
 These are observed cleanup/cardinality facts, not a promise of constant RSS or
 arbitrary concurrent workload support. Native caps and unknown-outcome semantics
 remain authoritative.
+
+
+## Final watch/PTY review follow-up
+
+External review found a pathname-registration ABA race and incomplete canonical
+PTY EOF. Both were repaired with retained descriptor identity, platform-native
+observers and current-termios EOF handling, then independently re-reviewed with
+no remaining P1/P2. The final local 16-case environment boundary run, strict
+all-target/all-feature Clippy, production build and external connectivity smoke
+passed. The actual native watch module and EOF function also passed isolated
+Apple Silicon target Clippy with the repository's pinned native dependencies;
+the macOS runtime boundary remains part of final-head FULL CI.
+
+The follow-up source is `a5dd0534850b25ac15fc2619c6fb71216baf6073`.
+Its final binary SHA-256 is
+`1c59b23fc2b116b4e45f445afab42291eb3796207cc78d30d12ccb1a2c0a4264`.
+Two fresh environment captures use that binary:
+[first follow-up](environment-followup-measurements.json) and
+[repeat follow-up](environment-followup-repeat-measurements.json).
+Their measured-source SHA-256 is
+`d4aeba44c4f4ebc5951449fb7bedfacdd99304b15ecd25e362cf01acbc4a1e97`,
+verified against that source commit. The harness records `workingTree: true`;
+the source digest, source revision and binary digest identify the measured code.
+
+The following values show **first follow-up / repeat follow-up**, using the same
+shared-host, five-warmup/twenty-cycle method and four modes described above:
+
+| Mode | Parent CPU ms | Reaped-child CPU ms | RSS after MiB | Cycle p50 ms | Cycle p95 ms |
+| --- | --- | --- | --- | --- | --- |
+| one client | 540 / 260 | 110 / 50 | 156.7 / 156.3 | 113.5 / 32.9 | 1494.5 / 33.8 |
+| three clients | 430 / 230 | 90 / 60 | 157.6 / 157.9 | 109.3 / 32.3 | 140.1 / 33.3 |
+| three Sessions | 570 / 520 | 110 / 80 | 160.7 / 162.0 | 47.1 / 41.1 | 49.4 / 46.5 |
+| idle paused client | 370 / 470 | 80 / 90 | 155.9 / 157.2 | 86.6 / 42.8 | 109.4 / 44.4 |
+
+Every one of these 160 cycles retained the descriptor baseline (19 for one client,
+21 for the other modes), invoked zero models and left one server process after
+command completion. Peak descriptors increased from the earlier source's 67/69
+to 75/77: each of the eight active watches now retains one additional authorized
+source descriptor. Cleanup returned to 19/21 descriptors and one process; the
+four-command peak still contained thirteen processes.
+
+Timing and CPU regressions remain visible, including the first capture's
+1494.5 ms p95 and the repeat's three-Session/paused-client CPU of 520/470 ms
+versus the earlier source's 290/280 ms. The first and repeated captures vary
+substantially on the shared host. Neither the improvements nor regressions
+establish causation or a production performance guarantee. macOS descriptor
+budgets and runtime correctness are tested natively in CI; these Linux samples
+are not macOS measurements.
+
+
+The final-source Turn comparison uses a freshly measured untouched base followed
+by source `a5dd0534850b25ac15fc2619c6fb71216baf6073`:
+[baseline follow-up](baseline-followup-measurements.json),
+[candidate follow-up](candidate-followup-measurements.json).
+The candidate's Turn measured-source SHA-256 is
+`60a85e30215c20dbbff4fdc7ce88e641bed0228b034ba74a03a737259454f429`,
+verified against that source commit; its binary matches the environment captures
+above. Both processes completed all five modes with exactly twenty native Turns
+each, twenty provider requests without Host Tools or forty with Host Tools.
+
+These values show **baseline / final-source candidate**:
+
+| Mode | CPU ms | RSS after MiB | Write calls | Kernel written MiB | Latency p50 ms | Latency p95 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| no-host-tools | 4670 / 4720 | 318.5 / 318.3 | 30636 / 30601 | 61.9 / 61.9 | 150.2 / 187.6 | 166.5 / 225.8 |
+| host-one-client | 17770 / 18010 | 339.8 / 340.0 | 70762 / 70879 | 143.1 / 143.1 | 559.9 / 636.8 | 594.0 / 724.1 |
+| host-three-clients | 23550 / 22980 | 347.0 / 344.1 | 70675 / 70741 | 143.0 / 143.2 | 568.9 / 618.7 | 621.9 / 690.4 |
+| host-three-clients-one-paused | 21620 / 21900 | 347.5 / 344.7 | 70588 / 70659 | 142.9 / 143.1 | 554.3 / 615.8 | 620.4 / 719.2 |
+| host-three-resident-sessions | 22740 / 23440 | 359.3 / 361.0 | 60253 / 60118 | 122.9 / 123.1 | 526.5 / 610.9 | 794.2 / 689.8 |
+
+This final pair retains higher p50 in every candidate mode and higher p95 in four
+of five modes; only the three-Session p95 decreased. CPU ranges from a 2.4%
+decrease to a 3.1% increase, with small sampled RSS/write differences. Fixed-order
+shared-host debug samples cannot attribute those movements to the change, and
+no zero-overhead or production-throughput claim follows from them. Earlier pairs
+and both final environment captures remain visible rather than selecting only
+the better measurements.
