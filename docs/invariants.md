@@ -146,7 +146,7 @@ revocation order. `delivery/cancel` (only for that connection's own id) takes th
 state lock. Every revocation of delivery authority (credential replacement or
 removal, connection revocation and drain, close, attachment detach, Product Host
 disconnect or replacement) runs in the order's exclusive side. Replacing or removing
-the delivery or Product Host credential is one transition: under that exclusive side
+the private Product Host credential is one transition: under that exclusive side
 and the credential slot's mutex, the previous grant is dropped, cancelling every token
 it minted, and the next is installed. Authentication, which takes only the slot's
 mutex, sees one side of it, and concurrent rotations take one total order. So a cancellation or
@@ -7900,7 +7900,7 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   retirement releases its reservation exactly once. Cancellation never waits for a
   Host read or its deadline.
 - Session metadata has a separate two-position lane for session/read,
-  session/settings and session/create. Reads are inert catalog operations;
+  session/settings and thread/start. Reads are inert catalog operations;
   creation authors durable identity without initializing MCP. Attachment lifecycle
   waits have their own 32-position lane, using the existing external attachment
   bound; a thirty-third local request is refused before ID allocation or send.
@@ -7908,7 +7908,7 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   Session creation, ordinary RPCs or control submission intent. Web metadata
   shares the existing bounded 64-request queue and starts its 30-second response
   clock at actual send. TUI retains its existing response-clock policy.
-  session/attach has no generic Web response clock: pre-submission preparation
+  thread/resume has no generic Web response clock: pre-submission preparation
   remains unarmed, and the native absolute submission-readiness deadline governs
   its MCP wait. Actual response loss preserves correlation and mutation uncertainty.
   No cwd authorization cache is added: Host scope and exact-root classification
@@ -8186,7 +8186,7 @@ Original admission scope, current controller and result reservation precede nati
   starts. Global source reservations include live ready and retiring generations;
   unknown settlement retains capacity and truthful failure evidence.
 - Preparation has no owner elapsed-time deadline while the draft remains owned.
-  Synchronous native receipt of actual `session/create.submission` captures the
+  Synchronous native receipt of actual `thread/start.submission` captures the
   original monotonic Send timestamp, before any configuration, capacity or
   MCP-dependent wait. One effective positive `mcp_startup_policy.wait_timeout_ms`
   (default 15000, CFG3 whole-object precedence) covers the complete initial batch.

@@ -204,7 +204,7 @@ No new state-store package or compatibility decoder was introduced.
 rustX owns canonical messages and history. The browser renders two authoritative
 read products and retains only replaceable read caches:
 
-- `session/attach` returns a bounded identity receipt; `session/checkpoint`
+- `thread/resume` returns a bounded identity receipt; `session/checkpoint`
   loads an independent bounded cut and `session/subscribe` follows consecutive
   native display transitions after its receipt is accepted.
   Contiguous notifications advance the native read model through the deterministic
@@ -384,7 +384,7 @@ one shared projection, while still requiring the exact destination append revisi
 
 The tail follows Harness `MessageIconActions`: Copy, Regenerate (rustX's only
 extra lineage action, seated where Harness places extra actions) and one branch
-action, Branch into a new Session (`session/fork`), then the Turn usage pill and
+action, Branch into a new Session (`thread/fork`), then the Turn usage pill and
 time. A completed response already names its exact boundary, so both lineage
 actions run on the click, as Harness `forkAt` does: no confirming chooser opens,
 the response actions lock until the transition settles, and a failure surfaces as
@@ -606,7 +606,7 @@ changing its Workspace creates nothing native. The Product Host lists, adopts an
 resolves Workspace handles; the browser never supplies an arbitrary path.
 
 `AppServerClient.firstSubmissions` owns the pending first input for the client
-lifetime. Native `session/create` commits identity and initial model configuration
+lifetime. Native `thread/start` commits identity and initial model configuration
 without composing a runtime. Its decoded acknowledgement synchronously publishes
 the Session-scoped operation, then `App` navigates to the Conversation, even when
 attach or the sidebar catalog is parked. `ConversationComposer` only observes;

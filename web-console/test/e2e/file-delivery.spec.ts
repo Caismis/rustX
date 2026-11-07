@@ -87,20 +87,35 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await expect(panel.locator('script,img,iframe,object')).toHaveCount(0);
     await download(panel.getByRole('button', { name: 'Download artifact', exact: true }), '报告 file.md', original);
     expect(deliveryRead).toBeDefined();
-    const bypass = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<number>((resolve, reject) => {
+    const admission = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<{ deliveryAccess?: boolean; removedMethod?: number; copiedTarget?: string; ownDelivery?: any }>((resolve, reject) => {
+      const observed: { deliveryAccess?: boolean; removedMethod?: number; copiedTarget?: string; ownDelivery?: any } = {};
       const socket = new WebSocket(endpoint, ['rustx.app-server.v73', `rustx-token.${btoa(token!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
       socket.onerror = () => reject(new Error('Browser ordinary connection failed'));
       socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 73, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
       socket.onmessage = event => {
         const reply = JSON.parse(event.data);
-        if (reply.id === 4191) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4192, method: 'session/fileRead', params: { ...read, allowed_roots: [cwd] } }));
-        else if (reply.id === 4192) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4193, method: 'delivery/read', params: read }));
-        else if (reply.id === 4193) { socket.close(); resolve(reply.error?.data?.kind === 'session_file_read' && reply.error.data.reason === 'unauthorized' ? -32601 : 0); }
+        if (reply.id === 4191) {
+          observed.deliveryAccess = reply.result?.capabilities.delivery_access;
+          socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4192, method: 'session/fileRead', params: { ...read, allowed_roots: [cwd] } }));
+        } else if (reply.id === 4192) {
+          observed.removedMethod = reply.error?.code;
+          socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4193, method: 'delivery/read', params: read }));
+        } else if (reply.id === 4193) {
+          observed.copiedTarget = reply.error?.data?.kind;
+          socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4194, method: 'thread/resume', params: { threadId: read.target.conversation_id } }));
+        } else if (reply.id === 4194) {
+          if (reply.error) { socket.close(); reject(new Error('Ordinary Thread resume failed')); return; }
+          socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4195, method: 'delivery/read', params: { ...read, target: reply.result.target } }));
+        } else if (reply.id === 4195) { observed.ownDelivery = reply.result; socket.close(); resolve(observed); }
       };
     }), { endpoint: fixture.endpoint, token: fixture.token, read: { target: deliveryRead.target, locator: deliveryRead.locator, delivery_index: deliveryRead.delivery_index }, cwd: fixture.workspaceA });
-    // All legitimate coordinates and exact cwd still confer no Host authority; the
-    // removed method stays absent and delivery/read without transport-granted access fails closed.
-    expect(bypass).toBe(-32601);
+    // Ordinary API eligibility is shared. Attachment authority remains physical-
+    // connection owned, and caller roots cannot revive the removed Host method.
+    expect(admission.deliveryAccess).toBe(true);
+    expect(admission.removedMethod).toBe(-32601);
+    expect(admission.copiedTarget).toBe('stale_attachment');
+    expect(admission.ownDelivery?.type).toBe('session_file_bytes');
+    expect(Buffer.from(admission.ownDelivery.data, 'base64')).toEqual(original);
     await close();
     writeFileSync(join(fixture.workspaceA,'large.txt'),Array.from({length:12000},(_,index)=>`Preview line ${index} ${'x'.repeat(80)}`).join('\n'));
     for (const name of ['plain 空格.txt', 'source.rs', 'pixel.png', 'data.bin', 'large.txt']) {

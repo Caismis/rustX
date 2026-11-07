@@ -236,10 +236,10 @@ server checks the original finite Journal kind and source ownership; a modified
 locator cannot select another field or widen the cut. No substituted Attempt ID
 is created.
 
-App Server v50 supports transport-granted committed-delivery access (#454):
+App Server v50 introduced committed-delivery access (#454):
 `delivery/read`, `delivery/locate`, the `session_file_location` result and the
-per-connection `ServerCapabilities.delivery_access` report. Only transport
-authentication grants the access. See
+per-connection `ServerCapabilities.delivery_access` report. In v73, successful
+connection authentication grants common ordinary API eligibility. See
 [Committed delivery access](#committed-delivery-access-v50).
 
 App Server v73 / Runtime Client v84 refresh retained Trace input ownership at the
@@ -570,7 +570,7 @@ retire that healthy attachment using its ordinary 30-second response clock.
 `agent/sendMessage`, ordinary RPCs and Session metadata operations retain that
 30-second deadline and existing response-loss disconnect behavior. A lost
 `thread/start` response remains an uncertain mutation. `agent/interrupt`,
-`job/cancel` and `turn/cancel` return finite cancellation-intent receipts; they
+`job/cancel` and `turn/interrupt` return finite cancellation-intent receipts; they
 never wait for physical settlement while occupying reserved control capacity.
 Actual socket close/error settles each pending operation once; transmitted
 mutations remain uncertain, waits are abandoned without cancellation, and no
@@ -593,7 +593,7 @@ existing 64-request bounded pending queue. Its 30-second response clock starts a
 actual send; queueing does not consume it. TUI uses the same finite positions and
 retains its existing absence of a response clock.
 
-Lifecycle controls (`agent/interrupt`, `job/cancel`, `turn/cancel`) use the reserved
+Lifecycle controls (`agent/interrupt`, `job/cancel`, `turn/interrupt`) use the reserved
 positions. Saturated ordinary, metadata, observation and attachment lanes cannot
 delay an otherwise admissible exact cancellation. Full control and attachment
 lanes reject new local admission before send; metadata and observation requests
@@ -672,7 +672,7 @@ explicitly rejected as an invalid request before any action occurs.
 - Both return `mcp_draft_accepted {}`. This acknowledges intent, never readiness
   or physical settlement. They are connection-local operations in shared method
   policy; losing a reply creates no durable Session or uncertain user input.
-- `session/create { settings, submission: target }` is the actual Web first Send.
+- `thread/start { settings, submission: target }` is the actual Web first Send.
   The native connection captures its monotonic receipt synchronously before the
   returned request future can be left unpolled, configuration resolution, capacity
   queueing or MCP-dependent loading. It seals the exact draft once. This field is
@@ -834,7 +834,7 @@ clears it. Superseded source completions cannot publish stale tools or failures.
 | `session/switchNode` | Switch to a selected branch; manager owns retirement and composition |
 | `session/checkpoint`, `session/subscribe`, `session/transcript`, `session/turns`, `session/boundaries` | Authoritative projection, bounded replay, cut-bound transcript windows/native Attempt outline and lineage-specific user-message pages |
 | `conversation/changes`, `conversation/changeDiff` | Read-only, attachment-bound completed-Attempt workspace summaries and immutable per-file comparison hunks |
-| `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
+| `turn/start`, `turn/steer`, `turn/interrupt` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `item/interaction/request`, client result/error, `serverRequest/resolved` | Originating native coordinator; one broadcast response claim, including routed child interactions |
 | `session/settings` | Durable resolved Session selection; model mutation uses `session/setModel` |
 | `session/model`, `session/models`, `session/setModel`, `session/selectModel` | Bounded attached Session model/catalog reads and finite mutation receipts; complete authored selections or catalog defaults at exact native binding revision and ordinals |
@@ -846,20 +846,20 @@ clears it. Superseded source completions cannot publish stale tools or failures.
 | `agent/transcript`, `agent/turns` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `AgentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
 | `agent/list`, `agent/status`, `agent/sendMessage`, `agent/wait`, `agent/interrupt` | Durable Agent owner: atomic message/resume arbitration, captured activation wait and finite intent receipt for interruption of that exact reserved/current activation |
 
-`turn/start` and `turn/steer` both submit native inbound content. The runtime
-decides whether it starts a fresh attempt or joins the inbound queue of the
-current attempt. Neither method creates a separate execution state machine.
-Callers learn accepted message identity and inbound sequence from the result.
+`turn/start` starts idle work or steers an open active Attempt at native admission.
+`turn/steer` requires `expectedTurnId` and refuses a different or closed Attempt.
+Both carry `inputId`; receipts retain the exact native Turn, disposition, message
+identity and inbound sequence. `inbound/queue` explicitly waits for a future
+Attempt rather than steering current work. These use one native coordinator and
+mailbox, with no separate execution state machine.
 
-`turn/cancel` asks the native coordinator to select and cancel its current
-Attempt under one coordinator guard. A stale or unavailable presentation view
-cannot choose the target or refuse cancellation. The receipt identifies that
-exact accepted cancellation, independently of later settlement or replacement.
-Web and TUI cancellation gestures use current connection and exact attachment
-control authority, independently of observation readiness. An unavailable or
-resynchronizing display must not disable a fresh cancellation gesture. A retained
-gesture still carries its original attachment generation: reconnect, replacement,
-detach or loss of control permission fences it before dispatch. Send, edit and
+`turn/interrupt` requires exact `turnId`; the native coordinator checks and cancels
+that Attempt under one guard. A stale ID cannot cancel its successor. The receipt
+identifies the accepted cancellation independently of later settlement.
+Web and TUI gestures retain connection, exact attachment and proven Attempt ID.
+They may use that retained proof during display resynchronization, but never
+guess an unknown or replacement Attempt. Reconnect, replacement, detach or native
+retirement fences an old gesture before dispatch. Send, edit and
 other commands that require an exact display baseline retain their stricter
 observation guards. No client guesses a replacement Attempt or retries cancellation
 because its response was lost.
@@ -2219,7 +2219,7 @@ update an Interrupted activation's Agent to Inactive without changing its logica
 outcome or replaying it.
 ## Session startup commit and catalog invalidation (v50)
 
-`session/create.settings.model` is optional `SessionModelConfig`. Explicit intent
+`thread/start.settings.model` is optional `SessionModelConfig`. Explicit intent
 is validated and persisted by native creation; omitted intent captures the native
 default at creation, not a client's earlier projection. Successful creation (also
 with a durability diagnostic) acknowledges a real Session identity. It does not
@@ -2329,9 +2329,10 @@ the returned page offset; an omitted offset always means native latest.
 
 `ToolExecutionResult.deliveries` contains runtime-owned `SessionFileReference`
 facts, distinct from managed `FileReference` / `ArtifactId`. Only committed
-successful Tool results authorize cards. App Server v73 exposes no ordinary
-Session-file read Method or caller-supplied root authorization; `delivery/read`
-requires transport-granted delivery access (below). Browser actions
+successful Tool results authorize cards. App Server v73 exposes no generic
+Session-file read Method or caller-supplied root authorization. `delivery/read`
+is an ordinary API under the client's exact attachment and native provenance.
+Browser actions
 use canonical coordinates through the Product Host HTTP carrier; a dedicated
 native WebSocket seam authenticates a separate process-scoped Product Host-only
 credential before accepting Host-owned current registration roots. Browser
@@ -2345,7 +2346,7 @@ fences, current registration policy, historical scope and resource limits.
 
 ### Committed delivery access (v50)
 
-`delivery/read { target, message_id, delivery_index }` returns
+`delivery/read { target, locator, delivery_index }` returns
 `session_file_bytes { file, data }`: the current original bytes (at most 512 KiB,
 base64) of one committed delivery. `delivery/locate` with the same parameters
 returns `session_file_location { file, path, device, inode }`: the absolute path in

@@ -757,7 +757,7 @@ supervision travel together. Draft preparation resolves only selected configured
 MCP demand from Root and enabled Workflows. It creates no durable Session, Python
 or Skill environment, provider request, upload receipt or executable capability.
 
-An actual Web Send carries its draft target in `session/create`. Synchronous
+An actual Web Send carries its draft target in `thread/start`. Synchronous
 native connection admission records the monotonic receipt and seals one exact
 selection before any asynchronous configuration, capacity, create or attach wait.
 Creation acknowledges the durable identity independently of runtime readiness.
@@ -835,7 +835,7 @@ does not reconcile history or move bootstrap/replay ownership.
 
 Fresh submission authorization must itself remain reachable while cold
 attachments wait. Native and shared Web/TUI method policy give `session/read`,
-`session/settings` and `session/create` a two-position metadata lane. Reads are
+`session/settings` and `thread/start` a two-position metadata lane. Reads are
 inert catalog operations; creation authors durable identity without preparing
 MCP. Attachment lifecycle waits have 32 positions, matching the existing external
 attachment bound. A thirty-third local attach is refused before ID allocation or

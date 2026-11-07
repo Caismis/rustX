@@ -238,11 +238,11 @@ or adopts it.
 ```text
 bind stdio child or external WebSocket
   -> initialize (App Server protocol v73)
-  -> session/create or choose a durable Session
-  -> resolve the exact Session/node; begin session/attach and editable connecting
+  -> thread/start or choose a durable Session
+  -> resolve the exact Session/node; begin thread/resume and editable connecting
        -> first explicit Send records session/submissionIntent
        -> native selected MCP readiness settles under that submission's budget
-  -> session/attach receipt establishes the fresh runtime identity
+  -> thread/resume receipt establishes the fresh runtime identity
   -> session/checkpoint (bounded authoritative cut and cursor)
   -> session/subscribe (receipt accepted before following events)
   -> interactive
@@ -684,8 +684,9 @@ snapshot. The renderer shows the immutable tool identity, mode, reason, and
 validated arguments for Approval, and the bounded questionnaire facts, option
 descriptions, previews, review tab, and client-owned custom row. Every
 response — an Approval decision or one typed whole-questionnaire submission —
-is sent through the same `interaction/respond` path with the exact routed
-`InteractionRef` it was collected for. Neither kind invokes a Tool, mutates
+is a JSON-RPC reply to the live `item/interaction/request`, retaining the exact
+routed `InteractionRef` it was collected for. Snapshot facts supply presentation;
+the current callback identity establishes answer eligibility. Neither kind invokes a Tool, mutates
 arguments, infers an outcome from detach/EOF, or callbacks into the Agent
 Loop.
 

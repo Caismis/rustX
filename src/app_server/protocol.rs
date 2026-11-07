@@ -210,10 +210,9 @@ pub enum Method {
     },
     /// Original bytes (at most 512 KiB) of one committed `present` delivery.
     ///
-    /// Requires delivery access, which only transport authentication grants
-    /// (an explicitly delegated stdio owner, or the separate WebSocket
-    /// delivery credential). Without it this fails `session_file_read`
-    /// `unauthorized` before any lookup, whatever the coordinates.
+    /// Every authenticated, initialized ordinary client has the same API
+    /// eligibility. The exact attachment must belong to this connection;
+    /// native resource, provenance and descriptor checks still apply.
     #[serde(rename = "delivery/read")]
     DeliveryRead {
         target: AttachmentTarget,

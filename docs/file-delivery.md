@@ -115,7 +115,7 @@ Initialize client names are metadata and have no authorization role.
 
 Two transport-authenticated callers enter one native owner,
 `app_server::delivery_access`: the private Product Host lane below, and an App
-Server connection holding *delivery access*. Each passes a cancellation authority
+Server connection initialized with ordinary API eligibility. Each passes a cancellation authority
 minted by its transport authentication; no JSON field, client name, coordinate,
 path or root list can manufacture one.
 
@@ -217,9 +217,8 @@ take the connection's route table before the revocation order, and a credential
 slot after it, and never take the stream or a request's state. Authentication
 takes only a credential slot. No path takes them in another order.
 
-**Credential rotation.** The WebSocket delivery credential and the Product Host
-credential each live in one slot owned by `AppServerHost`, and only
-`bind_delivery_access` / `bind_product_host` change it, through one transition
+**Private credential rotation.** The Product Host credential lives in one slot
+owned by `AppServerHost`; only `bind_product_host` changes it, through one transition
 (`AppServerHost::rotate`). The transition takes the exclusive side of the
 revocation order, then the slot's mutex. Holding both, it drops the previous
 grant, which cancels its token and so every connection or socket token it
@@ -382,7 +381,7 @@ the ordinary native failure vocabulary.
 | Host Office source read | 50 MiB, independent of ordinary preview/Download |
 | Private file carrier | Bounded JSON metadata followed by one complete binary WebSocket message; HTTP multipart metadata and original bytes to the browser |
 | Public `delivery/read` | Existing 512 KiB Base64 response within the ordinary 1 MiB record budget |
-| Native Session-file reads | 2 owned reads per AppServerHost, shared by the Product Host lane and delivery-access connections; excess fails, no unbounded queue |
+| Native Session-file reads | 2 owned reads per AppServerHost, shared by the Product Host lane and ordinary connections; excess fails, no unbounded queue |
 | Product Host file operations | 2 physical read obligations per Host instance; clean close/terminal response releases admission, unknown settlement keeps its slot unavailable |
 | Browser private Host reads / retained preview URLs | 2 private permits / 3 aggregate URLs: 2 visible panes plus 1 transient Download |
 | Managed Artifact transfers / URLs / bytes | Existing independent 2 / 16 / 262,144 bytes; preview leases separately obey the aggregate 3-URL limit |

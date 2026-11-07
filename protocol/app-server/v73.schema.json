@@ -31053,7 +31053,7 @@
           ]
         },
         {
-          "description": "Original bytes (at most 512 KiB) of one committed `present` delivery.\n\nRequires delivery access, which only transport authentication grants\n(an explicitly delegated stdio owner, or the separate WebSocket\ndelivery credential). Without it this fails `session_file_read`\n`unauthorized` before any lookup, whatever the coordinates.",
+          "description": "Original bytes (at most 512 KiB) of one committed `present` delivery.\n\nEvery authenticated, initialized ordinary client has the same API\neligibility. The exact attachment must belong to this connection;\nnative resource, provenance and descriptor checks still apply.",
           "type": "object",
           "properties": {
             "method": {

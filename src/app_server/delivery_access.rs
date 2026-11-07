@@ -2,7 +2,7 @@
 //!
 //! Two transport-authenticated callers enter it: the private Product Host lane
 //! (whose roots come from its current Workspace registrations) and a connection
-//! holding delivery access (stdio owner or separate WebSocket credential).
+//! with ordinary API eligibility (OS-trusted stdio or authenticated WebSocket).
 //! Neither JSON fields, client names, coordinates nor paths create authority:
 //! the caller passes a cancellation token minted by transport authentication.
 //!
