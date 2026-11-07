@@ -204,3 +204,16 @@ not an SDK or a second demo application. Rust-derived `v73.schema.json`, `v73.ts
 and fixtures are generated together; product clients validate server output apart
 from the generic client-response envelope so arbitrary callback results cannot
 weaken native server-response validation.
+
+A subscriber's detach sends its exact outstanding `serverRequest/resolved`
+correlations on the same ordered callback channel before any later replay. This
+retires only that subscriber's ability to answer and aborts its local Host Tool
+handlers. Other subscribers and native requests remain live.
+
+Input receipt recovery retains bounded application settlement ownership under the
+original server authority, Conversation and inputId. Both a lost transport response
+and a native `outcome_unknown` response retain that correlation. A positive lookup
+is handed to the original acknowledgement owner; Web's revision-sensitive composer
+consumes only that submission's text/files, and TUI settles the retained operation.
+Absent proofs and failed reads preserve uncertainty. Recovery never resends input
+or upgrades durable acceptance into execution completion.

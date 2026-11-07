@@ -262,6 +262,11 @@ export class RequestPipeline {
     }
     this.pending.delete(String(value.id)); clearTimeout(pending.timer);
     this.capacityReleased();
+    if ('error' in value && value.error.data?.kind === 'outcome_unknown'
+      && (pending.request.method === 'inbound/queue' || pending.request.method === 'turn/start' || pending.request.method === 'turn/steer')) {
+      const {inputId,target}=pending.request.params;
+      this.port.uncertainCommit({id:String(value.id),method:pending.request.method,sessionId:target.session_id,generation,inputId,conversationId:target.conversation_id});
+    }
     if ('result' in value && value.result?.type === 'session_transition' && value.result.durability_diagnostic) {
       this.port.uncertainCommit({ id: String(value.id), method: pending.request.method, sessionId: pending.sessionId, generation,
         committedNode: { sessionId: value.result.session.id, nodeId: value.result.session.active_node }, diagnostic: value.result.durability_diagnostic });

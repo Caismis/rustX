@@ -450,6 +450,7 @@ export class AppServerHost {
     }
     this.#failedInitializations.delete(sessionId);
     this.#sessions.set(sessionId, session);
+    await this.repairInputReceipts(session);
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
       // installs a fresh one rather than reusing a target the server retired.
@@ -464,6 +465,24 @@ export class AppServerHost {
   inheritModelSelectionUncertainty(previous: AppServerHost): void {
     for (const sessionId of previous.#unknownModelSelections) {
       this.#unknownModelSelections.add(sessionId);
+    }
+  }
+
+  /** Local operation ownership survives a socket, including rejection before
+   * close listeners run. Authority and Conversation are never inferred anew. */
+  inheritInputUncertainty(previous: AppServerHost): void {
+    this.client.inputReceipts=previous.client.inputReceipts;
+  }
+
+  async repairInputReceipts(session: AppServerSession): Promise<void> {
+    const target=session.target,authorityId=this.authorityId,receipts=this.client.inputReceipts;
+    for(const record of [...receipts.records.values()]) {
+      if(record.authorityId!==authorityId||record.conversationId!==target.conversation_id)continue;
+      try {
+        const result=await this.client.call('inbound/submissionLookup',{target,inputId:record.inputId},'inbound_submission');
+        if(result.acceptance&&!session.released&&!session.serverClosed&&this.authorityId===authorityId)
+          receipts.accepted(authorityId,target.conversation_id,record.inputId,result.acceptance);
+      } catch { /* A failed or absent read proves nothing; keep the operation. */ }
     }
   }
 

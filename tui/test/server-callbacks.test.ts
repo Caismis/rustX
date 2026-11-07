@@ -33,3 +33,15 @@ it('invalid envelopes and wrong-thread resolutions cannot clear a pending reques
   assert.throws(()=>callbacks.receive({...request('bad'),params:[]}),/Invalid/);
   callbacks.receive(resolved('one'));
 });
+it('subscriber retirement aborts handlers, fences late replies and permits more than 128 sequential callbacks',async()=>{
+ const replies:unknown[]=[],signals:AbortSignal[]=[],finish:Array<()=>void>=[];
+ const callbacks=new ServerCallbacks(async value=>{replies.push(value);});
+ callbacks.installHandler('business','lookup',async(_,signal)=>{signals.push(signal);await new Promise<void>(resolve=>finish.push(resolve));return {success:true,contentItems:[]};});
+ for(let index=0;index<130;index++){
+   const id=`retired-${index}`;
+   callbacks.receive(request(id));await flush();
+   callbacks.receive(resolved(id));assert.equal(signals[index]!.aborted,true);
+   finish[index]!();await flush();assert.equal(replies.length,0);
+ }
+ callbacks.receive(request('current'));await flush();finish[130]!();await flush();assert.equal(replies.length,1);
+});

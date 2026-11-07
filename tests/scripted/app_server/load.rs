@@ -477,3 +477,41 @@ async fn host_drain_and_native_activation_have_both_initialization_winners() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn archive_after_identity_resolution_fences_the_registered_execution_owner() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 1).await;
+        let id = f.id(0).await;
+        let probe = f.manager.probe(&id);
+        probe.before_load_registration.arm();
+        let load = f.load(0);
+        probe.before_load_registration.entered().await;
+        f.manager.archive_thread(id.clone(), true).await.unwrap();
+        probe.before_load_registration.release();
+        assert!(
+            load.await
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("archived")
+        );
+        assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.compositions.load(Ordering::SeqCst), 0);
+        assert_eq!(f.manager.residency(&id), ResidencyState::Unloaded);
+        assert!(f.provider.request_bodies().is_empty());
+        // Archive remains readable; only execution admission is fenced.
+        let access = f
+            .manager
+            .sessions
+            .acquire_session(&f.sessions[0].id, Some(&f.sessions[0].active_node))
+            .await
+            .unwrap();
+        assert!(access.node.archived);
+        drop(access);
+        f.manager.archive_thread(id.clone(), false).await.unwrap();
+        f.load(0).await.unwrap().unwrap();
+        f.close().await;
+    })
+    .await;
+}

@@ -208,3 +208,17 @@ it.each(['page','value'] as const)('a replaced pending owner resets loading whil
   expect(screen.queryByText('Which direction?')).toBeNull();
   expect(current.replies).toHaveLength(0);
 });
+
+it('detach releases delivered interactions across more than 128 sequential subscriptions',async()=>{
+ const current=server=new Server();await current.attached('A');
+ for(let index=0;index<130;index++) {
+   const header=interaction('approval');header.interaction={...header.interaction,interaction_id:`sequential-${index}`};
+   current.update('A',{...current.snapshots.get('A')!,pending_interactions:[header]});
+   expect(current.client.callbacks.canAnswer(header.interaction)).toBe(true);
+   await current.client.release('A');
+   expect(current.client.callbacks.canAnswer(header.interaction)).toBe(false);
+   current.snapshots.get('A')!.pending_interactions=[];
+   await current.client.attach('A');
+   expect(current.client.getSnapshot().connection).toBe('connected');
+ }
+});

@@ -263,6 +263,8 @@ impl SessionRuntimeManager {
             let id = target.conversation_id.clone();
             #[cfg(test)]
             let id_for_probe = id.clone();
+            #[cfg(test)]
+            self.probe(&id).before_load_registration.park().await;
             let flight = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 registry.check_session(session, &id)?;
@@ -430,11 +432,11 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let startup = flight.startup.clone();
         let initialization = flight.initialization.clone();
-        let terminal = TerminalGuard::new(self, id, flight, WriterCertainty::Absent);
+        let terminal = TerminalGuard::new(self, id.clone(), flight, WriterCertainty::Absent);
         // The flight is registered before this task can acquire allocation access.
         tokio::spawn(async move {
             let result = owner
-                .acquire_and_compose(&session, &node, startup, &initialization)
+                .acquire_and_compose(&id, &session, &node, startup, &initialization)
                 .await
                 .map(Some);
             terminal.finish(result);
@@ -443,6 +445,7 @@ impl SessionRuntimeManager {
 
     async fn acquire_and_compose(
         &self,
+        id: &ConversationId,
         session: &SessionId,
         node: &SessionNodeId,
         startup: super::super::composition::McpInitialSubmission,
@@ -453,12 +456,7 @@ impl SessionRuntimeManager {
         }
         #[cfg(test)]
         {
-            let target = self
-                .sessions
-                .resolve_session_target(session, Some(node))
-                .await
-                .map_err(error)?;
-            let probe = self.probe(&target.conversation_id);
+            let probe = self.probe(id);
             probe.before_allocation.park().await;
             probe
                 .acquisitions
@@ -472,6 +470,9 @@ impl SessionRuntimeManager {
             .acquire_session(session, Some(node))
             .await
             .map_err(error)?;
+        if access.node.conversation_id != *id {
+            return Err(error("Thread execution destination changed"));
+        }
         self.compose(access, startup, initialization).await
     }
 
@@ -482,6 +483,12 @@ impl SessionRuntimeManager {
         startup: super::super::composition::McpInitialSubmission,
         initialization: &Arc<super::Initialization>,
     ) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
+        // Every caller owns a registered Loading flight before acquiring this
+        // fresh node. Archive cannot commit across that reservation; an earlier
+        // identity-only read does not grant execution after archive commits.
+        if access.node.archived {
+            return Err(error("Thread is archived; unarchive before execution"));
+        }
         #[cfg(test)]
         {
             let probe = self.probe(&access.node.conversation_id);
@@ -976,6 +983,7 @@ impl SessionRuntimeManager {
                 owner.probe(&id).after_writer_transfer.park().await;
                 let result = owner
                     .acquire_and_compose(
+                        &id,
                         &session,
                         &node,
                         flight.startup.clone(),

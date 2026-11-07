@@ -1,4 +1,5 @@
 import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-server/callbacks.ts';
+import { InputReceipts } from './input-receipts.ts';
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
 import { ATTACHMENT_REQUEST_CAPACITY, requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
 import type { Request1 } from '../../../protocol/app-server/v73.ts';
@@ -214,6 +215,7 @@ export class AppServerClient {
   #nextAppServerRequestId = 1;
   #capabilities: ServerCapabilities | undefined;
   #authorityId = "";
+  inputReceipts = new InputReceipts();
   #closed: TransportClosedError | undefined;
 
   private constructor(transport: AppServerTransport) {
@@ -387,6 +389,11 @@ export class AppServerClient {
     const id = this.#nextAppServerRequestId;
     this.#nextAppServerRequestId += 1;
 
+    const input=method==='inbound/queue'||method==='turn/start'||method==='turn/steer'?inputCorrelation(params):undefined;
+    if(input) {
+      try { this.inputReceipts.reserve(this.#authorityId,input.conversationId,input.inputId); }
+      catch(error) { return Promise.reject(error); }
+    }
     return new Promise<MethodResult>((resolve, reject) => {
       const cancel = () => {
         if (!this.#pending.has(id)) return;
@@ -401,11 +408,11 @@ export class AppServerClient {
       };
       this.#pending.set(id, {
         method,
-        ...(inputCorrelation(params) ? {input:inputCorrelation(params)!} : {}),
+        ...(input ? {input} : {}),
         expect,
         effect: requestEffect({ method, params } as Request1),
-        resolve: (result) => { release(); resolve(result); },
-        reject: (error) => { release(); reject(error); },
+        resolve: (result) => { release(); if(input)this.inputReceipts.release(this.#authorityId,input.conversationId,input.inputId); resolve(result); },
+        reject: (error) => { release(); if(input&&!(error instanceof UncertainOutcomeError)&&!(error instanceof AppServerRequestError&&error.kind==='outcome_unknown'))this.inputReceipts.release(this.#authorityId,input.conversationId,input.inputId); reject(error); },
       });
       signal?.addEventListener("abort", cancel, { once: true });
       void this.#transport

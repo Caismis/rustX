@@ -1277,3 +1277,61 @@ async fn scheduler85_review_busy_hot_writer_does_not_block_activation_or_other_s
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn archived_cold_trigger_keeps_its_receipt_without_admitting_execution() {
+    bounded(async {
+        let mut f = Fixture::with_session_count(None, 1).await;
+        let clock = Clock::new();
+        f.manager.schedule_clock = clock.clone();
+        let created = receipt(start(&f, 0, "archive-ready").await.unwrap().unwrap());
+        let id = f.id(0).await;
+        let session = &f.sessions[0];
+        clock.add(60);
+        f.manager
+            .schedule_operation(
+                &session.id,
+                &session.active_node,
+                ScheduleOperation::Admit {
+                    id: created.id,
+                    expected_revision: 1,
+                },
+            )
+            .await
+            .unwrap();
+        let access = f
+            .manager
+            .sessions
+            .acquire_session(&session.id, Some(&session.active_node))
+            .await
+            .unwrap();
+        let store = crate::durable::SqliteConversationStore::open_existing(
+            id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        let trigger = store.schedule_summary().unwrap().ready[0].clone();
+        drop(store);
+        drop(access);
+        f.manager.archive_thread(id.clone(), true).await.unwrap();
+        let binding = ScheduleBinding {
+            session_id: session.id.clone(),
+            node_id: session.active_node.clone(),
+            conversation_id: id.clone(),
+        };
+        assert!(
+            f.manager
+                .activate_scheduled_target(&binding, &trigger)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("archived")
+        );
+        assert_eq!(pending(&f, session).await, 1);
+        assert_eq!(f.manager.probe(&id).compositions.load(Ordering::SeqCst), 0);
+        assert!(f.provider.request_bodies().is_empty());
+        assert!(f.manager.is_empty());
+        f.close().await;
+    })
+    .await;
+}

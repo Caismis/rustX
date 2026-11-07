@@ -116,3 +116,28 @@ private Product Host root-proof channel retains its separate native ownership.
 Command execution, new filesystem/management APIs and the other Issue B work
 remain outside this change. The standalone connectivity example and its run
 instructions are in [shared-control.md](shared-control.md#existing-clients-and-standalone-example).
+
+### Review boundary regressions after `33c7f5f`
+
+- `archive_after_identity_resolution_fences_the_registered_execution_owner` parks
+  after the early catalog identity read and before Loading registration, commits
+  archive, then exercises the production fresh-node composition admission. It
+  proves zero compositions/model calls, preserves read-only access and permits
+  explicit unarchive. `archived_cold_trigger_keeps_its_receipt_without_admitting_execution`
+  applies the same rule to an already accepted cold scheduled trigger.
+- `detach_revokes_only_the_departing_subscriber_without_leaking_capacity` repeats
+  130 subscriber retirements while another subscriber retains native settlement
+  authority. Native publication fences, same-channel retirement/replay order,
+  shared TypeScript handler aborts and late-result suppression remain covered.
+  Web's actual client repeats 130 attachment cycles without leaking callback slots.
+- The rendered Web composer lifecycle tests deliver lookup acceptance to the
+  original submission and First Submission ACK owner, including attachments,
+  later edits and explicit native `outcome_unknown`, without input replay.
+- TUI reconnect observation tests preserve the original operation record before
+  close listeners, transfer it across Hosts, and query exact authority/Conversation/
+  inputId. Accepted proofs settle it; absent or failed reads and mismatched
+  authority/Conversation preserve uncertainty. Typed native unknown responses use
+  the same path. None submits replacement input.
+
+These targeted regressions do not replace final-head FULL verification for the
+approved Thread runtime-status amendment.

@@ -382,17 +382,24 @@ impl Callbacks {
 
     pub(crate) fn unsubscribe(&self, client: &str, thread: &ConversationId) {
         let mut state = self.state.lock().expect("callbacks");
-        if let Some(participant) = state.clients.get_mut(client) {
-            participant.threads.remove(thread);
-            participant.waker.wake();
-        }
-        for pending in state
-            .pending
+        let State {
+            clients, pending, ..
+        } = &mut *state;
+        let Some(participant) = clients.get_mut(client) else {
+            return;
+        };
+        participant.threads.remove(thread);
+        for pending in pending
             .values_mut()
             .filter(|pending| pending.thread == *thread)
         {
-            pending.recipients.remove(client);
+            if pending.recipients.remove(client).is_some() {
+                // This subscriber can no longer answer. Retire its local
+                // correlation without settling the shared native request.
+                Self::resolved_for(participant, &pending.request.id, thread);
+            }
         }
+        participant.waker.wake();
     }
 
     pub(crate) fn disconnect(&self, client: &str) {
@@ -561,31 +568,34 @@ impl Callbacks {
     }
 
     fn resolved(state: &State, id: &RequestId, pending: &Pending) {
+        for recipient in pending.recipients.keys() {
+            if let Some(participant) = state.clients.get(recipient) {
+                Self::resolved_for(participant, id, &pending.thread);
+            }
+        }
+    }
+
+    fn resolved_for(participant: &Participant, id: &RequestId, thread: &ConversationId) {
         let message = ServerMessage::Resolved {
             jsonrpc: JsonRpcVersion::V2,
             method: super::protocol::ServerResolvedMethod::Resolved,
             params: super::protocol::ServerRequestResolved {
                 request_id: id.clone(),
-                thread_id: pending.thread.clone(),
+                thread_id: thread.clone(),
             },
         };
-        for recipient in pending.recipients.keys() {
-            if let Some(participant) = state.clients.get(recipient) {
-                participant.waker.wake();
-                if participant
-                    .sender
-                    .try_send(Queued {
-                        message: message.clone(),
-                        publication: None,
-                    })
-                    .is_err()
-                {
-                    participant.closed.cancel();
-                    participant.overloaded.cancel();
-                }
-                participant.waker.wake();
-            }
+        if participant
+            .sender
+            .try_send(Queued {
+                message,
+                publication: None,
+            })
+            .is_err()
+        {
+            participant.closed.cancel();
+            participant.overloaded.cancel();
         }
+        participant.waker.wake();
     }
 }
 
@@ -720,6 +730,39 @@ mod tests {
             id,
             result: value,
         })
+    }
+    #[tokio::test]
+    async fn detach_revokes_only_the_departing_subscriber_without_leaking_capacity() {
+        let callbacks = Arc::new(Callbacks::default());
+        let thread = ConversationId::generate();
+        let a = callbacks.connect();
+        let b = callbacks.connect();
+        callbacks.subscribe_test(&b.id, &thread);
+        for _ in 0..130 {
+            callbacks.subscribe_test(&a.id, &thread);
+            let mut ticket = callbacks
+                .request(thread.clone(), method(thread.clone()), None)
+                .unwrap();
+            let queued = a.messages.lock().await.recv().await.unwrap();
+            let publication = queued.publication.unwrap();
+            assert_eq!(publication.with_live(|| ()), Some(()));
+            b.messages.lock().await.recv().await.unwrap();
+            callbacks.unsubscribe(&a.id, &thread);
+            assert_eq!(publication.with_live(|| ()), None);
+            let ServerMessage::Resolved { params, .. } =
+                a.messages.lock().await.recv().await.unwrap().message
+            else {
+                panic!("subscriber retirement")
+            };
+            assert_eq!(params.request_id, ticket.id);
+            assert!(ticket.reply.try_recv().is_err());
+            assert!(!callbacks.respond(&a.id, reply(ticket.id.clone(), serde_json::json!({}))));
+            assert!(callbacks.respond(&b.id, reply(ticket.id.clone(), serde_json::json!({}))));
+            (&mut ticket.reply).await.unwrap();
+            b.messages.lock().await.recv().await.unwrap();
+            assert!(a.messages.lock().await.try_recv().is_err());
+            assert!(!a.overloaded.is_cancelled());
+        }
     }
     #[tokio::test]
     async fn broadcast_first_response_invalid_payload_disconnect_and_replay() {
@@ -939,6 +982,8 @@ mod tests {
             )),
             Acceptance::<()>::Discarded
         ));
+        let retired = client.messages.lock().await.recv().await.unwrap();
+        assert!(matches!(retired.message, ServerMessage::Resolved { .. }));
         let replay = client.messages.lock().await.recv().await.unwrap();
         assert!(matches!(
             replay

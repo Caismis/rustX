@@ -337,6 +337,7 @@ export class AppServerClient {
     const detached = [...(this.state.detached ?? [])];
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
     this.lifecycles.replaceAuthority(); this.reading.retireAuthority(); this.catalog.retireAuthority();
+    this.inputAcknowledgements.clear();
     this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
       authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
   }
@@ -867,6 +868,9 @@ export class AppServerClient {
     this.repairInputReceipts(id);
   }
   private readonly inputRepairs = new Set<string>();
+  /** Application-owned settlement, retained only while its bounded uncertain
+   * operation exists. A repaired receipt is the same evidence as a direct ACK. */
+  private readonly inputAcknowledgements = new Map<string, {authorityId: string | undefined; conversationId: string; acknowledge: NonNullable<Parameters<AppServerClient['send']>[4]>}>();
   private repairInputReceipts(id:string) {
     const target=this.state.views[id]?.target,generation=this.state.generation;
     if(!target)return;
@@ -876,6 +880,13 @@ export class AppServerClient {
       void this.request({method:'inbound/submissionLookup',params:{target,inputId:operation.inputId}},'inbound_submission')
         .then(({acceptance})=>{
           if(acceptance&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target)) {
+            const owner=this.inputAcknowledgements.get(operation.inputId!);
+            if(owner&&owner.authorityId===this.state.authorityId&&owner.conversationId===target.conversation_id) {
+              this.inputAcknowledgements.delete(operation.inputId!);
+              try { owner.acknowledge({type:'inbound_accepted',...acceptance}); }
+              catch(error) { console.error('App Server recovered acknowledgement observer failed',error); }
+            }
+            if(!this.current(generation)||!sameTarget(this.state.views[id]?.target,target))return;
             const view=this.state.views[id],submissions=view.submissions??[];
             // Acceptance proof takes over lost transport ownership atomically;
             // only a native observation of the exact MessageId can release it.
@@ -914,12 +925,20 @@ export class AppServerClient {
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
     // The request pipeline owns unresolved transport and its acknowledgement
     // handoff. No MessageId or queue identity is invented before acceptance.
+    const inputId=crypto.randomUUID();
+    if(acknowledged)this.inputAcknowledgements.set(inputId,{authorityId:this.state.authorityId,conversationId:target.conversation_id,acknowledge:acknowledged});
+    const acknowledge: typeof acknowledged = result => { this.inputAcknowledgements.delete(inputId); acknowledged?.(result); };
+    try {
     if (delivery === 'steer') {
       const expectedTurnId = this.state.views[id].snapshot?.attempt?.attempt_id;
       if (!expectedTurnId) throw new Error('No exact active Turn is available.');
-      return this.request({ method:'turn/steer', params:{target,content,expectedTurnId,inputId:crypto.randomUUID()} }, 'turn_input_accepted', acknowledged, dispatchCurrent);
+      return await this.request({ method:'turn/steer', params:{target,content,expectedTurnId,inputId} }, 'turn_input_accepted', acknowledge, dispatchCurrent);
     }
-    return this.request({ method:'inbound/queue', params:{target,content,inputId:crypto.randomUUID()} }, 'inbound_accepted', acknowledged, dispatchCurrent);
+    return await this.request({ method:'inbound/queue', params:{target,content,inputId} }, 'inbound_accepted', acknowledge, dispatchCurrent);
+    } finally {
+      // The pipeline publishes uncertainty before rejecting the request.
+      if(!this.state.uncertain.some(operation=>operation.inputId===inputId))this.inputAcknowledgements.delete(inputId);
+    }
   }
   private publishInbound(id: string, accepted?: Submission) {
     const view = this.state.views[id];
@@ -970,6 +989,8 @@ export class AppServerClient {
   acknowledgeDiagnostic(id: string) {
     // This acknowledges only the notice. Uncertain interaction controls remain
     // disabled until native state resolves them; no RPC is emitted.
+    const inputId=this.state.uncertain.find(item=>item.id===id)?.inputId;
+    if(inputId)this.inputAcknowledgements.delete(inputId);
     this.publish({ uncertain: this.state.uncertain.filter(item => item.id !== id) });
   }
 }

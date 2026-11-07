@@ -177,6 +177,7 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
     attached: [],
     retryInitialization: async () => {},
     inheritModelSelectionUncertainty: options.inheritModelSelectionUncertainty ?? (() => {}),
+    inheritInputUncertainty: () => {},
     describe: () => (ownership === "owned_child" ? "owned child" : "external"),
     stderrTail: () => ({ text: "", truncatedBytes: 0 }),
     childExit: undefined,

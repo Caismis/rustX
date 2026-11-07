@@ -338,6 +338,7 @@ export class RustxTuiApp {
       await oldHost.shutdown();
       replacement = await this.#reconnect();
       replacement.inheritModelSelectionUncertainty(oldHost);
+      replacement.inheritInputUncertainty(oldHost);
       let focus = focused;
       let observedDeletion: SessionDeleteResult | undefined;
       // A historical deletion target is independent of the currently focused Session.

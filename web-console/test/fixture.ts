@@ -326,7 +326,11 @@ export class Server {
       // Inspection detail is served per record, so the fixture answers from
       // the details its scenario staged and reports absence otherwise.
       case 'session/traceDetail': result = traceReceipt(this.traceDetails.get(request.params.record_id) ?? null); break;
-      case 'session/detach': this.targets.get(socket)!.delete(id); result = { type: 'detached' }; break;
+      case 'session/detach': {
+        const thread=this.targets.get(socket)?.get(id)?.conversation_id;
+        for(const [requestId,pending] of this.callbackRequests)if(pending.thread===thread)socket.deliver({jsonrpc:'2.0',method:'serverRequest/resolved',params:{requestId,threadId:pending.thread}});
+        this.targets.get(socket)!.delete(id); result = { type: 'detached' }; break;
+      }
       case 'session/switchNode': {
         this.targets.get(socket)!.delete(id);
         const conversation = (this.nodeSnapshots.get(request.params.node_id) ?? this.snapshots.get(id)!).conversation_id;

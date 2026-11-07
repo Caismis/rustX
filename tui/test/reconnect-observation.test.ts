@@ -82,3 +82,33 @@ test('T18 a restarted server cannot reuse a prior Applied cursor even when Runti
  assert.equal((await attaching).state.cursor,'0');
  assert.notEqual(current.client.authorityId,old.client.authorityId);
 });
+
+for(const proof of ['accepted','rpc-unknown','absent','failed','other-authority','other-conversation'] as const)test(`lost input recovery keeps exact correlation: ${proof}`,async t=>{
+ const old=await harness();t.after(()=>old.client.close());
+ const submitting=old.session.submitInbound([{type:'text',text:'one exact operation'}]);
+ const sent=await nextRequest(old,'inbound/queue');
+ const input=(sent.params as {inputId:string}).inputId;
+ const record=[...old.client.inputReceipts.records.values()][0]!;
+ assert.equal(record.inputId,input);
+ const rejected=assert.rejects(submitting,/unknown|lost|closed|EOF/i);
+ if(proof==='rpc-unknown')old.transport.respondError(sent.id,{code:-32000,message:'acceptance unknown',data:{kind:'outcome_unknown'}});
+ else old.client.close();
+ await rejected;old.client.close();
+ const current=await connection(proof==='other-authority'?'different-authority':undefined);t.after(()=>current.client.close());
+ current.host.inheritInputUncertainty(old.host);
+ const target=proof==='other-conversation'?{...old.session.target,conversation_id:'conv-other'}:old.session.target;
+ const repairing=current.host.repairInputReceipts({target,released:false,serverClosed:false} as typeof old.session);
+ if(proof==='other-authority'||proof==='other-conversation') {
+   await repairing;assert.equal(current.transport.transportCount('inbound/submissionLookup'),0);
+ } else {
+   const lookup=await nextRequest(current,'inbound/submissionLookup');
+   assert.deepEqual(lookup.params,{target,inputId:input});
+   if(proof==='failed')current.transport.respondError(lookup.id,{code:-32000,message:'read unavailable'});
+   else current.transport.respond(lookup.id,{type:'inbound_submission',acceptance:(proof==='accepted'||proof==='rpc-unknown')?{message_id:'durable-original',inbound_sequence:'17'}:null});
+   await repairing;
+ }
+ assert.equal(record.acceptance?.message_id,(proof==='accepted'||proof==='rpc-unknown')?'durable-original':undefined);
+ assert.equal(current.client.inputReceipts.records.size,(proof==='accepted'||proof==='rpc-unknown')?0:1);
+ assert.equal(current.transport.transportCount('inbound/queue'),0);
+ assert.equal(current.transport.transportCount('turn/steer'),0);
+});
