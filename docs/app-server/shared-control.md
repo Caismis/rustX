@@ -28,7 +28,7 @@ journal.
 | `thread/start` | `thread/start { settings, dynamicTools, submission? }` -> `session_transition { thread, session, ... }` | SessionController allocates exact native lineage; rustX retains its existing first-submission and editor receipts | Catalog and product first-submit suites |
 | `thread/resume` | `thread/resume { threadId }` -> exact AttachmentTarget | SessionRuntimeManager loads the catalog's exact Session/node; attachment identity includes runtime incarnation | Shared-control conformance; attachment and node-switch tests |
 | Thread read/list/status | `thread/read`, `thread/list { offset, limit, archived }`, `thread/loaded/list { offset, limit }`; `thread/status/changed`, `thread/status/resyncRequired` | Native catalog identities plus SessionRuntimeManager residency and ConversationRuntime activity; 64 rows per Thread page, instance notifications without transcript attachments | Native status, Interaction, physical-tail, shared-control and Web/TUI status regressions |
-| Thread name/archive | `thread/name/set`, `thread/archive`, `thread/unarchive` | Native node metadata. Archive drains only an idle runtime under the manager's retirement fence; active work is refused | Thread catalog regression; residency tests |
+| Thread name/archive | `thread/name/set`, `thread/archive`, `thread/unarchive` | Native node metadata. Archive probes outside Registry, then validates the exact resident and native idle epoch before retirement; active work is refused | Thread catalog, cross-Thread archive isolation and resident/epoch race regressions |
 | Thread history/Items | `session/history`, `session/historyPage`, `session/node`, `session/turns`, transcript/ContentRef readers | Existing bounded native history, turn and content authorities. rustX keeps chunked bodies and exact integer text | History, reading, root checkpoint and large-content suites |
 | Fork/branch | `thread/fork`, `session/branch`, `session/switchNode` | Existing catalog/lineage transactions. Explicit forks copy declarations; switching preserves exact-target admission and native retirement | Catalog switch/fork and projection tests |
 | Deletion | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Intentional native extension: revision-fenced deletion of the Session lineage group, with native recovery receipts; no separate synonymous Thread-delete RPC | Deletion membership, storage and product lifecycle suites |
@@ -311,3 +311,20 @@ Clients retain a successful higher-revision Native notification received since
 its start, so a recovery notice arriving before the nullable response is not
 lost. Duplicate or delayed revisions do not certify recovery. Thread identity
 remains available for later notifications even while its status is unknown.
+Failed `thread/read` responses use that same notification cut, connection and
+repair epoch: they revoke starting evidence while retaining a newer recovery
+proof received during the request. Revocation retains the previous revision
+fence, so delayed older notifications cannot restore discarded evidence.
+Notification receipts follow existing proof objects across early-cache eviction
+and replacement by newer snapshots. Snapshots inherit the original receipt cut
+without advancing it; exact revocation invalidates inherited receipts, and a
+connection/repair reset discards them. These weak references retain no Thread
+or transcript and cannot turn an old receipt into a new Native observation.
+
+TUI keeps pending exact reads under one owner, bounded by its 128 retained
+Thread interests. Catalog rows crossing a status gap and attachment reads enter
+the same sequential drain. The existing two-request metadata lane remains
+unchanged; the owner waits on a shared capacity wake and rechecks before
+dispatch. Other metadata operations can delay repair without discarding it.
+Another gap queues fresh reads at the new epoch; closing the connection wakes
+any capacity wait and ends the drain. No input or mutation is replayed.

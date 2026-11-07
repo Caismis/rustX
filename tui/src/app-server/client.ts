@@ -212,6 +212,7 @@ export class AppServerClient {
     sourceRepairs: new Map(),
   };
   readonly #closeListeners = new Set<CloseListener>();
+  #metadataCapacity?: {promise:Promise<void>;resolve:()=>void};
   #nextAppServerRequestId = 1;
   #capabilities: ServerCapabilities | undefined;
   #authorityId = "";
@@ -428,6 +429,27 @@ export class AppServerClient {
     return [...this.#pending.values()].filter(request => requestLane(request.method) === lane).length;
   }
 
+  get metadataAvailable():boolean {
+    return this.#closed===undefined&&this.#occupied('metadata')<REQUEST_CAPACITY.metadata;
+  }
+
+  /** One shared capacity wake, without queuing or reserving an RPC. The status
+   * repair owner retains its bounded identities and rechecks before dispatch. */
+  waitForMetadataCapacity():Promise<void> {
+    if(this.#closed!==undefined||this.metadataAvailable)return Promise.resolve();
+    if(!this.#metadataCapacity){
+      let resolve!:()=>void;
+      const promise=new Promise<void>(done=>{resolve=done;});
+      this.#metadataCapacity={promise,resolve};
+    }
+    return this.#metadataCapacity.promise;
+  }
+
+  #wakeMetadataCapacity():void {
+    if(this.#closed===undefined&&!this.metadataAvailable)return;
+    const waiting=this.#metadataCapacity;this.#metadataCapacity=undefined;waiting?.resolve();
+  }
+
   /** Sends the oldest waiting cancellation when the cancel slot is free. Its
    * answer is not the outcome — the delivery request's own terminal response
    * is — but a refusal means the server dropped a cancellation it owed. */
@@ -502,6 +524,7 @@ export class AppServerClient {
       return;
     }
     this.#pending.delete(record.id);
+    this.#wakeMetadataCapacity();
 
     if (isFailure(record)) {
       pending.reject(new AppServerRequestError(pending.method, record.error));
@@ -530,6 +553,7 @@ export class AppServerClient {
     // accepted.
     const pending = [...this.#pending.values()];
     this.#pending.clear();
+    this.#wakeMetadataCapacity();
     for (const request of pending) {
       request.reject(
         request.effect === "side_effecting"

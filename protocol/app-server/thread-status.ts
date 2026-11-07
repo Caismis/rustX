@@ -26,10 +26,20 @@ export class ThreadStatusNotifications {
   private readonly entries = new Map<string,{entry:ThreadStatusEntry;available:boolean;received:number}>();
   private forgottenThrough = 0n;
   private sequence = 0;
+  // Visible proofs can outlive the finite early-notification cache. Receipt
+  // evidence follows those existing objects without retaining their lifetime.
+  private receipts = new WeakMap<ThreadStatusEntry,{received:number;revoked:boolean}>();
   checkpoint():number {return this.sequence;}
-  latestSince(threadId:string,checkpoint:number):ThreadStatusEntry|undefined {
+  latestSince(threadId:string,checkpoint:number,...retained:(ThreadStatusEntry|null|undefined)[]):ThreadStatusEntry|undefined {
     const proof=this.entries.get(threadId);
-    return proof?.available&&proof.received>checkpoint?proof.entry:undefined;
+    let latest=proof?.available&&proof.received>checkpoint?proof.entry:undefined;
+    for(const entry of retained){
+      const receipt=entry&&this.receipts.get(entry);
+      if(entry?.threadId!==threadId||!receipt||receipt.revoked||receipt.received<=checkpoint)continue;
+      if(proof&&!proof.available&&BigInt(proof.entry.revision)>=BigInt(entry.revision))continue;
+      latest=newerThreadStatus(latest,entry);
+    }
+    return latest&&proof?.available?newerThreadStatus(latest,proof.entry):latest;
   }
   private retain(entry:ThreadStatusEntry,available:boolean,received:number):void {
     this.entries.delete(entry.threadId);
@@ -44,7 +54,8 @@ export class ThreadStatusNotifications {
     const previous=this.entries.get(entry.threadId);
     if(previous&&BigInt(previous.entry.revision)>=BigInt(entry.revision))return false;
     if(!previous&&BigInt(entry.revision)<=this.forgottenThrough)return false;
-    this.retain(entry,true,++this.sequence);return true;
+    this.receipts.set(entry,{received:++this.sequence,revoked:false});
+    this.retain(entry,true,this.sequence);return true;
   }
   snapshot(entry:ThreadStatusEntry,previous?:ThreadStatusEntry):ThreadStatusEntry|undefined {
     let proof=this.entries.get(entry.threadId);
@@ -53,6 +64,10 @@ export class ThreadStatusNotifications {
     }
     if(proof&&BigInt(proof.entry.revision)>=BigInt(entry.revision))return proof.available?proof.entry:undefined;
     if(!proof&&BigInt(entry.revision)<this.forgottenThrough)return undefined;
+    // A newer snapshot includes the recovery already certified by the older
+    // available proof. Preserve its cut; this is not a new notification.
+    const receipt=proof?.available?this.receipts.get(proof.entry):undefined;
+    if(receipt&&!receipt.revoked)this.receipts.set(entry,receipt);
     this.retain(entry,true,0);return entry;
   }
   latest(threadId:string):ThreadStatusEntry|undefined {const proof=this.entries.get(threadId);return proof?.available?proof.entry:undefined;}
@@ -61,7 +76,10 @@ export class ThreadStatusNotifications {
   forget(threadId:string,previous?:ThreadStatusEntry|null):void {
     const proof=this.entries.get(threadId);
     const entry=previous?.threadId===threadId?newerThreadStatus(proof?.entry,previous):proof?.entry;
+    for(const value of [proof?.entry,previous?.threadId===threadId?previous:undefined]){
+      const receipt=value&&this.receipts.get(value);if(receipt)receipt.revoked=true;
+    }
     if(entry)this.retain(entry,false,0);
   }
-  clear():void {this.entries.clear();this.forgottenThrough=0n;}
+  clear():void {this.entries.clear();this.forgottenThrough=0n;this.receipts=new WeakMap();}
 }

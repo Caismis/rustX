@@ -222,3 +222,55 @@ the complete manager and real TUI process suites also passed. Final amended-head
 FULL CI, using the repository's separate verification lanes, remains the authority
 for complete Native, macOS and browser coverage. Its exact head/run/result must
 be recorded on the primary PR before this amendment is declared complete.
+
+## Follow-up isolation and status-repair review
+
+The review of `cb7608b6c5515072626e8393ddd1c2b15db001e4` closed the four
+original P2 findings and identified three further boundaries. Their corrections
+preserve existing Native admission, client controls and layout.
+
+| Finding | Correction and deterministic evidence |
+| --- | --- |
+| Archive waited for one Coordinator while holding global Registry | Composition/idle probes run outside Registry. Reentry checks Session retirement, exact resident `Arc`, operation ownership and the native idle epoch before the nonblocking claim. `archive_idle_probe_never_holds_registry_while_another_thread_is_observed` holds A at both real boundaries while B's strong status and Session metadata reads complete. |
+| Moving archive probes must retain admission fencing | `archive_rechecks_the_exact_resident_and_native_admission_epoch` covers an active competing Attempt, a fully released admission returning the same runtime to idle with a newer epoch, and replacement by a new resident. Existing archive/load and cold scheduled-trigger tests remain green. |
+| A late failed status read revoked a newer recovery notice | Web/TUI capture the read's notification cut and connection/repair epoch. Failures revoke only starting evidence. Their status suites cover recovery before the failed response, delayed older notices, early-cache eviction, and positive/negative nullable responses. |
+| Recovery evidence must survive proof replacement without resurrection | Weak receipt evidence follows retained UI objects and newer snapshots without ticking notification sequence. Exact revocation invalidates inherited aliases; reset discards them. Tests cover recovery20, snapshot30, then an older nullable response; an off-page Web view introducing a nullable catalog row; and revocation followed by cache eviction. |
+| TUI catalog repair lost identities beyond metadata capacity | One bounded owner drains pending identities sequentially, waits for existing metadata capacity and rechecks work after waking. Tests cover all 32 cold rows crossing a gap, two unrelated occupied metadata slots, close during capacity wait, and eviction of the final queued interest. |
+
+Final local source checks: Native manager **469 passed, 2 ignored**; Web
+status/composer/interaction regressions **43 passed**; TUI status/reconnect/callback
+regressions **28 passed**. Complete Web deterministic verification passed
+**4202 tests, 4 platform skips**, and complete required-emulator TUI verification
+passed **1347 tests, 1 platform skip**. Formatting, all-target/all-feature Clippy
+with warnings denied, Native bins, Web production build, protocol/Web/TUI
+TypeScript, provenance/notices and i18n pass.
+
+An independent read-only agent re-reviewed all source corrections and their
+additional cache/queue boundaries. Its separate actual TUI Host/FakeTransport
+reproduction of recovery20, snapshot30 and a late nullable response now passes.
+It found no remaining actionable source issues; its review does not substitute
+for complete final-head CI.
+
+The old-head FULL browser run `42371118714` found two more Agent waiting-header
+references using the former generic label. Their explicit pinned-container
+updates alter **554/528 pixels**, confined to the existing header at
+`x439..516,y87..98`. Both and the Workflow editor case pass ordinary assertion
+mode (**3 tests**). No UI component, style or global comparison threshold changed.
+
+That run's stable Workflow graph capture differs at 746 curve pixels. Expanded
+Playwright trace snapshots prove its complete `rf__wrapper` DOM byte-identical
+to capture `42313212047`, at all three screenshot checkpoints; all five loaded
+CSS resources are byte-identical. The recorded fourth raw PNG/trace/CSS hashes
+and RGBA observations extend the existing policy only to the measured union:
+**779 disjoint 1x1 sites**, each with its observed per-site maximum (largest 35).
+The unchanged Workflow reference remains authoritative. The formerly negative
+site `(749,306)` is now measured; its unobserved adjacent site `(749,305)` remains
+an explicit rejection, as do other outside pixels and one level beyond each
+bound. After these test-evidence additions, the comparator/stability suites pass
+**81 tests**. The 4202-test Web result precedes only these evidence/test additions;
+the full final-head CI must include them. The browser-internal rasterization
+cause is not claimed to be established.
+
+Run `42371118714` is failed checkpoint evidence, not final-head verification.
+The primary PR must record a new complete FULL run for the final follow-up head
+before checking off the amendment or declaring it ready.

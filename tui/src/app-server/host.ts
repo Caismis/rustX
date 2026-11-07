@@ -151,6 +151,7 @@ export class AppServerHost {
   readonly #statusNotifications = new ThreadStatusNotifications();
   readonly #threadStatusListeners=new Set<()=>void>();
   #statusRepair?:Promise<void>;
+  readonly #pendingStatusReads=new Set<string>();
   #statusRepairEpoch = 0;
   #statusUnsynchronized = false;
   threadStatus(id:string):ThreadStatusEntry|undefined {return this.client.closed||this.#statusUnsynchronized?undefined:this.#threadStatuses.get(id);}
@@ -167,25 +168,65 @@ export class AppServerHost {
   }
   #rememberStatusInterest(threadId:string):void {
     this.#statusInterests.delete(threadId);this.#statusInterests.add(threadId);
-    if(this.#statusInterests.size>128)this.#statusInterests.delete(this.#statusInterests.values().next().value!);
+    if(this.#statusInterests.size>128){
+      const forgotten=this.#statusInterests.values().next().value!;
+      this.#statusInterests.delete(forgotten);this.#pendingStatusReads.delete(forgotten);
+    }
   }
   async #readThreadStatus(threadId:string):Promise<void> {
-    this.#rememberStatusInterest(threadId);
-    const epoch=this.#statusRepairEpoch;
-    const {thread}=await this.client.call('thread/read',{threadId},'thread');
-    if(thread.id!==threadId)throw new Error('Mismatched Thread status identity.');
-    if(epoch!==this.#statusRepairEpoch){void this.#repairThreadStatuses();return;}
-    if(!this.client.closed)this.#retainThreadStatus({threadId:thread.id,status:thread.status,revision:thread.statusRevision,runtimeIncarnation:thread.runtimeIncarnation});
+    const epoch=this.#statusRepairEpoch,cut=this.#statusNotifications.checkpoint();
+    try {
+      const {thread}=await this.client.call('thread/read',{threadId},'thread');
+      if(thread.id!==threadId)throw new Error('Mismatched Thread status identity.');
+      if(epoch!==this.#statusRepairEpoch){
+        if(this.#statusInterests.has(threadId))void this.#queueThreadStatuses([threadId]);
+        return;
+      }
+      if(!this.client.closed)this.#retainThreadStatus({threadId:thread.id,status:thread.status,revision:thread.statusRevision,runtimeIncarnation:thread.runtimeIncarnation});
+    } catch(error) {
+      if(!this.client.closed&&epoch===this.#statusRepairEpoch&&!this.#statusNotifications.latestSince(threadId,cut,this.#threadStatuses.get(threadId))){
+        this.#statusNotifications.forget(threadId,this.#threadStatuses.get(threadId));this.#threadStatuses.delete(threadId);
+        for(const listener of this.#threadStatusListeners)listener();
+      }
+      throw error;
+    }
+  }
+  /** One bounded owner drains exact status reads. Capacity delays this work;
+   * it never turns local backpressure into a dropped native observation. */
+  #queueThreadStatuses(ids:Iterable<string>):Promise<void> {
+    for(const id of ids){this.#rememberStatusInterest(id);this.#pendingStatusReads.add(id);}
+    if(this.#statusRepair)return this.#statusRepair;
+    const work=Promise.resolve().then(async()=>{
+      while(!this.client.closed){
+        while(this.#pendingStatusReads.size&&!this.client.closed){
+          await this.client.waitForMetadataCapacity();
+          if(this.client.closed||!this.#pendingStatusReads.size)break;
+          if(!this.client.metadataAvailable)continue;
+          const id=this.#pendingStatusReads.values().next().value!;
+          this.#pendingStatusReads.delete(id);
+          try {await this.#readThreadStatus(id);}catch { /* The exact read owns proof revocation. */ }
+        }
+        if(this.#statusUnsynchronized&&!this.client.closed){
+          this.#statusUnsynchronized=false;
+          for(const listener of this.#threadStatusListeners)listener();
+        }
+        if(!this.#pendingStatusReads.size)break;
+      }
+    }).finally(()=>{
+      if(this.#statusRepair===work){
+        this.#statusRepair=undefined;
+        if(this.#pendingStatusReads.size&&!this.client.closed)void this.#queueThreadStatuses([]);
+      }
+    });
+    this.#statusRepair=work;return work;
   }
   #repairThreadStatuses():Promise<void> {
     ++this.#statusRepairEpoch;
     this.#statusNotifications.clear();
     this.#statusUnsynchronized = true;
-    if(this.#statusRepair)return this.#statusRepair;
-    const ids=[...new Set([...this.#threadStatuses.keys(),...[...this.#sessions.values()].map(session=>session.target.conversation_id)])];this.#threadStatuses.clear();
+    const ids=new Set([...this.#statusInterests,...this.#threadStatuses.keys(),...[...this.#sessions.values()].map(session=>session.target.conversation_id)]);this.#threadStatuses.clear();
     for(const listener of this.#threadStatusListeners)listener();
-    const work=(async()=>{let repaired:number;do {repaired=this.#statusRepairEpoch;const currentIds=new Set([...ids,...this.#statusInterests,...this.#threadStatuses.keys(),...[...this.#sessions.values()].map(session=>session.target.conversation_id)]);for(const id of currentIds){try {await this.#readThreadStatus(id);}catch {this.#statusNotifications.forget(id,this.#threadStatuses.get(id));this.#threadStatuses.delete(id);}}}while(!this.client.closed&&repaired!==this.#statusRepairEpoch);if(!this.client.closed){this.#statusUnsynchronized=false;for(const listener of this.#threadStatusListeners)listener();}})().catch(()=>{}).finally(()=>{if(this.#statusRepair===work)this.#statusRepair=undefined;});
-    this.#statusRepair=work;return work;
+    return this.#queueThreadStatuses(ids);
   }
 
   readonly endpoint: string | undefined;
@@ -504,7 +545,7 @@ export class AppServerHost {
     this.#failedInitializations.delete(sessionId);
     this.#sessions.set(sessionId, session);
     await this.repairInputReceipts(session);
-    void this.#readThreadStatus(session.target.conversation_id).catch(()=>{});
+    void this.#queueThreadStatuses([session.target.conversation_id]);
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
       // installs a fresh one rather than reusing a target the server retired.
@@ -598,15 +639,17 @@ export class AppServerHost {
       },
       "sessions",
     );
+    const repairIds=new Set<string>();
     for(const row of page.sessions){
       this.#rememberStatusInterest(row.thread_id);
       if(statusEpoch===this.#statusRepairEpoch&&row.thread_status)this.#retainThreadStatus(row.thread_status);
-      if(!row.thread_status&&!this.#statusNotifications.latestSince(row.thread_id,statusCut)){
+      if(!row.thread_status&&!this.#statusNotifications.latestSince(row.thread_id,statusCut,this.#threadStatuses.get(row.thread_id))){
         this.#statusNotifications.forget(row.thread_id,this.#threadStatuses.get(row.thread_id));this.#threadStatuses.delete(row.thread_id);
         for(const listener of this.#threadStatusListeners)listener();
       }
-      if(statusEpoch!==this.#statusRepairEpoch||!this.threadStatus(row.thread_id))void this.#readThreadStatus(row.thread_id).catch(()=>{});
+      if(statusEpoch!==this.#statusRepairEpoch||!this.threadStatus(row.thread_id))repairIds.add(row.thread_id);
     }
+    if(repairIds.size)void this.#queueThreadStatuses(repairIds);
     return {
       sessions: page.sessions,
       nextOffset: page.next_offset ?? undefined,

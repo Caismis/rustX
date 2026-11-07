@@ -14,6 +14,92 @@ const row=()=>summaryFor({id:sessionView().id,cwd:'/work',name:'A',ownership_gen
 const changed=(h:Awaited<ReturnType<typeof connected>>,value:ThreadStatusEntry)=>h.transport.deliver({jsonrpc:'2.0',method:'thread/status/changed',params:value});
 const resync=(h:Awaited<ReturnType<typeof connected>>)=>h.transport.deliver({jsonrpc:'2.0',method:'thread/status/resyncRequired',params:{}});
 const readResult=(value:ThreadStatusEntry)=>({type:'thread' as const,thread:{...threadFor(sessionView({active_conversation_id:id})),status:value.status,statusRevision:value.revision,runtimeIncarnation:value.runtimeIncarnation}});
+test('a late failed Thread read preserves a recovery notification received during that read',async t=>{
+ for(const evicted of [false,true]){
+ const h=await connected();t.after(()=>h.client.close());
+ const listing=h.host.listSessions();const request=(await h.transport.log.awaitMethod('session/list'))[0]!;
+ h.transport.respond(request.id,{type:'sessions',sessions:[{...row(),thread_status:entry('5',{type:'idle'})}],next_offset:null});await listing;
+ resync(h);const read=(await h.transport.log.awaitMethod('thread/read'))[0]!;
+ changed(h,entry('20',{type:'active',activeFlags:[]}));
+ if(evicted)for(let i=0;i<130;i++)changed(h,{...entry(String(30+i),{type:'idle'}),threadId:`conv_113cba28-d6b2-70f4-8f62-${String(i).padStart(12,'0')}`});
+ const repaired=new Promise<void>(resolve=>{const stop=h.host.onThreadStatus(()=>{stop();resolve();});});
+ h.transport.respondError(read.id,{code:-32000,message:'source unavailable'});await repaired;
+ assert.equal(h.host.threadStatusLabel(id),'Running');assert.equal(h.host.threadStatus(id)?.revision,'20');
+ changed(h,entry('19',{type:'idle'}));assert.equal(h.host.threadStatus(id)?.revision,'20');
+ }
+});
+test('a newer snapshot inherits recovery evidence before an older nullable response arrives',async t=>{
+ const h=await connected();t.after(()=>h.client.close());
+ const first=h.host.listSessions();const initial=(await h.transport.log.awaitMethod('session/list'))[0]!;
+ h.transport.respond(initial.id,{type:'sessions',sessions:[{...row(),thread_status:entry('5',{type:'idle'})}],next_offset:null});await first;
+ const older=h.host.listSessions();const old=(await h.transport.log.awaitMethod('session/list',2))[1]!;
+ changed(h,entry('20',{type:'active',activeFlags:[]}));
+ const newer=h.host.listSessions();const fresh=(await h.transport.log.awaitMethod('session/list',3))[2]!;
+ h.transport.respond(fresh.id,{type:'sessions',sessions:[{...row(),thread_status:entry('30',{type:'idle'})}],next_offset:null});await newer;
+ assert.equal(h.host.threadStatus(id)?.revision,'30');
+ h.transport.respond(old.id,{type:'sessions',sessions:[{...row(),thread_status:null}],next_offset:null});await older;
+ assert.equal(h.host.threadStatus(id)?.revision,'30');assert.equal(h.host.threadStatusLabel(id),'Idle');
+ assert.equal(h.transport.log.count('thread/read'),0);
+});
+test('all 32 cold catalog rows crossing a status gap retain sequential repair ownership',async t=>{
+ const h=await connected();t.after(()=>h.client.close());
+ const listing=h.host.listSessions();const request=(await h.transport.log.awaitMethod('session/list'))[0]!;
+ resync(h);
+ const rows=Array.from({length:32},(_,i)=>{
+  const suffix=String(i).padStart(12,'0'),threadId=`conv_113cba28-d6b2-70f4-8f62-${suffix}`;
+  return {...row(),id:`ses_113cba28-d6b2-70f4-8f62-${suffix}`,thread_id:threadId,thread_status:{...entry('0',{type:'notLoaded'},null),threadId}};
+ });
+ h.transport.respond(request.id,{type:'sessions',sessions:rows,next_offset:null});await listing;
+ for(let i=0;i<rows.length;i++){
+  const read=(await h.transport.log.awaitMethod('thread/read',i+1))[i]!;
+  assert.equal(read.method,'thread/read');if(read.method!=='thread/read')throw Error('Thread read');
+  assert.equal(read.params.threadId,rows[i]!.thread_id);
+  const result=readResult({...entry('0',{type:'notLoaded'},null),threadId:read.params.threadId});result.thread.id=read.params.threadId;
+  h.transport.respond(read.id,result);
+ }
+ const last=rows.at(-1)!.thread_id;
+ if(!h.host.threadStatus(last))await new Promise<void>(resolve=>{const stop=h.host.onThreadStatus(()=>{if(h.host.threadStatus(last)){stop();resolve();}});});
+ for(const value of rows)assert.equal(h.host.threadStatusLabel(value.thread_id),'Not loaded');
+ assert.equal(h.transport.log.count('thread/read'),32);assert.equal(h.transport.log.count('thread/resume'),0);
+});
+test('status repair waits for unrelated metadata capacity and close wakes a parked repair',async t=>{
+ for(const closeWhileWaiting of [false,true]){
+  const h=await connected();t.after(()=>h.client.close());
+  const busy=[h.client.call('thread/read',{threadId:id},'thread'),h.client.call('thread/read',{threadId:id},'thread')];
+  const outcomes=Promise.allSettled(busy);
+  const requests=await h.transport.log.awaitMethod('thread/read',2);
+  const listing=h.host.listSessions();const request=(await h.transport.log.awaitMethod('session/list'))[0]!;
+  resync(h);h.transport.respond(request.id,{type:'sessions',sessions:[{...row(),thread_status:entry('0',{type:'notLoaded'},null)}],next_offset:null});await listing;
+  assert.equal(h.transport.log.count('thread/read'),2);
+  if(closeWhileWaiting){h.client.close();await outcomes;assert.equal(h.host.threadStatusLabel(id),'Status unavailable');continue;}
+  h.transport.respond(requests[0]!.id,readResult(entry('0',{type:'notLoaded'},null)));
+  const repairedRead=(await h.transport.log.awaitMethod('thread/read',3))[2]!;
+  const repaired=new Promise<void>(resolve=>{const stop=h.host.onThreadStatus(()=>{if(h.host.threadStatus(id)){stop();resolve();}});});
+  h.transport.respond(repairedRead.id,readResult(entry('0',{type:'notLoaded'},null)));await repaired;
+  h.transport.respond(requests[1]!.id,readResult(entry('0',{type:'notLoaded'},null)));await outcomes;
+  assert.equal(h.host.threadStatusLabel(id),'Not loaded');assert.equal(h.transport.log.count('thread/read'),3);
+ }
+});
+test('evicting the final queued interest while capacity is full never sends an undefined Thread',async t=>{
+ const h=await connected();t.after(()=>h.client.close());
+ const busy=[h.client.call('thread/read',{threadId:id},'thread'),h.client.call('thread/read',{threadId:id},'thread')];
+ const outcomes=Promise.allSettled(busy);const reads=await h.transport.log.awaitMethod('thread/read',2);
+ const first=h.host.listSessions();const original=(await h.transport.log.awaitMethod('session/list'))[0]!;
+ h.transport.respond(original.id,{type:'sessions',sessions:[{...row(),thread_status:null}],next_offset:null});await first;
+ for(let page=0;page<4;page++){
+  const listing=h.host.listSessions(undefined,page*32);const request=(await h.transport.log.awaitMethod('session/list',page+2))[page+1]!;
+  const rows=Array.from({length:32},(_,i)=>{
+   const suffix=String(page*32+i).padStart(12,'0'),threadId=`conv_113cba28-d6b2-70f4-8f62-${suffix}`;
+   return {...row(),id:`ses_113cba28-d6b2-70f4-8f62-${suffix}`,thread_id:threadId,thread_status:{...entry('0',{type:'notLoaded'},null),threadId}};
+  });
+  h.transport.respond(request.id,{type:'sessions',sessions:rows,next_offset:null});await listing;
+ }
+ h.transport.respond(reads[0]!.id,readResult(entry('0',{type:'notLoaded'},null)));await busy[0];
+ await h.client.waitForMetadataCapacity();
+ assert.equal(h.transport.log.count('thread/read'),2);
+ h.transport.respond(reads[1]!.id,readResult(entry('0',{type:'notLoaded'},null)));await outcomes;
+ assert.equal(h.transport.log.count('thread/read'),2);
+});
 test('early status notification wins over a first list snapshot without attaching',async t=>{
  const h=await connected();t.after(()=>h.client.close());const listing=h.host.listSessions();const request=(await h.transport.log.awaitMethod('session/list'))[0]!;
  changed(h,entry('6',{type:'active',activeFlags:['waitingOnApproval','waitingOnUserInput']}));
@@ -70,17 +156,18 @@ test('a nullable metadata proof preserves identity for a later exact recovery no
  changed(h,entry('21',{type:'idle'}));assert.equal(h.host.threadStatusLabel(id),'Idle');assert.equal(h.transport.log.count('thread/resume'),0);
 });
 test('a nullable proof revokes pre-read status but preserves a later recovery revision',async t=>{
- for(const recovered of [false,true]){
+ for(const recovered of [false,true])for(const evicted of [false,true]){
   const h=await connected();t.after(()=>h.client.close());
   const first=h.host.listSessions();const init=(await h.transport.log.awaitMethod('session/list'))[0]!;
   h.transport.respond(init.id,{type:'sessions',sessions:[{...row(),thread_status:entry('5',{type:'idle'})}],next_offset:null});await first;
   changed(h,entry('5',{type:'idle'}));
   const listing=h.host.listSessions();const request=(await h.transport.log.awaitMethod('session/list',2))[1]!;
   changed(h,recovered?entry('6',{type:'active',activeFlags:[]}):entry('5',{type:'idle'}));
+  if(evicted)for(let i=0;i<130;i++)changed(h,{...entry(String(20+i),{type:'idle'}),threadId:`conv_113cba28-d6b2-70f4-8f62-${String(i).padStart(12,'0')}`});
   h.transport.respond(request.id,{type:'sessions',sessions:[{...row(),thread_status:null}],next_offset:null});await listing;
   assert.equal(h.host.threadStatusLabel(id),recovered?'Running':'Status unavailable');
   if(!recovered){const read=(await h.transport.log.awaitMethod('thread/read'))[0]!;h.transport.respondError(read.id,{code:-32000,message:'source unavailable'});}
-  changed(h,entry('7',{type:'idle'}));assert.equal(h.host.threadStatusLabel(id),'Idle');
+  changed(h,entry('500',{type:'idle'}));assert.equal(h.host.threadStatusLabel(id),'Idle');
  }
 });
 test('revoking a snapshot retains its revision fence against delayed notifications',async t=>{

@@ -75,24 +75,47 @@ impl SessionRuntimeManager {
         archived: bool,
     ) -> Result<super::super::session::threads::Thread, RuntimeManagerError> {
         let thread = self.sessions.thread(&id).await.map_err(error)?;
+        let candidate = {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            registry.check_session(&thread.session_id, &id)?;
+            match registry.entries.get(&id) {
+                Some(super::Entry::Loaded(resident)) if archived => Some(resident.clone()),
+                None | Some(super::Entry::Loaded(_)) => None,
+                _ => return Err(error("Thread initialization or retirement is in progress")),
+            }
+        };
+        // Composition and Coordinator probes may wait on this Thread. Keep
+        // those waits outside residency publication so other Threads proceed.
+        let candidate = if let Some(resident) = candidate {
+            let native = resident
+                .shutdown_runtime()
+                .ok_or_else(|| error("Thread writer is retiring"))?;
+            #[cfg(test)]
+            self.probe(&id).archive_before_idle.enter();
+            let epoch = native
+                .idle_epoch()
+                .map_err(|reason| error(format!("Thread is busy: {reason:?}")))?;
+            #[cfg(test)]
+            self.probe(&id).archive_before_claim.enter();
+            Some((resident, native, epoch))
+        } else {
+            None
+        };
         let retirement = {
             let mut registry = self.registry.0.lock().expect("registry mutex");
             registry.check_session(&thread.session_id, &id)?;
-            let resident = match registry.entries.get(&id) {
-                Some(super::Entry::Loaded(resident)) if archived => {
-                    let native = resident
-                        .shutdown_runtime()
-                        .ok_or_else(|| error("Thread writer is retiring"))?;
-                    let epoch = native
-                        .idle_epoch()
-                        .map_err(|reason| error(format!("Thread is busy: {reason:?}")))?;
-                    if *resident.operations.borrow() != 0 || !native.claim_idle(epoch) {
+            let resident = match (registry.entries.get(&id), candidate.as_ref()) {
+                (Some(super::Entry::Loaded(current)), Some((resident, native, epoch)))
+                    if std::sync::Arc::ptr_eq(current, resident) =>
+                {
+                    if *resident.operations.borrow() != 0 || !native.claim_idle(*epoch) {
                         return Err(error("Thread admission changed before archive"));
                     }
                     Some(resident.clone())
                 }
-                None | Some(super::Entry::Loaded(_)) => None,
-                _ => return Err(error("Thread initialization or retirement is in progress")),
+                (None, None) => None,
+                (Some(super::Entry::Loaded(_)), None) if !archived => None,
+                _ => return Err(error("Thread residency changed before archive")),
             };
             if !registry.retiring_sessions.insert(thread.session_id.clone()) {
                 return Err(error("Session retirement already owns admission"));

@@ -151,13 +151,18 @@ export class AppServerClient {
   private statusGapQueued = false;
   private readonly statusSnapshotCut = new WeakMap<SessionSummary,number>();
   private readonly statusSnapshotEpoch = new WeakMap<ThreadStatusEntry,number>();
+  private threadStatusSince(threadId:string,cut:number,previous?:ThreadStatusEntry|null):ThreadStatusEntry|undefined {
+    return this.statusNotifications.latestSince(threadId,cut,previous,
+      this.state.sessions.find(row=>row.thread_id===threadId)?.thread_status,
+      ...Object.values(this.state.views).flatMap(view=>[view.threadStatus,view.summary?.thread_status]));
+  }
   private mergeSummaryStatus(row: SessionSummary, previous?: ThreadStatusEntry|null): SessionSummary {
     if(row.thread_status===undefined)return row;
     const threadId=row.thread_id??row.thread_status?.threadId;
     if (!threadId) return row;
     const currentEpoch=this.statusRepairEpoch;
     const freshPrevious=previous&&(this.statusSnapshotEpoch.get(previous)??0)===currentEpoch?previous:undefined;
-    const status = !row.thread_status ? this.statusNotifications.latestSince(threadId,this.statusSnapshotCut.get(row)??this.statusNotifications.checkpoint()) : (this.statusSnapshotEpoch.get(row.thread_status)??0)!==currentEpoch
+    const status = !row.thread_status ? this.threadStatusSince(threadId,this.statusSnapshotCut.get(row)??this.statusNotifications.checkpoint(),previous) : (this.statusSnapshotEpoch.get(row.thread_status)??0)!==currentEpoch
       ? this.statusNotifications.latest(row.thread_status.threadId)??freshPrevious
       : this.statusNotifications.snapshot(row.thread_status, freshPrevious);
     if(!row.thread_status&&!status)this.revokeStatusProof(threadId,previous);
@@ -812,10 +817,18 @@ export class AppServerClient {
     if(changed)this.publish({sessions,views});
   }
   private async readThreadStatus(threadId:string,generation=this.state.generation) {
-    const epoch=this.statusRepairEpoch;
-    const {thread}=await this.request({method:'thread/read',params:{threadId}},'thread');
-    if(thread.id!==threadId)throw new Error('Mismatched Thread status identity.');
-    if(this.current(generation)&&epoch===this.statusRepairEpoch)this.observeThreadStatus({threadId:thread.id,status:thread.status,revision:thread.statusRevision,runtimeIncarnation:thread.runtimeIncarnation});
+    const epoch=this.statusRepairEpoch,cut=this.statusNotifications.checkpoint();
+    try {
+      const {thread}=await this.request({method:'thread/read',params:{threadId}},'thread');
+      if(thread.id!==threadId)throw new Error('Mismatched Thread status identity.');
+      if(this.current(generation)&&epoch===this.statusRepairEpoch)this.observeThreadStatus({threadId:thread.id,status:thread.status,revision:thread.statusRevision,runtimeIncarnation:thread.runtimeIncarnation});
+    } catch(error) {
+      // A failed read revokes only its starting evidence. A newer recovery
+      // notification can overtake that response on the same connection.
+      const recovery=this.threadStatusSince(threadId,cut);
+      if(this.current(generation)&&epoch===this.statusRepairEpoch&&!recovery)this.forgetThreadStatus(threadId);
+      throw error;
+    }
   }
   private revokeStatusProof(threadId:string,previous?:ThreadStatusEntry|null):void {
     this.statusNotifications.forget(threadId,previous);
@@ -850,7 +863,7 @@ export class AppServerClient {
         for(const id of knownIds())ids.add(id);
         for(const id of ids) {
           try {await this.readThreadStatus(id,generation);}
-          catch {if(this.current(generation))this.forgetThreadStatus(id);}
+          catch { /* The exact read owns proof revocation at its notification cut. */ }
         }
       } while(this.current(generation) && repaired !== this.statusRepairEpoch);
       if(this.current(generation))this.publish({threadStatusSynchronized:true});

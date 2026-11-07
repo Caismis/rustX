@@ -1,6 +1,7 @@
 //! Thread status reads and instance notifications observe native owners only.
 use super::*;
 use crate::app_server::thread_status::ThreadStatus;
+use crate::local_runtime::session_runtime_manager::ResidencyState;
 
 pub(super) async fn read(
     connection: &AppServerConnection,
@@ -268,5 +269,136 @@ async fn thread_status_busy_metadata_lock_recovers_without_a_semantic_wake() {
         drop(managed);
         f.close().await;
     }).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn archive_idle_probe_never_holds_registry_while_another_thread_is_observed() {
+    bounded(async {
+        use crate::runtime::conversation_runtime::Gate;
+        let f = Fixture::with_session_count(None, 2).await;
+        let a_id = f.id(0).await;
+        let b_id = f.id(1).await;
+        let a = f.load(0).await.unwrap().unwrap();
+        let b = f.load(1).await.unwrap().unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        assert_eq!(read(&connection, &a_id).await.status, ThreadStatus::Idle);
+        assert_eq!(read(&connection, &b_id).await.status, ThreadStatus::Idle);
+
+        let gate = std::sync::Arc::new(Gate::default());
+        let release_native = gate.arm_scoped();
+        let holding = gate.clone();
+        let native = a.inspect_runtime().unwrap();
+        let held = tokio::task::spawn_blocking(move || {
+            native.with_activity_coordinator_lock_for_test(|| holding.enter());
+        });
+        super::super::gate_entered(&gate).await;
+        let probe = f.manager.probe(&a_id);
+        let release_archive = probe.archive_before_idle.arm_scoped();
+        let manager = f.manager.clone();
+        let id = a_id.clone();
+        let archiving = tokio::spawn(async move { manager.archive_thread(id, true).await });
+        super::super::gate_entered(&probe.archive_before_idle).await;
+
+        // Both A's Coordinator and the actual archive probe boundary remain
+        // parked until these unrelated strong and metadata reads complete.
+        assert_eq!(read(&connection, &b_id).await.status, ThreadStatus::Idle);
+        let MethodResult::Sessions { sessions, .. } = call(
+            &connection,
+            705,
+            Method::SessionList {
+                query: None,
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("Session metadata page");
+        };
+        assert_eq!(sessions.len(), 2);
+        assert!(
+            sessions
+                .iter()
+                .find(|row| row.thread_id == a_id)
+                .unwrap()
+                .thread_status
+                .is_none()
+        );
+        assert_eq!(
+            sessions
+                .iter()
+                .find(|row| row.thread_id == b_id)
+                .unwrap()
+                .thread_status
+                .as_ref()
+                .unwrap()
+                .status,
+            ThreadStatus::Idle
+        );
+        assert!(!archiving.is_finished());
+        assert!(f.provider.request_bodies().is_empty());
+        drop(release_native);
+        held.await.unwrap();
+        drop(release_archive);
+        assert!(archiving.await.unwrap().unwrap().archived);
+        assert_eq!(read(&connection, &b_id).await.status, ThreadStatus::Idle);
+        drop((a, b));
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn archive_rechecks_the_exact_resident_and_native_admission_epoch() {
+    for competitor in 0..3 {
+        bounded(async {
+            let f = Fixture::with_session_count(None, 1).await;
+            let id = f.id(0).await;
+            let a = f.load(0).await.unwrap().unwrap();
+            let probe = f.manager.probe(&id);
+            let release = probe.archive_before_claim.arm_scoped();
+            let manager = f.manager.clone();
+            let archiving_id = id.clone();
+            let archiving =
+                tokio::spawn(async move { manager.archive_thread(archiving_id, true).await });
+            super::super::gate_entered(&probe.archive_before_claim).await;
+            let replacement = if competitor == 2 {
+                f.manager.unload(&id).await.unwrap();
+                Some(f.load(0).await.unwrap().unwrap())
+            } else if competitor == 0 {
+                a.client()
+                    .submit_inbound(input("archive epoch competitor"))
+                    .unwrap();
+                f.gates[0].wait_entered().await;
+                None
+            } else {
+                let native = a.inspect_runtime().unwrap();
+                let lifecycle = native.lifecycle_for_test();
+                let previous = lifecycle.idle_epoch().unwrap();
+                drop(lifecycle.try_enter_running().unwrap());
+                lifecycle.wait_for_no_active_operations().await;
+                assert!(lifecycle.idle_epoch().unwrap() > previous);
+                assert!(!native.has_current_attempt());
+                None
+            };
+            drop(release);
+            let failure = archiving.await.unwrap().unwrap_err().to_string();
+            assert!(
+                failure.contains(if competitor == 2 {
+                    "residency changed"
+                } else {
+                    "admission changed"
+                }),
+                "{failure}"
+            );
+            assert!(!f.manager.sessions.thread(&id).await.unwrap().archived);
+            assert_eq!(f.manager.residency(&id), ResidencyState::Loaded);
+            f.gates[0].release();
+            drop((a, replacement));
+            f.close().await;
+        })
+        .await;
     }
 }
