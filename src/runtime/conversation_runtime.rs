@@ -375,6 +375,7 @@ use durability::{
 
 #[cfg(test)]
 pub(crate) use admission::IdleBusyReason;
+pub(crate) use admission::TurnInputAdmission;
 pub use admission::{InboundAdmission, InboundAdmissionError};
 pub use attempt::CancelAttemptError;
 pub(crate) use attempt::{NativeAttemptOutcome, NativeAttemptSettlement};

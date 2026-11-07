@@ -10,7 +10,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v72';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v73';
 
 let server: Server;
 beforeEach(() => {
@@ -65,14 +65,14 @@ it('uses only the Sidebar for selection; switching preserves concurrent work and
   expect(row('A').textContent).not.toContain('Working…');
   await select('A');
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
-  expect(methods().slice(before).filter(method => ['session/attach', 'session/detach', 'session/unload', 'turn/cancel'].includes(method))).toEqual([]);
+  expect(methods().slice(before).filter(method => ['thread/resume', 'session/detach', 'session/unload', 'turn/interrupt'].includes(method))).toEqual([]);
   fireEvent.click(screen.getByRole('button', { name: 'View options' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Close view' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Session A' })));
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   expect(server.snapshots.get('A')!.attempt?.phase.type).toBe('running');
   expect(server.loaded.has('A')).toBe(true);
-  expect(methods().slice(before).filter(method => ['session/detach', 'session/unload', 'turn/cancel'].includes(method))).toEqual(['session/detach']);
+  expect(methods().slice(before).filter(method => ['session/detach', 'session/unload', 'turn/interrupt'].includes(method))).toEqual(['session/detach']);
   expect(row('A')).toBeTruthy();
   expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
 });
@@ -179,8 +179,8 @@ it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retry
   expect(screen.getByLabelText('Session title').textContent).toBe('Native preview');
   expect(server.client.getSnapshot().views.A.summary?.preview).toBe('Native preview');
   expect(server.client.getSnapshot().sessions.map(item => item.id)).toEqual(['B']);
-  expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
-  expect(methods().filter(method => ['session/name', 'turn/cancel', 'session/unload', 'session/detach'].includes(method))).toEqual([]);
+  expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
+  expect(methods().filter(method => ['session/name', 'turn/interrupt', 'session/unload', 'session/detach'].includes(method))).toEqual([]);
   expect(server.client.getSnapshot().uncertain).toEqual([]);
   expect(server.requests.filter(({ request }) => request.method === 'session/list').every(({ request }) => request.method === 'session/list' && request.params.query === '')).toBe(true);
 });
@@ -217,7 +217,7 @@ it.each([false, true])('repairs off-page cached metadata on reconnect (completed
   for (let i = 0; i < 3; i++) await act(async () => server.client.refresh('A'));
   expect(reads()).toBe(3);
   expect(server.client.getSnapshot().uncertain).toEqual([]);
-  expect(methods().filter(method => ['session/name', 'turn/start', 'turn/cancel', 'session/unload', 'session/detach'].includes(method))).toEqual([]);
+  expect(methods().filter(method => ['session/name', 'inbound/queue', 'turn/interrupt', 'session/unload', 'session/detach'].includes(method))).toEqual([]);
   expect(server.requests.filter(({ request }) => request.method === 'session/list').every(({ request }) => request.method === 'session/list' && request.params.query === '')).toBe(true);
 });
 
@@ -345,9 +345,9 @@ it('restores an explicitly named empty Session outside the current catalog page'
 
 it('A stays healthy while B uncertainty remains visible, scoped and never replayed when switching', async () => {
   await mount();
-  server.held.add('turn/start');
+  server.held.add('inbound/queue');
   const lost = server.client.send('B', 'uncertain B', [], 'send').catch(() => {});
-  const request = await server.waitFor('turn/start', 1);
+  const request = await server.waitFor('inbound/queue', 1);
   await act(async () => { server.socket.close(); await lost; await server.connect(); });
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(row('B').textContent).toContain('Needs verification');
@@ -358,15 +358,15 @@ it('A stays healthy while B uncertainty remains visible, scoped and never replay
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
   expect(server.client.getSnapshot().uncertain).toMatchObject([{ id: request.id, sessionId: 'B' }]);
   await select('A');
-  expect(methods().slice(before).filter(method => ['turn/start', 'turn/cancel', 'session/unload', 'session/detach', 'session/attach'].includes(method))).toEqual([]);
-  expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+  expect(methods().slice(before).filter(method => ['inbound/queue', 'turn/interrupt', 'session/unload', 'session/detach', 'thread/resume'].includes(method))).toEqual([]);
+  expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
 });
 
 it('unscoped uncertainty is global, not assigned to every Session; reviewed diagnostics acknowledge locally in Connection Settings', async () => {
   await mount();
-  server.held.add('session/create');
-  const lost = server.client.request({ method: 'session/create', params: { settings: { cwd: '/workspace/A' } } }, 'session').catch(() => {});
-  await server.waitFor('session/create', 1);
+  server.held.add('thread/start');
+  const lost = server.client.request({ method: 'thread/start', params: { settings: { cwd: '/workspace/A' } } }, 'session').catch(() => {});
+  await server.waitFor('thread/start', 1);
   await act(async () => { server.socket.close(); await lost; await server.connect(); });
   const state = server.client.getSnapshot();
   expect(state.uncertain[0].sessionId).toBeUndefined();
@@ -382,24 +382,26 @@ it('unscoped uncertainty is global, not assigned to every Session; reviewed diag
   expect(methods().slice(before)).toEqual([]);
 });
 
-it('interaction operation evidence is scoped and cannot be dismissed as a non-interaction diagnostic', async () => {
+it('a live pending replay releases scoped answer uncertainty without another automatic reply', async () => {
   const pending = interaction('approval', 'B');
   server.snapshots.get('B')!.pending_interactions = [pending];
   await mount();
-  server.held.add('interaction/respond');
+
   await select('B');
+  server.holdCallbackReplies=true;
   fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
-  await server.waitFor('interaction/respond', 1);
+  await server.waitForReply();
   await act(async () => { server.socket.close(); await server.connect(); });
   await select('A');
   expect(screen.queryByLabelText('Session status')).toBeNull();
   await select('B');
-  expect(Object.values(server.client.getSnapshot().interactionOperations)).toEqual([{ sessionId: 'B', status: 'uncertain' }]);
+  expect(Object.values(server.client.getSnapshot().interactionOperations)).toEqual([]);
+  expect(screen.getByRole('button',{name:'Allow once'})).toHaveProperty('disabled',false);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
   expect(screen.queryByText('Review uncertain operations')).toBeNull();
-  expect(methods().filter(method => method === 'interaction/respond')).toHaveLength(1);
+  expect(server.replies).toHaveLength(1);
 });
 
 it('32-view capacity is actionable through Sidebar close, without eviction or stopping server work', async () => {
@@ -423,7 +425,7 @@ it('32-view capacity is actionable through Sidebar close, without eviction or st
   expect(screen.getByLabelText('Session title').textContent).toBe('Session session-32');
   expect(server.claims()).toHaveLength(32);
   expect(methods().filter(method => method === 'session/detach')).toHaveLength(1);
-  expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
+  expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/interrupt');
 });
 
 it('deletion shows the catalog title and impact, never raw identity/CAS, while sending the exact revision', async () => {
@@ -461,7 +463,7 @@ it('unlisted restored views cannot strand the finite view capacity', async () =>
   expect(methods().slice(before)).toEqual([]); // No controller exists to release.
   await select('A');
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
-  expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/cancel');
+  expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/interrupt');
 });
 
 it('Close all views releases observed controllers without stopping their work', async () => {
@@ -520,7 +522,7 @@ it.each([true, false])('focused deletion fences controls and selects an existing
   await act(async () => server.reply(request));
   if (another) expect(screen.getByLabelText('Session title').textContent).toBe('Session B');
   else expect(screen.queryByLabelText('Session title')).toBeNull();
-  expect(methods().filter(method => method === 'session/create')).toHaveLength(0);
+  expect(methods().filter(method => method === 'thread/start')).toHaveLength(0);
   expect(methods().filter(method => method === 'session/delete')).toHaveLength(1);
 });
 
@@ -604,7 +606,7 @@ it('converges on a projection published after a null summary read', async () => 
   // The invalidation itself settles: it is not a retry loop.
   for (let i = 0; i < 3; i++) await act(async () => server.client.refresh('A'));
   expect(reads()).toBe(baseline + 2);
-  expect(methods()).not.toContain('turn/start');
+  expect(methods()).not.toContain('inbound/queue');
   expect(methods()).not.toContain('session/name');
 });
 
@@ -697,7 +699,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v72').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v73').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 
@@ -717,7 +719,7 @@ it('A1 an invalidation observed before an initial list introduces its row still 
   expect(previews()).toEqual({ A: 'Committed native preview', B: null });
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   expect(row('A').getAttribute('aria-label')).toBe('Open Committed native preview');
-  expect(methods().filter(method => ['session/attach', 'turn/start', 'session/name'].includes(method))).toEqual([]);
+  expect(methods().filter(method => ['thread/resume', 'inbound/queue', 'session/name'].includes(method))).toEqual([]);
 });
 
 it('A2 a Session first introduced by a later page converges without changing page membership', async () => {
@@ -784,7 +786,7 @@ it('A4 repair is bounded, isolated, and never applied after supersession or repl
   await act(async () => { server.reply(stale); await superseded; });
   expect(reads()).toBe(beforeStale);
   expect(previews().B).toBeNull();
-  expect(methods().filter(method => ['session/attach', 'session/unload', 'turn/start'].includes(method))).toEqual([]);
+  expect(methods().filter(method => ['thread/resume', 'session/unload', 'inbound/queue'].includes(method))).toEqual([]);
 });
 
 
@@ -807,5 +809,5 @@ it('deletion presentation follows actor admission while Switch and queued Releas
   expect(server.client.getSnapshot().views.A.nodeId).toBe('next');
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   expect(server.claims()).toHaveLength(0);
-  expect(methods().filter(method => ['session/attach', 'session/switchNode', 'session/detach', 'session/delete'].includes(method))).toEqual(['session/attach', 'session/switchNode']);
+  expect(methods().filter(method => ['thread/resume', 'session/switchNode', 'session/detach', 'session/delete'].includes(method))).toEqual(['thread/resume', 'session/switchNode']);
 });

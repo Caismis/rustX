@@ -21,7 +21,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v72';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v73';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { responseRetryReady, type ResponseRetry } from './response-retry';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
@@ -179,7 +179,7 @@ export function PendingMessage({ client, sessionId }: { client: AppServerClient;
   const submissions = useClientSelector(client, state => state.views[sessionId]?.history?.window ? undefined : state.views[sessionId]?.submissions);
   const accepted = submissions?.find(value => value.messageId === flow?.acceptedMessageId);
   if (!flow || !['attaching', 'uploading', 'admitting'].includes(flow.phase) && !accepted) return null;
-  const text = accepted ? accepted.content.flatMap(value => value.type === 'text' ? [value.text] : []).join('\n') : flow.draft.text;
+  const text = accepted?.content ? accepted.content.flatMap(value => value.type === 'text' ? [value.text] : []).join('\n') : flow.draft.text;
   return <div className={pendingCss.root} data-pending-message="" data-provisional-message-id={accepted?.messageId} data-chat-anchor-key={accepted ? 'message:' + accepted.messageId : undefined}>
     <UserMessage label={tx('agent:message.your-message')} attachments={flow.attachments.length > 0 ? flow.attachments.map(file => file.type.startsWith('image/')
       ? <AttachmentCard key={file.id} name={file.name} image/>

@@ -601,6 +601,8 @@ struct RuntimeRegistry(Mutex<RegistryState>);
 /// current configuration sources to `configuration`, and execution to each core.
 #[derive(Clone)]
 pub struct SessionRuntimeManager {
+    interaction_lifecycle:
+        Arc<std::sync::OnceLock<Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>>>,
     pub(super) sessions: SessionController,
     registry: Arc<RuntimeRegistry>,
     pub(super) configuration: UserConfigManager,
@@ -626,6 +628,22 @@ impl std::fmt::Debug for SessionRuntimeManager {
     }
 }
 impl SessionRuntimeManager {
+    pub(crate) fn bind_interaction_lifecycle(
+        &self,
+        sink: Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>,
+    ) {
+        assert!(
+            self.interaction_lifecycle.set(sink).is_ok(),
+            "one process interaction sink"
+        );
+    }
+    pub(crate) fn bind_host_tools(
+        &self,
+        dispatcher: Arc<dyn crate::tools::host::HostToolDispatcher>,
+    ) {
+        self.dependencies.host_tools.bind(dispatcher);
+    }
+
     pub(crate) fn mcp_draft_scope(&self) -> super::mcp_drafts::McpDraftScope {
         self.mcp_drafts
             .open(self.configuration.clone(), self.credentials.clone())
@@ -817,6 +835,7 @@ impl SessionRuntimeManager {
             applications: super::configuration::application::ConfigurationApplications::default(),
             mcp_drafts: Arc::default(),
             dependencies: Arc::new(dependencies),
+            interaction_lifecycle: Arc::default(),
             clock: Arc::new(SystemMonotonicClock::new()),
             schedule_clock: Arc::new(crate::runtime::types::SystemClock),
             schedule_changed: Arc::default(),

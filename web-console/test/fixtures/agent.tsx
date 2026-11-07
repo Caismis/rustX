@@ -18,7 +18,7 @@ import { workflowRunsFixture } from './workflow-runs';
 import { chatSpacingFixture } from './chat-spacing';
 import { workflowReviewHistoryFixture } from './workflow-review-history';
 import { questionHistoryFixture } from './question-history';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v72';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v73';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -29,6 +29,9 @@ import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
 const mode = new URLSearchParams(location.search).get('mode') ?? 'settled';
 const server = new Server();
+// This static presentation fixture does not implement Auxiliary APIs. Keep its
+// advertised feature set explicit; live App Server admission is covered separately.
+server.capabilities = {...server.capabilities,delivery_access:false};
 if (mode === 'desktop') {
   const desktop = { catalogs: [] as boolean[], launches: [] as unknown[], unavailable: false, failure: false, requests: () => server.requests.map(row => row.request.method) };
   server.workspaceHost.desktopCatalog = async (_scope, refresh = false) => { desktop.catalogs.push(refresh); return desktop.unavailable ? { available: false, reason: 'headless' } : { available: true, applications: [{ id: 'files', label: 'File manager' }, { id: 'code', label: 'Visual Studio Code' }] }; };
@@ -166,30 +169,30 @@ if (mode === 'composer') {
       next.inbound = { pending: value ? [{ sequence: '1', revision: '0', message: { id: 'queued', source: 'human', content: [{ type: 'text', text: 'Verify the native queue controls' }] } }] : [] };
       await server.update('A', next);
     },
-    holdCancellation: () => { server.held.add('turn/cancel'); },
-    holdSubmission: () => { server.held.add('turn/start'); server.held.add('turn/steer'); },
+    holdCancellation: () => { server.held.add('turn/interrupt'); },
+    holdSubmission: () => { server.held.add('inbound/queue'); server.held.add('turn/steer'); },
     acknowledgeSubmission: () => {
-      const row = server.requests.filter(({ request }) => request.method === 'turn/start' || request.method === 'turn/steer').at(-1);
+      const row = server.requests.filter(({ request }) => request.method === 'inbound/queue' || request.method === 'turn/steer').at(-1);
       if (!row) throw new Error('No submission requested');
-      server.held.delete('turn/start'); server.held.delete('turn/steer'); server.reply(row.request, row.socket);
+      server.held.delete('inbound/queue'); server.held.delete('turn/steer'); server.reply(row.request, row.socket);
     },
     // Stands in for the General Settings row, which owns this preference.
     busyEnter: value => composerPreferences().setBusyEnter(value),
-    cancellations: () => server.requests.flatMap(row => row.request.method === 'turn/cancel' ? [row.request.params.target] : []),
+    cancellations: () => server.requests.flatMap(row => row.request.method === 'turn/interrupt' ? [row.request.params.target] : []),
     acknowledgeCancellation: async () => {
-      const request = server.requests.find(row => row.request.method === 'turn/cancel')?.request;
+      const request = server.requests.find(row => row.request.method === 'turn/interrupt')?.request;
       if (!request) throw new Error('No cancellation requested');
       server.reply(request);
       const next = structuredClone(server.snapshots.get('A')!);
       next.attempt!.phase = { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } };
       server.snapshots.set('A', next); await server.client.refresh('A');
     },
-    submissions: () => server.requests.flatMap(row => row.request.method === 'turn/start' || row.request.method === 'turn/steer' ? [row.request.method] : []),
+    submissions: () => server.requests.flatMap(row => row.request.method === 'inbound/queue' || row.request.method === 'turn/steer' ? [row.request.method] : []),
   };
 }
 declare global {
  interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
-  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; holdSubmission(): void; acknowledgeSubmission(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v72').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; holdSubmission(): void; acknowledgeSubmission(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v73').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

@@ -11,8 +11,8 @@ it('keeps later idle input visible after acceptance even when attempt updates pr
     const ui = await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
     const input = screen.getByRole('textbox', { name: 'Message' });
     fireEvent.change(input, { target: { value: 'Later message stays visible' } });
-    server.held.add('turn/start'); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    const request = await server.waitFor('turn/start', 1);
+    server.held.add('inbound/queue'); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    const request = await server.waitFor('inbound/queue', 1);
     const running = { ...snapshot('A'), attempt: { attempt_id: 'later-attempt', phase: { type: 'running' as const }, turn: 2 } };
     await act(async () => server.update('A', running));
     await act(async () => server.reply(request));
@@ -43,8 +43,8 @@ it('keeps the first input visible between its ACK and exact canonical observatio
     const ui = await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
     fireEvent.click(await screen.findByRole('button', { name: 'Open Session B' }));
     const input = screen.getByRole('textbox', { name: 'Message' }); fireEvent.change(input, { target: { value: 'First message stays visible' } });
-    server.held.add('turn/start'); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    const command = await server.waitFor('turn/start', 1);
+    server.held.add('inbound/queue'); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    const command = await server.waitFor('inbound/queue', 1);
     expect(screen.getAllByText('First message stays visible')).toHaveLength(1);
     await act(async () => server.reply(command));
     await waitFor(() => expect(firstSubmissions(server.client).session('B')?.phase).toBe('admitted'));

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v72.ts';
+import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v73.ts';
 import { AppServerSession } from '../src/app-server/session.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
 import { checkpoint, sessionView, snapshot } from './support/fixtures.ts';
@@ -53,10 +53,12 @@ for (const [name, corrupt] of corruptions) it(`T13/T17 Root repair rejects ${nam
 it('T13 Root initial attach rejects a foreign cut before Subscribe', async () => {
   const h = await harness();
   try {
-    const attaching = AppServerSession.attach(h.client, 'ses_84097828-fc31-78c8-9292-10df48901a86'), rejected = assert.rejects(attaching, /checkpoint identity/);
-    const attach = await nextRequest(h, 'session/attach');
     const target = { ...h.target, session_id: 'ses_84097828-fc31-78c8-9292-10df48901a86', conversation_id: 'conv_01900000-0000-7000-8000-000000000004', attachment_id: 'second-attachment' };
-    h.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    const attaching = AppServerSession.attach(h.client, 'ses_84097828-fc31-78c8-9292-10df48901a86'), rejected = assert.rejects(attaching, /checkpoint identity/);
+    const metadata=await nextRequest(h,'session/read');
+    h.transport.respond(metadata.id,{type:'session',session:sessionView({id:target.session_id,active_conversation_id:target.conversation_id})});
+    const attach = await nextRequest(h, 'thread/resume');
+    h.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'writable', observation_source: 'live' });
     const read = await nextRequest(h, 'session/checkpoint'), invalid = checkpoint(snapshot({ conversation_id: target.conversation_id }));
     invalid.read_cut.conversation_id = 'conv_01900000-0000-7000-8000-000000000003';
     h.transport.respond(read.id, { type: 'checkpoint', checkpoint: invalid }); await rejected;
@@ -64,10 +66,10 @@ it('T13 Root initial attach rejects a foreign cut before Subscribe', async () =>
   } finally { h.client.close(); }
 });
 
-function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v72.ts').RuntimeClientEvent {
+function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v73.ts').RuntimeClientEvent {
   return { type: 'projection_transition', events: [], metadata: { read_cut: value.read_cut, content: [], collections: [] } };
 }
-const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v72.ts').RuntimeClientEvent][] = [
+const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v73.ts').RuntimeClientEvent][] = [
   ['foreign snapshot', value => { value.snapshot.conversation_id = 'conv_01900000-0000-7000-8000-000000000003'; return { type: 'checkpoint_advanced', transition: 'scope', checkpoint: value }; }],
   ['foreign metadata', value => { value.read_cut.conversation_id = 'conv_01900000-0000-7000-8000-000000000003'; return scopedEvent(value); }],
   ['Child metadata', value => { value.read_cut.activation_id = 'child-activation'; return scopedEvent(value); }],
@@ -111,8 +113,8 @@ for (const operation of ['detach', 'switch'] as const) {
         h.client.onNotification(message => value.applyNotification(message));
       });
       if (acquisition === 'attach') {
-        const attach = await nextRequest(h, 'session/attach');
-        h.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+        const attach = await nextRequest(h, 'thread/resume');
+        h.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'writable', observation_source: 'live' });
       }
       const read = await nextRequest(h, 'session/checkpoint');
       const baseline = checkpoint(snapshot(), '2');
@@ -152,8 +154,8 @@ it('T17 prepared attach released immediately never starts a subscription', async
   try {
     let releasing: Promise<void> | undefined;
     const attaching = AppServerSession.attach(h.client, h.target.session_id, undefined, value => { releasing = value.detach(); });
-    const attach = await nextRequest(h, 'session/attach');
-    h.transport.respond(attach.id, { type: 'attached', target: h.target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    const attach = await nextRequest(h, 'thread/resume');
+    h.transport.respond(attach.id, { type: 'attached', target: h.target, configuration_revision: '0', attachment_kind: 'writable', observation_source: 'live' });
     const read = await nextRequest(h, 'session/checkpoint');
     h.transport.respond(read.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot(), '2') });
     const detach = await nextRequest(h, 'session/detach');
@@ -181,7 +183,7 @@ it('Source unavailability preserves Applied and requires explicit recovery witho
     await Promise.resolve();
     assert.equal(h.session.state, before);
     assert.equal(h.transport.log.count('session/checkpoint'),1); assert.equal(h.transport.log.count('session/subscribe'),1);
-    assert.equal(h.transport.log.count('turn/start'),0); assert.equal(h.transport.log.count('turn/cancel'),0);
+    assert.equal(h.transport.log.count('inbound/queue'),0); assert.equal(h.transport.log.count('turn/interrupt'),0);
     const repair=h.session.resync(), read=await nextRequest(h,'session/checkpoint');
     h.transport.respond(read.id,{type:'checkpoint',checkpoint:checkpoint(snapshot(),'2')});
     const subscribe=await nextRequest(h,'session/subscribe');
@@ -207,6 +209,6 @@ it('unavailable buffered before the Subscribe promise continuation stays unavail
   await refused;
   assert.equal(h.session.observationPhase,'unavailable');assert.equal(h.session.state,before);assert.equal(h.session.state.cursor,'2');
   assert.equal(h.session.controlReady,false);assert.match(h.session.observationError!,/source unavailable/i);
-  await Promise.resolve();assert.equal(h.transport.log.count('session/checkpoint'),2);assert.equal(h.transport.log.count('session/subscribe'),2);assert.equal(h.transport.log.count('turn/start'),0);
+  await Promise.resolve();assert.equal(h.transport.log.count('session/checkpoint'),2);assert.equal(h.transport.log.count('session/subscribe'),2);assert.equal(h.transport.log.count('inbound/queue'),0);
  }finally{h.client.close();}
 });

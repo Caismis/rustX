@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v72';
+import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v73';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {readTraceCollection} from '../src/client/trace-content';
 import {traceTool} from './trace-fixture';
@@ -52,7 +52,7 @@ async function selected(kind:'root'|'child'|'historical',total=1) {
  }else if(kind==='child'){
   await server.attached('A');server.handlers.set('agent/trace',()=>({type:'trace',page:{read_cut:original,records:[native],next_cursor:null}}));server.handlers.set('agent/traceDetail',()=>({type:'domain_page',page:head(original,'user',total)}));const reader=new AgentTraceReader(server.client,'A',server.client.getSnapshot().views.A.attachmentObservation!,{agent_id:'child',activation_id:'child-activation',child_conversation_id:'child',state:'active'});await reader.refresh();await reader.detail(native.id);entry=reader.snapshot().details[native.id];retire=async()=>reader.retire();
  }else{
-  await server.connect();server.held.add('session/attach');server.handlers.set('session/traceHistory',()=>({type:'session_trace_history',conversation_id:original.conversation_id,page:{read_cut:original,records:[native],next_cursor:null}}));server.handlers.set('session/traceHistoryDetail',()=>({type:'session_trace_history_detail',conversation_id:original.conversation_id,page:head(original,'user',total)}));const attach=server.client.attach('A'),request=await server.waitFor('session/attach',1);await waitFor(()=>expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toHaveLength(1));await server.client.loadTraceDetail('A',native.id);entry=server.client.getSnapshot().views.A.tracePreview!.cache.details[native.id];retire=async()=>{server.reply(request);await attach;};
+  await server.connect();server.held.add('thread/resume');server.handlers.set('session/traceHistory',()=>({type:'session_trace_history',conversation_id:original.conversation_id,page:{read_cut:original,records:[native],next_cursor:null}}));server.handlers.set('session/traceHistoryDetail',()=>({type:'session_trace_history_detail',conversation_id:original.conversation_id,page:head(original,'user',total)}));const attach=server.client.attach('A'),request=await server.waitFor('thread/resume',1);await waitFor(()=>expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toHaveLength(1));await server.client.loadTraceDetail('A',native.id);entry=server.client.getSnapshot().views.A.tracePreview!.cache.details[native.id];retire=async()=>{server.reply(request);await attach;};
  }
  return {server,native,original,entry,retire};
 }

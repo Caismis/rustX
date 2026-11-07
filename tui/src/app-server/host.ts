@@ -434,6 +434,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId?: SessionNodeId,
     previous?: AppServerSession,
+    knownThreadId?: string,
   ): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
@@ -442,7 +443,7 @@ export class AppServerHost {
     }
     let session: AppServerSession;
     try {
-      session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections);
+      session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections, knownThreadId);
     } catch (error) {
       if (error instanceof AppServerRequestError && error.kind !== 'outcome_unknown' && !this.#sessions.has(sessionId)) this.#failedInitializations.add(sessionId);
       throw error;
@@ -469,14 +470,15 @@ export class AppServerHost {
   /** User-confirmed branch switch; the manager owns native retirement. */
   async openNode(sessionId: SessionId, nodeId: SessionNodeId, onSwitched?: () => void): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
+    let threadId: string | undefined;
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
-      await existing.switchNode(nodeId);
+      threadId = (await existing.switchNode(nodeId)).active_conversation_id;
       this.#sessions.delete(sessionId);
     }
     // The confirmed target can accept submission intent while its successor
     // attachment waits for native preparation. Unknown switches never get here.
     onSwitched?.();
-    return this.attach(sessionId, nodeId);
+    return this.attach(sessionId, nodeId, undefined, threadId);
   }
 
   /** The attachment this connection holds for a Session, if any. */
@@ -534,6 +536,10 @@ export class AppServerHost {
     this.#failedInitializations.delete(sessionId);
   }
 
+  async readNode(sessionId: SessionId, nodeId: SessionNodeId) {
+    return (await this.client.call('session/node',{session_id:sessionId,node_id:nodeId},'node')).node;
+  }
+
   async readSession(sessionId: SessionId): Promise<SessionSnapshot> {
     const read = await this.client.call(
       "session/read",
@@ -546,7 +552,7 @@ export class AppServerHost {
   async createSession(settings: SessionPersistentState): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
-        "session/create",
+        "thread/start",
         { settings },
         "session_transition",
       ),
@@ -592,12 +598,12 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: import("../../../protocol/app-server/v72.ts").CanonicalContentLocator,
+    boundary?: import("../../../protocol/app-server/v73.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
-        "session/fork",
+        "thread/fork",
         {
           session_id: sessionId,
           node_id: nodeId ?? null,
@@ -615,7 +621,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: import("../../../protocol/app-server/v72.ts").CanonicalContentLocator,
+    boundary: import("../../../protocol/app-server/v73.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
@@ -722,7 +728,7 @@ export class AppServerHost {
 
 async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor?: import('../../../protocol/app-server/v72.ts').EditorLocator | null;
+  editor?: import('../../../protocol/app-server/v73.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
 }): Promise<SessionTransition> {
   return {

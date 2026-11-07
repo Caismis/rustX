@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server } from './fixture';
-import type { AuxiliaryResult, AuxiliarySegment } from '../../protocol/app-server/v72';
+import type { AuxiliaryResult, AuxiliarySegment } from '../../protocol/app-server/v73';
 const servers: Server[] = [];
 afterEach(() => { for (const server of servers.splice(0)) server.client.disconnect(); vi.useRealTimers(); });
 async function connected() {
@@ -138,11 +138,10 @@ it('a pending native CallId never becomes a confirmed receipt before preparation
   expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(1);
 });
 
-it('does not offer execution without a native Delivery Access grant', async () => {
-  const server = new Server(); servers.push(server); await server.attached('A');
-  expect(server.client.hasAuxiliaryAuthority('A')).toBe(false);
-  await expect(server.client.auxiliary.submit('A', 'Question')).rejects.toThrow();
-  expect(server.requests.some(row => row.request.method === 'auxiliary/btw')).toBe(false);
+it('ordinary trusted attachments have Auxiliary API eligibility without another credential',async()=>{
+  const server=new Server();servers.push(server);await server.attached('A');
+  expect(server.client.hasAuxiliaryAuthority('A')).toBe(true);
+  expect(server.requests.some(row=>row.request.method==='auxiliary/btw')).toBe(false);
 });
 
 it('publication refusal after native admission retains correlation and forbids a second question across reconnect', async () => {

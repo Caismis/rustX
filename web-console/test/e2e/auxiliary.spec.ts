@@ -12,7 +12,7 @@ for (const locale of ['en', 'zh'] as const) {
       await page.setViewportSize({ width: locale === 'zh' ? 390 : 1440, height: 900 });
       await page.addInitScript(locale => { localStorage.setItem('rustx-locale-v1', 'en'); localStorage.setItem('rustx-appearance-v1', locale === 'en' ? 'light' : 'dark'); }, locale);
       await routeWorkspaceHost(page, fixture); await page.goto('/');
-      await connectRemote(page, fixture.endpoint, fixture.token, fixture.deliveryToken);
+      await connectRemote(page, fixture.endpoint, fixture.token);
       await openEmptySession(page, fixture, 'Workspace A');
       if (locale === 'zh') {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();

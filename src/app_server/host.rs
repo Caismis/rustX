@@ -43,10 +43,10 @@ impl HostState {
 }
 #[derive(Debug)]
 struct HostInner {
+    callbacks: Arc<super::callbacks::Callbacks>,
     #[cfg(test)]
     file_read_probe: Arc<super::product_host::ReadProbe>,
     product_host: Mutex<Option<super::product_host::Authority>>,
-    delivery_access: Mutex<Option<super::delivery_access::Grant>>,
     revocations: Arc<super::delivery_access::Revocations>,
     authority_id: String,
     manager: SessionRuntimeManager,
@@ -99,6 +99,9 @@ impl Drop for AttachmentPermit {
 }
 
 impl AppServerHost {
+    pub(crate) fn callbacks(&self) -> &Arc<super::callbacks::Callbacks> {
+        &self.0.callbacks
+    }
     /// Accept intent synchronously, before a protocol future can be left unpolled.
     /// Each admitted job retains its counted host and association owners. Only
     /// target resolution and clock registration serialize; MCP waits never do.
@@ -169,24 +172,6 @@ impl AppServerHost {
         self.0.file_read_probe.authenticating.enter();
         authority.as_ref()?.authenticate(offered)
     }
-    /// Native process composition only, like the Product Host credential.
-    /// Replacing or removing it revokes every connection it admitted.
-    pub(crate) fn bind_delivery_access(
-        &self,
-        credential: Option<super::transport::websocket::Credential>,
-    ) {
-        #[cfg(test)]
-        let installed = {
-            let (probe, installed) = (self.0.file_read_probe.clone(), credential.clone());
-            move || probe.rotations.record(installed)
-        };
-        self.rotate(
-            &self.0.delivery_access,
-            credential.map(super::delivery_access::Grant::new),
-            #[cfg(test)]
-            installed,
-        );
-    }
     /// One authority transition of a credential slot, linearized in the
     /// exclusive side of [`Self::revocations`] and the slot's own mutex.
     ///
@@ -222,27 +207,6 @@ impl AppServerHost {
     /// Orders every revocation of delivery authority against publication.
     pub(crate) fn revocations(&self) -> &Arc<super::delivery_access::Revocations> {
         &self.0.revocations
-    }
-    /// `Ok(None)`: no delivery credential was offered. An offered credential
-    /// that does not authenticate fails the whole handshake closed.
-    pub(crate) fn authenticate_delivery_access(
-        &self,
-        offered: &[&str],
-    ) -> Result<Option<tokio_util::sync::CancellationToken>, ()> {
-        if !offered
-            .iter()
-            .any(|value| value.starts_with(super::delivery_access::CREDENTIAL_PREFIX))
-        {
-            return Ok(None);
-        }
-        let grant = self.0.delivery_access.lock().expect("credential slot");
-        #[cfg(test)]
-        self.0.file_read_probe.authenticating.enter();
-        grant
-            .as_ref()
-            .and_then(|grant| grant.authenticate(offered))
-            .map(Some)
-            .ok_or(())
     }
     pub(super) fn register_file_route(&self, route: &Arc<super::connection::Route>) {
         let mut routes = self.0.file_routes.lock().expect("file routes");
@@ -286,11 +250,14 @@ impl AppServerHost {
     #[must_use]
     pub fn new(manager: SessionRuntimeManager, policy: AppServerPolicy) -> Self {
         manager.bind_process_policy(policy);
+        let callbacks = Arc::new(super::callbacks::Callbacks::default());
+        manager.bind_host_tools(Arc::new(callbacks.clone()));
+        manager.bind_interaction_lifecycle(Arc::new(callbacks.clone()));
         Self(Arc::new(HostInner {
+            callbacks,
             #[cfg(test)]
             file_read_probe: Arc::default(),
             product_host: Mutex::default(),
-            delivery_access: Mutex::default(),
             revocations: Arc::default(),
             authority_id: uuid::Uuid::new_v4().to_string(),
             manager,

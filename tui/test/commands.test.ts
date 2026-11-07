@@ -1,3 +1,4 @@
+import {threadFor} from '../../protocol/app-server/testing.ts';
 import {readCut} from './support/fixtures.ts';
 import { checkpoint, domainReceipt, goalReceipt, compactReceipt, jobReceipt } from './support/fixtures.ts';
 import { boundedSettings } from "./support/fixtures.ts";
@@ -58,7 +59,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v72.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v73.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -116,7 +117,7 @@ describe("Goal commands", () => {
     assert.match(created.body, /Progress: 0\/10 autonomous rounds/);
     assert.doesNotMatch(created.body, /\barm|disarm|Inactive/i);
     // Creating a Goal is a typed control, never a conversation message.
-    assert.equal(h.transport.log.count("turn/start"), 0);
+    assert.equal(h.transport.log.count("inbound/queue"), 0);
     assert.equal(h.transport.log.count("goal/control"), 2);
   });
 
@@ -283,14 +284,14 @@ describe("CommandDispatcher", () => {
     const failure = await h.dispatcher.submit("/export");
     assert.equal(failure.kind, "transient");
     if (failure.kind === "transient") { assert.equal(failure.level, "error"); assert.match(failure.text, /Native preflight failed/); }
-    assert.equal(h.transport.log.count("turn/start"), 0);
+    assert.equal(h.transport.log.count("inbound/queue"), 0);
   });
 
   it("submits plain text as one inbound message", async () => {
     const h = await harness();
     const submitting = h.dispatcher.submit("hello runtime");
-    const start = await nextRequest(h, "turn/start");
-    const params = paramsOf(start, "turn/start");
+    const start = await nextRequest(h, "inbound/queue");
+    const params = paramsOf(start, "inbound/queue");
 
     // Inbound content is carried verbatim, addressed at the full attachment
     // target. The client composes nothing and interprets nothing.
@@ -310,11 +311,11 @@ describe("CommandDispatcher", () => {
       snapshot({ pending_interactions: [questionnaireInteraction()] }),
     );
     const responding = h.dispatcher.submit("production");
-    const start = await nextRequest(h, "turn/start");
+    const start = await nextRequest(h, "inbound/queue");
 
     // A pending Questionnaire never captures the editor: only the focused
     // human-input surface answers one, and it does so with a typed response.
-    assert.deepEqual(paramsOf(start, "turn/start").content, [
+    assert.deepEqual(paramsOf(start, "inbound/queue").content, [
       { type: "text", text: "production" },
     ]);
     assert.equal(h.transport.log.count("interaction/respond"), 0);
@@ -335,8 +336,8 @@ describe("CommandDispatcher", () => {
       }),
     );
     const responding = h.dispatcher.submit("a private environment");
-    const start = await nextRequest(h, "turn/start");
-    assert.deepEqual(paramsOf(start, "turn/start").content, [
+    const start = await nextRequest(h, "inbound/queue");
+    assert.deepEqual(paramsOf(start, "inbound/queue").content, [
       { type: "text", text: "a private environment" },
     ]);
     h.transport.respond(start.id, {
@@ -357,7 +358,7 @@ describe("CommandDispatcher", () => {
       }),
     );
     const responding = h.dispatcher.submit("production");
-    const start = await nextRequest(h, "turn/start");
+    const start = await nextRequest(h, "inbound/queue");
     assert.equal(h.transport.log.count("interaction/respond"), 0);
     h.transport.respond(start.id, {
       type: "inbound_accepted",
@@ -372,7 +373,7 @@ describe("CommandDispatcher", () => {
       snapshot({ pending_interactions: [questionnaireInteraction()] }),
     );
     const submitting = h.dispatcher.submit("custom environment");
-    const start = await nextRequest(h, "turn/start");
+    const start = await nextRequest(h, "inbound/queue");
     assert.equal(h.transport.log.count("interaction/respond"), 0);
     h.transport.respond(start.id, {
       type: "inbound_accepted",
@@ -692,7 +693,7 @@ describe("CommandDispatcher", () => {
     }
     // The durable list is a read: choosing is the user's, and focusing is a
     // separate step that this command does not take.
-    assert.equal(h.transport.log.count("session/attach"), 1);
+    assert.equal(h.transport.log.count("thread/resume"), 1);
   });
 
   it("selecting a Session is a focus intent, with no request of its own", async () => {
@@ -730,7 +731,7 @@ describe("CommandDispatcher", () => {
     };
 
     const forking = h.dispatcher.forkAt(boundary);
-    const fork = await nextRequest(h, "session/fork");
+    const fork = await nextRequest(h, "thread/fork");
     h.transport.respondError(fork.id, {
       code: -32000,
       message: "stale boundary",
@@ -757,11 +758,11 @@ describe("CommandDispatcher", () => {
   it("creates a new Session from this client's Session settings", async () => {
     const h = await harness();
     const creating = h.dispatcher.submit("/new");
-    const create = await nextRequest(h, "session/create");
+    const create = await nextRequest(h, "thread/start");
     // The Session's cwd is a Session selection, supplied here. The App Server
     // process's own launch directory is never substituted for it.
-    assert.deepEqual(paramsOf(create, "session/create").settings, SESSION_SETTINGS);
-    h.transport.respond(create.id, {
+    assert.deepEqual(paramsOf(create, "thread/start").settings, SESSION_SETTINGS);
+    h.transport.respond(create.id, { thread:threadFor(sessionView({ id: "ses_5d906140-8048-712d-8539-25aed45333a1", name: "New session" })),
       type: "session_transition",
       session: sessionView({ id: "ses_5d906140-8048-712d-8539-25aed45333a1", name: "New session" }),
     });
@@ -775,7 +776,7 @@ describe("CommandDispatcher", () => {
     // Creating a Session replaces no process and stops nothing.
     const methods = h.transport.log.requests.map((request) => request.method);
     assert.ok(!methods.includes("session/switchNode"));
-    assert.ok(!methods.includes("turn/cancel"));
+    assert.ok(!methods.includes("turn/interrupt"));
   });
 
   it("clones the exact committed head, read authoritatively first", async () => {
@@ -788,12 +789,12 @@ describe("CommandDispatcher", () => {
       boundaries: [],
       next_offset: null,
     });
-    const fork = await nextRequest(h, "session/fork");
-    const params = paramsOf(fork, "session/fork");
+    const fork = await nextRequest(h, "thread/fork");
+    const params = paramsOf(fork, "thread/fork");
     // A clone is a fork with no boundary, at the exact revision just read.
     assert.equal(params.surface_revision, "17");
     assert.equal(params.boundary, null);
-    h.transport.respond(fork.id, {
+    h.transport.respond(fork.id, { thread:threadFor(sessionView({ id: "ses_eb278475-f606-7143-97df-8cb657e1c7ee" })),
       type: "session_transition",
       session: sessionView({ id: "ses_eb278475-f606-7143-97df-8cb657e1c7ee" }),
     });
@@ -820,7 +821,7 @@ describe("CommandDispatcher", () => {
     if (outcome.kind === "transient") {
       assert.match(outcome.text, /session named design review/);
     }
-    assert.equal(h.transport.log.count("turn/start"), 0);
+    assert.equal(h.transport.log.count("inbound/queue"), 0);
   });
 
   // A Session is unnamed until someone names it, so a bare `/name` answers
@@ -1320,8 +1321,8 @@ describe("CommandDispatcher", () => {
     const h = await harness(snapshot({ attempt: attemptView() }));
     const before = structuredClone(h.session.state);
     const cancelling = h.dispatcher.submit("/cancel");
-    const cancel = await nextRequest(h, "turn/cancel");
-    assert.deepEqual(paramsOf(cancel, "turn/cancel").target, h.target);
+    const cancel = await nextRequest(h, "turn/interrupt");
+    assert.deepEqual(paramsOf(cancel, "turn/interrupt").target, h.target);
     h.transport.respond(cancel.id, {
       type: "cancellation_accepted",
       attempt_id: "a1",
@@ -1386,7 +1387,7 @@ describe("CommandDispatcher", () => {
     const h = await harness(snapshot({ attempt: attemptView() }));
     const before = structuredClone(h.session.state);
     const cancelling = h.dispatcher.submit("/cancel");
-    const cancel = await nextRequest(h, "turn/cancel");
+    const cancel = await nextRequest(h, "turn/interrupt");
     h.transport.respondError(cancel.id, {
       code: -32000,
       message: "no attempt is currently cancellable",
@@ -1407,7 +1408,7 @@ describe("CommandDispatcher", () => {
     const h = await harness(snapshot({ attempt: attemptView() }));
     const before = structuredClone(h.session.state);
     const cancelling = h.dispatcher.submit("/cancel");
-    await nextRequest(h, "turn/cancel");
+    await nextRequest(h, "turn/interrupt");
     // The response is lost. Cancellation may well have been accepted.
     h.transport.fail("input_eof", "the connection dropped");
 
@@ -1420,7 +1421,7 @@ describe("CommandDispatcher", () => {
     }
     assert.deepEqual(h.session.state, before, "response loss cannot fabricate terminal settlement");
     assert.equal(
-      h.transport.log.count("turn/cancel"),
+      h.transport.log.count("turn/interrupt"),
       1,
       "the uncertain mutation was never resent",
     );
@@ -1470,7 +1471,7 @@ describe("CLI arguments", () => {
       config: "/private/user/rustx.toml",
       runtimeRoot: "/private/state",
     });
-    // Session settings are `session/create` inputs, and stay separate.
+    // Session settings are `thread/start` inputs, and stay separate.
     assert.deepEqual(parsed.sessionSettings, {
       cwd: "/work/project",
       model: { model: "local/dev" },
@@ -1576,25 +1577,8 @@ describe("CLI arguments", () => {
     );
   });
 
-  it("accepts a separate delivery-access credential only for an external App Server", () => {
-    const remote = parseArguments([
-      "--connect", "ws://127.0.0.1:8080", "--token-file", "/t",
-      "--delivery-access-token-file", "/d", "--workspace", "/srv/project",
-    ]);
-    assert.deepEqual(remote.mode, {
-      kind: "remote", endpoint: "ws://127.0.0.1:8080", tokenFile: "/t", deliveryAccessTokenFile: "/d",
-    });
-    assert.equal(
-      "deliveryAccessTokenFile" in parseArguments(["--connect", "ws://127.0.0.1:8080", "--token-file", "/t", "--workspace", "/srv"]).mode,
-      false,
-      "without it the connection holds metadata visibility only",
-    );
-    // The owned stdio child receives delivery access by explicit delegation,
-    // so a credential file there would be a flag that grants nothing.
-    assert.throws(
-      () => parseArguments(["--binary", "/usr/bin/rustx", "--delivery-access-token-file", "/d"]),
-      /applies only to --connect/,
-    );
+  it("rejects the removed delivery-access credential flag", () => {
+    assert.throws(()=>parseArguments(["--connect","ws://127.0.0.1:8080","--token-file","/t","--delivery-access-token-file","/d"]),/unknown argument/);
   });
 
   it("rejects an endpoint that is not a WebSocket URL", () => {
@@ -1701,9 +1685,9 @@ it("a replacement attachment does not inherit an old Agent-message submission fe
   h.transport.respond(detach.id, { type: 'detached' });
   await detaching;
   const attaching = h.host.attach(h.session.sessionId);
-  const attach = await nextRequest(h, 'session/attach', 1);
+  const attach = await nextRequest(h, 'thread/resume', 1);
   const replacementTarget = { ...h.target, attachment_id: 'replacement' };
-  h.transport.respond(attach.id, {type:'attached', target: replacementTarget, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+  h.transport.respond(attach.id, {type:'attached', target: replacementTarget, configuration_revision:'0', attachment_kind:'writable', observation_source:'live'});
   const replacementCut = await nextRequest(h,'session/checkpoint');
   h.transport.respond(replacementCut.id,{type:'checkpoint',checkpoint:checkpoint(snapshot())});
   const registration = await nextRequest(h,'session/subscribe');

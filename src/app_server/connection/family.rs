@@ -77,11 +77,11 @@ impl Family<'_> {
             | Method::SessionSubscribe { target, .. }
             | Method::TurnStart { target, .. }
             | Method::TurnSteer { target, .. }
+            | Method::InboundQueue { target, .. }
+            | Method::InboundSubmissionLookup { target, .. }
             | Method::InboundEdit { target, .. }
             | Method::InboundRemove { target, .. }
-            | Method::TurnCancel { target, .. }
-            | Method::InteractionRespond { target, .. }
-            | Method::InteractionCancel { target, .. } => Family::Runtime(target),
+            | Method::TurnCancel { target, .. } => Family::Runtime(target),
             Method::WorkflowScheduledRecovery { .. }
             | Method::WorkflowScheduledCancel { .. }
             | Method::WorkflowScheduledReconcile { .. }
@@ -113,7 +113,12 @@ impl Family<'_> {
             | Method::SessionRetryInitialization { .. }
             | Method::SessionDetach { .. }
             | Method::SessionAttachmentStatus { .. } => Family::Attachment,
-            Method::SessionExportPrepare { .. }
+            Method::ThreadRead { .. }
+            | Method::ThreadList { .. }
+            | Method::ThreadName { .. }
+            | Method::ThreadArchive { .. }
+            | Method::ThreadUnarchive { .. }
+            | Method::SessionExportPrepare { .. }
             | Method::SessionList { .. }
             | Method::SessionCreate { .. }
             | Method::SessionRead { .. }

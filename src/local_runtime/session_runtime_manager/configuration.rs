@@ -31,7 +31,7 @@ impl SessionRuntimeManager {
             let composition = composition.as_ref()?;
             (
                 composition.runtime().clone(),
-                composition.runtime().title_lifecycle(),
+                composition.runtime().lifecycle(),
             )
         };
         let mut publications = runtime.runtime_catalog_publications();

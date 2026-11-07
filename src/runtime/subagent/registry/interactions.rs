@@ -191,6 +191,22 @@ impl SubagentInteractionSink {
 }
 
 impl SubagentRegistry {
+    pub(crate) fn with_pending_interaction_header<T>(
+        &self,
+        interaction: &InteractionRef,
+        publish: impl FnOnce(&crate::observation::interaction::RuntimeClientInteractionHeader) -> T,
+    ) -> Option<T> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let record = &state.records[*state.index.get(state.routed_direct.get(interaction)?)?];
+        if !record.lifecycle.is_active()
+            || record.cancel_reason.is_some()
+            || record.publication_abandoned
+        {
+            return None;
+        }
+        Some(publish(state.routed_interactions.get(interaction)?))
+    }
+
     /// Updates the root human-provider state for all live and future child
     /// conversations. This changes only whether a new interaction may be
     /// published; it never settles an interaction already pending.
@@ -296,6 +312,13 @@ impl SubagentRegistry {
     /// Returns the live child interaction projection for the Runtime Client
     /// bootstrap cut. These values are never used as recovery authority.
     #[must_use]
+    pub(crate) fn callback_headers(
+        &self,
+        limit: usize,
+    ) -> Vec<crate::observation::interaction::RuntimeClientInteractionHeader> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        Self::pending_interaction_page_locked(&state, None, limit).head
+    }
     pub(crate) fn pending_interaction_head(&self) -> ChildPendingHeadProof {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         Self::pending_interaction_head_locked(&state)

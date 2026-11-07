@@ -1,6 +1,42 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v72.js';
+import type {ProtocolMessage} from './v73.js';
 export const fixtures = [
+  {
+    "jsonrpc": "2.0",
+    "id": "server-incarnation:host-1",
+    "method": "item/tool/call",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "turnId": "native-attempt",
+      "callId": "native-call",
+      "namespace": "business",
+      "tool": "lookup",
+      "arguments": {
+        "key": "invoice"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "server-incarnation:host-1",
+    "result": {
+      "success": true,
+      "contentItems": [
+        {
+          "type": "inputText",
+          "text": "invoice found"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "serverRequest/resolved",
+    "params": {
+      "requestId": "server-incarnation:host-1",
+      "threadId": "conv_00000000-0000-7000-8000-000000000001"
+    }
+  },
   {
     "jsonrpc": "2.0",
     "id": "exact-node",
@@ -43,8 +79,9 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "create-with-initial-model",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace",
         "model": {
@@ -69,8 +106,9 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "create-with-native-default",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace"
       }
@@ -104,8 +142,9 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "submit-workspace-draft",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace"
       },
@@ -240,7 +279,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 72,
+      "protocol_version": 73,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -258,16 +297,16 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 72,
+      "protocol_version": 73,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
           "max_chunk_bytes": 65536
         },
         "multi_session": true,
-        "single_writable_controller": true,
+        "shared_writable_clients": true,
         "headless_interactions": true,
-        "delivery_access": false,
+        "delivery_access": true,
         "experimental_methods": []
       }
     }
@@ -290,45 +329,32 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
-    "id": -3,
-    "method": "interaction/respond",
-    "params": {
-      "target": {
-        "session_id": "ses_00000000-0000-7000-8000-000000000001",
-        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-        "runtime_incarnation": "9007199254740993",
-        "attachment_id": "attachment-fixture"
-      },
-      "interaction": {
-        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-        "interaction_id": "interaction-fixture"
-      },
+    "id": "server-incarnation:3",
+    "result": {
+      "type": "questionnaire",
       "response": {
-        "type": "questionnaire",
-        "response": {
-          "type": "submitted",
-          "value": {
-            "answers": [
-              {
-                "question_index": 0,
-                "answer": {
-                  "type": "integer",
-                  "value": {
-                    "value": "9007199254740993"
-                  }
-                }
-              },
-              {
-                "question_index": 1,
-                "answer": {
-                  "type": "number",
-                  "value": {
-                    "value": "3ff4000000000000"
-                  }
+        "type": "submitted",
+        "value": {
+          "answers": [
+            {
+              "question_index": 0,
+              "answer": {
+                "type": "integer",
+                "value": {
+                  "value": "9007199254740993"
                 }
               }
-            ]
-          }
+            },
+            {
+              "question_index": 1,
+              "answer": {
+                "type": "number",
+                "value": {
+                  "value": "3ff4000000000000"
+                }
+              }
+            }
+          ]
         }
       }
     }
@@ -692,7 +718,7 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
-    "method": "session/fork",
+    "method": "thread/fork",
     "params": {
       "session_id": "ses_00000000-0000-7000-8000-000000000001",
       "node_id": null,

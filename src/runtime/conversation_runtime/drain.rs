@@ -239,6 +239,12 @@ impl RuntimeInner {
                             .request_cancel(CancellationReason::RuntimeShutdown);
                     }
                     let transitioned = self.lifecycle.begin_drain();
+                    self.mailbox
+                        .steering
+                        .lock()
+                        .expect("steering admission")
+                        .waiting
+                        .clear();
                     debug_assert!(
                         transitioned,
                         "the coordinator lock owns the runtime drain transition"

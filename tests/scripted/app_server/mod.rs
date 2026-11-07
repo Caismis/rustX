@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_lines)]
 #[path = "../../support/app_server_conformance.rs"]
 mod app_server_conformance;
+mod authentication;
 mod compaction_ownership;
 mod configuration;
 mod inbound_model;

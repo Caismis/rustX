@@ -11,7 +11,7 @@ const connected = { connection: 'connected' as const, uncertain: [] };
 const base = (): SessionView => ({ id: 'A', attachment: 'attached', attachmentIntent: 'wanted',
   target: { session_id: 'A', conversation_id: 'conversation-A', runtime_incarnation: 'native-incarnation', attachment_id: 'native-attachment' }, snapshot: snapshot() });
 const running = () => ({ attempt_id: 'private-attempt', phase: { type: 'running' as const }, turn: 1 });
-const uncertain = { id: 'lost-request', method: 'turn/cancel' as const, sessionId: 'A', generation: 7 };
+const uncertain = { id: 'lost-request', method: 'turn/interrupt' as const, sessionId: 'A', generation: 7 };
 
 it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progress while retaining real failures', transition => {
   const tx = translator('en'), view: SessionView = { ...base(), target: undefined, attachment: 'detached', attachmentIntent: 'released' };
@@ -85,9 +85,9 @@ it('conversation chrome exposes product controls without developer diagnostics',
   expect(screen.queryByLabelText('Native diagnostic JSON')).toBeNull();
 });
 it('lost cancellation remains uncertain through reconnect and a settled snapshot, with no replay', async () => {
-  const server = await mount(); server.held.add('turn/cancel');
+  const server = await mount(); server.held.add('turn/interrupt');
   fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-  await server.waitFor('turn/cancel', 1);
+  await server.waitFor('turn/interrupt', 1);
   expect(screen.getByLabelText('Session status').textContent).toBe('Stopping…');
   await act(async () => server.socket.close());
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
@@ -95,15 +95,15 @@ it('lost cancellation remains uncertain through reconnect and a settled snapshot
   server.snapshots.get('A')!.attempt = { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } };
   await act(async () => server.connect());
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
-  expect(server.client.getSnapshot().uncertain).toMatchObject([{ method: 'turn/cancel', sessionId: 'A' }]);
-  expect(server.requests.filter(row => row.request.method === 'turn/cancel')).toHaveLength(1);
+  expect(server.client.getSnapshot().uncertain).toMatchObject([{ method: 'turn/interrupt', sessionId: 'A' }]);
+  expect(server.requests.filter(row => row.request.method === 'turn/interrupt')).toHaveLength(1);
 });
 it('lost authoritative attachment exposes one Open Session action and sends one admission-fenced attach', async () => {
   const server = await mount();
   await act(async () => server.client.release('A'));
   const before = server.requests.length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
-  expect(server.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(server.requests.slice(before).filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
   expect(screen.queryByRole('button', { name: 'Open Session' })).toBeNull();
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(screen.getByText('Deep diving…', {selector:'[role=status]'})).toBeTruthy();
@@ -124,8 +124,8 @@ it('failed observation exposes one Refresh observation action which refreshes wi
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh observation' })));
   const operations = server.requests.slice(before).map(row => row.request.method);
   expect(operations.filter(method => method === 'session/checkpoint')).toHaveLength(1);
-  expect(operations).not.toContain('session/attach');
-  expect(operations).not.toContain('turn/start');
-  expect(operations).not.toContain('turn/cancel');
+  expect(operations).not.toContain('thread/resume');
+  expect(operations).not.toContain('inbound/queue');
+  expect(operations).not.toContain('turn/interrupt');
   expect(screen.queryByRole('button', { name: 'Refresh observation' })).toBeNull();
 });

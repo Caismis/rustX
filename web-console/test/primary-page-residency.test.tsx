@@ -1,6 +1,7 @@
+import {threadFor} from '../../protocol/app-server/testing.ts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { Request } from '../../protocol/app-server/v72';
+import type { Request } from '../../protocol/app-server/v73';
 import { App } from '../src/app/App';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 import { Server, boundedSettings, snapshot } from './fixture';
@@ -28,9 +29,9 @@ async function mounted(selected = true) {
 
 it('an uncertain Attach across Settings retains the selected local editor without another native operation', async () => {
   await mounted();
-  server.held.add('session/attach');
+  server.held.add('thread/resume');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
-  const attach = await server.waitFor('session/attach', 2), carrier = server.socket;
+  const attach = await server.waitFor('thread/resume', 2), carrier = server.socket;
   const editor = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
   fireEvent.change(editor, { target: { value: 'Keep this while Attach needs verification' } });
   await act(async () => fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [new File(['local'], 'uncertain.txt')] } }));
@@ -48,18 +49,18 @@ it('an uncertain Attach across Settings retains the selected local editor withou
   expect(server.requests.slice(at).filter(({ request }) => /^(turn\/|session\/(attach|detach|create|submissionIntent|uploadPrepare)$)/.test(request.method))).toEqual([]);
 });
 
-async function firstSend(hold?: 'session/attach' | 'session/subscribe', file?: File) {
+async function firstSend(hold?: 'thread/resume' | 'session/subscribe', file?: File) {
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
   server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: {
     ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'policy',
     session_models: { kind: 'available', default_model: { model: 'main' }, catalog: { models: [{ model: 'main', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } },
   } });
   const session = { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' };
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session }));
+  server.handlers.set('thread/start', () => ({thread:threadFor(session), type: 'session_transition', session }));
   server.summaries.set(session.id, { cwd: '/workspace/A' });
   server.snapshots.set(session.id, snapshot(session.id));
   server.nodeSnapshots.set(session.active_node, server.snapshots.get(session.id)!);
-  server.held.add('session/create');
+  server.held.add('thread/start');
   await mounted(false);
   if (hold) server.held.add(hold);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' })));
@@ -68,7 +69,7 @@ async function firstSend(hold?: 'session/attach' | 'session/subscribe', file?: F
   if (file) await act(async () => fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [file] } }));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  const create = await server.waitFor('session/create', 1);
+  const create = await server.waitFor('thread/start', 1);
   const incarnation = document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation');
   return { session, create, incarnation };
 }
@@ -106,13 +107,13 @@ it.each(creationReturns)('the first creation ACK from $page follows only its ret
   await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session'));
   if (arrival !== 'newer Session') expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
   expect(screen.getByLabelText('Session title').textContent).toBe(arrival === 'newer Session' ? 'Session B' : 'Session created');
-  expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(arrival === 'newer Session' ? 0 : 1);
-  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(arrival === 'newer Session' ? 0 : 1);
+  expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === session.id)).toHaveLength(arrival === 'newer Session' ? 0 : 1);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(arrival === 'newer Session' ? 0 : 1);
 });
 
 const attachingReturns = ['Settings', 'Workflows', 'Scheduled Tasks'].flatMap(page =>
-  (['session/attach', 'session/subscribe'] as const).map(hold => ({ page, hold })));
+  (['thread/resume', 'session/subscribe'] as const).map(hold => ({ page, hold })));
 it.each(attachingReturns)('a known creation from $page retains its original Send while $hold is held across Home return', async ({ page, hold }) => {
   const { session, create, incarnation } = await firstSend(hold);
   await navigate(page);
@@ -124,9 +125,9 @@ it.each(attachingReturns)('a known creation from $page retains its original Send
   await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('admitted'));
   await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session'));
   expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
-  expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === session.id)).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
 });
 
 it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('an admitted creation from %s follows native readiness after Home authorization resumes during resync', async page => {
@@ -155,9 +156,9 @@ it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('an admitted creation from
     expect(updates).toBe(0);
     await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session'));
     expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
-    expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
-    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === session.id)).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
   } finally { stop(); releaseHome(); }
 });
 
@@ -190,13 +191,13 @@ it.each(recoveringReturns)('a retained upload failure from $page can recover and
     server.held.delete('session/uploadStatus');
     await act(async () => fireEvent.click(await screen.findByRole('button', { name: 'Check status for recover.txt' })));
     await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('paused'));
-    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Continue submission' })));
     await waitFor(() => expect(firstSubmissions(server.client).session(session.id)?.phase).toBe('admitted'));
-    expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === session.id)).toHaveLength(1);
     expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
-    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
     expect(server.carrierTransfers).toBe(1);
     await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('session'));
     expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
@@ -236,16 +237,16 @@ it.each(discardedReturns)('discarding the first input after $page follows only i
     expect(server.client.isAttachmentControlCurrent(session.id, server.client.getSnapshot().views[session.id].attachmentObservation)).toBe(true);
     await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe(replace ? 'new-conversation' : 'session'));
     expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
-    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
-    expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === session.id)).toHaveLength(1);
     expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
     if (replace) return;
     fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'After discard' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-    const sent = await server.waitFor('turn/start', 1);
-    expect(sent.method === 'turn/start' && sent.params.content).toEqual([{ type: 'text', text: 'After discard' }]);
+    const sent = await server.waitFor('inbound/queue', 1);
+    expect(sent.method === 'inbound/queue' && sent.params.content).toEqual([{ type: 'text', text: 'After discard' }]);
   } finally { releaseHome(); await act(settleResync); }
 });
 
@@ -343,8 +344,8 @@ it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('a late created Session de
     await waitFor(() => expect(document.querySelector('#session-view')!.getAttribute('data-shell-route')).toBe('new-conversation'));
     expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).not.toBe(incarnation);
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', '');
-    expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-    expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === session.id)).toHaveLength(1);
-    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === session.id)).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
   } finally { releaseHome(); }
 });

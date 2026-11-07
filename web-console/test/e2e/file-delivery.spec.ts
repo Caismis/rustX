@@ -88,9 +88,9 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await download(panel.getByRole('button', { name: 'Download artifact', exact: true }), '报告 file.md', original);
     expect(deliveryRead).toBeDefined();
     const bypass = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<number>((resolve, reject) => {
-      const socket = new WebSocket(endpoint, ['rustx.app-server.v72', `rustx-token.${token}`]);
+      const socket = new WebSocket(endpoint, ['rustx.app-server.v73', `rustx-token.${btoa(token!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
       socket.onerror = () => reject(new Error('Browser ordinary connection failed'));
-      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 72, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
+      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 73, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
       socket.onmessage = event => {
         const reply = JSON.parse(event.data);
         if (reply.id === 4191) socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4192, method: 'session/fileRead', params: { ...read, allowed_roots: [cwd] } }));
@@ -173,7 +173,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await expect(page.getByRole('alert').filter({ hasText: '无法下载已授权的原始文件' })).toBeVisible();
     await chinese.getByRole('button', { name: /^关闭预览 / }).first().click(); await expect.poll(countUrls).toBe(0);
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
-    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(1);
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
     expect(errors).toEqual([]); passed = true;
   } finally { await fixture.stop(passed); }
 });
@@ -192,5 +192,5 @@ test('managed Artifact Markdown/text/code previews download original bytes throu
   }
   const methods = await page.evaluate(() => (window as any).managedPreviewRequests.map((value: any) => value.request.method));
   expect(methods.filter((method: string) => method === 'artifact/read')).toHaveLength(6); // Preview and Download each authorize a fresh read.
-  expect(methods.filter((method: string) => method === 'session/fileRead' || method === 'turn/start')).toHaveLength(0);
+  expect(methods.filter((method: string) => method === 'session/fileRead' || method === 'inbound/queue')).toHaveLength(0);
 });

@@ -566,6 +566,7 @@ impl SessionRuntimeManager {
             access.allocation,
             startup,
             &initialization.cancellation,
+            &access.node.dynamic_tools,
         )
         .await
         .map_err(|failure| match failure {
@@ -611,6 +612,11 @@ impl SessionRuntimeManager {
             core.runtime().install_admission_gate(gate);
         }
         let composition = core.into_bound().map_err(error)?;
+        if let Some(sink) = self.interaction_lifecycle.get() {
+            composition
+                .host()
+                .install_interaction_lifecycle(sink.clone());
+        }
         // The App Server display-projection seam (Issue #386). Two different
         // conditions live here and must not be confused:
         //

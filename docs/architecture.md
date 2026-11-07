@@ -4902,7 +4902,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v72
+       App Server protocol v73
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4923,14 +4923,14 @@ carry optional Model-owned reasoning Profile order; selection ordinals and froze
 invocation snapshots are unchanged. It also distinguishes incomplete historical
 Workflow nodes from proven current activity. It retains Workflow
 data-node observation kinds and the removal of speculative cached-Connecting
-source state; App Server v72 records first-submission intent
+source state; App Server v73 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v72, the only external product control protocol, and
+console speak App Server v73, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -7468,7 +7468,7 @@ See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue
 
 ## Scheduler product projection
 
-App Server v72 provides a bounded, read-only task catalog over the existing
+App Server v73 provides a bounded, read-only task catalog over the existing
 Session catalog and exact-node schedule readers. Keyset traversal, instruction
 search and unavailable-source reporting stay native; the browser does not walk
 Session trees or load runtimes to discover tasks. A coalesced native watch hint
@@ -7559,7 +7559,7 @@ a smaller 512 KiB byte ceiling. Graph, value, presentation and run protections
 remain separate. Counting/bounded serialization stops before oversized encoded
 buffers grow; an expanded-JSON-footprint preflight protects typed YAML allocation.
 
-App Server v72 carries Workflow document references, not inline documents.
+App Server v73 carries Workflow document references, not inline documents.
 Connection-owned anonymous scratch receives/serves 64 KiB chunks and verifies
 length, SHA-256 and the native document before use. Content uses the same
 lossless numeric/unique-field codec; a 32 MiB encoded allowance preserves the
@@ -7614,3 +7614,31 @@ confirmation. Replaced or cancelled leave intents cannot publish. These are Web
 presentation boundaries; Session lifecycle, native execution, authorization,
 configuration CAS, settlement and transport ownership remain unchanged. See
 [`web-console/SHELL-ARCHITECTURE.md`](../web-console/SHELL-ARCHITECTURE.md).
+
+## Shared App Server control and application Host Tools
+
+The [shared-control contract and pinned owner/test matrix](app-server/shared-control.md)
+map Thread directly to native Conversation lineage plus Session/node metadata,
+Turn to native Attempt, and Items to existing transcript/publication facts. Native
+SessionController, SessionRuntimeManager, coordinator, mailbox and Tool Runtime
+retain durable identity, retirement, admission, cancellation and settlement.
+
+Transport admission owns startup-loaded capability or HS256 bearer validation.
+Every ordinary authenticated client has equal API eligibility; there is no
+controller lease, provider lease, client role, method scope or Thread ACL.
+Connection-owned attachment/subscription and resource fences remain independent.
+The private Product Host surface keeps its existing registered-root authority.
+
+An App Server callback broker holds at most 128 ephemeral pending requests and a
+256-message queue per client. Native Interaction lifecycle facts and Tool Runtime
+Host dispatch feed it. A native-valid first correlated reply/error atomically
+claims a request; physical outbound acceptance rechecks cancellation, subscription
+and connection fences. Native owners validate domain replies, bound/spill outputs,
+commit canonical results and settle execution. No wire, HTTP, JWT or database type
+enters a kernel contract. No alternate execution/history store is introduced.
+
+Host declarations belong to native node metadata and freeze with effective root
+capabilities. Effective identities include namespace/name, with collision checks
+against native Builtin/MCP/Python bindings. Explicit forks preserve declarations;
+children do not implicitly inherit Host capabilities. Restart recovers uncertain
+external work through native recovery without automatically replaying it.

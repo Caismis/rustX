@@ -426,39 +426,6 @@ impl Revocations {
     }
 }
 
-/// WebSocket clients offer this beside the ordinary transport credential.
-pub(crate) const CREDENTIAL_PREFIX: &str = "rustx-delivery-access.";
-
-/// The separate WebSocket delivery credential. Distinct from the ordinary
-/// transport token and the Product Host secret; never serialized. Dropping or
-/// replacing it synchronously revokes every connection it admitted.
-pub(crate) struct Grant {
-    credential: super::transport::websocket::Credential,
-    revoked: CancellationToken,
-}
-impl std::fmt::Debug for Grant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("DeliveryAccessGrant")
-    }
-}
-impl Grant {
-    pub(crate) fn new(credential: super::transport::websocket::Credential) -> Self {
-        Self {
-            credential,
-            revoked: CancellationToken::new(),
-        }
-    }
-    pub(crate) fn authenticate(&self, offered: &[&str]) -> Option<CancellationToken> {
-        (self.credential.offered(offered, CREDENTIAL_PREFIX) && !self.revoked.is_cancelled())
-            .then(|| self.revoked.child_token())
-    }
-}
-impl Drop for Grant {
-    fn drop(&mut self) {
-        self.revoked.cancel();
-    }
-}
-
 /// Where one delivery request stands relative to its publication.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {

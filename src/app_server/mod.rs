@@ -1,6 +1,7 @@
 //! Transport-neutral App Server connection and versioned JSON-RPC contract.
 
 mod admission;
+mod callbacks;
 pub(crate) use admission::RequestLane;
 pub mod connection;
 pub mod editor_read;

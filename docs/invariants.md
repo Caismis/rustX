@@ -123,13 +123,12 @@ unchanged. See [preview workspace invariants](preview-workspace.md).
 A `present` delivery exists only in the typed `deliveries` of a successfully
 committed canonical Tool-result message (#431/#454). Arguments, Tool output text,
 generic JSON, prose and foreground settlements never become deliveries in any
-client. Delivery metadata is not file authority: Session-file bytes or a native
-location cross the App Server only for a transport-authenticated authority, either
-the Product Host secret lane or a connection's delivery access granted by stdio-owner
-delegation or the separate WebSocket delivery credential. No request field, client
+client. Delivery metadata is not file authority: bytes and native locations cross ordinary App
+Server APIs only after connection authentication and native operation checks.
+The private Product Host lane separately owns its registered-root proof. No request field, client
 name, coordinate, path or root list creates or widens it. A connection reaches only
-its own attachments. Close, native credential removal, attachment detach or mapping
-change revoke it at the next fence, and an admitted read releases its native permit
+its own attachments. Close, attachment detach, native retirement or mapping
+change fence it at the next fence, and an admitted read releases its native permit
 only on physical settlement. A client interprets a native location locally only on
 a demonstrably shared filesystem; a remote server path is never a client path. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients).
@@ -1327,25 +1326,15 @@ traffic uses the reliable bidirectional child control lane. The disposable
 activity lane is diagnostics-only and can coalesce or lose observations
 without affecting interaction correctness.
 
-Publication eligibility has one explicit root-side linearization point. The
-root host's `ClientState.control_attachment` slot is guarded by the same mutex
-for attach, detach, and the admission check. A child first asks the parent
-driver for admission with its full `InteractionRef`; the driver asks the
-`SubagentRegistry`, which verifies the live child incarnation and delegates
-the check to that root host authority. Only an exact, ephemeral permit allows
-the child coordinator to commit `InteractionRequested`. Thus, if detach wins
-that synchronized frontier, publication fails closed before any requested
-audit; if admission wins, the originating coordinator may remain pending even
-when the later detach notification is still in flight. The propagated
-`provider_available` watch is only an early fail-closed hint and is never the
-authority proving publication eligibility. A permit carries no waiter or
-settlement authority and cannot authorize another `InteractionRef`.
-
-A capable root control attachment makes the human provider available to live
-children; it does not grant `ask_user`, which remains available only when the
-frozen child capability definition explicitly selects it. Detaching after
-publication leaves the originating waiter pending, and reconnect reconstructs
-its presentation from live runtime state.
+Native Interaction publication and response validity retain their coordinator
+and live child-registry fences. Writable attachments are independent entries in
+`ClientState.attachments`, never an exclusive controller slot. The App Server's
+headless interaction sink admits publication without requiring a connected human
+client, then broadcasts one bounded request identity to live Thread subscribers.
+Detach never settles the native waiter. Live pending requests may replay on a
+fresh subscription; resolution, cancellation, child retirement and server restart
+cannot revive an old response claim. Human input availability does not grant
+`ask_user` or Host Tools to children: frozen native capabilities still decide.
 
 The permit is also the boundary between two failure contracts. Before a permit
 exists, an exact root refusal is `Unavailable`: no `InteractionRequested` fact
@@ -8378,3 +8367,20 @@ See [the storage and lifecycle contract](issue-520/README.md).
 - File-byte admission is independent of model projection, preview, complete-read,
   archive expansion and transport budgets. The retained policies are enumerated
   in [the resource-limit inventory](resource-limits.md).
+
+## Shared App Server control and Host callbacks
+
+One native Conversation coordinator remains the writer for all ordinary clients.
+Thread IDs name exact native Conversation lineages; Turn IDs name native Attempts.
+Input admission, native configuration CAS and capability freeze retain their
+existing linearization points. Steer and interrupt name an exact active Turn;
+explicit queue entries remain in the native mailbox for the next Attempt.
+Disconnect fences only connection-owned resources and never cancels accepted work.
+
+The bounded callback broker owns ephemeral correlation, not execution or history.
+One first valid eligible response/error claims a pending request under its native
+liveness/cancellation fence. Domain-invalid answers cannot reopen arbitration.
+Multiple Host handlers may perform external effects; only one canonical result and
+continuation are authoritative. Remote cancellation does not prove external work
+stopped. Native recovery preserves OutcomeUnknown and never replays a Host effect.
+See the [identity/method/owner/test matrix](app-server/shared-control.md).

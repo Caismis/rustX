@@ -24,7 +24,12 @@ impl RequestLane {
             Method::AgentObserve { .. } => Self::Observation,
             // Inert catalog reads and durable identity creation precede first
             // submission; none initializes MCP or borrows control capacity.
-            Method::SessionRead { .. }
+            Method::ThreadRead { .. }
+            | Method::ThreadList { .. }
+            | Method::ThreadName { .. }
+            | Method::ThreadArchive { .. }
+            | Method::ThreadUnarchive { .. }
+            | Method::SessionRead { .. }
             | Method::SettingsRead { .. }
             | Method::SessionCreate { .. } => Self::Metadata,
             Method::AuxiliaryCancel { .. }
@@ -36,8 +41,7 @@ impl RequestLane {
             | Method::SessionDetach { .. }
             | Method::McpDraftCancel { .. }
             | Method::SessionSubmissionIntent { .. }
-            | Method::SessionRetryInitialization { .. }
-            | Method::InteractionCancel { .. } => Self::Control,
+            | Method::SessionRetryInitialization { .. } => Self::Control,
             _ => Self::Ordinary,
         }
     }

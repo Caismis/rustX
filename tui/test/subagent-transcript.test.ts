@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { SubagentTranscript } from '../src/app-server/subagent-transcript.ts';
 import { emptyPresentationState } from '../src/presentation/projection.ts';
 import { checkpoint, snapshot, subagent, userMessage } from './support/fixtures.ts';
-import type { AgentObservation, AgentObservationCursor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v72.ts';
+import type { AgentObservation, AgentObservationCursor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v73.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
 const page = (id: string, next?: string): RuntimeClientTranscriptPage => ({ entries: [{ cursor: id, item: { type: 'message', message: userMessage(id, id) } }], next_cursor: next });
 function controlled(id = 'A') {
@@ -70,7 +70,7 @@ test('parent detach fences historical continuation and reads name the exact pare
   const detached = h.session.detach(); const detach = await nextRequest(h, 'session/detach', 0); h.transport.respond(detach.id, { type: 'detached' }); await detached;
   h.transport.respond(read.id, { type: 'transcript_window', window: { cut: { conversation_id: snapshot().conversation_id, journal: '20', transcript: '20', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: page('10') } });
   assert.equal(await reading, undefined);
-  for (const method of ['turn/start', 'turn/steer', 'agent/interrupt', 'interaction/respond'] as const) assert.equal(h.transport.transportCount(method), 0); h.client.close();
+  for (const method of ['inbound/queue', 'turn/steer', 'agent/interrupt', 'interaction/respond'] as const) assert.equal(h.transport.transportCount(method), 0); h.client.close();
 });
 
 test('T11/T18 off-head Child source refresh uses bounded status and rejects an old Activation cursor', async () => {

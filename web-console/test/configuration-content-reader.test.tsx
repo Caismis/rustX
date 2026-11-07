@@ -2,7 +2,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { ConfigurationContent } from '../src/app/trajectory/TrajectoryInspector';
 import type { TraceFieldReader } from '../src/client/trace';
-import type { CheckpointReadCut, ContentChunk, ContentRef } from '../../protocol/app-server/v72';
+import type { CheckpointReadCut, ContentChunk, ContentRef } from '../../protocol/app-server/v73';
 afterEach(cleanup);
 
 const text = 'Instructions B';

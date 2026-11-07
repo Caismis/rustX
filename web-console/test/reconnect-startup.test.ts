@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v72';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v73';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
 import { Server, snapshot } from './fixture';
@@ -29,16 +29,16 @@ async function coldReconnect() {
   oldSocket.close();
   // Native idle eviction preserves durable history and selected Node identity.
   server.loaded.delete('A'); server.residentConversations.delete('A');
-  server.held.add('session/attach');
+  server.held.add('thread/resume');
   const connecting = server.connect();
-  const first = await server.waitFor('session/attach', 3);
+  const first = await server.waitFor('thread/resume', 3);
   // This assertion fails at the dependency cut, rather than waiting for a test
   // watchdog to infer that connect() is parked behind the held MCP attachment.
   expect(server.client.getSnapshot().connection).toBe('connected');
   await connecting;
-  const second = await server.waitFor('session/attach', 4);
-  expect(first.params).toMatchObject({ session_id: 'A', node_id: 'node-A' });
-  expect(second.params).toMatchObject({ session_id: 'B', node_id: 'node-B' });
+  const second = await server.waitFor('thread/resume', 4);
+  expect(first.params).toMatchObject({threadId:'conversation-A'});
+  expect(second.params).toMatchObject({threadId:'conversation-B'});
   const state = server.client.getSnapshot();
   expect(state).toMatchObject({ authorityId: before.authorityId, generation: before.generation + 1 });
   expect(state.authorityRevision).toBe(before.authorityRevision);
@@ -61,11 +61,11 @@ it('same-authority reconnect accepts first Send while a previously completed Ses
   expect(port.current()).toBe(true);
   const submitting = owner.submit('cold-reconnect', { workspaceId: '', text: 'Next request', files: [] }, port, undefined, undefined, 'A');
   const intent = await server.waitFor('session/submissionIntent', 1);
-  expect(intent.params).toEqual({ session_id: 'A', node_id: 'node-A' });
+  expect(intent.params).toEqual({session_id:'A',node_id:'node-A'});
   expect(server.loaded.has('A')).toBe(false);
-  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
-  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(4);
-  expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(0);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(4);
+  expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(0);
 
   server.reply(first);
   await expect(submitting).resolves.toBe(true);
@@ -75,7 +75,7 @@ it('same-authority reconnect accepts first Send while a previously completed Ses
   expect(target.attachment_id).not.toBe(previous.attachment_id);
   expect(server.coldLoads.get('A')).toBe(2);
   expect(server.client.isAttachmentControlCurrent('A', oldObservation)).toBe(false);
-  const starts = server.requests.filter(row => row.request.method === 'turn/start');
+  const starts = server.requests.filter(row => row.request.method === 'inbound/queue');
   expect(starts).toHaveLength(1);
   expect(starts[0].request.params).toMatchObject({ target, content: [{ type: 'text', text: 'Next request' }] });
   const installed = server.client.getSnapshot().views.A;
@@ -106,12 +106,12 @@ it.each(['navigation', 'disconnect', 'replacement'] as const)('a first Send wait
     }
     const beforeLateResponse = server.client.getSnapshot();
     // A late response from the retired carrier cannot establish a new proof.
-    socket.success(first, { type: 'attached', target: { ...previous, attachment_id: 'late-old-claim' }, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    socket.success(first, { type: 'attached', target: { ...previous, attachment_id: 'late-old-claim' }, configuration_revision: '0', attachment_kind: 'writable', observation_source: 'live' });
     expect(server.client.getSnapshot()).toBe(beforeLateResponse);
   }
   await expect(submitting).resolves.toBe(false);
   expect(port.current()).toBe(false);
-  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
   expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(4);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(4);
 });

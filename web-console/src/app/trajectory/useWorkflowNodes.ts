@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { validateCanonicalInspectionPage } from '../../../../protocol/app-server/trace-inspection';
 import type { TraceCache } from '../../client/trace';
-import type { TraceRecord } from '../../../../protocol/app-server/v72';
+import type { TraceRecord } from '../../../../protocol/app-server/v73';
 import { workflowCollection, type WorkflowNodes, type WorkflowTraceNode } from './workflow';
 
 /** All admitted visits, including loop bodies, paged at the original native cut. */

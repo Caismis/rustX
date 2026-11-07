@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v72.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor } from './v73.ts';
 import { canonicalLocatorKey, contentSourceKey, sameContentRef } from './content-identity.ts';
 
 const cuts = new WeakMap<Snapshot, ProjectionMetadata>();
@@ -277,7 +277,7 @@ function foldOrdinaryEvent(state: Snapshot, event: Exclude<Event, {type: 'projec
       }
       return { ...state, inbound: { ...state.inbound, pending: [...state.inbound.pending ?? [], { sequence: event.sequence, revision: "0", message: event.message }] } };
     }
-    case 'inbound_drained': return { ...state, inbound: { pending: (state.inbound.pending ?? []).filter(item => BigInt(item.sequence) > BigInt(event.watermark)), last_drain: { watermark: event.watermark, count: event.count } } };
+    case 'inbound_drained': return { ...state, inbound: { pending: (state.inbound.pending ?? []).filter(item => !event.message_ids.includes(item.message.id)), last_drain: { watermark: event.watermark, count: event.count } } };
     case 'job_updated': {
       if(Number(event.position)>=32)return state;
       const head=(state.jobs??[]).filter(row=>row.job_id!==event.evicted_job_id);

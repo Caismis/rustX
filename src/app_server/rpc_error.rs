@@ -9,6 +9,7 @@ use crate::runtime_client::types::RuntimeClientError;
 
 pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
     domain(match error {
+        RuntimeClientError::OutcomeUnknown => ErrorData::OutcomeUnknown,
         RuntimeClientError::Auxiliary { reason } => ErrorData::Auxiliary { reason },
         RuntimeClientError::AgentNotDelivered { agent_id } => {
             ErrorData::AgentNotDelivered { agent_id }
@@ -35,7 +36,6 @@ pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
         RuntimeClientError::InteractionAuditFailed { interaction } => {
             ErrorData::InteractionAuditFailed { interaction }
         }
-        RuntimeClientError::AttachmentInUse { .. } => ErrorData::ControllerInUse,
         RuntimeClientError::NotAttached => ErrorData::StaleAttachment,
         RuntimeClientError::ResyncRequired { .. } => ErrorData::ResyncRequired,
         RuntimeClientError::ObservationUnavailable { message } => {

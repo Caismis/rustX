@@ -22,7 +22,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ExactInteger, FiniteNumber, IntegerAnswer, NumberAnswer, QuestionnaireAnswer,
         QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSubmission,
     };
-    use crate::runtime::identity::{ConversationId, InteractionId};
+    use crate::runtime::identity::ConversationId;
     let target = AttachmentTarget {
         session_id: crate::local_runtime::session::SessionId::new(
             "ses_00000000-0000-7000-8000-000000000001",
@@ -48,6 +48,24 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         attempt_id_source: None,
     };
     let mut fixtures = vec![
+        ProtocolMessage::ServerMessage(super::protocol::ServerMessage::Request(super::protocol::ServerRequest {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("server-incarnation:host-1".into()),
+            call: super::protocol::ServerRequestMethod::ToolCall(super::protocol::HostToolCall {
+                thread_id:target.conversation_id.clone(),
+                turn_id:crate::runtime::identity::AttemptId::new("native-attempt"),
+                call_id:crate::runtime::identity::ToolCallId::new("native-call"),
+                namespace:Some("business".into()),tool:"lookup".into(),arguments:serde_json::json!({"key":"invoice"}),
+            }),
+        })),
+        ProtocolMessage::ClientReply(super::protocol::ClientReply::Success(super::protocol::ClientSuccess {
+            jsonrpc:JsonRpcVersion::V2,id:RequestId::String("server-incarnation:host-1".into()),
+            result:serde_json::json!({"success":true,"contentItems":[{"type":"inputText","text":"invoice found"}]}),
+        })),
+        ProtocolMessage::ServerMessage(super::protocol::ServerMessage::Resolved {
+            jsonrpc:JsonRpcVersion::V2,method:super::protocol::ServerResolvedMethod::Resolved,
+            params:super::protocol::ServerRequestResolved {request_id:RequestId::String("server-incarnation:host-1".into()),thread_id:target.conversation_id.clone()},
+        }),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-node".into()),
@@ -87,7 +105,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-initial-model".into()),
-            call: Method::SessionCreate { submission: None,
+            call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: Some(crate::model::session::SessionModelConfig::of(
@@ -99,7 +117,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-native-default".into()),
-            call: Method::SessionCreate { submission: None,
+            call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: None,
@@ -123,6 +141,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("submit-workspace-draft".into()),
             call: Method::SessionCreate {
+                dynamic_tools: Vec::new(),
                 settings: crate::local_runtime::session::SessionPersistentState { cwd: "/workspace".into(), model: None },
                 submission: Some(crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() }),
             },
@@ -248,34 +267,15 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 data: None,
             },
         })),
-        ProtocolMessage::Request(Box::new(Request {
+        ProtocolMessage::ClientReply(super::protocol::ClientReply::Success(super::protocol::ClientSuccess {
             jsonrpc: JsonRpcVersion::V2,
-            id: RequestId::Integer(-3),
-            call: Method::InteractionRespond {
-                target: target.clone(),
-                interaction: crate::runtime::interaction::InteractionRef {
-                    conversation_id: target.conversation_id.clone(),
-                    interaction_id: InteractionId::new("interaction-fixture"),
-                },
-                response: crate::runtime::interaction::InteractionResponse::Questionnaire {
-                    response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
-                        answers: vec![
-                            QuestionnaireAnswerEntry {
-                                question_index: 0,
-                                answer: QuestionnaireAnswer::Integer(IntegerAnswer {
-                                    value: ExactInteger::new(9_007_199_254_740_993),
-                                }),
-                            },
-                            QuestionnaireAnswerEntry {
-                                question_index: 1,
-                                answer: QuestionnaireAnswer::Number(NumberAnswer {
-                                    value: FiniteNumber::try_new(1.25).expect("finite"),
-                                }),
-                            },
-                        ],
-                    }),
-                },
-            },
+            id: RequestId::String("server-incarnation:3".into()),
+            result: serde_json::to_value(crate::runtime::interaction::InteractionResponse::Questionnaire {
+                response: QuestionnaireResponse::Submitted(QuestionnaireSubmission { answers: vec![
+                    QuestionnaireAnswerEntry { question_index: 0, answer: QuestionnaireAnswer::Integer(IntegerAnswer { value: ExactInteger::new(9_007_199_254_740_993) }) },
+                    QuestionnaireAnswerEntry { question_index: 1, answer: QuestionnaireAnswer::Number(NumberAnswer { value: FiniteNumber::try_new(1.25).expect("finite") }) },
+                ] }),
+            }).unwrap(),
         })),
         ProtocolMessage::Notification(Notification {
             jsonrpc: JsonRpcVersion::V2,
@@ -1530,23 +1530,28 @@ mod tests {
     }
 
     #[test]
-    fn public_questionnaire_requests_reject_impossible_scalar_values() {
-        let schema = protocol_schema();
-        let validator = jsonschema::validator_for(&schema).unwrap();
+    fn response_envelopes_leave_domain_validation_to_the_native_owner() {
+        let validator = jsonschema::validator_for(&protocol_schema()).unwrap();
         let request = fixtures()
             .into_iter()
             .find_map(|fixture| match fixture {
-                ProtocolMessage::Request(request)
-                    if matches!(request.call, Method::InteractionRespond { .. }) =>
-                {
-                    Some(*request)
+                ProtocolMessage::ClientReply(super::super::protocol::ClientReply::Success(
+                    reply,
+                )) if reply.result["type"] == "questionnaire" => {
+                    Some(super::super::protocol::ClientReply::Success(reply))
                 }
                 _ => None,
             })
             .unwrap();
         let wire = serde_json::to_value(request).unwrap();
         assert!(validator.is_valid(&wire));
-        assert!(serde_json::from_value::<Request>(wire.clone()).is_ok());
+        let payload = wire["result"].clone();
+        assert!(
+            serde_json::from_value::<crate::runtime::interaction::InteractionResponse>(
+                payload.clone()
+            )
+            .is_ok()
+        );
         for (index, invalid) in [
             (0, "9223372036854775808"),
             (0, "-0"),
@@ -1554,12 +1559,16 @@ mod tests {
             (1, "8000000000000000"),
         ] {
             let mut wire = wire.clone();
-            wire["params"]["response"]["response"]["value"]["answers"][index]["answer"]["value"]
-                ["value"] = serde_json::json!(invalid);
-            assert!(!validator.is_valid(&wire), "schema accepted {invalid}");
+            wire["result"]["response"]["value"]["answers"][index]["answer"]["value"]["value"] =
+                serde_json::json!(invalid);
             assert!(
-                serde_json::from_value::<Request>(wire).is_err(),
-                "serde accepted {invalid}"
+                serde_json::from_value::<super::super::protocol::ClientReply>(wire.clone()).is_ok()
+            );
+            assert!(
+                serde_json::from_value::<crate::runtime::interaction::InteractionResponse>(
+                    wire["result"].clone()
+                )
+                .is_err()
             );
         }
     }
@@ -1574,9 +1583,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v72.schema.json", "v72.ts"]);
+        assert_eq!(generations, ["v73.schema.json", "v73.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v72.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v73.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

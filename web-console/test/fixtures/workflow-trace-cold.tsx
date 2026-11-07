@@ -20,7 +20,7 @@ for (const node of source.nodes.get(root.collections[0].domain)!) {
   node.instance.block.run.origin = { type: 'scheduled', start_id: 'scheduled-start' };
 }
 server.snapshots.set('A', { ...snapshot(), trace: { records: [root], read_cut: source.cut, next_cursor: 'trace:30' } });
-server.held.add('session/attach');
+server.held.add('thread/resume');
 server.held.add('session/tracePage');
 server.held.add('session/traceValueRead');
 server.handlers.set('session/traceHistory', request => {

@@ -1,11 +1,11 @@
-/** The sole untrusted-JSON → generated DTO boundary for App Server v72. */
+/** The sole untrusted-JSON → generated DTO boundary for App Server v73. */
 import { readFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
-import type { ProtocolMessage } from "../../../protocol/app-server/v72.ts";
+import type { ProtocolMessage, ServerOutput } from "../../../protocol/app-server/v73.ts";
 
 const schema = JSON.parse(readFileSync(
-  new URL("../../../protocol/app-server/v72.schema.json", import.meta.url),
+  new URL("../../../protocol/app-server/v73.schema.json", import.meta.url),
   "utf8",
 ));
 const ajv = new Ajv2020({
@@ -22,6 +22,11 @@ const ajv = new Ajv2020({
 });
 // Compile once. No coercion, default insertion, or removal of unknown fields.
 const validate = ajv.compile<ProtocolMessage>(schema);
+
+const validateOutput = ajv.compile<ServerOutput>({...schema, anyOf:[{$ref:'#/$defs/ServerOutput'}]});
+export function decodeServerOutput(record: unknown): ServerOutput | undefined {
+  try { return validateOutput(record) ? record : undefined; } catch { return undefined; }
+}
 
 export function decodeProtocolMessage(record: unknown): ProtocolMessage | undefined {
   try {

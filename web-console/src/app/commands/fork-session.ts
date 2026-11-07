@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Catalog fork navigation adapted from session-controller sessions/service.ts; see PROVENANCE.md. */
 import type { AppServerClient } from '../../client/app-server';
-import type { MethodResult } from '../../../../protocol/app-server/v72';
+import type { MethodResult } from '../../../../protocol/app-server/v73';
 import { messageDescriptor } from '../../../../protocol/app-server/message-descriptor';
 import { message, displayText } from '../../locale/translation';
 import { localeController } from '../../locale/controller';
@@ -62,7 +62,7 @@ export async function forkLatestSession(client: AppServerClient, sessionId: stri
       entry.response && (!selected || BigInt(entry.cursor) > BigInt(selected.cursor)) ? entry : selected, undefined);
     const response = latest?.response;
     if (response) {
-      const fork = await client.request({ method: 'session/fork', params: { session_id: sessionId, node_id: session.active_node,
+      const fork = await client.request({ method: 'thread/fork', params: { session_id: sessionId, node_id: session.active_node,
         surface_revision: response.surface_revision, boundary: response.closing_locator, side: 'after' } }, 'session_transition', undefined, admitted);
       const receipt: { sessionId: string; warning?: string } = { sessionId: fork.session.id };
       const warning = await finishForkSession(client, fork, sourceTitle, generation);

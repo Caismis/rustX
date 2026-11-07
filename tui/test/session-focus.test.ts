@@ -1,4 +1,5 @@
-import { followAttachment } from './support/app-server-peer.ts';
+import {sessionView} from './support/fixtures.ts';
+import { followAttachment, resolveThreadMetadata } from './support/app-server-peer.ts';
 import { checkpoint } from "./support/fixtures.ts";
 import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
 const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
@@ -40,7 +41,7 @@ import { attemptView, runtimeCursor, snapshot } from "./support/fixtures.ts";
 
 const CAPABILITIES = {
   upload_policy: nativeUploadPolicy, multi_session: true,
-  single_writable_controller: true,
+  shared_writable_clients: true,
   headless_interactions: true, delivery_access: false,
   experimental_methods: [],
 };
@@ -76,10 +77,11 @@ async function focus(
   options: { running?: boolean; cursor?: number } = {},
 ): Promise<AppServerSession> {
   const { transport } = connected;
-  const attaches = transport.log.count("session/attach") + 1;
+  const attaches = transport.log.count("thread/resume") + 1;
   const pending = connected.host.attach(sessionId);
-  const attach = (await transport.log.awaitMethod("session/attach", attaches)).at(-1)!;
-  transport.respond(attach.id, {type:'attached', target: targetFor(sessionId, index), configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+  await resolveThreadMetadata(transport,sessionView({id:sessionId,active_conversation_id:targetFor(sessionId,index).conversation_id}));
+  const attach = (await transport.log.awaitMethod("thread/resume", attaches)).at(-1)!;
+  transport.respond(attach.id, {type:'attached', target: targetFor(sessionId, index), configuration_revision:'0', attachment_kind:'writable', observation_source:'live'});
   await followAttachment(transport,targetFor(sessionId,index),snapshot(options.running===true?{attempt:attemptView({phase:{type:'running'}})}:{}),runtimeCursor(options.cursor??1));
   return pending;
 }
@@ -108,11 +110,9 @@ describe("multi-Session focus on one connection", () => {
 
     const methods = connected.transport.log.requests.map((m) => m.method);
     for (const forbidden of [
-      "turn/cancel",
+      "turn/interrupt",
       "session/switchNode",
       "session/detach",
-      "interaction/cancel",
-      "interaction/respond",
     ] as const) {
       assert.ok(
         !methods.includes(forbidden),
@@ -121,7 +121,7 @@ describe("multi-Session focus on one connection", () => {
     }
     // Each of the two attachments independently captures a checkpoint and
     // subscribes after that same cut.
-    assert.equal(connected.transport.log.count("session/attach"), 2);
+    assert.equal(connected.transport.log.count("thread/resume"), 2);
     assert.equal(connected.transport.log.count("session/subscribe"), 2);
   });
 
@@ -154,7 +154,7 @@ describe("multi-Session focus on one connection", () => {
 
     assert.equal(returned, a, "the same attachment, not a second one");
     assert.equal(
-      connected.transport.log.count("session/attach"),
+      connected.transport.log.count("thread/resume"),
       2,
       "returning to a Session does not re-attach it",
     );
@@ -226,7 +226,7 @@ describe("explicit release is a different operation from focus", () => {
     assert.equal(connected.transport.log.count("session/detach"), 1);
     assert.equal(connected.host.attachment("ses_fa57a52d-bf08-7902-9852-9730a3e99db6"), undefined);
     const methods = connected.transport.log.requests.map((m) => m.method);
-    assert.ok(!methods.includes("turn/cancel"));
+    assert.ok(!methods.includes("turn/interrupt"));
     assert.ok(!methods.includes("session/switchNode"));
   });
 
@@ -245,7 +245,7 @@ describe("process ownership", () => {
     // Exiting a remote TUI must not ask the server to stop anything.
     const methods = connected.transport.log.requests.map((m) => m.method);
     assert.ok(!methods.includes("session/switchNode"));
-    assert.ok(!methods.includes("turn/cancel"));
+    assert.ok(!methods.includes("turn/interrupt"));
     assert.ok(!methods.includes("session/detach"));
   });
 

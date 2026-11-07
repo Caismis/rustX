@@ -2110,6 +2110,36 @@ impl InteractionCoordinator {
             .get(&interaction.interaction_id)
             .map(|pending| pending.source.clone())
     }
+    pub(crate) fn with_pending_header<T>(
+        &self,
+        interaction: &InteractionRef,
+        publish: impl FnOnce(&crate::observation::interaction::RuntimeClientInteractionHeader) -> T,
+    ) -> Option<T> {
+        if interaction.conversation_id != self.conversation_id {
+            return None;
+        }
+        let state = self.state.lock().expect("interaction state");
+        let pending = state.pending.get(&interaction.interaction_id)?;
+        let mut header = pending.source.header().clone();
+        header.source_offset = pending.sequence? * 2;
+        pending.cancellation.with_active(|| publish(&header))
+    }
+    pub(crate) fn callback_headers(
+        &self,
+        limit: usize,
+    ) -> Vec<crate::observation::interaction::RuntimeClientInteractionHeader> {
+        let state = self.state.lock().expect("interaction state");
+        state
+            .pending_order
+            .iter()
+            .take(limit)
+            .map(|(sequence, id)| {
+                let mut header = state.pending[id].source.header().clone();
+                header.source_offset = sequence * 2;
+                header
+            })
+            .collect()
+    }
     pub(crate) fn observation_head(&self) -> PendingHeadProof {
         self.state
             .lock()

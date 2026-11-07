@@ -12,7 +12,7 @@ import { connectRemote, chooseWorkspace } from './shell-actions';
 for (let sample = 1; sample <= 3; sample++) test(`startup phase measurement ${sample}`, async ({ page }) => {
   const fixture = await startDogfood('web_composer_context');
   const wire = await wireProbe(page);
-  wire.holdNext('session/create');
+  wire.holdNext('thread/start');
   try {
     await routeWorkspaceHost(page, fixture);
     await page.addInitScript(() => {
@@ -28,12 +28,12 @@ for (let sample = 1; sample <= 3; sample++) test(`startup phase measurement ${sa
           super(url, protocols);
           this.addEventListener('message', event => {
             const response = JSON.parse(event.data), method = this.methods.get(response.id);
-            if (method === 'session/create') { mark('T3'); evidence.identities.created = response.result?.session; }
-            if (method === 'session/attach') { evidence.identities.attached = response.result?.target; mark('T6'); if (response.result?.snapshot?.model) mark('T7'); }
+            if (method === 'thread/start') { mark('T3'); evidence.identities.created = response.result?.session; }
+            if (method === 'thread/resume') { evidence.identities.attached = response.result?.target; mark('T6'); if (response.result?.snapshot?.model) mark('T7'); }
             if (response.method === 'session/event' && (response.params.event.type === 'block_content_advanced' || response.params.event.type === 'projection_transition' && response.params.event.events.some((event: {type:string}) => event.type === 'block_content_advanced'))) mark('T10');
             const trace = response.result?.snapshot?.trace?.records;
             if (trace) evidence.providerTimings = trace.filter((r: any) => r.request?.generation).map((r: any) => ({ request_id: r.request.request_id, generation: r.request.generation }));
-            if (method === 'turn/start') mark('T9');
+            if (method === 'inbound/queue') mark('T9');
           });
         }
         send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
@@ -41,9 +41,9 @@ for (let sample = 1; sample <= 3; sample++) test(`startup phase measurement ${sa
             const request = JSON.parse(data);
             this.methods.set(request.id, request.method);
             if (evidence.times.T0 !== undefined) { evidence.requests.push(request.method); evidence.rpcIds.push({ id: request.id, method: request.method }); }
-            if (request.method === 'session/create') mark('T2');
-            if (request.method === 'session/attach') mark('T4');
-            if (request.method === 'turn/start') { mark('T8'); evidence.startupRequests = [...evidence.requests]; }
+            if (request.method === 'thread/start') mark('T2');
+            if (request.method === 'thread/resume') mark('T4');
+            if (request.method === 'inbound/queue') { mark('T8'); evidence.startupRequests = [...evidence.requests]; }
           }
           super.send(data);
         }
@@ -62,7 +62,7 @@ for (let sample = 1; sample <= 3; sample++) test(`startup phase measurement ${sa
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.held()).toBe(1);
     const native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    try { await native.renameSession(wire.responses.find(row => row.method === 'session/create')!.result.session.id, 'New session'); }
+    try { await native.renameSession(wire.responses.find(row => row.method === 'thread/start')!.result.session.id, 'New session'); }
     finally { await native.shutdown(); }
     wire.releaseHeld();
     // Plan recorded belongs to the second request, after three real Todo calls.

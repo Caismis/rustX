@@ -18,6 +18,7 @@ pub mod background;
 pub mod deadline;
 pub mod environment;
 pub mod executor;
+pub mod host;
 pub mod invocation;
 pub mod limits;
 pub mod locator;

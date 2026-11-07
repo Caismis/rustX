@@ -1,3 +1,4 @@
+import {isPlainMessageKind} from '../../../../protocol/app-server/message-kind';
 import { ConfigurationChangeRow, hasConfigurationChangeRow } from './ConfigurationChangeRow';
 import { WorkflowRunPanel } from './WorkflowRunPanel';
 import { workflowKey } from '../../bindings/workflow-children';
@@ -20,7 +21,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v72';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v73';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isContextInjection, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
@@ -46,7 +47,7 @@ import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v72';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v73';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Context injections are
  * Harness hidden rows in every work-detail mode. Suppressing a body does not
@@ -205,7 +206,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   const durableFlow = compactionPlacement(turnPresentation(entries, snapshot.conversation_id), compactions, entries, snapshot.transcript, history);
   const trailingCompaction = durableFlow.filter(node => node.kind === 'compaction' && BigInt(node.marker.head.transcript_anchor) >= BigInt(entries.at(-1)?.cursor ?? '0')).at(-1);
   const pendingMessages = !history?.window ? messages.filter(message => !durableIds.has(message.id) && message.role !== 'tool'
-    && !(message.role === 'user' && message.kind && message.kind !== 'message')) : [];
+    && !(message.role === 'user' && !isPlainMessageKind(message.kind))) : [];
   const activeOwner = snapshot.attempt ? { conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id, attempt_id_source: snapshot.attempt.attempt_id_source } : undefined;
   if (streaming && activeOwner) headOwners.current.values.set(streaming.message_id, activeOwner);
   for (const descriptor of snapshot.message_descriptors ?? []) if (descriptor.identity && descriptor.turn_process?.conversation_id === snapshot.conversation_id) headOwners.current.values.set(descriptor.identity, descriptor.turn_process);
@@ -341,7 +342,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   };
   // Context injections are hidden rows (Agent Status has its own anchored
   // annotation): only a not-yet-durable Goal continuation remains here.
-  const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isContextInjection(message));
+  const currentContext = messages.filter(message => message.role === 'user' && !isPlainMessageKind(message.kind) && !durableIds.has(message.id) && !isContextInjection(message));
   const runningAttempt = !history?.window && !!snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? snapshot.attempt : undefined;
   const latestTurn = snapshot.transcript.statistics?.latest_turn;
   const startedAt = runningAttempt && (latestTurn?.attempt_id != null && latestTurn.attempt_id === runningAttempt.attempt_id ? latestTurn.started_at
@@ -392,7 +393,9 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     {history?.error && <p role="alert">{history.error}</p>}
     {withProcessSpacing(nodes.map(node => {
       if (node.kind === 'accepted') {
-        const value = node.submission, files = value.content.filter(block => block.type === 'upload').length;
+        const value = node.submission;
+        if (!value.content) return null; // Identity-only repair cannot invent a provisional body.
+        const files = value.content.filter(block => block.type === 'upload').length;
         const text = value.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
         return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
           other={<UserMessage label={tx('agent:message.your-message')} attachments={files ? <MessageFile name={tx(files === 1 ? 'agent:attachments.one' : 'agent:attachments.other', { n: files })}/> : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>}/></div>;

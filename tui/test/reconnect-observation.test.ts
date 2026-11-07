@@ -15,7 +15,7 @@ async function connection(authority='fixture-app-server-authority') {
  return {transport,client,host:new AppServerHost({client,ownership:'external'})};
 }
 
-function readDomains(cursor: string, conversationId: string): import('../../protocol/app-server/v72.ts').RuntimeClientEvent {
+function readDomains(cursor: string, conversationId: string): import('../../protocol/app-server/v73.ts').RuntimeClientEvent {
  const cut=checkpoint(snapshot({conversation_id:conversationId}),cursor);
  return {type:'projection_transition',events:[{type:'read_domains_updated',trace:{records:[]},transcript:{entries:[]},occupancy:null,todos:null}],
    metadata:{read_cut:cut.read_cut,collections:cut.collections,content:cut.content}};
@@ -28,9 +28,9 @@ test('T17 reconnect subscribes from locally Applied with matching Runtime identi
  old.client.close();
  const current=await connection();t.after(()=>current.client.close());
  const attaching=current.host.attach(old.session.sessionId,old.session.nodeId,old.session);
- const attach=await nextRequest(current,'session/attach');
+ const attach=await nextRequest(current,'thread/resume');
  const target={...old.target,attachment_id:'new-attachment'};
- current.transport.respond(attach.id,{type:'attached',target,attachment_kind:'controller',observation_source:'live',configuration_revision:'0'});
+ current.transport.respond(attach.id,{type:'attached',target,attachment_kind:'writable',observation_source:'live',configuration_revision:'0'});
  const subscribe=await nextRequest(current,'session/subscribe');
  assert.equal(current.transport.transportCount('session/checkpoint'),0);
  assert.equal((subscribe.params as {after_cursor:string}).after_cursor,'1');
@@ -47,9 +47,9 @@ test('T18 changed Runtime incarnation requires a fresh checkpoint before followi
  const old=await harness();t.after(()=>old.client.close());old.client.close();
  const current=await connection();t.after(()=>current.client.close());
  const attaching=current.host.attach(old.session.sessionId,old.session.nodeId,old.session);
- const attach=await nextRequest(current,'session/attach');
+ const attach=await nextRequest(current,'thread/resume');
  const target={...old.target,attachment_id:'new-incarnation',runtime_incarnation:'2'};
- current.transport.respond(attach.id,{type:'attached',target,attachment_kind:'controller',observation_source:'live',configuration_revision:'0'});
+ current.transport.respond(attach.id,{type:'attached',target,attachment_kind:'writable',observation_source:'live',configuration_revision:'0'});
  const read=await nextRequest(current,'session/checkpoint');
  assert.equal(current.transport.transportCount('session/subscribe'),0);
  current.transport.respond(read.id,{type:'checkpoint',checkpoint:checkpoint(snapshot(),'9')});
@@ -68,9 +68,9 @@ test('T18 a restarted server cannot reuse a prior Applied cursor even when Runti
  assert.equal(old.session.state.cursor,'1');old.client.close();
  const current=await connection('restarted-server-authority');t.after(()=>current.client.close());
  const attaching=current.host.attach(old.session.sessionId,old.session.nodeId,old.session);
- const attach=await nextRequest(current,'session/attach');
+ const attach=await nextRequest(current,'thread/resume');
  const target={...old.target,attachment_id:'new-process-same-counter'};
- current.transport.respond(attach.id,{type:'attached',target,attachment_kind:'controller',observation_source:'live',configuration_revision:'0'});
+ current.transport.respond(attach.id,{type:'attached',target,attachment_kind:'writable',observation_source:'live',configuration_revision:'0'});
  const read=await nextRequest(current,'session/checkpoint');
  assert.equal(current.transport.transportCount('session/subscribe'),0);
  current.transport.respond(read.id,{type:'checkpoint',checkpoint:checkpoint(snapshot(),'0')});

@@ -4,7 +4,7 @@ async function attach(page: Page, width: number, nested = false) {
   await page.setViewportSize({ width, height: 1000 });
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
   await page.goto(fixture + (nested ? '&nested-subagents' : ''));
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('thread/resume'); f.resumeCatalog(); });
   if (width < 600) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await expect(page.getByRole('button', { name: 'Subagents', exact: true })).toBeVisible();

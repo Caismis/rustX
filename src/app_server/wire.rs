@@ -558,6 +558,7 @@ macro_rules! envelope {
 envelope!(super::protocol::Request);
 envelope!(super::protocol::Response);
 envelope!(super::protocol::Notification);
+envelope!(super::protocol::ServerRequest);
 // The private Host carrier uses the same exact attachment identities as the
 // ordinary protocol, without adding its operation to the public Method space.
 envelope!(super::product_host::FileRead);
@@ -573,6 +574,9 @@ pub(super) fn protocol_schema() -> Value {
     let _ = generator.subschema_for::<crate::durable::observation::WorkflowTraceNode>();
     let _ = generator.subschema_for::<crate::runtime_client::RuntimeClientModelName>();
     let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
+    let _ = generator.subschema_for::<crate::runtime::interaction::InteractionResponse>();
+    let _ = generator.subschema_for::<super::protocol::HostToolResponse>();
+    let _ = generator.subschema_for::<super::protocol::ServerOutput>();
     // Assign envelope-owned names first; the chunked report shares domain type names.
     let _ = generator.root_schema_for::<super::protocol::ProtocolMessage>();
     let _ =
@@ -699,7 +703,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v72.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v73.ts"),
         )
         .unwrap();
         for domain in [

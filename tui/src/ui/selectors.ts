@@ -321,7 +321,7 @@ export class SelectorSurfaces {
     const launch = this.#opener.launch;
     const noAccess = this.#port.host().ownership === "owned_child"
       ? "the App Server did not grant delivery access to this connection"
-      : "this connection holds no delivery access; reconnect with --delivery-access-token-file";
+      : "this connection is not ready; reconnect to the App Server";
     const availability: DeliveryAvailability = {
       save: !session.deliveryAccess ? noAccess : undefined,
       open: !session.deliveryAccess ? noAccess

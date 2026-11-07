@@ -249,6 +249,30 @@ pub(crate) fn select_tools(
     // allowlist), but it must never hide an identity collision with a
     // runtime-owned protocol name.
     for registration in available.iter().chain(extensions) {
+        if let crate::tools::ToolOrigin::Host { namespace, name } = &registration.definition.origin
+        {
+            for other in available.iter().chain(extensions) {
+                if other.definition.id == registration.definition.id {
+                    continue;
+                }
+                let (other_namespace, other_name) = match &other.definition.origin {
+                    crate::tools::ToolOrigin::Builtin => (None, other.definition.name.as_str()),
+                    crate::tools::ToolOrigin::Mcp { server_id } => {
+                        (Some(server_id.as_str()), other.definition.name.as_str())
+                    }
+                    crate::tools::ToolOrigin::ManagedPython { package } => {
+                        (Some(package.as_str()), other.definition.name.as_str())
+                    }
+                    crate::tools::ToolOrigin::Host { namespace, name } => {
+                        (namespace.as_deref(), name.as_str())
+                    }
+                };
+                if namespace.as_deref() == other_namespace && name == other_name {
+                    return Err("Host Tool collides with an effective capability identity".into());
+                }
+            }
+        }
+
         // Validate each available capability even when activation hides it.
         // A one-entry registry reuses native registration validation without
         // treating same-name, source-qualified available tools as collisions.

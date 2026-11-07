@@ -278,7 +278,7 @@ it("source notices never reach an attached Session's conversation", async () => 
   h.transport.notify(notification("configuration/sourceRepairChanged", { target: { kind: "user" }, receipt: receipt(), sequence: "1" }));
   assert.deepEqual(h.session.state, before);
   assert.equal(h.host.sourceRepairs()[0]?.receipt?.id, "receipt-user-1");
-  for (const method of ["turn/start", "turn/steer"]) assert.equal(h.transport.transportCount(method), 0);
+  for (const method of ["inbound/queue", "turn/steer"]) assert.equal(h.transport.transportCount(method), 0);
 });
 
 // The repair status line belongs to one App Server authority.
@@ -977,7 +977,7 @@ async function answerRead(harnessed: Awaited<ReturnType<typeof harness>>): Promi
 /** Inspection only: the connection carried reads and nothing else. */
 function assertReadOnly(harnessed: Awaited<ReturnType<typeof harness>>) {
   const methods = new Set(harnessed.transport.log.requests.map(request => request.method));
-  for (const method of methods) assert.ok(["initialize", "session/attach", "session/checkpoint", "session/subscribe", "session/summary", "session/configuration", "session/settings", "configuration/sourcesRead", "configuration/sourceValueRead"].includes(method), method);
+  for (const method of methods) assert.ok(["initialize", "session/read", "session/node", "thread/resume", "session/checkpoint", "session/subscribe", "session/summary", "session/configuration", "session/settings", "configuration/sourcesRead", "configuration/sourceValueRead"].includes(method), method);
 }
 
 function body(outcome: Awaited<ReturnType<CommandDispatcher["submit"]>>): string {

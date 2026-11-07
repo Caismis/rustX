@@ -1582,7 +1582,7 @@ async fn live_catalog_busy_frontier_defers_existing_admission_without_parking_co
         super::super::gate_entered(&admission).await;
         let frontier = Arc::new(Gate::default());
         let release_frontier = frontier.arm_scoped();
-        let lifecycle = runtime.title_lifecycle();
+        let lifecycle = runtime.lifecycle();
         let holding = frontier.clone();
         let held =
             tokio::task::spawn_blocking(move || lifecycle.with_running_commit(|| holding.enter()));

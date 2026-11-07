@@ -53,7 +53,7 @@ test('Chinese new conversation preserves the user draft and localizes composer c
   await expect(page.getByRole('listbox', { name: '模型', exact: true })).toBeVisible();
   await page.getByRole('option', { name: 'fixture/model', exact: true }).click();
   await expect(input).toHaveValue('');
-  expect(await page.evaluate(() => (window as unknown as { rustxNativeRequests(): { method: string }[] }).rustxNativeRequests().filter(request => request.method === 'session/create'))).toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as { rustxNativeRequests(): { method: string }[] }).rustxNativeRequests().filter(request => request.method === 'thread/start'))).toEqual([]);
 });
 
 test('Chinese approval localizes actions while preserving the native request reason', async ({ page }) => {

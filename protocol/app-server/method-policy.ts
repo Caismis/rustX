@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v72.ts';
+import type { Request1 } from './v73.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -150,7 +150,12 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   // Durable identity creation performs no runtime/MCP preparation.
   'mcp/draftPrepare': { effect: 'connection_local' },
   'mcp/draftCancel': { effect: 'connection_local', lane: 'control' },
-  'session/create': { effect: 'side_effecting', lane: 'metadata' },
+  'thread/read': {effect:'read',lane:'metadata'},
+  'thread/list': {effect:'read',lane:'metadata'},
+  'thread/name/set': {effect:'side_effecting',lane:'metadata'},
+  'thread/archive': {effect:'side_effecting',lane:'metadata'},
+  'thread/unarchive': {effect:'side_effecting',lane:'metadata'},
+  'thread/start': { effect: 'side_effecting', lane: 'metadata' },
   // Exact inert metadata needed before submission intent and attachment.
   'session/read': { effect: 'read', lane: 'metadata' },
   'session/name': { effect: 'side_effecting' },
@@ -159,14 +164,14 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/nodeValueRead': { effect: 'read' },
   'session/nodeOriginHistory': { effect: 'read' },
   'session/boundaries': { effect: 'read' },
-  'session/fork': { effect: 'side_effecting' },
+  'thread/fork': { effect: 'side_effecting' },
   'session/branch': { effect: 'side_effecting' },
   'session/deletePreview': { effect: 'read' },
   'session/delete': { effect: 'side_effecting' },
   'session/recoverDeletion': { effect: 'side_effecting' },
   // Native initialization and its submission-triggered deadline own this wait.
   // Before submission an attachment may legitimately remain pending indefinitely.
-  'session/attach': { effect: 'side_effecting', lane: 'attachment', unbounded: true },
+  'thread/resume': { effect: 'side_effecting', lane: 'attachment', unbounded: true },
   // First Send must reach native while its attachment is still preparing.
   'session/submissionIntent': { effect: 'side_effecting', lane: 'control' },
   'session/retryInitialization': { effect: 'side_effecting', lane: 'control' },
@@ -182,11 +187,11 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/subscribe': { effect: 'connection_local' },
   'turn/start': { effect: 'side_effecting' },
   'turn/steer': { effect: 'side_effecting' },
+  'inbound/submissionLookup': {effect:'read'},
+  'inbound/queue': { effect: 'side_effecting' },
   'inbound/edit': { effect: 'side_effecting' },
   'inbound/remove': { effect: 'side_effecting' },
-  'turn/cancel': { effect: 'side_effecting', lane: 'control' },
-  'interaction/respond': { effect: 'side_effecting' },
-  'interaction/cancel': { effect: 'side_effecting', lane: 'control' },
+  'turn/interrupt': { effect: 'side_effecting', lane: 'control' },
   'session/settings': { effect: 'read', lane: 'metadata' },
   'session/settingsValueRead': { effect: 'read' },
   'session/configuration': { effect: 'read' },

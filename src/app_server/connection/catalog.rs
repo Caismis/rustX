@@ -17,6 +17,56 @@ impl AppServerConnection {
         request_owner: ServerOperation,
     ) -> Result<MethodResult, RpcError> {
         match method {
+            Method::ThreadRead { thread_id } => Ok(MethodResult::Thread {
+                thread: self
+                    .sessions
+                    .thread(&thread_id)
+                    .await
+                    .map_err(session_error)?,
+            }),
+            Method::ThreadList {
+                offset,
+                limit,
+                archived,
+            } => {
+                let (data, next_offset) = self
+                    .sessions
+                    .threads(offset, limit, archived)
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::Threads { data, next_offset })
+            }
+            Method::ThreadName { thread_id, name } => Ok(MethodResult::Thread {
+                thread: self
+                    .sessions
+                    .update_thread(
+                        &thread_id,
+                        crate::local_runtime::session::threads::ThreadUpdate::Name(name),
+                    )
+                    .await
+                    .map_err(session_error)?,
+            }),
+            method @ (Method::ThreadArchive { .. } | Method::ThreadUnarchive { .. }) => {
+                let (thread_id, archived) = match method {
+                    Method::ThreadArchive { thread_id } => (thread_id, true),
+                    Method::ThreadUnarchive { thread_id } => (thread_id, false),
+                    _ => unreachable!("archive methods"),
+                };
+                let manager = self.host.manager().clone();
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                tokio::spawn(async move {
+                    let _request = request_owner;
+                    let result = manager
+                        .archive_thread(thread_id, archived)
+                        .await
+                        .map(|thread| MethodResult::Thread { thread })
+                        .map_err(manager_error);
+                    let _ = sender.send(result);
+                });
+                receiver
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?
+            }
             Method::SessionDelete {
                 session_id,
                 expected_target_revision,
@@ -121,11 +171,15 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?,
             }),
-            Method::SessionCreate { settings, .. } => {
+            Method::SessionCreate {
+                settings,
+                dynamic_tools,
+                ..
+            } => {
                 let result = self
                     .host
                     .manager()
-                    .create_session(settings)
+                    .create_thread(settings, dynamic_tools)
                     .await
                     .map_err(session_error)?;
                 transition(result, &self.sessions).await
@@ -286,6 +340,10 @@ pub(super) async fn transition(
         .map_err(|_| domain(ErrorData::OutcomeUnknown))?;
     let editor = crate::app_server::editor_read::locator(result.session.id.clone(), &node);
     Ok(MethodResult::SessionTransition {
+        thread: sessions
+            .thread(&result.session.active_conversation_id)
+            .await
+            .map_err(session_error)?,
         session: result.session,
         editor,
         durability_diagnostic: result

@@ -1,7 +1,7 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { replaceTranscript } from './transcript';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v72';
+import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v73';
 import type { ObservationPhase } from '../../../protocol/app-server/observation';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { CancellationTarget, ClientView, CompactionRequestEvidence, ConnectionRequest, GoalControlOutcome, InboundControlOutcome, SessionView } from './contracts';
@@ -156,9 +156,9 @@ export class SessionControls {
   cancellationTarget(id: string): CancellationTarget | undefined {
     const view = this.port.state().views[id], attempt = view?.snapshot?.attempt;
     // This proof owns the live attachment even when its observation source is
-    // unavailable. The coordinator selects the current Attempt at dispatch.
+    // unavailable. Dispatch keeps the retained exact Attempt precondition.
     if (!this.port.observesAttachment(id, view?.attachmentObservation) || !this.port.controlReady() || view?.attachmentIntent !== 'wanted'
-      || !view.target || view.deleting || this.cancellationPending(id)) return;
+      || !view.target || !attempt?.attempt_id || view.deleting || this.cancellationPending(id)) return;
     if (this.port.observationPhase(id) === 'following' && (!attempt || attempt.attempt_id == null || !['admitted','running'].includes(attempt.phase.type)
       || view.snapshot?.shutting_down || view.snapshot?.durability_failure || view.snapshot?.pending_interactions?.length)) return;
     return { generation: this.port.state().generation, target: view.target, attemptId: attempt?.attempt_id ?? undefined, attachment: view.attachmentObservation };
@@ -166,7 +166,7 @@ export class SessionControls {
   private cancellationPending(id: string): boolean {
     const view = this.port.state().views[id], cancellation = view?.cancellation;
     // An acknowledgement cannot establish that its Attempt is still current
-    // while observation is unavailable. A later explicit gesture selects anew.
+    // while observation is unavailable. A later gesture retains the exact observed ID.
     return !!cancellation && (cancellation.status !== 'acknowledged'
       || this.port.observationPhase(id) === 'following' && cancellation.attemptId === view.snapshot?.attempt?.attempt_id);
   }
@@ -174,11 +174,11 @@ export class SessionControls {
     const { target, generation, attemptId, attachment } = expected, id = target.session_id;
     const current = () => this.port.current(generation) && this.port.controlReady()
       && this.port.observes(id, attachment) && sameTarget(this.port.state().views[id]?.target, target);
-    if (!current() || this.cancellationPending(id)) return;
+    if (!current() || !attemptId || this.cancellationPending(id)) return;
     const operation = { attemptId, status: 'in-flight' as const };
     this.port.setSession(id, { cancellation: operation });
     try {
-      const accepted = await this.port.request({ method: 'turn/cancel', params: { target } }, 'cancellation_accepted', undefined,
+      const accepted = await this.port.request({ method: 'turn/interrupt', params: { target, turnId:attemptId } }, 'cancellation_accepted', undefined,
         () => current() && this.port.state().views[id]?.cancellation === operation);
       if (current() && this.port.state().views[id].cancellation === operation) {
         this.port.setSession(id, { cancellation: { attemptId: accepted.attempt_id, status: 'acknowledged' } });

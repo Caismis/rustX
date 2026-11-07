@@ -62,7 +62,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(resident.loaded).toBe(1);
     await closeSessionView(page, id);
     await expect.poll(async () => (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
-    const attached = await remoteA.client.call('session/attach', { session_id: id }, 'attached');
+    const attached = await remoteA.client.call('thread/resume', {threadId:(await remoteA.readSession(id)).active_conversation_id}, 'attached');
     const baselineCheckpoint=await remoteA.client.call('session/checkpoint',{target:attached.target},'checkpoint');
     await remoteA.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_receipt');
     const refreshed = await remoteA.client.call('session/checkpoint', { target: attached.target }, 'checkpoint');

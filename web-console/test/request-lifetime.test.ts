@@ -1,24 +1,24 @@
 import { jobReceipt, compactReceipt, readingWindow } from './fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v72';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v73';
 import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { Server, snapshot } from './fixture';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
 const servers: Server[] = [];
 afterEach(() => { for (const s of servers.splice(0)) s.client.disconnect(); vi.useRealTimers(); });
 async function connected() { const s = new Server(); servers.push(s); await s.attached('A'); return s; }
-type DomainMethod = 'turn/cancel' | 'agent/wait' | 'job/wait' | 'agent/interrupt' | 'job/cancel' | 'agent/sendMessage' | 'context/compact';
+type DomainMethod = 'turn/interrupt' | 'agent/wait' | 'job/wait' | 'agent/interrupt' | 'job/cancel' | 'agent/sendMessage' | 'context/compact';
 function operation(s: Server, method: DomainMethod): Request1 {
   const target = s.client.target('A');
   if (method === 'context/compact') return { method, params: { target, request_id: 'compact-a' } };
-  if (method === 'turn/cancel') return { method, params: { target } };
+  if (method === 'turn/interrupt') return { method, params: { target, turnId:'attempt-A' } };
   return method === 'job/wait' || method === 'job/cancel' ? { method, params: { target, job_id: 'job-a' } }
     : method === 'agent/sendMessage' ? { method, params: { target, agent_id: 'agent-a', attachments: [], message: 'input' } }
     : { method, params: { target, agent_id: 'agent-a' } };
 }
 function result(method: DomainMethod): MethodResult {
   if (method === 'context/compact') return compactReceipt({ compaction_count: 1, compaction_in_progress: false });
-  if (method === 'turn/cancel') return { type: 'cancellation_accepted', attempt_id: 'attempt-A' };
+  if (method === 'turn/interrupt') return { type: 'cancellation_accepted', attempt_id: 'attempt-A' };
   if (method === 'job/cancel') return { type: 'job_cancellation_accepted', job_id: 'job-a' };
   if (method === 'agent/interrupt') return { type: 'agent_interruption_accepted', agent_id: 'agent-a', activation_id: 'activation-b' };
   if (method === 'job/wait') return jobReceipt({ job_id: 'job-a', tool_id: 'bash', tool_name: 'bash', state: 'cancelled' });
@@ -60,12 +60,12 @@ it('retiring a child observation cancels its exact native read, while leaving Ag
 });
 it.each([25_000, 61_000])('attachment remains pending for %i ms before first Send and ten seconds of native readiness wait', async beforeSubmission => {
   const s = new Server(); servers.push(s); await s.connect();
-  s.held.add('session/attach'); vi.useFakeTimers();
+  s.held.add('thread/resume'); vi.useFakeTimers();
   const opening = s.client.attach('A'); void opening.catch(() => {});
-  const attachment = await s.waitFor('session/attach', 1);
+  const attachment = await s.waitFor('thread/resume', 1);
   await vi.advanceTimersByTimeAsync(beforeSubmission);
   expect(s.client.getSnapshot().connection).toBe('connected');
-  expect(s.requests.filter(row => ['session/submissionIntent', 'turn/start'].includes(row.request.method))).toEqual([]);
+  expect(s.requests.filter(row => ['session/submissionIntent', 'inbound/queue'].includes(row.request.method))).toEqual([]);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
   const port = firstSubmitPort(s.client, s.workspaceHost, () => true, () => () => {}, true);
   const submitted = port.readExisting!('A'); void submitted.catch(() => {});
@@ -75,27 +75,27 @@ it.each([25_000, 61_000])('attachment remains pending for %i ms before first Sen
   expect(s.client.getSnapshot().connection).toBe('connected');
   expect(s.client.getSnapshot().views.A.attachment).toBe('attaching');
   expect(s.client.getSnapshot().uncertain).toEqual([]);
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toEqual([]);
   s.reply(attachment); await opening;
   await expect(submitted).resolves.toEqual({ id: 'A', node: 'node-A', conversation: 'conversation-A' });
   await s.client.send('A', 'one authorized first input');
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
-  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
 });
 
 it('the attachment lifecycle lane rejects its thirty-third waiter without starving ordinary or metadata requests', async () => {
   const s = new Server(); servers.push(s); await s.connect();
-  s.held.add('session/attach');
+  s.held.add('thread/resume');
   const openings: Promise<void>[] = [];
   for (let index = 0; index < 32; index++) {
     const id = `cold-${index}`; s.snapshots.set(id, snapshot(id));
     const opening = s.client.attach(id); void opening.catch(() => {});
     openings.push(opening);
-    await s.waitFor('session/attach', index + 1);
+    await s.waitFor('thread/resume', index + 1);
   }
   s.snapshots.set('overflow', snapshot('overflow'));
   await expect(s.client.attach('overflow')).rejects.toThrow('attachment capacity');
-  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(32);
+  expect(s.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(32);
   await expect(s.client.request({ method: 'server/info', params: {} }, 'server_info')).resolves.toMatchObject({ type: 'server_info' });
   await expect(s.client.request({ method: 'session/settings', params: { session_id: 'cold-0' } }, 'settings')).resolves.toMatchObject({ type: 'settings' });
   expect(s.loaded.size).toBe(0);
@@ -105,20 +105,20 @@ it('the attachment lifecycle lane rejects its thirty-third waiter without starvi
 
 it('real attachment response loss remains one uncertain mutation after an unbounded initialization wait', async () => {
   const s = new Server(); servers.push(s); await s.connect();
-  s.held.add('session/attach'); vi.useFakeTimers();
+  s.held.add('thread/resume'); vi.useFakeTimers();
   const opening = s.client.attach('A');
   const rejected = expect(opening).rejects.toBeInstanceOf(OutcomeUncertain);
-  const request = await s.waitFor('session/attach', 1);
+  const request = await s.waitFor('thread/resume', 1);
   await vi.advanceTimersByTimeAsync(120_000);
   expect(s.client.getSnapshot().connection).toBe('connected');
   s.commit(request); // Native claim committed; acknowledgement is deliberately lost.
   s.socket.close(); await rejected;
-  expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method: 'session/attach', sessionId: 'A' })]);
-  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
+  expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method: 'thread/resume', sessionId: 'A' })]);
+  expect(s.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toEqual([]);
 });
 
-it.each([...methods, 'turn/cancel', 'context/compact'] as const)('%s owns its lifetime without incidental traffic', async method => {
+it.each([...methods, 'turn/interrupt', 'context/compact'] as const)('%s owns its lifetime without incidental traffic', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();
   const settled = vi.fn(); const response = result(method);
   const work = s.client.request(operation(s, method), response.type).then(settled);
@@ -140,7 +140,7 @@ it.each(['agent/wait', 'job/wait', 'context/compact'] as const)('%s at full capa
   expect(s.requests.filter(row=>row.request.method===method)).toHaveLength(6);
   for(let i=0;i<4;i++){s.cursor++;s.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:s.client.target('A'),cursor:String(s.cursor),event:{type:'goal_changed',view:{current:null}}}});await vi.advanceTimersByTimeAsync(30_001);}
   expect(settled).not.toHaveBeenCalled(); expect(s.client.getSnapshot().connection).toBe('connected');
-  for (const control of ['turn/cancel'] as const) {
+  for (const control of ['turn/interrupt'] as const) {
     s.handlers.set(control, () => result(control));
     await expect(s.client.request(operation(s, control), result(control).type)).resolves.toEqual(result(control));
   }
@@ -149,11 +149,11 @@ it.each(['agent/wait', 'job/wait', 'context/compact'] as const)('%s at full capa
   const queuedRequest=await s.waitFor(method,7);s.socket.success(queuedRequest,response);await Promise.all([...waits,queued,inspect]);expect(settled).toHaveBeenCalledTimes(6);
 });
 it('T20 six ordinary waits leave both finite control slots independent',async()=>{
- const s=await connected();s.held.add('agent/wait');s.held.add('turn/cancel');
+ const s=await connected();s.held.add('agent/wait');s.held.add('turn/interrupt');
  const work=Array.from({length:6},()=>s.client.request(operation(s,'agent/wait'),'agent_wait'));
- const controls=Array.from({length:2},()=>s.client.request(operation(s,'turn/cancel'),'cancellation_accepted'));
+ const controls=Array.from({length:2},()=>s.client.request(operation(s,'turn/interrupt'),'cancellation_accepted'));
  const queued=s.client.request(operation(s,'agent/wait'),'agent_wait');void queued.catch(()=>{});expect(s.requests.filter(row=>row.request.method==='agent/wait')).toHaveLength(6);
- await expect(s.client.request(operation(s,'turn/cancel'),'cancellation_accepted')).rejects.toThrow('control capacity');
+ await expect(s.client.request(operation(s,'turn/interrupt'),'cancellation_accepted')).rejects.toThrow('control capacity');
  for(const {request}of s.requests.filter(row=>s.held.has(row.request.method)))s.socket.success(request,result(request.method as DomainMethod));
  const extra=await s.waitFor('agent/wait',7);s.socket.success(extra,result('agent/wait'));await Promise.all([...work,...controls,queued]);expect(s.client.getSnapshot().connection).toBe('connected');
 });
@@ -176,7 +176,7 @@ it.each(['conversation/changes', 'conversation/changeDiff'] as const)('%s shares
   expect(s.requests.filter(row => row.request.method === 'session/projections')).toHaveLength(0);
   expect(s.requests.filter(row => row.request.method === 'session/transcript')).toHaveLength(0);
   await expect(s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings')).resolves.toMatchObject({ type: 'settings' });
-  await expect(s.client.request(operation(s, 'turn/cancel'), 'cancellation_accepted')).resolves.toEqual(result('turn/cancel'));
+  await expect(s.client.request(operation(s, 'turn/interrupt'), 'cancellation_accepted')).resolves.toEqual(result('turn/interrupt'));
   expect(s.requests.filter(row => row.request.method === 'session/projections')).toHaveLength(0);
 
   // Each completed ordinary read releases exactly one slot. Neither metadata
@@ -209,7 +209,7 @@ it.each(['workflow/scheduled/getRecovery', 'workflow/scheduled/cancel', 'workflo
   expect(s.requests.filter(row => row.request.method === method)).toHaveLength(6);
   const queued = s.client.request(scheduled(6), 'scheduled_workflow_recovery'); void queued.catch(() => {});
   expect(s.requests.filter(row => row.request.method === method)).toHaveLength(6);
-  await expect(s.client.request(operation(s, 'turn/cancel'), 'cancellation_accepted')).resolves.toEqual(result('turn/cancel'));
+  await expect(s.client.request(operation(s, 'turn/interrupt'), 'cancellation_accepted')).resolves.toEqual(result('turn/interrupt'));
   expect(s.requests.filter(row => row.request.method === method)).toHaveLength(6);
   const first = await s.waitFor(method, 1); s.reply(first);
   await s.waitFor(method, 7);
@@ -230,8 +230,8 @@ it('two metadata requests bypass full ordinary capacity and release only their o
   const third = s.client.request({ method: 'session/read', params: { session_id: 'B' } }, 'session');
   expect(s.requests.filter(row => row.request.method === 'session/read')).toHaveLength(readCount + 1);
   expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(settingsCount + 1);
-  s.handlers.set('turn/cancel', () => result('turn/cancel'));
-  await s.client.request(operation(s, 'turn/cancel'), 'cancellation_accepted');
+  s.handlers.set('turn/interrupt', () => result('turn/interrupt'));
+  await s.client.request(operation(s, 'turn/interrupt'), 'cancellation_accepted');
   const firstRead = s.requests.filter(row => row.request.method === 'session/read').at(-1)!.request;
   s.reply(firstRead);
   const queuedRead = await s.waitFor('session/read', readCount + 2);
@@ -243,14 +243,14 @@ it('two metadata requests bypass full ordinary capacity and release only their o
   await Promise.all([first, second, third, ...waits]);
   expect(s.client.getSnapshot().connection).toBe('connected');
 });
-it.each(['session/read', 'session/settings', 'session/create'] as const)('%s retains its finite response deadline in the metadata lane', async method => {
+it.each(['session/read', 'session/settings', 'thread/start'] as const)('%s retains its finite response deadline in the metadata lane', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();
-  const work = method === 'session/create'
+  const work = method === 'thread/start'
     ? s.client.request({ method, params: { settings: { cwd: '/workspace/A' } } }, 'session_transition')
     : method === 'session/read'
       ? s.client.request({ method, params: { session_id: 'A' } }, 'session')
       : s.client.request({ method, params: { session_id: 'A' } }, 'settings');
-  const rejected = method === 'session/create'
+  const rejected = method === 'thread/start'
     ? expect(work).rejects.toBeInstanceOf(OutcomeUncertain)
     : expect(work).rejects.toThrow('Disconnected before a response');
   await vi.advanceTimersByTimeAsync(29_999);
@@ -258,7 +258,7 @@ it.each(['session/read', 'session/settings', 'session/create'] as const)('%s ret
   await vi.advanceTimersByTimeAsync(1);
   await rejected;
   expect(s.client.getSnapshot().connection).not.toBe('connected');
-  expect(s.client.getSnapshot().uncertain).toEqual(method === 'session/create' ? [expect.objectContaining({ method })] : []);
+  expect(s.client.getSnapshot().uncertain).toEqual(method === 'thread/start' ? [expect.objectContaining({ method })] : []);
 });
 it.each(['close', 'error'] as const)('socket %s settles operations once without replay or stale adoption', async failure => {
   const s = await connected(); for (const method of methods) s.held.add(method);
@@ -285,14 +285,14 @@ it('full wait and RPC lanes preserve controls and retired startup dispatch owner
   const admission = s.client.send('A', 'retained', [], 'send', undefined, () => current);
   const rejected = expect(admission).rejects.toThrow('before dispatch');
   expect(s.requests.filter(row=>row.request.method==='agent/wait')).toHaveLength(3);
-  for (const control of ['turn/cancel'] as const) {
+  for (const control of ['turn/interrupt'] as const) {
     s.handlers.set(control, () => result(control));
     await expect(s.client.request(operation(s, control), result(control).type)).resolves.toEqual(result(control));
   }
   current = false;
   for (const item of s.requests.filter(item => item.request.method === 'server/info').slice(-3)) s.reply(item.request);
   await Promise.all([...reads, rejected]);
-  expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
+  expect(s.requests.filter(item => item.request.method === 'inbound/queue')).toEqual([]);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
   expect(s.client.getSnapshot().connection).toBe('connected');
   for (const item of s.requests.filter(item => item.request.method === 'agent/wait')) s.socket.success(item.request, result('agent/wait'));

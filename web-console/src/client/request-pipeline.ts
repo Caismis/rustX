@@ -1,8 +1,8 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { ATTACHMENT_REQUEST_CAPACITY, hasResponseDeadline, requestEffect, requestLane } from '../../../protocol/app-server/method-policy';
 import { OutcomeUncertain, RequestAdmissionDeferred, RequestNotDispatched, RpcFailure } from './errors';
-import { interactionKey, type ClientView, type OperationAdmission, type SessionView, type Socket, type Submission, type UncertainOperation } from './contracts';
-import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v72';
+import { type ClientView, type OperationAdmission, type SessionView, type Socket, type Submission, type UncertainOperation } from './contracts';
+import type { MethodResult, Request, Request1, Response } from '../../../protocol/app-server/v73';
 
 interface Pending {
   /** Pure actor authority, evaluated after caller-owned admission callbacks. */
@@ -75,7 +75,7 @@ export class RequestPipeline {
   /** Current-generation turn/start and turn/steer requests of one Session. */
   inboundRequests(id: string): number {
     return [...this.pending.values()].filter(item =>
-      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.sessionId === id).length;
+      (item.request.method === 'turn/start' || item.request.method === 'turn/steer' || item.request.method === 'inbound/queue') && item.sessionId === id).length;
   }
   private capacityReleased() {
     ++this.admissionRevision;
@@ -91,7 +91,7 @@ export class RequestPipeline {
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T, acknowledged?: (result: Extract<MethodResult, { type: T }>) => void, dispatchCurrent?: (() => boolean) | OperationAdmission, observationSignal?: AbortSignal): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.port.socket() || (!this.port.initialized() && operation.method !== 'initialize')) throw new RequestNotDispatched('Connect and initialize first.');
-    if (['session/attach', 'session/detach', 'session/switchNode', 'session/delete', 'session/recoverDeletion'].includes(operation.method)
+    if (['thread/resume', 'session/detach', 'session/switchNode', 'session/delete', 'session/recoverDeletion'].includes(operation.method)
       && (typeof dispatchCurrent !== 'object' || !this.port.claimLifecycleAdmission(dispatchCurrent))) throw new RequestNotDispatched('Session lifecycle operations require actor admission.');
     // The Session actor owns control admission. Retained targets authorize only
     // lifecycle settlement; live reads and new effects require the exact committed
@@ -102,7 +102,7 @@ export class RequestPipeline {
       && operation.method !== 'session/detach' && operation.method !== 'session/switchNode') {
       const target = operation.params.target, id = target.session_id;
       const admission = this.port.state().views[id]?.attachmentObservation;
-      const current = () => (operation.method === 'turn/cancel' || operation.method === 'context/compact' || operation.method === 'auxiliary/cancel'
+      const current = () => (operation.method === 'turn/interrupt' || operation.method === 'context/compact' || operation.method === 'auxiliary/cancel'
         ? this.port.observes(id, admission)
         : this.port.controls(id, admission)) && sameTarget(admission?.target, target);
       if (!current()) throw new RequestNotDispatched('Attachment control authority was revoked.');
@@ -125,7 +125,7 @@ export class RequestPipeline {
     let abortObservation = () => {};
     const work = new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
-      const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id ?? undefined : undefined;
+      const sessionId = operation.method==='thread/resume' ? Object.values(this.port.state().views).find(view=>view.nodeConversationId===operation.params.threadId||view.target?.conversation_id===operation.params.threadId)?.id : 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id ?? undefined : undefined;
       this.pending.set(id, { request, sessionId, submittedWhileRunning: false, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
         const auxiliaryRead = ['auxiliary/status', 'auxiliary/result', 'auxiliary/submissionLookup'].includes(operation.method);
@@ -139,7 +139,7 @@ export class RequestPipeline {
       observationSignal?.addEventListener('abort', abortObservation, {once:true});
       if (observationSignal?.aborted) abortObservation();
 
-      if (operation.method === 'turn/start' || operation.method === 'turn/steer') this.port.inboundChanged(operation.params.target.session_id);
+      if (operation.method === 'turn/start' || operation.method === 'turn/steer' || operation.method === 'inbound/queue') this.port.inboundChanged(operation.params.target.session_id);
       this.pump();
     });
     const result = observationSignal ? await work.finally(() => observationSignal.removeEventListener('abort', abortObservation)) : await work;
@@ -225,7 +225,7 @@ export class RequestPipeline {
     this.capacityReleased();
     clearTimeout(pending.timer); pending.validation?.abort(); pending.validation = undefined;
     pending.reject(new RequestNotDispatched(cause));
-    if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') this.port.inboundChanged(pending.request.params.target.session_id);
+    if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer' || pending.request.method === 'inbound/queue') this.port.inboundChanged(pending.request.params.target.session_id);
   }
   private sendPending(pending: Pending) {
     const socket = this.port.socket(), generation = this.port.state().generation;
@@ -239,7 +239,7 @@ export class RequestPipeline {
     if (socket.readyState !== 1) { this.port.lose(generation); return; }
     // No external observer runs between this final proof and send invocation.
     // sent means transmission attempted, never native acceptance.
-    if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') {
+    if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer' || pending.request.method === 'inbound/queue') {
       const attempt = this.port.state().views[pending.request.params.target.session_id]?.snapshot?.attempt;
       pending.submittedWhileRunning = !!attempt && ['admitted', 'running'].includes(attempt.phase.type);
     }
@@ -275,9 +275,9 @@ export class RequestPipeline {
     }
     try {
       const operation = pending.request;
-      if (operation.method === 'turn/start' || operation.method === 'turn/steer') {
+      if (operation.method === 'turn/start' || operation.method === 'turn/steer' || operation.method === 'inbound/queue') {
         const target = operation.params.target;
-        const accepted = 'result' in value && value.result.type === 'inbound_accepted' && sameTarget(this.port.state().views[target.session_id]?.target, target)
+        const accepted = 'result' in value && (value.result.type === 'inbound_accepted' || value.result.type === 'turn_input_accepted') && sameTarget(this.port.state().views[target.session_id]?.target, target)
           ? { messageId: value.result.message_id, content: operation.params.content, submittedWhileRunning: pending.submittedWhileRunning } : undefined;
         // One publication hands request ownership to exact acknowledged identity.
         // Never publish a zero count before publishing the accepted MessageId.
@@ -304,7 +304,7 @@ export class RequestPipeline {
         uncertain.push({ id, method: pending.request.method, sessionId: pending.sessionId, generation,
           ...(pending.request.method === 'session/uploadPrepare' ? { uploadOperationId: pending.request.params.operation_id } : {}),
           ...(pending.request.method === 'context/compact' ? { compactionRequestId: pending.request.params.request_id } : {}),
-          ...('interaction' in params ? { interactionKey: interactionKey(params.interaction) } : {}),
+          ...('inputId' in params && 'target' in params ? {inputId:params.inputId,conversationId:params.target.conversation_id} : {}),
         });
         pending.reject(new OutcomeUncertain());
       } else pending.reject(pending.sent

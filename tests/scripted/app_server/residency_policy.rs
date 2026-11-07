@@ -1,29 +1,21 @@
 use super::*;
-use crate::app_server::host::{AppServerHost, HostAdmissionError, ServerLifecycle};
+use crate::app_server::host::{HostAdmissionError, ServerLifecycle};
 use crate::runtime::monotonic::ManualMonotonicClock;
 
-fn policy(f: &mut Fixture, limit: usize) -> Arc<ManualMonotonicClock> {
+async fn policy(count: usize, limit: usize) -> (Fixture, Arc<ManualMonotonicClock>) {
     let clock = Arc::new(ManualMonotonicClock::new());
-    f.manager.clock = clock.clone();
-    let mut state = f.manager.registry.0.lock().unwrap();
-    state.policy.max_resident_runtimes = limit;
-    state.policy.idle_grace_ms = 100;
-    drop(state);
-    f.host = AppServerHost::new(
-        f.manager.clone(),
-        crate::local_runtime::app_server_policy::AppServerPolicy {
-            max_resident_runtimes: limit,
-            idle_grace_ms: 100,
-            ..Default::default()
-        },
-    );
-    clock
+    let policy = crate::local_runtime::app_server_policy::AppServerPolicy {
+        max_resident_runtimes: limit,
+        idle_grace_ms: 100,
+        ..Default::default()
+    };
+    let fixture = Fixture::with_owner_policy(count, clock.clone(), policy).await;
+    (fixture, clock)
 }
 
 #[tokio::test]
 async fn quota_counts_loading_loaded_unloading_and_single_flight() {
-    let mut f = Fixture::new().await;
-    policy(&mut f, 1);
+    let (f, _clock) = policy(2, 1).await;
     let id = f.id(0).await;
     let probe = f.manager.probe(&id);
     probe.before_compose.arm();
@@ -62,8 +54,7 @@ async fn quota_counts_loading_loaded_unloading_and_single_flight() {
 
 #[tokio::test]
 async fn failed_composition_releases_reservation() {
-    let mut f = Fixture::new().await;
-    policy(&mut f, 1);
+    let (f, _clock) = policy(2, 1).await;
     f.manager
         .probe(&f.id(0).await)
         .panic_once
@@ -76,8 +67,7 @@ async fn failed_composition_releases_reservation() {
 
 #[tokio::test]
 async fn idle_grace_detach_eviction_cold_resume_and_session_independence() {
-    let mut f = Fixture::new().await;
-    let clock = policy(&mut f, 2);
+    let (f, clock) = policy(2, 2).await;
     let a = f.load(0).await.unwrap().unwrap();
     let b = f.load(1).await.unwrap().unwrap();
     let live = a.inspect_runtime().unwrap();
@@ -158,8 +148,7 @@ async fn idle_grace_detach_eviction_cold_resume_and_session_independence() {
 
 #[tokio::test]
 async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
-    let mut f = Fixture::new().await;
-    let clock = policy(&mut f, 2);
+    let (f, clock) = policy(2, 2).await;
     let a = f.load(0).await.unwrap().unwrap();
     f.manager.reap_idle();
     clock.advance(100);
@@ -219,15 +208,13 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
 
 #[tokio::test]
 async fn external_attachment_capacity_is_independent_and_released_on_detach() {
-    let mut f = Fixture::new().await;
-    policy(&mut f, 2);
-    let host = AppServerHost::new(
-        f.manager.clone(),
-        crate::local_runtime::app_server_policy::AppServerPolicy {
+    let (f, _clock) = policy(2, 2).await;
+    f.manager
+        .bind_process_policy(crate::local_runtime::app_server_policy::AppServerPolicy {
             max_external_attachments: 1,
             ..Default::default()
-        },
-    );
+        });
+    let host = f.host.clone();
     let a = f.load(0).await.unwrap().unwrap();
     let b = f.load(1).await.unwrap().unwrap();
     let capacity = host.admit_attachment().unwrap();
@@ -249,8 +236,7 @@ async fn external_attachment_capacity_is_independent_and_released_on_detach() {
 async fn idle_claim_has_both_attach_and_inbound_winners_at_publication() {
     bounded(async {
         for attachment_wins in [false, true] {
-            let mut f = Fixture::new().await;
-            let clock = policy(&mut f, 2);
+            let (f, clock) = policy(2, 2).await;
             let a = f.load(0).await.unwrap().unwrap();
             let native = a.inspect_runtime().unwrap();
             while native.idle_epoch().is_err() {
@@ -278,8 +264,7 @@ async fn idle_claim_has_both_attach_and_inbound_winners_at_publication() {
             drop(attachment);
             f.close().await;
         }
-        let mut f = Fixture::new().await;
-        let clock = policy(&mut f, 2);
+        let (f, clock) = policy(2, 2).await;
         let a = f.load(0).await.unwrap().unwrap();
         let native = a.inspect_runtime().unwrap();
         while native.idle_epoch().is_err() {
@@ -320,8 +305,7 @@ async fn idle_claim_has_both_attach_and_inbound_winners_at_publication() {
 #[tokio::test]
 async fn active_turn_after_detach_starts_grace_only_after_settlement() {
     bounded(async {
-        let mut f = Fixture::with_session_count(None, 1).await;
-        let clock = policy(&mut f, 2);
+        let (f, clock) = policy(1, 2).await;
         let a = f.load(0).await.unwrap().unwrap();
         let native = a.inspect_runtime().unwrap();
         let (attached, external) = a.client().attach().unwrap();
@@ -357,8 +341,7 @@ async fn active_turn_after_detach_starts_grace_only_after_settlement() {
 
 #[tokio::test]
 async fn drain_reports_failure_and_still_settles_sibling_without_releasing_failed_slot() {
-    let mut f = Fixture::new().await;
-    policy(&mut f, 2);
+    let (f, _clock) = policy(2, 2).await;
     let a = f.load(0).await.unwrap().unwrap();
     let b = f.load(1).await.unwrap().unwrap();
     a.inspect_runtime().unwrap().fail_residency_settlement();
@@ -393,8 +376,7 @@ async fn drain_reports_failure_and_still_settles_sibling_without_releasing_faile
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn accepted_inbound_before_attempt_admission_prevents_idle_claim() {
     bounded(async {
-        let mut f = Fixture::with_session_count(None, 1).await;
-        let clock = policy(&mut f, 2);
+        let (f, clock) = policy(1, 2).await;
         let a = f.load(0).await.unwrap().unwrap();
         let native = a.inspect_runtime().unwrap();
         while native.idle_epoch().is_err() {
@@ -421,8 +403,7 @@ async fn accepted_inbound_before_attempt_admission_prevents_idle_claim() {
 
 #[tokio::test]
 async fn inactive_goal_can_idle_unload_and_policy_is_user_only() {
-    let mut f = Fixture::new().await;
-    let clock = policy(&mut f, 2);
+    let (f, clock) = policy(2, 2).await;
     std::fs::write(
         f.workspaces[0].join("rustx.toml"),
         "[agent.plugins.goal]\nenabled = true\n",
@@ -454,8 +435,7 @@ async fn inactive_goal_can_idle_unload_and_policy_is_user_only() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_distinct_loads_cannot_oversubscribe_one_slot() {
-    let mut f = Fixture::new().await;
-    policy(&mut f, 1);
+    let (f, _clock) = policy(2, 1).await;
     let (a, b) = tokio::join!(f.load(0), f.load(1));
     let results = [a.unwrap(), b.unwrap()];
     assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
@@ -473,8 +453,7 @@ async fn concurrent_distinct_loads_cannot_oversubscribe_one_slot() {
 #[tokio::test]
 async fn one_reaper_timer_wakes_from_manual_clock_and_unloads_automatically() {
     bounded(async {
-        let mut f = Fixture::with_session_count(None, 1).await;
-        let clock = policy(&mut f, 2);
+        let (f, clock) = policy(1, 2).await;
         let a = f.load(0).await.unwrap().unwrap();
         let native = a.inspect_runtime().unwrap();
         while native.idle_epoch().is_err() {
@@ -517,8 +496,7 @@ async fn goal_fixture() -> (
     Arc<ManagedRuntime>,
     ConversationRuntime,
 ) {
-    let mut f = Fixture::new().await;
-    let clock = policy(&mut f, 2);
+    let (f, clock) = policy(2, 2).await;
     std::fs::write(
         f.workspaces[0].join("rustx.toml"),
         "[agent.plugins.goal]\nenabled = true\n",

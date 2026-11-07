@@ -120,7 +120,7 @@ export interface RustxTuiAppOptions {
   /** Absent while browsing the resume catalog, before explicit selection. */
   session?: AppServerSession;
   connecting?: ConnectingSession;
-  /** `session/create` inputs for Sessions this client creates. */
+  /** `thread/start` inputs for Sessions this client creates. */
   sessionSettings: SessionSettings;
   /** A read-only catalog page acquired during resume bootstrap. */
   resumePage?: SessionCatalogPage;
@@ -575,7 +575,9 @@ export class RustxTuiApp {
     try {
       // Resolve cold navigation through durable metadata before any native
       // preparation wait. Attach and first Send must name the same exact node.
-      const selectedNode = nodeId ?? (await host.readSession(sessionId)).active_node;
+      const selection = nodeId === undefined ? await host.readSession(sessionId) : undefined;
+      const selectedNode = nodeId ?? selection!.active_node;
+      const selectedThread = selection?.active_conversation_id ?? (previous?.nodeId === selectedNode ? previous.target.conversation_id : undefined);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       if (retryInitialization) {
         await host.retryInitialization(sessionId, selectedNode);
@@ -584,7 +586,7 @@ export class RustxTuiApp {
       if (!changingNode) beginConnecting(selectedNode);
       const next = changingNode
         ? await host.openNode(sessionId, selectedNode, () => beginConnecting(selectedNode))
-        : await host.attach(sessionId, selectedNode, previous);
+        : await host.attach(sessionId, selectedNode, previous, selectedThread);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       if (targetConversation !== undefined && next.target.conversation_id !== targetConversation) {
         throw new Error('The attached Conversation changed. Original input remains in its previous Conversation draft; select the current target explicitly.');

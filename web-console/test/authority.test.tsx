@@ -22,7 +22,7 @@ it('two authorities containing Session A never inherit wanted attachment intent 
   await owner.start(); await client.attach('A');
   await owner.disconnect(); await owner.reconnect();
   await client.waitForAttachment('A', () => true);
-  expect(a.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
+  expect(a.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(2);
   await owner.select('remote'); await owner.connectRemote(remote, TOKEN);
   expect(client.getSnapshot().sessions.some(row => row.id === 'A')).toBe(true);
   expect(client.getSnapshot().views).toEqual({});
@@ -30,10 +30,10 @@ it('two authorities containing Session A never inherit wanted attachment intent 
   await client.attach('A');
   await owner.disconnect(); await owner.reconnect();
   await client.waitForAttachment('A', () => true);
-  expect(b.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
+  expect(b.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(2);
   await owner.select('local');
   expect(client.getSnapshot().views).toEqual({});
-  expect(a.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
+  expect(a.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(2);
   await owner.disconnect();
 });
 it('replacement fences immediately and waits for exactly one close before retiring state and creating the new socket', async () => {
@@ -51,16 +51,16 @@ it('replacement fences immediately and waits for exactly one close before retiri
 });
 it('old mutation uncertainty stays inspectable and inert despite the same Session ID on the replacement server', async () => {
   const { a, b, client, owner } = pair(); await owner.start(); await client.attach('A');
-  a.held.add('turn/start');
+  a.held.add('inbound/queue');
   const sending = client.send('A', 'do not replay').catch(error => error);
-  await a.waitFor('turn/start', 1);
+  await a.waitFor('inbound/queue', 1);
   await owner.select('remote'); await owner.connectRemote(remote, TOKEN); await sending;
   expect(client.getSnapshot().uncertain).toEqual([]);
   expect(client.getSnapshot().interactionOperations).toEqual({});
-  expect(client.getSnapshot().detached).toEqual([expect.objectContaining({ authority: endpoint, operations: [expect.objectContaining({ method: 'turn/start', sessionId: 'A' })] })]);
-  expect(b.requests.some(row => row.request.method === 'turn/start')).toBe(false);
+  expect(client.getSnapshot().detached).toEqual([expect.objectContaining({ authority: endpoint, operations: [expect.objectContaining({ method: 'inbound/queue', sessionId: 'A' })] })]);
+  expect(b.requests.some(row => row.request.method === 'inbound/queue')).toBe(false);
   await client.attach('A'); await client.send('A', 'new explicit B operation');
-  expect(b.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(b.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
   render(<ConnectionSettings connection={owner} client={client} />);
   expect(screen.getByText('Detached authority diagnostics')).toBeTruthy();
   expect(screen.getByRole('heading', { name: endpoint })).toBeTruthy();
@@ -117,7 +117,7 @@ it('authority replacement clears open/focused browser Session A before B can reu
   expect(screen.queryByRole('dialog', { name: 'Rename session' })).toBeNull();
   expect(screen.getByText('What would you like to build?')).toBeTruthy();
   expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!)).toEqual({ endpoint: remote, openViews: [], draft: true });
-  expect(b.requests.some(row => row.request.method === 'session/attach')).toBe(false);
+  expect(b.requests.some(row => row.request.method === 'thread/resume')).toBe(false);
   await act(async () => owner.disconnect());
 });
 it('normal Settings opens General, while recovery Show details opens the Advanced Connection sub-surface', async () => {
@@ -130,20 +130,19 @@ it('normal Settings opens General, while recovery Show details opens the Advance
   expect(screen.getByRole('tab', { name: 'Advanced' }).getAttribute('aria-selected')).toBe('true');
   expect(screen.getByRole('region', { name: 'Connection Settings' })).toBeTruthy();
 });
-it('interaction uncertainty cannot lock the same Session/interaction on another authority', async () => {
+it('an interaction reply is not replayed on another authority', async () => {
   const { a, b, client, owner } = pair();
   const pending = interaction('approval');
   a.snapshots.get('A')!.pending_interactions = [pending]; b.snapshots.get('A')!.pending_interactions = [pending];
   await owner.start(); await client.attach('A');
-  a.held.add('interaction/cancel');
-  const request = client.request({ method: 'interaction/cancel', params: { target: client.target('A'), interaction: pending.interaction } }, 'interaction_settled').catch(error => error);
-  await a.waitFor('interaction/cancel', 1);
-  await owner.select('remote'); await owner.connectRemote(remote, TOKEN); await request; await client.attach('A');
+  await client.answer('A',pending.interaction);
+  await a.waitForReply();
+  await owner.select('remote'); await owner.connectRemote(remote, TOKEN); await client.attach('A');
   expect(client.getSnapshot().interactionOperations).toEqual({});
-  expect(client.getSnapshot().detached?.[0].operations[0].interactionKey).toBeDefined();
-  expect(b.requests.some(row => row.request.method === 'interaction/cancel')).toBe(false);
+  expect(b.replies).toHaveLength(0);
   await owner.disconnect();
 });
+
 it('close timeout fails closed without retiring unresolved evidence or creating a replacement socket', async () => {
   const { a, b, client, owner } = pair(); await owner.start();
   vi.useFakeTimers(); vi.spyOn(a.socket, 'close').mockImplementation(() => {});
@@ -159,7 +158,7 @@ it('saved view hints from a different endpoint cannot open the colliding Session
   render(<App client={client} connection={owner} workspaceHost={a.workspaceHost} />);
   await act(async () => owner.start());
   expect(screen.queryByLabelText('Session title')).toBeNull();
-  expect(a.requests.some(row => row.request.method === 'session/attach')).toBe(false);
+  expect(a.requests.some(row => row.request.method === 'thread/resume')).toBe(false);
   await act(async () => owner.disconnect());
 });
 it('detached evidence capacity refusal preserves Remote and its material until explicit acknowledgement', async () => {

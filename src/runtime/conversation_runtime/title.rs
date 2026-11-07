@@ -4,7 +4,7 @@
 use super::{ConversationRuntime, RuntimeResourceSnapshot};
 use crate::context::{ContextError, ContextErrorKind};
 use crate::runtime::auxiliary::executor::{AuxiliaryReservation, AuxiliaryScope};
-use crate::runtime::types::{ConversationLifecycle, ConversationLifecycleState};
+use crate::runtime::types::ConversationLifecycleState;
 #[cfg(test)]
 use crate::{message::types::MessageBlock, runtime::observation::ConversationObservation};
 use std::sync::Arc;
@@ -23,10 +23,6 @@ pub(crate) struct PreparedTitle {
 impl ConversationRuntime {
     pub(crate) fn title_capacity_changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.inner.auxiliary.capacity_changes()
-    }
-
-    pub(crate) fn title_lifecycle(&self) -> ConversationLifecycle {
-        self.inner.lifecycle.clone()
     }
 
     pub(crate) fn first_title_source(

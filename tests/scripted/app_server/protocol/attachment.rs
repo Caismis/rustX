@@ -192,6 +192,7 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
             rejected(
                 &connection,
                 Method::TurnStart {
+                    input_id: uuid::Uuid::new_v4().to_string(),
                     target: target.clone(),
                     content: (input("must not run"))
                         .into_iter()
@@ -276,8 +277,7 @@ async fn attachment_capacity_rejection_never_composes_and_detach_reclaims_withou
             rejected(
                 &connection,
                 Method::SessionAttach {
-                    session_id: sessions[2].id.clone(),
-                    node_id: None
+                    thread_id: sessions[2].active_conversation_id.clone()
                 }
             )
             .await,
@@ -360,17 +360,14 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
         for (index, session) in sessions[1..].iter().enumerate() {
             let worker = connection.clone();
             let barrier = barrier.clone();
-            let session_id = session.id.clone();
+            let thread_id = session.active_conversation_id.clone();
             tasks.push(tokio::spawn(async move {
                 barrier.wait().await;
                 worker
                     .handle_request(Request {
                         jsonrpc: JsonRpcVersion::V2,
                         id: RequestId::Integer(400 + i64::try_from(index).unwrap()),
-                        call: Method::SessionAttach {
-                            session_id,
-                            node_id: None,
-                        },
+                        call: Method::SessionAttach { thread_id },
                     })
                     .await
             }));
@@ -540,6 +537,7 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
                 &connection,
                 20,
                 Method::TurnStart {
+                    input_id: uuid::Uuid::new_v4().to_string(),
                     target: a.clone(),
                     content: (input("request-A"))
                         .into_iter()
@@ -555,6 +553,7 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
                 &connection,
                 21,
                 Method::TurnStart {
+                    input_id: uuid::Uuid::new_v4().to_string(),
                     target: b.clone(),
                     content: (input("request-B"))
                         .into_iter()
@@ -567,8 +566,8 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
                 }
             ),
         );
-        assert!(matches!(reply_a, MethodResult::InboundAccepted { .. }));
-        assert!(matches!(reply_b, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply_a, MethodResult::TurnInputAccepted { .. }));
+        assert!(matches!(reply_b, MethodResult::TurnInputAccepted { .. }));
         tokio::join!(f.gates[0].wait_entered(), f.gates[1].wait_entered());
         f.manager
             .configuration_host(&a.session_id)
@@ -702,27 +701,26 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(30),
                 call: Method::SessionAttach {
-                    session_id: a.session_id.clone(),
-                    node_id: None,
+                    thread_id: a.conversation_id.clone(),
                 },
             })
             .await;
-        assert!(matches!(
-            response,
-            Response::Failure(Failure {
-                error: RpcError {
-                    data: Some(ErrorData::ControllerInUse),
-                    ..
-                },
-                ..
-            })
-        ));
+        let Response::Success(response) = response else {
+            panic!("shared writable attachment")
+        };
+        let MethodResult::Attached { target: new_a, .. } = response.result else {
+            panic!("attachment")
+        };
+
         call(&connection, 31, Method::SessionDetach { target: a.clone() }).await;
         let stale = connection
             .handle_request(Request {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(310),
-                call: Method::TurnCancel { target: a.clone() },
+                call: Method::TurnCancel {
+                    turn_id: crate::runtime::identity::AttemptId::new("obsolete-turn"),
+                    target: a.clone(),
+                },
             })
             .await;
         assert!(matches!(
@@ -738,7 +736,6 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         let live_a = f.manager.load(&a.session_id, None).await.unwrap();
         assert_eq!(live_a.incarnation_id(), a.runtime_incarnation);
         assert!(live_a.inspect_runtime().unwrap().has_current_attempt());
-        let new_a = attach(&rival, &f, 0).await;
         assert_ne!(new_a.attachment_id, a.attachment_id);
         let MethodResult::Checkpoint {
             checkpoint: checkpoint_3,
@@ -799,6 +796,7 @@ async fn stale_connection_cannot_retain_or_control_replacement() {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(50),
                 call: Method::TurnStart {
+                    input_id: uuid::Uuid::new_v4().to_string(),
                     target: old,
                     content: (input("must not execute"))
                         .into_iter()
@@ -843,8 +841,7 @@ async fn t13_attach_identity_checkpoint_and_subscribe_preserve_the_native_cut() 
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(80),
                 call: Method::SessionAttach {
-                    session_id: f.sessions[0].id.clone(),
-                    node_id: None,
+                    thread_id: f.sessions[0].active_conversation_id.clone(),
                 },
             })
             .await
@@ -1019,17 +1016,11 @@ async fn close_linearizes_before_pending_attach_commit() {
         let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let pending = connection.clone();
-        let session_id = f.sessions[0].id.clone();
-        let request = tokio::spawn(async move {
-            rejected(
-                &pending,
-                Method::SessionAttach {
-                    session_id,
-                    node_id: None,
-                },
-            )
-            .await
-        });
+        let thread_id = f.sessions[0].active_conversation_id.clone();
+        let request =
+            tokio::spawn(
+                async move { rejected(&pending, Method::SessionAttach { thread_id }).await },
+            );
         probe.before_compose.entered().await;
         assert_eq!(connection.attachment_counts(), (0, 1));
         connection.close();
@@ -1096,7 +1087,14 @@ async fn another_connection_deletes_an_attached_idle_session_and_closes_its_rout
         }
         assert_eq!(viewer.attachment_counts(), (0, 0));
         assert_eq!(
-            rejected(&viewer, Method::TurnCancel { target }).await,
+            rejected(
+                &viewer,
+                Method::TurnCancel {
+                    turn_id: crate::runtime::identity::AttemptId::new("obsolete-turn"),
+                    target
+                }
+            )
+            .await,
             ErrorData::StaleAttachment
         );
         f.close().await;
@@ -1163,8 +1161,7 @@ async fn t13_lost_huge_root_attach_receipt_is_reconciled_without_second_admissio
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(46_710),
                 call: Method::SessionAttach {
-                    session_id: session.id.clone(),
-                    node_id: None,
+                    thread_id: session.active_conversation_id.clone(),
                 },
             })
             .await;
@@ -1199,12 +1196,11 @@ async fn t13_lost_huge_root_attach_receipt_is_reconciled_without_second_admissio
             rejected(
                 &connection,
                 Method::SessionAttach {
-                    session_id: session.id.clone(),
-                    node_id: None,
+                    thread_id: session.active_conversation_id.clone()
                 }
             )
             .await,
-            ErrorData::ControllerInUse
+            ErrorData::InvalidParams
         );
         let MethodResult::Checkpoint { checkpoint } = call(
             &connection,

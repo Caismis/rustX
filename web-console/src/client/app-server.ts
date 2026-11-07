@@ -1,3 +1,5 @@
+import {credentialSubprotocol} from '../../../protocol/app-server/auth';
+import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-server/callbacks';
 import { AuxiliaryQuestions } from './auxiliary';
 import { parseTransportJson } from '../../shared/json-numbers';
 import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
@@ -26,7 +28,7 @@ import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, RuntimeClientInteractionHeader,
-} from '../../../protocol/app-server/v72';
+} from '../../../protocol/app-server/v73';
 import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
 import { RequestPipeline } from './request-pipeline';
@@ -64,6 +66,13 @@ export class AppServerClient {
   /** Application owners that must fence work of a replaced App Server authority. */
   onAuthorityRetired = (listener: () => void) => { this.authorityListeners.add(listener); return () => { this.authorityListeners.delete(listener); }; };
   private socket?: Socket;
+  readonly callbacks = new ServerCallbacks(async message => {
+    const socket = this.socket;
+    if (!socket || !this.initialized) throw new Error('Connection is unavailable. Response not sent.');
+    socket.send(JSON.stringify(message));
+  });
+  installHostToolHandler(namespace: string | undefined, name: string, handler: HostToolHandler) { return this.callbacks.installHandler(namespace, name, handler); }
+
   private initialized = false;
   private readonly sourceRepairs = new SourceRepairObserver({
     request: (...args) => this.request(...args),
@@ -99,7 +108,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v72').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v73').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -207,9 +216,9 @@ export class AppServerClient {
         return found.conversation_id;
       },
       admit: current => this.admitSessionOperation(id, current),
-      attach: async (node_id, admission) => {
+      attach: async (node_id, conversation, admission) => {
         const generation = this.state.generation;
-        try { return await native({ method: 'session/attach', params: { session_id: id, node_id } }, 'attached', admission); }
+        try { return await native({ method: 'thread/resume', params: { threadId: conversation } }, 'attached', admission); }
         catch (error) {
           // A bounded receipt can be lost after commitment. Reconcile the
           // existing connection claim; never replay Attach to infer its outcome.
@@ -218,7 +227,7 @@ export class AppServerClient {
           if (!status.target || status.target.session_id !== id) throw error;
           const {node} = await this.request({method:'session/node',params:{session_id:id,node_id}},'node',undefined,admission.current);
           if (node.id !== node_id || node.conversation_id !== status.target.conversation_id) throw error;
-          return {type:'attached' as const,target:status.target,configuration_revision:status.configuration_revision,attachment_kind:'controller' as const,observation_source:'live' as const};
+          return {type:'attached' as const,target:status.target,configuration_revision:status.configuration_revision,attachment_kind:'writable' as const,observation_source:'live' as const};
         }
       },
       detach: async (target, admission) => { await native({ method: 'session/detach', params: { target } }, 'detached', admission); },
@@ -232,7 +241,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v72').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v73').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -334,13 +343,12 @@ export class AppServerClient {
   // Browser transport authority, not a durable server identity. Reconnect alone
   // can restore wanted Session intent; replacement must retire it after fencing.
   isSameAuthority(endpoint: string) { return !this.state.endpoint || new URL(endpoint).href === this.state.endpoint; }
-  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect', committed?: () => void, deliveryToken?: string) {
+  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect', committed?: () => void) {
     const url = new URL(endpoint);
     if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
       throw new Error('Use a ws:// or wss:// endpoint at / with no credentials, query, or fragment.');
     }
-    if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) throw new Error('Enter the dedicated 43–128 character App Server transport token.');
-    if (deliveryToken && (!/^[A-Za-z0-9_-]{43,128}$/.test(deliveryToken) || deliveryToken === token)) throw new Error('Enter a separate 43–128 character Delivery Access token.');
+    if (!/^[A-Za-z0-9._~+/=-]{1,16384}$/.test(token)) throw new Error('Enter a valid App Server bearer token.');
     const replacing = !this.isSameAuthority(url.href);
     if (replacing && transition !== 'replace-authority') throw new Error('Different App Server authority requires explicit replacement.');
     if (replacing) this.admitAuthorityReplacement();
@@ -358,7 +366,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v72', `rustx-token.${token}`, ...(deliveryToken ? [`rustx-delivery-access.${deliveryToken}`] : [])]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v73', credentialSubprotocol(token)]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -376,12 +384,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 72, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 73, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 72 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v72 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 73 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.shared_writable_clients) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v73 with native multi-Session, headless interactions, and shared writable admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -451,6 +459,7 @@ export class AppServerClient {
     this.retainAppliedObservations();
     this.socket = undefined;
     this.initialized = false;
+    this.callbacks.clear();
     this.sourceRepairs.disconnect();
     const uncertain = [...this.state.uncertain];
     uncertain.push(...this.pipeline.disconnect(this.state.generation));
@@ -458,7 +467,7 @@ export class AppServerClient {
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
     this.refreshes.clear(); this.traces.disconnect(); this.reading.disconnect(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
-    for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
+    for (const [key, operation] of Object.entries(operations)) operations[key] = {...operation,status:'uncertain'};
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.lifecycles.transport(this.state.generation + 1, false);
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
@@ -491,6 +500,7 @@ export class AppServerClient {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       this.lose(generation); return;
     }
+    try { if (this.callbacks.receive(parsed)) { for(const [id,view] of Object.entries(this.state.views))if(view.snapshot&&this.lifecycles.observe(id))this.interactions.reconcile(id);this.publish({ views: { ...this.state.views } }); return; } } catch { this.lose(generation); return; }
     const value = parsed as Response | Notification;
     if (value.jsonrpc !== '2.0') { this.lose(generation); return; }
     if ('result' in value || 'error' in value || 'id' in value) { this.pipeline.response(value as Response, generation); return; }
@@ -640,7 +650,7 @@ export class AppServerClient {
   loadTraceDetail(id: string, record: string) { return this.traces.loadTraceDetail(id, record); }
   projections(id: string, after?: string) { return this.traces.projections(id, after); }
   projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
-  projectionDetailReader(detail: import('../../../protocol/app-server/v72').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
+  projectionDetailReader(detail: import('../../../protocol/app-server/v73').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
   private readonly controls = new SessionControls({
     request: (...args) => this.request(...args),
     state: () => this.state,
@@ -681,6 +691,7 @@ export class AppServerClient {
   confirmAgentModel(id: string, config: SessionModelConfig, current: () => boolean) { return this.models.confirmAgentModel(id, config, current); }
   private readonly interactions = new Interactions({
     request: (...args) => this.request(...args),
+    callbacks: this.callbacks,
     state: () => this.state,
     current: generation => this.current(generation),
     setSession: (id, patch) => this.setSession(id, patch),
@@ -853,6 +864,26 @@ export class AppServerClient {
     this.models.reconcile(id);
     this.controls.reconcileCancellation(id);
     this.interactions.reconcile(id);
+    this.repairInputReceipts(id);
+  }
+  private readonly inputRepairs = new Set<string>();
+  private repairInputReceipts(id:string) {
+    const target=this.state.views[id]?.target,generation=this.state.generation;
+    if(!target)return;
+    for(const operation of this.state.uncertain) {
+      if(operation.sessionId!==id||operation.conversationId!==target.conversation_id||!operation.inputId||this.inputRepairs.has(operation.id))continue;
+      this.inputRepairs.add(operation.id);
+      void this.request({method:'inbound/submissionLookup',params:{target,inputId:operation.inputId}},'inbound_submission')
+        .then(({acceptance})=>{
+          if(acceptance&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target)) {
+            const view=this.state.views[id],submissions=view.submissions??[];
+            // Acceptance proof takes over lost transport ownership atomically;
+            // only a native observation of the exact MessageId can release it.
+            this.publish({uncertain:this.state.uncertain.filter(value=>value.id!==operation.id),views:{...this.state.views,[id]:{...view,submissions:submissions.some(value=>value.messageId===acceptance.message_id)?submissions:[...submissions,{messageId:acceptance.message_id,submittedWhileRunning:false}]}}});
+            this.settleSubmissions(id);
+          }
+        }).catch(()=>{}).finally(()=>this.inputRepairs.delete(operation.id));
+    }
   }
   target(id: string) {
     return this.lifecycles.target(id);
@@ -863,7 +894,7 @@ export class AppServerClient {
     const view = this.state.views[target.session_id];
     if (!sameTarget(view?.target, target) || view?.attachmentNodeId !== nodeId) throw new Error('Node does not own the current attachment.');
   }
-  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
+  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' | 'turn_input_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     if (receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
       ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
@@ -871,7 +902,7 @@ export class AppServerClient {
     ];
     return this.sendContent(id, content, delivery, acknowledged, dispatchCurrent);
   }
-  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
+  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' | 'turn_input_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     const generation = this.state.generation;
     const preparation = this.models.preparation(id);
     if (preparation) await preparation;
@@ -883,7 +914,12 @@ export class AppServerClient {
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
     // The request pipeline owns unresolved transport and its acknowledgement
     // handoff. No MessageId or queue identity is invented before acceptance.
-    return this.request({ method: delivery === 'steer' ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted', acknowledged, dispatchCurrent);
+    if (delivery === 'steer') {
+      const expectedTurnId = this.state.views[id].snapshot?.attempt?.attempt_id;
+      if (!expectedTurnId) throw new Error('No exact active Turn is available.');
+      return this.request({ method:'turn/steer', params:{target,content,expectedTurnId,inputId:crypto.randomUUID()} }, 'turn_input_accepted', acknowledged, dispatchCurrent);
+    }
+    return this.request({ method:'inbound/queue', params:{target,content,inputId:crypto.randomUUID()} }, 'inbound_accepted', acknowledged, dispatchCurrent);
   }
   private publishInbound(id: string, accepted?: Submission) {
     const view = this.state.views[id];

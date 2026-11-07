@@ -5,7 +5,7 @@ import { sameEndpoint } from '../../workspaces/endpoint';
 import type { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v72';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v73';
 import type { FirstSubmitPort } from './first-submit';
 
 export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, preparePublication: () => ((id: string) => (() => boolean) | void), existing = false): FirstSubmitPort {
@@ -57,7 +57,7 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       const [initialLocation] = await host.classifyLocations([cwd], endpoint, catalog.authorityId);
       if (!initialLocation?.authorized) throw new RequestNotDispatched('Session cwd is not authorized by this Product Host. No operation was sent.');
       requireCurrent();
-      const result = await client.request({ method: 'session/create', params: { submission, settings: { cwd, ...(draft.model ? { model: draft.model } : {}) } } }, 'session_transition', result => {
+      const result = await client.request({ method: 'thread/start', params: { submission, settings: { cwd, ...(draft.model ? { model: draft.model } : {}) } } }, 'session_transition', result => {
         acknowledged({ id: result.session.id, node: result.session.active_node, conversation: result.session.active_conversation_id, diagnostic: result.durability_diagnostic ?? undefined });
         const state = client.getSnapshot();
         if (draft.model && state.endpoint === endpoint && state.authorityRevision === authorityRevision) modelPreferences().select(endpoint, draft.model);

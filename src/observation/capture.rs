@@ -58,9 +58,10 @@ fn bounded_inbound_kind(
                 last_round_message_id: goal.last_round_message_id.clone(),
             })),
         ),
-        InboundKind::Message | InboundKind::GoalContinuation(_) | InboundKind::Context(_) => {
-            kind.clone()
-        }
+        InboundKind::Message
+        | InboundKind::QueuedMessage
+        | InboundKind::GoalContinuation(_)
+        | InboundKind::Context(_) => kind.clone(),
     }
 }
 pub(crate) struct Capture {

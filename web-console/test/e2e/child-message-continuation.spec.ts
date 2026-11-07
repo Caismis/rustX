@@ -9,7 +9,7 @@ for (const width of [1440, 390]) test(`resident Child Chat resumes unfinished me
   await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
   await page.goto(`${origin}/test/fixtures/startup.html?existing&models&subagents&child-message-continuation`);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('thread/resume'); f.resumeCatalog(); });
   if (width < 600) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await page.getByRole('button', { name: 'Subagents', exact: true }).click();

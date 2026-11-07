@@ -6,7 +6,7 @@ import type { TranscriptCache } from './transcript';
 import type {
   AttachmentTarget, ConfigRepairReceipt, ConfigurationApplication, InteractionRef, MethodResult, ObservedTurnPage, PendingMutationOutcome,
   Request1, RuntimeClientCursor, RuntimeClientSnapshot, ServerCapabilities, SessionPersistentState, SessionSummary, SourceTarget, UserInputBlock,
-} from '../../../protocol/app-server/v72';
+} from '../../../protocol/app-server/v73';
 
 /** The published read model of one App Server connection and the operation
  * contracts its consumers hold. The client is their only writer; everything
@@ -48,16 +48,16 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   summary?: SessionSummary;
   snapshot?: RuntimeClientSnapshot;
   publicationHeads?: readonly PublicationHead[];
-  checkpoint?: import('../../../protocol/app-server/v72').RuntimeClientCheckpoint;
+  checkpoint?: import('../../../protocol/app-server/v73').RuntimeClientCheckpoint;
   observationState?: import('../../../protocol/app-server/observation').ObservationPhase;
-  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v72').CheckpointReadCut;body:import('../../../protocol/app-server/v72').RoutedInteraction};
-  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v72').CheckpointPage;rows:import('../../../protocol/app-server/v72').RuntimeClientInteractionHeader[];offset:number};
+  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v73').CheckpointReadCut;body:import('../../../protocol/app-server/v73').RoutedInteraction};
+  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v73').CheckpointPage;rows:import('../../../protocol/app-server/v73').RuntimeClientInteractionHeader[];offset:number};
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v72').CheckpointReadCut; statistics: import('../../../protocol/app-server/v72').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v72').RuntimeClientContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v73').CheckpointReadCut; statistics: import('../../../protocol/app-server/v73').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v73').RuntimeClientContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ObservedTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -67,7 +67,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v72').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v73').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId?: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;
@@ -76,7 +76,8 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
  * sole identity; settles when an authoritative snapshot contains that MessageId. */
 export interface Submission {
   messageId: string;
-  content: readonly UserInputBlock[];
+  /** Local preview when known; read repair can prove identity without a body. */
+  content?: readonly UserInputBlock[];
   /** Observed activity at dispatch, solely for provisional placement. */
   submittedWhileRunning: boolean;
 }
@@ -95,6 +96,8 @@ export interface UncertainOperation {
   diagnostic?: string;
   uploadOperationId?: string;
   compactionRequestId?: string;
+  inputId?: string;
+  conversationId?: string;
   id: string;
   method: Request1['method'];
   sessionId?: string;

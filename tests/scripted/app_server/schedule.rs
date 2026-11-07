@@ -192,8 +192,11 @@ async fn pending_creation_reserves_runtime_capacity_independently_of_cold_storag
             cwd: f.workspaces[1].clone(),
             model: None,
         };
-        let creation =
-            tokio::spawn(async move { manager.create_session_submitted(settings, claim).await });
+        let creation = tokio::spawn(async move {
+            manager
+                .create_session_submitted(settings, Vec::new(), claim)
+                .await
+        });
         entered.await.unwrap();
         assert_eq!(f.manager.diagnostics().storage_only, 1);
         assert_eq!(f.manager.registry.0.lock().unwrap().pending_creations, 1);

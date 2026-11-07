@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v72. It does not parse
+The TUI is a projection/control client of App Server protocol v73. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v72.ts`](../protocol/app-server/v72.ts).
+[`protocol/app-server/v73.ts`](../protocol/app-server/v73.ts).
 
 Initial MCP preparation is native-owned. Early attachment remains asynchronous
 and the editor stays usable. On the first nonempty submission, the TUI sends
@@ -22,7 +22,7 @@ adoption command. See [MCP startup policy](configuration.md#runtime-policies).
 Cold reconnection retains the same logical draft and editor, including pasted
 command-token provenance. It captures complete input blocks and an explicit Tab
 Queue choice together; the fresh attachment and intent acknowledgement gate one
-dispatch. A running Attempt receives Tab via `turn/start`, while Enter uses its
+dispatch. A running Attempt receives Tab via `inbound/queue`, while Enter uses its
 current native projection to choose Send or Steer. Later typing remains local,
 and transport recovery never replays an unanswered mutation.
 
@@ -185,7 +185,7 @@ control submission until authoritative settlement. Success focuses an existing
 Session or opens the empty selector, without automatically creating a Session.
 Lost deletion responses are never replayed; reconnection inspects native state.
 
-`session/summaryInvalidated` is part of the mandatory v72 vocabulary and is
+`session/summaryInvalidated` is part of the mandatory v73 vocabulary and is
 decoded with its mandatory `catalog_changed` scope and routed by Session identity. The TUI
 holds no cached Session summary — `/resume` reads the catalog afresh every time
 it opens — so the notification is accepted and declined: it is never folded into

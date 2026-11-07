@@ -117,12 +117,17 @@ impl AppServerConnection {
                 .ok()
                 .and_then(|()| target.workspace().map(std::path::Path::to_path_buf)),
             Method::SessionCreate { settings, .. } => std::fs::canonicalize(&settings.cwd).ok(),
-            Method::SessionAttach { session_id, .. } => self
-                .sessions
-                .read_settings(session_id)
-                .await
-                .ok()
-                .and_then(|(_, settings)| std::fs::canonicalize(&settings.cwd).ok()),
+            Method::SessionAttach { thread_id } => {
+                if let Ok(thread) = self.sessions.thread(thread_id).await {
+                    self.sessions
+                        .read_settings(&thread.session_id)
+                        .await
+                        .ok()
+                        .and_then(|(_, settings)| std::fs::canonicalize(&settings.cwd).ok())
+                } else {
+                    None
+                }
+            }
             _ => None,
         };
         if let Some(directory) = directory.filter(|directory| directory.is_dir()) {
@@ -159,7 +164,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v72 notice reaches only a connection that negotiated v72.
+        // A v73 notice reaches only a connection that negotiated v73.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -444,6 +449,7 @@ impl AppServerConnection {
             }
         }
     }
+    #[allow(clippy::too_many_lines)] // One registration-scoped native projection.
     fn routed_notification(
         &self,
         route: &Arc<Route>,
@@ -475,6 +481,31 @@ impl AppServerConnection {
                 }
             }
             RoutedDelivery::Projection(EventDelivery::Event(event)) => {
+                for fact in event.event.facts() {
+                    match fact {
+                        crate::runtime_client::RuntimeClientEvent::InteractionPending {
+                            interaction,
+                        } => {
+                            if let Ok(owner) = route.attachment.operation_authority() {
+                                self.host.callbacks().interaction(
+                                    &target.conversation_id,
+                                    &interaction.interaction,
+                                    &owner,
+                                );
+                            }
+                        }
+                        crate::runtime_client::RuntimeClientEvent::InteractionSettled {
+                            interaction,
+                            ..
+                        }
+                        | crate::runtime_client::RuntimeClientEvent::InteractionRemoved {
+                            interaction,
+                        } => {
+                            self.host.callbacks().interaction_settled(interaction);
+                        }
+                        _ => {}
+                    }
+                }
                 let registration_id = registration.id.clone();
                 publication = Some(registration.event(event.cursor));
                 NotificationMethod::Event {

@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v72';
+import type { AttachmentTarget, MethodResult, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v73';
 
 export interface Admission {
   current(): boolean;
@@ -34,7 +34,7 @@ export interface SessionLifecyclePort {
   resolveNode(current: () => boolean): Promise<{ node: string; conversation: string }>;
   conversation(node: string, current: () => boolean): Promise<string>;
   admit(current: () => boolean): Promise<false | Admission>;
-  attach(node: string, admission: Admission): Promise<Attached>;
+  attach(node: string, conversation: string, admission: Admission): Promise<Attached>;
   detach(target: AttachmentTarget, admission: Admission): Promise<void>;
   switchNode(target: AttachmentTarget, node: string, admission: Admission): Promise<Extract<MethodResult, { type: 'session' }>['session']>;
   delete(revision: string, admission: Admission): Promise<RuntimeClientSessionDeletionResult>;

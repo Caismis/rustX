@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {it} from 'node:test';
 import {harness} from './support/app-server-harness.ts';
 import {snapshot} from './support/fixtures.ts';
-import type {RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v72.ts';
+import type {RuntimeClientDeliveryHead,RuntimeClientDeliveryItem,SessionFileReference} from '../../protocol/app-server/v73.ts';
 
 it('finite delivery discovery preserves the source cut, ninth original index, selected metadata and protected RPC ownership',async()=>{
  const original:SessionFileReference={scope:{conversation_id:'conv_01900000-0000-7000-8000-000000000004',device:'1',inode:'2'},path:'out/报告.md',name:'报告.md',mime_type:'text/markdown'};
@@ -42,6 +42,6 @@ it('finite delivery discovery preserves the source cut, ninth original index, se
   let current=true;const number=h.transport.log.count('conversation/checkpointValueRead')+1;const late=h.session.deliveryMetadata(record,()=>current),rejected=assert.rejects(late,/view changed/);
   const selected=(await h.transport.log.awaitMethod('conversation/checkpointValueRead',number))[number-1]!;current=false;
   h.transport.respond(selected.id,{type:'checkpoint_value_chunk',chunk:{representation:'canonical_json_v1',cut,domain:item(8).metadata_domain,item_offset:0,path:[],offset:0,bytes_base64:bytes.toString('base64'),readable_end:bytes.length,next_offset:null}});await rejected;
-  assert.equal(h.session.state.cursor,'0');assert.equal(h.transport.log.count('turn/start'),0);assert.equal(h.transport.log.count('conversation/contentRead'),0);
+  assert.equal(h.session.state.cursor,'0');assert.equal(h.transport.log.count('inbound/queue'),0);assert.equal(h.transport.log.count('conversation/contentRead'),0);
  }finally{h.client.close();}
 });

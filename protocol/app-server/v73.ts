@@ -6,7 +6,7 @@
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ProtocolMessage".
  */
-export type ProtocolMessage = Request | Response | Notification;
+export type ProtocolMessage = Request | Response | Notification | ServerMessage | ClientReply;
 /**
  * A single public method space, with no nested Runtime Client envelope.
  *
@@ -30,6 +30,39 @@ export type JsonRpcVersion = '2.0';
  */
 export type AppServerRequestId = string | number;
 export type Request1 =
+  | {
+      method: 'thread/read';
+      params: {
+        threadId: ConversationId;
+      };
+    }
+  | {
+      method: 'thread/list';
+      params: {
+        offset: number;
+        limit: number;
+        archived: boolean;
+      };
+    }
+  | {
+      method: 'thread/name/set';
+      params: {
+        threadId: ConversationId;
+        name?: string | null;
+      };
+    }
+  | {
+      method: 'thread/archive';
+      params: {
+        threadId: ConversationId;
+      };
+    }
+  | {
+      method: 'thread/unarchive';
+      params: {
+        threadId: ConversationId;
+      };
+    }
   | {
       method: 'auxiliary/classify';
       params: {
@@ -550,8 +583,9 @@ export type Request1 =
       };
     }
   | {
-      method: 'session/create';
+      method: 'thread/start';
       params: {
+        dynamicTools?: HostToolDefinition[];
         settings: SessionPersistentState;
         submission?: McpDraftTarget | null;
       };
@@ -746,7 +780,7 @@ export type Request1 =
       };
     }
   | {
-      method: 'session/fork';
+      method: 'thread/fork';
       params: {
         session_id: SessionId;
         node_id?: SessionNodeId | null;
@@ -785,10 +819,9 @@ export type Request1 =
       };
     }
   | {
-      method: 'session/attach';
+      method: 'thread/resume';
       params: {
-        session_id: SessionId;
-        node_id?: SessionNodeId | null;
+        threadId: ConversationId;
       };
     }
   | {
@@ -927,6 +960,7 @@ export type Request1 =
       method: 'turn/start';
       params: {
         target: AttachmentTarget;
+        inputId: string;
         content: UserInputBlock[];
       };
     }
@@ -934,7 +968,24 @@ export type Request1 =
       method: 'turn/steer';
       params: {
         target: AttachmentTarget;
+        inputId: string;
+        expectedTurnId: AttemptId;
         content: UserInputBlock[];
+      };
+    }
+  | {
+      method: 'inbound/queue';
+      params: {
+        target: AttachmentTarget;
+        inputId: string;
+        content: UserInputBlock[];
+      };
+    }
+  | {
+      method: 'inbound/submissionLookup';
+      params: {
+        target: AttachmentTarget;
+        inputId: string;
       };
     }
   | {
@@ -953,24 +1004,10 @@ export type Request1 =
       };
     }
   | {
-      method: 'turn/cancel';
+      method: 'turn/interrupt';
       params: {
         target: AttachmentTarget;
-      };
-    }
-  | {
-      method: 'interaction/respond';
-      params: {
-        target: AttachmentTarget;
-        interaction: InteractionRef;
-        response: InteractionResponse;
-      };
-    }
-  | {
-      method: 'interaction/cancel';
-      params: {
-        target: AttachmentTarget;
-        interaction: InteractionRef;
+        turnId: AttemptId;
       };
     }
   | {
@@ -1186,14 +1223,14 @@ export type Request1 =
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SessionId".
- */
-export type SessionId = string;
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ConversationId".
  */
 export type ConversationId = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionId".
+ */
+export type SessionId = string;
 /**
  * Process-local live composition identity. Never a durable or transport identity.
  *
@@ -1794,48 +1831,6 @@ export type UserInputBlock =
       type: 'upload';
     };
 /**
- * A typed response to one native interaction.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InteractionResponse".
- */
-export type InteractionResponse =
-  | {
-      response: ReviewResponse;
-      type: 'review';
-    }
-  | {
-      /**
-       * The finite approval decision.  It has no tool arguments.
-       */
-      decision:
-        | {
-            type: 'allow';
-          }
-        | {
-            /**
-             * A bounded client-facing reason.
-             */
-            reason: string;
-            type: 'deny';
-          };
-      type: 'approval';
-    }
-  | {
-      /**
-       * A submitted answer set or explicit decline.
-       */
-      response:
-        | {
-            type: 'submitted';
-            value: QuestionnaireSubmission1;
-          }
-        | {
-            type: 'declined';
-          };
-      type: 'questionnaire';
-    };
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "EffectiveFieldName".
  */
@@ -2430,6 +2425,26 @@ export type Response = Success | Failure;
  */
 export type MethodResult =
   | {
+      thread: Thread;
+      type: 'thread';
+    }
+  | {
+      data: ThreadSummary[];
+      next_offset?: number | null;
+      type: 'threads';
+    }
+  | {
+      acceptance?: InboundAcceptance | null;
+      type: 'inbound_submission';
+    }
+  | {
+      turnId: AttemptId;
+      disposition: TurnInputDisposition;
+      message_id: MessageId;
+      inbound_sequence: InboundSequence;
+      type: 'turn_input_accepted';
+    }
+  | {
       recovery?: ScheduledWorkflowRecovery | null;
       type: 'scheduled_workflow_recovery';
     }
@@ -2649,6 +2664,7 @@ export type MethodResult =
       type: 'editor_page';
     }
   | {
+      thread: Thread;
       session: SessionSnapshot;
       editor?: EditorLocator | null;
       durability_diagnostic?: string | null;
@@ -2857,6 +2873,25 @@ export type MethodResult =
       type: 'settings';
     };
 /**
+ * A conversation-scoped inbound sequence number.
+ *
+ * The sequence identifies one item of the conversation's inbound ordering
+ * domain. It is **not**
+ * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+ * and is never allocated from the Event Journal sequence; the durable
+ * Pending Inbound Inbox owns allocation, and the first successful
+ * acceptance of a conversation receives `1`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundSequence".
+ */
+export type InboundSequence = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TurnInputDisposition".
+ */
+export type TurnInputDisposition = 'started' | 'steered';
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ScheduledWorkflowState".
  */
@@ -3007,20 +3042,6 @@ export type ScheduledTargetReceipt =
       run_id: WorkflowRunId;
       type: 'workflow';
     };
-/**
- * A conversation-scoped inbound sequence number.
- *
- * The sequence identifies one item of the conversation's inbound ordering
- * domain. It is **not**
- * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
- * and is never allocated from the Event Journal sequence; the durable
- * Pending Inbound Inbox owns allocation, and the first successful
- * acceptance of a conversation receives `1`.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InboundSequence".
- */
-export type InboundSequence = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ScheduleCompletionReason".
@@ -4666,6 +4687,12 @@ export type AgentIdentity =
  * via the `definition` "ToolOrigin".
  */
 export type ToolOrigin =
+  | {
+      host: {
+        namespace?: string | null;
+        name: string;
+      };
+    }
   | 'builtin'
   | {
       mcp: {
@@ -5427,7 +5454,7 @@ export type RuntimeClientEvent =
           }
         | {
             /**
-             * A typed response to one native interaction.
+             * The accepted response.
              */
             response:
               | {
@@ -5458,7 +5485,7 @@ export type RuntimeClientEvent =
                   response:
                     | {
                         type: 'submitted';
-                        value: QuestionnaireSubmission1;
+                        value: QuestionnaireSubmission2;
                       }
                     | {
                         type: 'declined';
@@ -5946,7 +5973,7 @@ export type RuntimeClientSessionDeletionBlocker =
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AttachmentKind".
  */
-export type AttachmentKind = 'controller';
+export type AttachmentKind = 'writable';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ObservationSource2".
@@ -6328,9 +6355,6 @@ export type ErrorData =
       kind: 'stale_runtime';
     }
   | {
-      kind: 'controller_in_use';
-    }
-  | {
       kind: 'invalid_state';
     }
   | {
@@ -6500,6 +6524,50 @@ export type AuxiliarySegment =
  * via the `definition` "ResyncReason".
  */
 export type ResyncReason = 'replay_unavailable' | 'record_too_large';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ServerMessage".
+ */
+export type ServerMessage =
+  | ServerRequest
+  | {
+      jsonrpc: JsonRpcVersion;
+      method: ServerResolvedMethod;
+      params: ServerRequestResolved;
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ServerRequest".
+ */
+export type ServerRequest = {
+  jsonrpc: JsonRpcVersion;
+  id: AppServerRequestId;
+} & ServerRequest1;
+export type ServerRequest1 =
+  | {
+      method: 'item/tool/call';
+      params: HostToolCall;
+    }
+  | {
+      method: 'item/interaction/request';
+      params: {
+        threadId: ConversationId;
+        interaction: RuntimeClientInteractionHeader;
+      };
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ServerResolvedMethod".
+ */
+export type ServerResolvedMethod = 'serverRequest/resolved';
+/**
+ * Client replies to live server-originated requests. RPC identity is scoped
+ * to the server incarnation; it is never a tool execution or history ID.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ClientReply".
+ */
+export type ClientReply = ClientSuccess | ClientError;
 /**
  * One Workflow node in the authoring/domain layer.
  *
@@ -7320,6 +7388,12 @@ export type InteractionKind =
        * The registry-resolved tool origin.
        */
       origin:
+        | {
+            host: {
+              namespace?: string | null;
+              name: string;
+            };
+          }
         | 'builtin'
         | {
             mcp: {
@@ -7444,6 +7518,48 @@ export type AnswerSpecification =
       type: 'multi_choice';
     };
 /**
+ * A typed response to one native interaction.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InteractionResponse".
+ */
+export type InteractionResponse =
+  | {
+      response: ReviewResponse;
+      type: 'review';
+    }
+  | {
+      /**
+       * The finite approval decision.  It has no tool arguments.
+       */
+      decision:
+        | {
+            type: 'allow';
+          }
+        | {
+            /**
+             * A bounded client-facing reason.
+             */
+            reason: string;
+            type: 'deny';
+          };
+      type: 'approval';
+    }
+  | {
+      /**
+       * A submitted answer set or explicit decline.
+       */
+      response:
+        | {
+            type: 'submitted';
+            value: QuestionnaireSubmission2;
+          }
+        | {
+            type: 'declined';
+          };
+      type: 'questionnaire';
+    };
+/**
  * A typed answer decision accepted from a Runtime Client.
  *
  * Which variants are legal for a given question is decided by that question's
@@ -7507,32 +7623,27 @@ export type ApprovalDecision =
 export type QuestionnaireResponse =
   | {
       type: 'submitted';
-      value: QuestionnaireSubmission1;
+      value: QuestionnaireSubmission2;
     }
   | {
       type: 'declined';
     };
 /**
- * The configurable execution-ownership policy of one tool.
- *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ExecutionPolicyDocument".
+ * via the `definition` "HostToolContent".
  */
-export type ExecutionPolicyDocument = 'foreground_only' | 'background_only' | 'model_selectable';
+export type HostToolContent = {
+  text: string;
+  type: 'inputText';
+};
 /**
- * The configurable in-batch scheduling policy of one tool.
+ * Direction-specific server output. Generic client replies cannot weaken
+ * validation of typed server responses sharing the same JSON-RPC envelope.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ConcurrencyPolicyDocument".
+ * via the `definition` "ServerOutput".
  */
-export type ConcurrencyPolicyDocument = 'sequential' | 'parallel';
-/**
- * The configurable HITL approval policy of one Tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApprovalPolicyDocument".
- */
-export type ApprovalPolicyDocument = 'never' | 'always';
+export type ServerOutput = Response | Notification | ServerMessage;
 /**
  * Where a [`TokenMeasurement`] came from.
  *
@@ -7914,7 +8025,7 @@ export type RuntimeClientTranscriptItem =
             type: 'denied';
           }
         | {
-            submission: QuestionnaireSubmission2;
+            submission: QuestionnaireSubmission1;
             type: 'questionnaire_submitted';
           }
         | {
@@ -7952,6 +8063,7 @@ export type RuntimeClientTranscriptItem =
  * via the `definition` "InboundKind".
  */
 export type InboundKind =
+  | 'queued_message'
   | {
       goal_continuation: GoalRef;
     }
@@ -8039,7 +8151,7 @@ export type InteractionSettlement =
       type: 'denied';
     }
   | {
-      submission: QuestionnaireSubmission2;
+      submission: QuestionnaireSubmission1;
       type: 'questionnaire_submitted';
     }
   | {
@@ -8851,7 +8963,7 @@ export type InteractionOutcome =
     }
   | {
       /**
-       * A typed response to one native interaction.
+       * The accepted response.
        */
       response:
         | {
@@ -8882,7 +8994,7 @@ export type InteractionOutcome =
             response:
               | {
                   type: 'submitted';
-                  value: QuestionnaireSubmission1;
+                  value: QuestionnaireSubmission2;
                 }
               | {
                   type: 'declined';
@@ -8902,6 +9014,27 @@ export type InteractionOutcome =
         | 'subagent_execution_deadline_exceeded';
       type: 'cancelled';
     };
+/**
+ * The configurable execution-ownership policy of one tool.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ExecutionPolicyDocument".
+ */
+export type ExecutionPolicyDocument = 'foreground_only' | 'background_only' | 'model_selectable';
+/**
+ * The configurable in-batch scheduling policy of one tool.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConcurrencyPolicyDocument".
+ */
+export type ConcurrencyPolicyDocument = 'sequential' | 'parallel';
+/**
+ * The configurable HITL approval policy of one Tool.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ApprovalPolicyDocument".
+ */
+export type ApprovalPolicyDocument = 'never' | 'always';
 /**
  * Whether the native compiler admits the candidate's structure.
  *
@@ -9271,6 +9404,19 @@ export interface PresentationCapabilities {
   reviews: boolean;
 }
 /**
+ * Immutable declarations owned by native Session-node metadata. Omitted
+ * namespaces are unqualified; explicit namespaces are nonempty.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostToolDefinition".
+ */
+export interface HostToolDefinition {
+  namespace?: string | null;
+  name: string;
+  description: string;
+  inputSchema: unknown;
+}
+/**
  * Deliberate Session-owned intent. Effective configuration is never persisted.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9412,259 +9558,6 @@ export interface PendingInboundRef {
    * Expected native content revision.
    */
   revision: string;
-}
-/**
- * The root-facing address of a conversation-local interaction.
- *
- * `InteractionId` is allocated inside one conversation/attempt domain and is
- * intentionally not globally unique. The pair is the only identity that
- * crosses a Runtime Client or parent/child routing boundary.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InteractionRef".
- */
-export interface InteractionRef {
-  /**
-   * The conversation-owned semantic interaction domain.
-   */
-  conversation_id: string;
-  /**
-   * The interaction identity allocated by that conversation's coordinator.
-   */
-  interaction_id: string;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ReviewResponse".
- */
-export interface ReviewResponse {
-  instance: WorkflowNodeInstance;
-  subject_digest: string;
-  submission: QuestionnaireSubmission;
-}
-/**
- * One concrete node visit in an owning block instance.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowNodeInstance".
- */
-export interface WorkflowNodeInstance {
-  block: WorkflowBlockInstance;
-  node: string;
-  visit: number;
-}
-/**
- * A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBlockInstance".
- */
-export interface WorkflowBlockInstance {
-  run: WorkflowRunId;
-  definition: WorkflowDefinitionPath;
-  invocations: number[];
-}
-/**
- * Runtime-owned identity, independent of model `ToolCall` text.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowRunId".
- */
-export interface WorkflowRunId {
-  /**
-   * Owning conversation.
-   */
-  conversation_id: string;
-  /**
-   * Real Tool or durable Scheduled origin, unique across recovery.
-   */
-  origin:
-    | {
-        attempt_id: AttemptId;
-        type: 'tool';
-      }
-    | {
-        start_id: ScheduledWorkflowStartId;
-        type: 'scheduled';
-      };
-  /**
-   * WorkflowRuntime-owned invocation ordinal, allocated at run admission.
-   */
-  invocation: string;
-}
-/**
- * Static source location; never a concrete execution authority.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowDefinitionPath".
- */
-export interface WorkflowDefinitionPath {
-  workflow_id: WorkflowId;
-  /**
-   * Pairs of Loop owner node and the fixed child key `body`; empty for root.
-   */
-  blocks: string[];
-}
-/**
- * Every question answered; the action is an option of the last one.
- */
-export interface QuestionnaireSubmission {
-  /**
-   * At most one entry per answered question.
-   */
-  answers: QuestionnaireAnswerEntry[];
-}
-/**
- * One decision for one question. It carries only an index and a decision,
- * never a client-echoed copy of the request facts.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "QuestionnaireAnswerEntry".
- */
-export interface QuestionnaireAnswerEntry {
-  /**
-   * Zero-based index into the immutable questionnaire.
-   */
-  question_index: number;
-  /**
-   * The typed decision for that question.
-   */
-  answer:
-    | {
-        type: 'text';
-        value: TextAnswer;
-      }
-    | {
-        type: 'number';
-        value: NumberAnswer;
-      }
-    | {
-        type: 'integer';
-        value: IntegerAnswer;
-      }
-    | {
-        type: 'boolean';
-        value: BooleanAnswer;
-      }
-    | {
-        type: 'option';
-        value: OptionAnswer;
-      }
-    | {
-        type: 'options';
-        value: OptionsAnswer;
-      }
-    | {
-        type: 'custom';
-        value: CustomAnswer;
-      };
-}
-/**
- * A bounded free-form text answer.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TextAnswer".
- */
-export interface TextAnswer {
-  /**
-   * The bounded user-entered text.
-   */
-  value: string;
-}
-/**
- * A finite numeric answer, carried as canonical binary64 **text**.
- *
- * The value is a [`FiniteNumber`], the same domain the question's bounds and
- * the emitted MCP content use, so what the runtime validates is bit-identical
- * to what it sends — and the wire encoding is the value's own bits, so it is
- * bit-identical to what the client selected too. See [`FiniteNumber`] for why
- * a JSON number could not carry that identity.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NumberAnswer".
- */
-export interface NumberAnswer {
-  /**
-   * The typed value, exactly representable as a finite binary64.
-   */
-  value: string;
-}
-/**
- * A whole-number answer.
- *
- * The value is an [`ExactInteger`], which crosses the Runtime Client protocol
- * as canonical decimal text, so an answer above the binary64 integer frontier
- * round-trips exactly instead of being rounded by a client.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "IntegerAnswer".
- */
-export interface IntegerAnswer {
-  /**
-   * The typed value.
-   */
-  value: ('0' | string) & string;
-}
-/**
- * A typed boolean answer.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "BooleanAnswer".
- */
-export interface BooleanAnswer {
-  /**
-   * The canonical business value, never a `Yes`/`No` display string.
-   */
-  value: boolean;
-}
-/**
- * One declared option selected for a single-choice question.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "OptionAnswer".
- */
-export interface OptionAnswer {
-  /**
-   * The zero-based index into the question's declared options.
-   */
-  option_index: number;
-}
-/**
- * Several declared options selected for a multi-choice question.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "OptionsAnswer".
- */
-export interface OptionsAnswer {
-  /**
-   * Zero-based option indices in ascending canonical order.
-   */
-  option_indices: number[];
-}
-/**
- * A custom answer entered by the user.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "CustomAnswer".
- */
-export interface CustomAnswer {
-  /**
-   * The bounded user-entered answer.
-   */
-  answer: string;
-}
-/**
- * The submitted decisions for one questionnaire. Omitted questions are
- * intentionally allowed so a user may submit a partial questionnaire.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "QuestionnaireSubmission".
- */
-export interface QuestionnaireSubmission1 {
-  /**
-   * At most one entry per answered question.
-   */
-  answers: QuestionnaireAnswerEntry[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -10256,6 +10149,42 @@ export interface Success {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Thread".
+ */
+export interface Thread {
+  id: ConversationId;
+  sessionId: SessionId;
+  nodeId: SessionNodeId;
+  name?: string | null;
+  archived: boolean;
+  dynamicTools: HostToolDefinition[];
+}
+/**
+ * Finite catalog rows omit declaration bodies; one Thread read owns those.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ThreadSummary".
+ */
+export interface ThreadSummary {
+  id: ConversationId;
+  sessionId: SessionId;
+  nodeId: SessionNodeId;
+  name?: string | null;
+  archived: boolean;
+}
+/**
+ * Durable acceptance evidence for a caller-owned input correlation. Lookup
+ * never replays a submission and remains valid after adoption or removal.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundAcceptance".
+ */
+export interface InboundAcceptance {
+  message_id: MessageId;
+  inbound_sequence: InboundSequence;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ScheduledWorkflowRecovery".
  */
 export interface ScheduledWorkflowRecovery {
@@ -10281,6 +10210,34 @@ export interface ScheduledWorkflowHead {
   recovery_blocked?: string | null;
   native_quiescence_proven: boolean;
   result_digest?: string | null;
+}
+/**
+ * Runtime-owned identity, independent of model `ToolCall` text.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowRunId".
+ */
+export interface WorkflowRunId {
+  /**
+   * Owning conversation.
+   */
+  conversation_id: string;
+  /**
+   * Real Tool or durable Scheduled origin, unique across recovery.
+   */
+  origin:
+    | {
+        attempt_id: AttemptId;
+        type: 'tool';
+      }
+    | {
+        start_id: ScheduledWorkflowStartId;
+        type: 'scheduled';
+      };
+  /**
+   * WorkflowRuntime-owned invocation ordinal, allocated at run admission.
+   */
+  invocation: string;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -10313,6 +10270,41 @@ export interface ScheduledWorkflowEffect {
   owner: ScheduledEffectOwner;
   physical_settlement_proven: boolean;
   diagnostic?: string | null;
+}
+/**
+ * One concrete node visit in an owning block instance.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeInstance".
+ */
+export interface WorkflowNodeInstance {
+  block: WorkflowBlockInstance;
+  node: string;
+  visit: number;
+}
+/**
+ * A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBlockInstance".
+ */
+export interface WorkflowBlockInstance {
+  run: WorkflowRunId;
+  definition: WorkflowDefinitionPath;
+  invocations: number[];
+}
+/**
+ * Static source location; never a concrete execution authority.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDefinitionPath".
+ */
+export interface WorkflowDefinitionPath {
+  workflow_id: WorkflowId;
+  /**
+   * Pairs of Loop owner node and the fixed child key `body`; empty for root.
+   */
+  blocks: string[];
 }
 /**
  * A finite catalog page. Failed sources remain explicit instead of becoming empty.
@@ -11832,7 +11824,7 @@ export interface RuntimeClientTranscriptEntry {
               type: 'denied';
             }
           | {
-              submission: QuestionnaireSubmission2;
+              submission: QuestionnaireSubmission1;
               type: 'questionnaire_submitted';
             }
           | {
@@ -12425,6 +12417,7 @@ export interface UserMessageBlock {
    * Typed kind of inbound information.
    */
   kind?:
+    | 'queued_message'
     | {
         goal_continuation: GoalRef;
       }
@@ -12946,6 +12939,12 @@ export interface InteractionRequester {
    * The registry-resolved tool origin, which carries MCP server identity.
    */
   origin:
+    | {
+        host: {
+          namespace?: string | null;
+          name: string;
+        };
+      }
     | 'builtin'
     | {
         mcp: {
@@ -12968,10 +12967,166 @@ export interface QuestionnaireSpecification1 {
   questions: QuestionSpecification[];
 }
 /**
- * The submitted decisions for one questionnaire. Omitted questions are
- * intentionally allowed so a user may submit a partial questionnaire.
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ReviewResponse".
  */
-export interface QuestionnaireSubmission2 {
+export interface ReviewResponse {
+  instance: WorkflowNodeInstance;
+  subject_digest: string;
+  submission: QuestionnaireSubmission;
+}
+/**
+ * Every question answered; the action is an option of the last one.
+ */
+export interface QuestionnaireSubmission {
+  /**
+   * At most one entry per answered question.
+   */
+  answers: QuestionnaireAnswerEntry[];
+}
+/**
+ * One decision for one question. It carries only an index and a decision,
+ * never a client-echoed copy of the request facts.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "QuestionnaireAnswerEntry".
+ */
+export interface QuestionnaireAnswerEntry {
+  /**
+   * Zero-based index into the immutable questionnaire.
+   */
+  question_index: number;
+  /**
+   * The typed decision for that question.
+   */
+  answer:
+    | {
+        type: 'text';
+        value: TextAnswer;
+      }
+    | {
+        type: 'number';
+        value: NumberAnswer;
+      }
+    | {
+        type: 'integer';
+        value: IntegerAnswer;
+      }
+    | {
+        type: 'boolean';
+        value: BooleanAnswer;
+      }
+    | {
+        type: 'option';
+        value: OptionAnswer;
+      }
+    | {
+        type: 'options';
+        value: OptionsAnswer;
+      }
+    | {
+        type: 'custom';
+        value: CustomAnswer;
+      };
+}
+/**
+ * A bounded free-form text answer.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TextAnswer".
+ */
+export interface TextAnswer {
+  /**
+   * The bounded user-entered text.
+   */
+  value: string;
+}
+/**
+ * A finite numeric answer, carried as canonical binary64 **text**.
+ *
+ * The value is a [`FiniteNumber`], the same domain the question's bounds and
+ * the emitted MCP content use, so what the runtime validates is bit-identical
+ * to what it sends — and the wire encoding is the value's own bits, so it is
+ * bit-identical to what the client selected too. See [`FiniteNumber`] for why
+ * a JSON number could not carry that identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "NumberAnswer".
+ */
+export interface NumberAnswer {
+  /**
+   * Canonical finite binary64 bits: lowercase hex, positive zero only; no NaN or infinity.
+   */
+  value: string;
+}
+/**
+ * A whole-number answer.
+ *
+ * The value is an [`ExactInteger`], which crosses the Runtime Client protocol
+ * as canonical decimal text, so an answer above the binary64 integer frontier
+ * round-trips exactly instead of being rounded by a client.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "IntegerAnswer".
+ */
+export interface IntegerAnswer {
+  /**
+   * Canonical i64 decimal text, from -9223372036854775808 through 9223372036854775807; zero is 0, never -0.
+   */
+  value: ('0' | string) & string;
+}
+/**
+ * A typed boolean answer.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BooleanAnswer".
+ */
+export interface BooleanAnswer {
+  /**
+   * The canonical business value, never a `Yes`/`No` display string.
+   */
+  value: boolean;
+}
+/**
+ * One declared option selected for a single-choice question.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "OptionAnswer".
+ */
+export interface OptionAnswer {
+  /**
+   * The zero-based index into the question's declared options.
+   */
+  option_index: number;
+}
+/**
+ * Several declared options selected for a multi-choice question.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "OptionsAnswer".
+ */
+export interface OptionsAnswer {
+  /**
+   * Zero-based option indices in ascending canonical order.
+   */
+  option_indices: number[];
+}
+/**
+ * A custom answer entered by the user.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CustomAnswer".
+ */
+export interface CustomAnswer {
+  /**
+   * The bounded user-entered answer.
+   */
+  answer: string;
+}
+/**
+ * The accepted answer decisions in question order.
+ */
+export interface QuestionnaireSubmission1 {
   /**
    * At most one entry per answered question.
    */
@@ -13452,6 +13607,26 @@ export interface WorkflowInstanceView {
   iterations_max?: number | null;
   loop_exit?: WorkflowLoopExit | null;
   checks_passed?: boolean | null;
+}
+/**
+ * The root-facing address of a conversation-local interaction.
+ *
+ * `InteractionId` is allocated inside one conversation/attempt domain and is
+ * intentionally not globally unique. The pair is the only identity that
+ * crosses a Runtime Client or parent/child routing boundary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InteractionRef".
+ */
+export interface InteractionRef {
+  /**
+   * The conversation-owned semantic interaction domain.
+   */
+  conversation_id: string;
+  /**
+   * The interaction identity allocated by that conversation's coordinator.
+   */
+  interaction_id: string;
 }
 /**
  * The client-visible durable-authority failure state of a conversation
@@ -14204,6 +14379,7 @@ export interface UserMessageBlock1 {
    * Typed kind of inbound information.
    */
   kind?:
+    | 'queued_message'
     | {
         goal_continuation: GoalRef;
       }
@@ -14361,6 +14537,12 @@ export interface InteractionRequest {
          * The registry-resolved tool origin.
          */
         origin:
+          | {
+              host: {
+                namespace?: string | null;
+                name: string;
+              };
+            }
           | 'builtin'
           | {
               mcp: {
@@ -14422,6 +14604,12 @@ export interface InteractionRequester1 {
    * The registry-resolved tool origin, which carries MCP server identity.
    */
   origin:
+    | {
+        host: {
+          namespace?: string | null;
+          name: string;
+        };
+      }
     | 'builtin'
     | {
         mcp: {
@@ -15072,6 +15260,12 @@ export interface RuntimeClientTool {
    * Where the tool comes from.
    */
   origin:
+    | {
+        host: {
+          namespace?: string | null;
+          name: string;
+        };
+      }
     | 'builtin'
     | {
         mcp: {
@@ -15991,7 +16185,7 @@ export interface RuntimeClientProtocolEvent {
             }
           | {
               /**
-               * A typed response to one native interaction.
+               * The accepted response.
                */
               response:
                 | {
@@ -16022,7 +16216,7 @@ export interface RuntimeClientProtocolEvent {
                     response:
                       | {
                           type: 'submitted';
-                          value: QuestionnaireSubmission1;
+                          value: QuestionnaireSubmission2;
                         }
                       | {
                           type: 'declined';
@@ -16511,6 +16705,19 @@ export interface InteractionRef1 {
   interaction_id: string;
 }
 /**
+ * The submitted decisions for one questionnaire. Omitted questions are
+ * intentionally allowed so a user may submit a partial questionnaire.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "QuestionnaireSubmission".
+ */
+export interface QuestionnaireSubmission2 {
+  /**
+   * At most one entry per answered question.
+   */
+  answers: QuestionnaireAnswerEntry[];
+}
+/**
  * The root-facing address of a conversation-local interaction.
  *
  * `InteractionId` is allocated inside one conversation/attempt domain and is
@@ -16664,7 +16871,7 @@ export interface RuntimeClientTranscriptInteractionSettled {
         type: 'denied';
       }
     | {
-        submission: QuestionnaireSubmission2;
+        submission: QuestionnaireSubmission1;
         type: 'questionnaire_submitted';
       }
     | {
@@ -17255,6 +17462,7 @@ export interface UserMessageBlock2 {
    * Typed kind of inbound information.
    */
   kind?:
+    | 'queued_message'
     | {
         goal_continuation: GoalRef;
       }
@@ -17606,11 +17814,11 @@ export interface AgentActiveInterval {
 export interface ServerCapabilities {
   upload_policy: UploadPolicy;
   multi_session: boolean;
-  single_writable_controller: boolean;
+  shared_writable_clients: boolean;
   headless_interactions: boolean;
   /**
-   * Whether this connection holds transport-granted delivery access.
-   * Reporting it grants nothing; the native seam checks the capability.
+   * Ordinary trusted clients may read committed deliveries. Native resource,
+   * provenance, size and connection-lifetime checks still apply.
    */
   delivery_access: boolean;
   experimental_methods: string[];
@@ -18183,6 +18391,12 @@ export interface ToolDefinition {
    * Where a tool comes from.
    */
   origin:
+    | {
+        host: {
+          namespace?: string | null;
+          name: string;
+        };
+      }
     | 'builtin'
     | {
         mcp: {
@@ -18941,6 +19155,53 @@ export interface RpcError {
   code: number;
   message: string;
   data?: ErrorData | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "HostToolCall".
+ */
+export interface HostToolCall {
+  threadId: ConversationId;
+  turnId: AttemptId;
+  callId: ToolCallId;
+  namespace?: string | null;
+  tool: string;
+  arguments: unknown;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ServerRequestResolved".
+ */
+export interface ServerRequestResolved {
+  requestId: AppServerRequestId;
+  threadId: ConversationId;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ClientSuccess".
+ */
+export interface ClientSuccess {
+  jsonrpc: JsonRpcVersion;
+  id: AppServerRequestId;
+  result: unknown;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ClientError".
+ */
+export interface ClientError {
+  jsonrpc: JsonRpcVersion;
+  id: AppServerRequestId;
+  error: ClientRpcError;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ClientRpcError".
+ */
+export interface ClientRpcError {
+  code: number;
+  message: string;
+  data?: unknown;
 }
 /**
  * Complete authored source, with the executable fields at their native YAML
@@ -19787,6 +20048,12 @@ export interface InteractionRequest1 {
          * The registry-resolved tool origin.
          */
         origin:
+          | {
+              host: {
+                namespace?: string | null;
+                name: string;
+              };
+            }
           | 'builtin'
           | {
               mcp: {
@@ -19880,6 +20147,12 @@ export interface InteractionRequester2 {
    * The registry-resolved tool origin, which carries MCP server identity.
    */
   origin:
+    | {
+        host: {
+          namespace?: string | null;
+          name: string;
+        };
+      }
     | 'builtin'
     | {
         mcp: {
@@ -19893,62 +20166,12 @@ export interface InteractionRequester2 {
       };
 }
 /**
- * Configuration of the bounded Time status contributor.
- *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "TimeStatusConfig".
+ * via the `definition` "HostToolResponse".
  */
-export interface TimeStatusConfig1 {
-  /**
-   * Whether Time participates in an available Agent Status opportunity.
-   */
-  enabled?: boolean;
-  /**
-   * The optional IANA timezone used only by Time presentation. Omitting it
-   * renders UTC.
-   */
-  timezone?: string | null;
-}
-/**
- * Configuration of the bounded Background status contributor.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "BackgroundStatusConfig".
- */
-export interface BackgroundStatusConfig1 {
-  /**
-   * Whether Background participates in an available Agent Status opportunity.
-   */
-  enabled?: boolean;
-}
-/**
- * Shared Agent and Workflow Agent override selection. Extensions are composed
- * by their native owner and never enter this ordinary capability vocabulary.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolSelectionDocument".
- */
-export interface ToolSelectionDocument1 {
-  builtin?: string[];
-  sources?: {
-    [k: string]: SourceToolSelection;
-  };
-}
-/**
- * The closed authored composition surface of native Agent Extensions.
- *
- * Every member is a concrete named extension in a closed record.
- * Unknown extension names are rejected. Runtime TOML layers use the separate
- * `snake_case` authoring boundary; resource and wire documents retain their
- * own serialization contract.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativeAgentExtensionsDocument".
- */
-export interface NativeAgentExtensionsDocument1 {
-  agent_status?: AgentStatusExtensionDocument1;
-  todo?: TodoExtensionDocument1;
-  goal?: GoalExtensionDocument1;
+export interface HostToolResponse {
+  success: boolean;
+  contentItems: HostToolContent[];
 }
 /**
  * The original native filesystem root, independent of the viewing lineage.
@@ -20453,7 +20676,7 @@ export interface RuntimeClientTranscriptInteractionSettled1 {
         type: 'denied';
       }
     | {
-        submission: QuestionnaireSubmission2;
+        submission: QuestionnaireSubmission1;
         type: 'questionnaire_submitted';
       }
     | {
@@ -20502,6 +20725,64 @@ export interface RuntimeClientToolCall2 {
   name: string;
   arguments?: unknown;
   metadata_ref?: ContentRef | null;
+}
+/**
+ * Configuration of the bounded Time status contributor.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TimeStatusConfig".
+ */
+export interface TimeStatusConfig1 {
+  /**
+   * Whether Time participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
+  /**
+   * The optional IANA timezone used only by Time presentation. Omitting it
+   * renders UTC.
+   */
+  timezone?: string | null;
+}
+/**
+ * Configuration of the bounded Background status contributor.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BackgroundStatusConfig".
+ */
+export interface BackgroundStatusConfig1 {
+  /**
+   * Whether Background participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
+}
+/**
+ * Shared Agent and Workflow Agent override selection. Extensions are composed
+ * by their native owner and never enter this ordinary capability vocabulary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ToolSelectionDocument".
+ */
+export interface ToolSelectionDocument1 {
+  builtin?: string[];
+  sources?: {
+    [k: string]: SourceToolSelection;
+  };
+}
+/**
+ * The closed authored composition surface of native Agent Extensions.
+ *
+ * Every member is a concrete named extension in a closed record.
+ * Unknown extension names are rejected. Runtime TOML layers use the separate
+ * `snake_case` authoring boundary; resource and wire documents retain their
+ * own serialization contract.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "NativeAgentExtensionsDocument".
+ */
+export interface NativeAgentExtensionsDocument1 {
+  agent_status?: AgentStatusExtensionDocument1;
+  todo?: TodoExtensionDocument1;
+  goal?: GoalExtensionDocument1;
 }
 /**
  * One offline check of one exact candidate document.

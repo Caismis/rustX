@@ -10,7 +10,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/errors';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v72';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v73';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -28,7 +28,7 @@ it('S1-01 User Settings opens with zero Sessions and zero Workspaces without hid
   expect(sourcesReads(s)).toHaveLength(1);
   expect(sourcesReads(s)[0][0]).toEqual({ method: 'configuration/sourcesRead', params: { target: { kind: 'user' } } });
   const names = s.request.mock.calls.map(([op]) => op.method);
-  expect(names.some(name => ['session/create', 'session/attach', 'session/effectiveConfiguration', 'turn/start', 'configuration/reconcile'].includes(name))).toBe(false);
+  expect(names.some(name => ['thread/start', 'thread/resume', 'session/effectiveConfiguration', 'inbound/queue', 'configuration/reconcile'].includes(name))).toBe(false);
   expect(screen.queryByLabelText('Configuration owner')).toBeNull();
 });
 

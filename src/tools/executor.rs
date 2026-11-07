@@ -76,6 +76,7 @@ pub trait ProgressReporter: Send + Sync {
 /// resources (process ids, MCP SDK types) belong inside executor
 /// implementations and never appear here.
 pub struct ToolExecutionContext<'a> {
+    pub(crate) attempt_id: Option<&'a crate::runtime::identity::AttemptId>,
     /// An invocation-local complete stdout channel requested by a native
     /// runtime consumer. It never changes the model-facing preview policy.
     pub(crate) stdout_capture: Option<crate::tools::output::BoundedStdoutCapture>,
@@ -186,6 +187,7 @@ impl<'a> ToolExecutionContext<'a> {
             tool_output: self.tool_output,
             environment: self.environment,
             model_invocation: self.model_invocation,
+            attempt_id: self.attempt_id,
             questionnaire_requester: self
                 .questionnaire_requester
                 .as_ref()
@@ -226,6 +228,7 @@ impl<'a> ToolExecutionContext<'a> {
             tool_output,
             environment,
             model_invocation: None,
+            attempt_id: None,
             questionnaire_requester: None,
             todos: None,
             goal: None,
@@ -2150,6 +2153,7 @@ mod tests {
         let context = ToolExecutionContext {
             stdout_capture: None,
             model_invocation: None,
+            attempt_id: None,
             goal: None,
             schedule: None,
             conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),

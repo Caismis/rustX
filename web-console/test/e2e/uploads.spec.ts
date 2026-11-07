@@ -50,8 +50,8 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     expect(readFileSync(sourcePaths[0], 'utf8')).toBe('UPLOAD_NATIVE_SENTINEL');
     expect(readFileSync(sourcePaths[1])).toEqual(png);
     await submit('Source');
-    // A native receipt, not a browser-constructed ArtifactId, enters turn/start.
-    const input = wire.requests.find(request => request.method === 'turn/start')!.params.content;
+    // A native receipt, not a browser-constructed ArtifactId, enters inbound/queue.
+    const input = wire.requests.find(request => request.method === 'inbound/queue')!.params.content;
     expect(input.filter((block: any) => block.type === 'upload')).toHaveLength(2);
     expect(JSON.stringify(input)).not.toContain('artifact');
     const sourceRequest = (await fixture.control('requests')).requests[0].body;
@@ -77,7 +77,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await expect.poll(() => wire.responses.filter(row => row.method === 'session/detach').length).toBe(detached + 1);
     const observer = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     try {
-      const attached = await observer.client.call('session/attach', { session_id: source }, 'attached');
+      const attached = await observer.client.call('thread/resume', {threadId:(await observer.readSession(source)).active_conversation_id}, 'attached');
       await observer.client.call('session/detach', { target: attached.target }, 'detached');
     } finally { await observer.shutdown(); }
     await page.locator(`button[data-session-id="${source}"]`).hover();
@@ -133,7 +133,7 @@ test('24 files including a six MiB document use the binary lane without a model 
       expect(readFileSync(join(root, batch, name), 'utf8')).toBe(`note ${index}`);
     }
     expect(wire.requests.filter(request => request.method === 'session/uploadPrepare')).toHaveLength(24);
-    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(0);
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); expect(report.failures).toEqual([]); }
 });

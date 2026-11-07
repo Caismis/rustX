@@ -202,6 +202,9 @@ impl std::fmt::Debug for ExecutionCancellation {
 }
 
 impl ExecutionCancellation {
+    pub(crate) fn with_active<T>(&self, admit: impl FnOnce() -> T) -> Option<T> {
+        self.signal.with_active(admit)
+    }
     /// Binds one runtime cancellation signal to the authority that owns its
     /// semantic cause.
     #[must_use]

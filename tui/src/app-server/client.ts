@@ -1,6 +1,7 @@
+import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-server/callbacks.ts';
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
 import { ATTACHMENT_REQUEST_CAPACITY, requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
-import type { Request1 } from '../../../protocol/app-server/v72.ts';
+import type { Request1 } from '../../../protocol/app-server/v73.ts';
 /**
  * The one typed App Server client.
  *
@@ -46,7 +47,7 @@ import type { Request1 } from '../../../protocol/app-server/v72.ts';
  */
 
 import { retainSourceRepair, sourceRepairKey } from "../../../protocol/app-server/source-repair.ts";
-import { decodeProtocolMessage } from "../protocol/decoder.ts";
+import { decodeServerOutput } from "../protocol/decoder.ts";
 
 import {
   describeRpcError,
@@ -73,7 +74,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 72;
+export const APP_SERVER_PROTOCOL_VERSION = 73;
 
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
@@ -128,8 +129,9 @@ export class UncertainOutcomeError extends Error {
   readonly method: MethodName;
   /** The transport failure that lost the response. */
   readonly transportFailure: TransportClosedError;
+  readonly input?: { inputId: string; conversationId: string };
 
-  constructor(method: MethodName, cause: TransportClosedError) {
+  constructor(method: MethodName, cause: TransportClosedError, input?: {inputId:string;conversationId:string}) {
     super(
       `the connection ended before ${method} was answered; whether the server accepted it is unknown`,
       { cause },
@@ -137,6 +139,7 @@ export class UncertainOutcomeError extends Error {
     this.name = "UncertainOutcomeError";
     this.method = method;
     this.transportFailure = cause;
+    this.input = input;
   }
 }
 
@@ -144,6 +147,7 @@ export class UncertainOutcomeError extends Error {
 export type DeliveryMethod = "delivery/read" | "delivery/locate";
 
 interface PendingRequest {
+  readonly input?: {inputId:string;conversationId:string};
   readonly method: MethodName;
   readonly expect: ResultType;
   readonly effect: MethodEffect;
@@ -175,9 +179,11 @@ export interface AppServerClientOptions {
 }
 
 export class AppServerClient {
+  installHostToolHandler(namespace: string | undefined, name: string, handler: HostToolHandler) { return this.callbacks.installHandler(namespace, name, handler); }
   uploadCarrier = transferUpload;
   uploadEndpoint?: string;
   readonly #transport: AppServerTransport;
+  readonly callbacks: ServerCallbacks;
   readonly #pending = new Map<AppServerRequestId, PendingRequest>();
   /** Aborted delivery requests whose cancellation awaits the cancel slot, in
    * abort order. An entry leaves when its cancel is sent or its request
@@ -212,6 +218,7 @@ export class AppServerClient {
 
   private constructor(transport: AppServerTransport) {
     this.#transport = transport;
+    this.callbacks = new ServerCallbacks(message => transport.send(message));
     transport.onMessage((record) => this.#dispatch(record));
     transport.onClose((error) => this.#settleTerminally(error));
   }
@@ -394,6 +401,7 @@ export class AppServerClient {
       };
       this.#pending.set(id, {
         method,
+        ...(inputCorrelation(params) ? {input:inputCorrelation(params)!} : {}),
         expect,
         effect: requestEffect({ method, params } as Request1),
         resolve: (result) => { release(); resolve(result); },
@@ -435,11 +443,13 @@ export class AppServerClient {
       return;
     }
 
-    const record = decodeProtocolMessage(untrusted);
+    const record = decodeServerOutput(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v72 protocol message");
+      this.#fail("invalid App Server v73 protocol message");
       return;
     }
+
+    if (this.callbacks.receive(record)) return;
 
     if (isNotification(record)) {
       if (this.#unrouted !== undefined) {
@@ -505,6 +515,7 @@ export class AppServerClient {
       return;
     }
     this.#closed = error;
+    this.callbacks.clear();
 
     // Every pending request settles exactly once, explicitly. A request that
     // could have changed server state settles as *unknown*, never as failed:
@@ -515,7 +526,7 @@ export class AppServerClient {
     for (const request of pending) {
       request.reject(
         request.effect === "side_effecting"
-          ? new UncertainOutcomeError(request.method, error)
+          ? new UncertainOutcomeError(request.method, error, request.input)
           : error,
       );
     }
@@ -567,12 +578,12 @@ export function isStaleAttachment(error: unknown): boolean {
   );
 }
 
-/** Whether another client already holds this Session's writable control. */
-export function isControllerInUse(error: unknown): boolean {
-  return (
-    error instanceof AppServerRequestError && error.kind === "controller_in_use"
-  );
-}
-
 /** Whether two targets address the same attachment in every identity domain. */
 export type { AttachmentTarget };
+
+function inputCorrelation(params: unknown): {inputId:string;conversationId:string}|undefined {
+  if (!params || typeof params !== 'object' || !('inputId' in params) || typeof params.inputId !== 'string' || !('target' in params)) return;
+  const target = params.target;
+  if (!target || typeof target !== 'object' || !('conversation_id' in target) || typeof target.conversation_id !== 'string') return;
+  return {inputId:params.inputId,conversationId:target.conversation_id};
+}
