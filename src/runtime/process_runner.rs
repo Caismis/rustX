@@ -125,6 +125,19 @@ pub(crate) struct SupervisedCommandSpec {
     pub cancellation: CancellationSignal,
 }
 
+/// Private supervisor launch data. It never comes from the child environment.
+/// The ordinary Bash path leaves this absent; standalone callers supply argv
+/// without shell parsing and retain the same process-tree settlement owner.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ProgramInvocation {
+    pub argv: Vec<String>,
+    pub stdin_socket: Option<PathBuf>,
+    pub terminal: Option<PathBuf>,
+    pub cwd_identity: (u64, u64),
+}
+
+pub(crate) const PROGRAM_INVOCATION_ENV: &str = "RUSTX_SUPERVISOR_PROGRAM";
+
 /// The settlement kind when cancellation/timeout owns the invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Settled {
@@ -800,6 +813,23 @@ impl SupervisedCommandRunner {
         ),
         RunnerSpawnError,
     > {
+        Self::spawn_program(spec, control, None)
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)] // The single shared supervisor spawn boundary.
+    pub(crate) fn spawn_program(
+        spec: &SupervisedCommandSpec,
+        control: Option<RunnerTestControl>,
+        program: Option<&ProgramInvocation>,
+    ) -> Result<
+        (
+            Self,
+            Option<tokio::process::ChildStdout>,
+            Option<tokio::process::ChildStderr>,
+        ),
+        RunnerSpawnError,
+    > {
         #[cfg(not(test))]
         let _ = control;
         #[cfg(test)]
@@ -848,6 +878,13 @@ impl SupervisedCommandRunner {
         }
         supervisor.env(SUPERVISOR_ROLE_ENV, ROLE_OUTER);
         supervisor.env(COMMAND_ENV, &spec.command);
+        if let Some(program) = program {
+            supervisor.env(
+                PROGRAM_INVOCATION_ENV,
+                serde_json::to_string(program)
+                    .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+            );
+        }
         #[cfg(test)]
         if let Some(control) = &control {
             if let Some(path) = &control.anchor_pid_file {

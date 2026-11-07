@@ -46,6 +46,7 @@ async fn rpc(socket: &mut Socket, call: Method) -> MethodResult {
 async fn native_and_browser_share_validation_and_jwt_expiry_only_affects_new_admission() {
     bounded(async {
         let f=Fixture::with_session_count(None,0).await;
+        f.manager.bind_process_policy(crate::local_runtime::app_server_policy::AppServerPolicy {environment_roots:f.workspaces.to_vec(),..Default::default()});
         let secret=b"host-signing-secret-with-at-least-32-bytes";
         let clock=Arc::new(AtomicI64::new(100));
         let signed=jsonwebtoken::encode(&jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),&serde_json::json!({"exp":110,"nbf":90,"iss":"host","aud":"rustx","role":"readonly","thread":"unrelated"}),&jsonwebtoken::EncodingKey::from_secret(secret)).unwrap();
@@ -63,6 +64,13 @@ async fn native_and_browser_share_validation_and_jwt_expiry_only_affects_new_adm
                 assert_eq!(response.headers().contains_key("Sec-WebSocket-Protocol"),browser);
                 let MethodResult::Initialized {capabilities,..}=rpc(&mut socket,Method::Initialize(InitializeParams {protocol_version:APP_SERVER_PROTOCOL_VERSION,client:ClientIdentity {name:if browser {"browser"}else{"native"}.into(),version:"1".into()},presentation:PresentationCapabilities::default()})).await else {panic!("initialized")};
                 assert!(capabilities.shared_writable_clients);
+                let path=f.workspaces[0].join(format!("trusted-environment-{index}-{browser}"));
+                assert!(matches!(rpc(&mut socket,Method::FsWriteFile {path:path.display().to_string(),data_base64:"dHJ1c3RlZA==".into(),expected_revision:None}).await,MethodResult::FileMetadata {..}));
+                assert!(matches!(rpc(&mut socket,Method::FsGetMetadata {path:path.display().to_string()}).await,MethodResult::FileMetadata {..}));
+                let params=serde_json::from_value(serde_json::json!({"command":["/usr/bin/printf","trusted"],"cwd":f.workspaces[0]})).unwrap();
+                let MethodResult::CommandExec {result}=rpc(&mut socket,Method::CommandExec(params)).await else {panic!("equal command eligibility")};
+                assert_eq!(result.exit_code,Some(0));
+                assert!(matches!(rpc(&mut socket,Method::SkillsList {target:crate::local_runtime::configuration::settings::SourceTarget::User,offset:0,limit:32,expected_revision:None}).await,MethodResult::Skills {..}));
                 peers.push(socket);
             }
             let MethodResult::SessionTransition {thread,..}=rpc(&mut peers[0],Method::SessionCreate {settings:crate::local_runtime::session::SessionPersistentState {cwd:f.workspaces[0].clone(),model:None},dynamic_tools:vec![],submission:None}).await else {panic!("ordinary write eligibility")};

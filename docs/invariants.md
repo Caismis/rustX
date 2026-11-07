@@ -1,5 +1,14 @@
 # Runtime Invariants
 
+## Environment service ownership (#533)
+
+1. Every authenticated, initialized ordinary client has equal command/file/management API eligibility; common native source, OS, state, secret and capacity restrictions remain effective.
+2. Independent process IDs and watch IDs route only within their creating connection. Disconnect cancels independent processes and retires watches; accepted Agent work remains server-owned.
+3. Native process-tree settlement and ordered output acceptance precede final command response and capacity release. Cancellation receipts do not prove physical settlement, and lost responses never restart a command.
+4. Filesystem operations retain granted root/source identity and descriptor authority through physical work. Atomic single-file publication has an explicit revision/commit boundary; partial tree operations and unknown post-commit outcomes require rereads.
+5. Watch notifications are bounded hints, with exact incarnation retirement and explicit reread requirements. Configuration remains owned by native revisions, source authority and safe automatic application; admitted Attempts retain their frozen context.
+6. Provider/App Server secrets are not implicitly inherited by commands or read back through management projections. See [the complete contract](app-server/environment-services.md).
+
 ## Bounded conversation observation (Issue #467, RFC v3)
 
 Conversation observation is bounded by encoded transport bytes, incremental by

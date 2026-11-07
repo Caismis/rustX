@@ -31,6 +31,124 @@ export type JsonRpcVersion = '2.0';
 export type AppServerRequestId = string | number;
 export type Request1 =
   | {
+      method: 'mcp/catalog';
+      params: {
+        target: SourceTarget;
+        id: McpServerId;
+        expected_revision: string;
+        kind: CatalogKind;
+      };
+    }
+  | {
+      method: 'skills/list';
+      params: {
+        target: SourceTarget;
+        offset: number;
+        limit: number;
+        expected_revision?: string | null;
+      };
+    }
+  | {
+      method: 'skills/read';
+      params: {
+        target: SourceTarget;
+        name: string;
+        kind: SkillContentKind;
+        offset: string;
+        max_bytes: number;
+        expected_revision?: string | null;
+      };
+    }
+  | {
+      method: 'command/exec';
+      params: ExecParams;
+    }
+  | {
+      method: 'command/exec/write';
+      params: WriteParams;
+    }
+  | {
+      method: 'command/exec/resize';
+      params: {
+        processId: string;
+        size: TerminalSize;
+      };
+    }
+  | {
+      method: 'command/exec/terminate';
+      params: {
+        processId: string;
+      };
+    }
+  | {
+      method: 'fs/readFile';
+      params: {
+        path: string;
+        offset: string;
+        maxBytes: number;
+        expectedRevision?: string | null;
+      };
+    }
+  | {
+      method: 'fs/writeFile';
+      params: {
+        path: string;
+        dataBase64: string;
+        expectedRevision?: string | null;
+      };
+    }
+  | {
+      method: 'fs/readDirectory';
+      params: {
+        path: string;
+        offset: number;
+        limit: number;
+        expectedRevision?: string | null;
+      };
+    }
+  | {
+      method: 'fs/getMetadata';
+      params: {
+        path: string;
+      };
+    }
+  | {
+      method: 'fs/createDirectory';
+      params: {
+        path: string;
+        recursive: boolean;
+      };
+    }
+  | {
+      method: 'fs/remove';
+      params: {
+        path: string;
+        recursive: boolean;
+        force: boolean;
+      };
+    }
+  | {
+      method: 'fs/copy';
+      params: {
+        sourcePath: string;
+        destinationPath: string;
+        recursive: boolean;
+      };
+    }
+  | {
+      method: 'fs/watch';
+      params: {
+        watchId: string;
+        path: string;
+      };
+    }
+  | {
+      method: 'fs/unwatch';
+      params: {
+        watchId: string;
+      };
+    }
+  | {
       method: 'thread/read';
       params: {
         threadId: ConversationId;
@@ -1229,6 +1347,37 @@ export type Request1 =
       };
     };
 /**
+ * Native source authority. A Session is never an authoring target.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SourceTarget".
+ */
+export type SourceTarget =
+  | {
+      kind: 'user';
+    }
+  | {
+      directory: string;
+      kind: 'workspace';
+    };
+/**
+ * Identifies an MCP server bound to the runtime.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpServerId".
+ */
+export type McpServerId = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CatalogKind".
+ */
+export type CatalogKind = 'tools' | 'resources' | 'templates';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillContentKind".
+ */
+export type SkillContentKind = 'instructions' | 'metadata';
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ConversationId".
  */
@@ -1861,27 +2010,6 @@ export type EffectiveFieldName =
   | 'effective_model'
   | 'admitted_attempt';
 /**
- * Native source authority. A Session is never an authoring target.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceTarget".
- */
-export type SourceTarget =
-  | {
-      kind: 'user';
-    }
-  | {
-      directory: string;
-      kind: 'workspace';
-    };
-/**
- * Identifies an MCP server bound to the runtime.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "McpServerId".
- */
-export type McpServerId = string;
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceFieldName".
  */
@@ -2432,6 +2560,33 @@ export type Response = Success | Failure;
  */
 export type MethodResult =
   | {
+      page: SkillPage;
+      type: 'skills';
+    }
+  | {
+      content: SkillContent;
+      type: 'skill_content';
+    }
+  | {
+      result: ExecResult;
+      type: 'command_exec';
+    }
+  | {
+      type: 'environment_accepted';
+    }
+  | {
+      chunk: FileChunk;
+      type: 'file_chunk';
+    }
+  | {
+      metadata: FileMetadata;
+      type: 'file_metadata';
+    }
+  | {
+      page: DirectoryPage;
+      type: 'directory_page';
+    }
+  | {
       thread: Thread;
       type: 'thread';
     }
@@ -2884,6 +3039,179 @@ export type MethodResult =
       projection: BoundedSessionSettings;
       type: 'settings';
     };
+/**
+ * One typed generation-scoped Skill discovery fact.
+ *
+ * The variant declaration order, followed by the field order, **is** the
+ * canonical diagnostic order: the derived [`Ord`] is the only sort key, so
+ * no consumer can observe a filesystem-enumeration-dependent ordering.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillDiagnostic".
+ */
+export type SkillDiagnostic =
+  | {
+      /**
+       * The source whose root is absent.
+       */
+      source: 'user' | 'workspace';
+      /**
+       * The resolved root path.
+       */
+      root: string;
+      kind: 'source_root_missing';
+    }
+  | {
+      /**
+       * The source whose root is unusable.
+       */
+      source: 'user' | 'workspace';
+      /**
+       * The resolved root path.
+       */
+      root: string;
+      kind: 'source_root_invalid';
+    }
+  | {
+      /**
+       * The source whose cumulative budget was exhausted.
+       */
+      source: 'user' | 'workspace';
+      /**
+       * The fixed collection root, represented in canonical order.
+       */
+      roots: string[];
+      /**
+       * The source's total candidate count.
+       */
+      candidates: number;
+      /**
+       * The source's cumulative candidate budget.
+       */
+      limit: number;
+      kind: 'source_budget_exceeded';
+    }
+  | {
+      /**
+       * The source the candidate was found under.
+       */
+      source: 'user' | 'workspace';
+      /**
+       * The candidate package directory.
+       */
+      package: string;
+      /**
+       * The preserved typed validation cause.
+       */
+      cause:
+        | {
+            directory: string;
+            cause: 'invalid_name';
+          }
+        | {
+            directory: string;
+            cause: 'name_directory_mismatch';
+          }
+        | {
+            directory: string;
+            cause: 'missing_skill_markdown';
+          }
+        | {
+            directory: string;
+            cause: 'skill_markdown_not_regular_file';
+          }
+        | {
+            directory: string;
+            cause: 'malformed_frontmatter';
+          }
+        | {
+            directory: string;
+            cause: 'invalid_description';
+          }
+        | {
+            directory: string;
+            cause: 'invalid_compatibility';
+          }
+        | {
+            directory: string;
+            cause: 'malformed_metadata';
+          }
+        | {
+            directory: string;
+            cause: 'invalid_dependency_declaration';
+          }
+        | {
+            path: string;
+            cause: 'unsupported_symlink';
+          }
+        | {
+            path: string;
+            cause: 'unrepresentable_root';
+          }
+        | {
+            path: string;
+            cause: 'io';
+          };
+      kind: 'package_invalid';
+    }
+  | {
+      /**
+       * The source that offered the candidate.
+       */
+      source: 'user' | 'workspace';
+      /**
+       * The candidate package directory as offered.
+       */
+      package: string;
+      /**
+       * The canonical source root the candidate left.
+       */
+      root: string;
+      kind: 'package_escapes_source';
+    }
+  | {
+      /**
+       * The scope that defines the identity more than once.
+       */
+      source: 'user' | 'workspace';
+      /**
+       * The contested logical Skill identity.
+       */
+      name: string;
+      /**
+       * Every conflicting package root, in canonical order.
+       */
+      packages: string[];
+      kind: 'duplicate_identity';
+    }
+  | {
+      /**
+       * The contested logical Skill identity.
+       */
+      name: string;
+      /**
+       * The source that owns the effective package.
+       */
+      effective_source: 'user' | 'workspace';
+      /**
+       * The effective package's `SKILL.md` location.
+       */
+      effective_location: string;
+      /**
+       * The source whose package was shadowed.
+       */
+      shadowed_source: 'user' | 'workspace';
+      /**
+       * The shadowed package's `SKILL.md` location.
+       */
+      shadowed_location: string;
+      kind: 'shadowed';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ExecStatus".
+ */
+export type ExecStatus = 'completed' | 'timedOut' | 'terminated' | 'processControlFailed';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ThreadStatus".
@@ -4941,174 +5269,6 @@ export type SourceInspection =
       status: 'unavailable';
     };
 /**
- * One typed generation-scoped Skill discovery fact.
- *
- * The variant declaration order, followed by the field order, **is** the
- * canonical diagnostic order: the derived [`Ord`] is the only sort key, so
- * no consumer can observe a filesystem-enumeration-dependent ordering.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SkillDiagnostic".
- */
-export type SkillDiagnostic =
-  | {
-      /**
-       * The source whose root is absent.
-       */
-      source: 'user' | 'workspace';
-      /**
-       * The resolved root path.
-       */
-      root: string;
-      kind: 'source_root_missing';
-    }
-  | {
-      /**
-       * The source whose root is unusable.
-       */
-      source: 'user' | 'workspace';
-      /**
-       * The resolved root path.
-       */
-      root: string;
-      kind: 'source_root_invalid';
-    }
-  | {
-      /**
-       * The source whose cumulative budget was exhausted.
-       */
-      source: 'user' | 'workspace';
-      /**
-       * The fixed collection root, represented in canonical order.
-       */
-      roots: string[];
-      /**
-       * The source's total candidate count.
-       */
-      candidates: number;
-      /**
-       * The source's cumulative candidate budget.
-       */
-      limit: number;
-      kind: 'source_budget_exceeded';
-    }
-  | {
-      /**
-       * The source the candidate was found under.
-       */
-      source: 'user' | 'workspace';
-      /**
-       * The candidate package directory.
-       */
-      package: string;
-      /**
-       * The preserved typed validation cause.
-       */
-      cause:
-        | {
-            directory: string;
-            cause: 'invalid_name';
-          }
-        | {
-            directory: string;
-            cause: 'name_directory_mismatch';
-          }
-        | {
-            directory: string;
-            cause: 'missing_skill_markdown';
-          }
-        | {
-            directory: string;
-            cause: 'skill_markdown_not_regular_file';
-          }
-        | {
-            directory: string;
-            cause: 'malformed_frontmatter';
-          }
-        | {
-            directory: string;
-            cause: 'invalid_description';
-          }
-        | {
-            directory: string;
-            cause: 'invalid_compatibility';
-          }
-        | {
-            directory: string;
-            cause: 'malformed_metadata';
-          }
-        | {
-            directory: string;
-            cause: 'invalid_dependency_declaration';
-          }
-        | {
-            path: string;
-            cause: 'unsupported_symlink';
-          }
-        | {
-            path: string;
-            cause: 'unrepresentable_root';
-          }
-        | {
-            path: string;
-            cause: 'io';
-          };
-      kind: 'package_invalid';
-    }
-  | {
-      /**
-       * The source that offered the candidate.
-       */
-      source: 'user' | 'workspace';
-      /**
-       * The candidate package directory as offered.
-       */
-      package: string;
-      /**
-       * The canonical source root the candidate left.
-       */
-      root: string;
-      kind: 'package_escapes_source';
-    }
-  | {
-      /**
-       * The scope that defines the identity more than once.
-       */
-      source: 'user' | 'workspace';
-      /**
-       * The contested logical Skill identity.
-       */
-      name: string;
-      /**
-       * Every conflicting package root, in canonical order.
-       */
-      packages: string[];
-      kind: 'duplicate_identity';
-    }
-  | {
-      /**
-       * The contested logical Skill identity.
-       */
-      name: string;
-      /**
-       * The source that owns the effective package.
-       */
-      effective_source: 'user' | 'workspace';
-      /**
-       * The effective package's `SKILL.md` location.
-       */
-      effective_location: string;
-      /**
-       * The source whose package was shadowed.
-       */
-      shadowed_source: 'user' | 'workspace';
-      /**
-       * The shadowed package's `SKILL.md` location.
-       */
-      shadowed_location: string;
-      kind: 'shadowed';
-    };
-/**
  * The redacted client-facing projection of an auxiliary policy.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -6231,6 +6391,18 @@ export type WorkflowReferenceCompatibility = 'compatible' | 'incompatible' | 'un
  */
 export type ErrorData =
   | {
+      kind: 'connection_closed';
+    }
+  | {
+      kind: 'environment_unauthorized';
+    }
+  | {
+      kind: 'environment_resource_not_found';
+    }
+  | {
+      kind: 'environment_capacity_or_conflict';
+    }
+  | {
       reason: AuxiliaryFailure;
       kind: 'auxiliary';
     }
@@ -6446,6 +6618,14 @@ export type Notification = {
 } & Notification1;
 export type Notification1 =
   | {
+      method: 'command/exec/outputDelta';
+      params: OutputDelta;
+    }
+  | {
+      method: 'fs/changed';
+      params: Changed;
+    }
+  | {
       method: 'thread/status/changed';
       params: ThreadStatusEntry;
     }
@@ -6542,6 +6722,11 @@ export type Notification1 =
         catalog_changed: boolean;
       };
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "OutputStream".
+ */
+export type OutputStream = 'stdout' | 'stderr';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AuxiliarySegment".
@@ -7687,6 +7872,76 @@ export type HostToolContent = {
  * via the `definition` "ServerOutput".
  */
 export type ServerOutput = Response | Notification | ServerMessage;
+/**
+ * One Skill source authority.
+ *
+ * The declaration order **is** the precedence order: a later variant wins
+ * the same logical Skill identity against an earlier one.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillSource".
+ */
+export type SkillSource = 'user' | 'workspace';
+/**
+ * A parsing/validation failure of **one** Skill package.
+ *
+ * Every variant identifies the responsible candidate. A failure here
+ * excludes exactly that candidate and is preserved verbatim inside
+ * [`SkillDiagnostic::PackageInvalid`]; it never fails discovery, and it
+ * never suppresses an unrelated valid package.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillPackageError".
+ */
+export type SkillPackageError =
+  | {
+      directory: string;
+      cause: 'invalid_name';
+    }
+  | {
+      directory: string;
+      cause: 'name_directory_mismatch';
+    }
+  | {
+      directory: string;
+      cause: 'missing_skill_markdown';
+    }
+  | {
+      directory: string;
+      cause: 'skill_markdown_not_regular_file';
+    }
+  | {
+      directory: string;
+      cause: 'malformed_frontmatter';
+    }
+  | {
+      directory: string;
+      cause: 'invalid_description';
+    }
+  | {
+      directory: string;
+      cause: 'invalid_compatibility';
+    }
+  | {
+      directory: string;
+      cause: 'malformed_metadata';
+    }
+  | {
+      directory: string;
+      cause: 'invalid_dependency_declaration';
+    }
+  | {
+      path: string;
+      cause: 'unsupported_symlink';
+    }
+  | {
+      path: string;
+      cause: 'unrepresentable_root';
+    }
+  | {
+      path: string;
+      cause: 'io';
+    };
 /**
  * Where a [`TokenMeasurement`] came from.
  *
@@ -8924,76 +9179,6 @@ export type CapabilitySourceStateView =
       type: 'unavailable';
     };
 /**
- * One Skill source authority.
- *
- * The declaration order **is** the precedence order: a later variant wins
- * the same logical Skill identity against an earlier one.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SkillSource".
- */
-export type SkillSource = 'user' | 'workspace';
-/**
- * A parsing/validation failure of **one** Skill package.
- *
- * Every variant identifies the responsible candidate. A failure here
- * excludes exactly that candidate and is preserved verbatim inside
- * [`SkillDiagnostic::PackageInvalid`]; it never fails discovery, and it
- * never suppresses an unrelated valid package.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SkillPackageError".
- */
-export type SkillPackageError =
-  | {
-      directory: string;
-      cause: 'invalid_name';
-    }
-  | {
-      directory: string;
-      cause: 'name_directory_mismatch';
-    }
-  | {
-      directory: string;
-      cause: 'missing_skill_markdown';
-    }
-  | {
-      directory: string;
-      cause: 'skill_markdown_not_regular_file';
-    }
-  | {
-      directory: string;
-      cause: 'malformed_frontmatter';
-    }
-  | {
-      directory: string;
-      cause: 'invalid_description';
-    }
-  | {
-      directory: string;
-      cause: 'invalid_compatibility';
-    }
-  | {
-      directory: string;
-      cause: 'malformed_metadata';
-    }
-  | {
-      directory: string;
-      cause: 'invalid_dependency_declaration';
-    }
-  | {
-      path: string;
-      cause: 'unsupported_symlink';
-    }
-  | {
-      path: string;
-      cause: 'unrepresentable_root';
-    }
-  | {
-      path: string;
-      cause: 'io';
-    };
-/**
  * The terminal outcome delivered to the semantic waiter.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9142,6 +9327,45 @@ export type ModelPolicyInspection =
 
 export interface ProtocolTypes {
   message: ProtocolMessage;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ExecParams".
+ */
+export interface ExecParams {
+  /**
+   * @minItems 1
+   * @maxItems 256
+   */
+  command: [string, ...string[]];
+  cwd: string;
+  env?: {
+    [k: string]: string | null;
+  };
+  processId?: string | null;
+  tty?: boolean;
+  streamStdin?: boolean;
+  streamStdoutStderr?: boolean;
+  outputBytesCap?: number | null;
+  timeoutMs?: number | null;
+  size?: TerminalSize | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TerminalSize".
+ */
+export interface TerminalSize {
+  rows: number;
+  cols: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WriteParams".
+ */
+export interface WriteParams {
+  processId: string;
+  deltaBase64?: string | null;
+  closeStdin?: boolean;
 }
 /**
  * Every attached operation addresses all routing domains explicitly.
@@ -10011,6 +10235,13 @@ export interface InvocationPolicyDocument {
  * via the `definition` "AppServerPolicy".
  */
 export interface AppServerPolicy {
+  /**
+   * Instance-wide native roots for standalone commands and filesystem RPCs.
+   * Empty denies these operations. Only User/Host configuration owns grants.
+   *
+   * @maxItems 32
+   */
+  environment_roots?: string[];
   max_resident_runtimes?: number;
   max_connections?: number;
   max_external_attachments?: number;
@@ -10189,6 +10420,156 @@ export interface Success {
   jsonrpc: JsonRpcVersion;
   id: AppServerRequestId;
   result: MethodResult;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillPage".
+ */
+export interface SkillPage {
+  data: SkillDescriptor[];
+  diagnostics: SkillDiagnostic[];
+  diagnostics_truncated: boolean;
+  next_offset?: number | null;
+  revision: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillDescriptor".
+ */
+export interface SkillDescriptor {
+  catalog: SkillCatalogEntry;
+  provenance: SkillProvenance;
+  metadata_revision: string;
+}
+/**
+ * One model-visible Skill catalog entry: standard metadata plus the host
+ * location of the primary instructions file.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillCatalogEntry".
+ */
+export interface SkillCatalogEntry {
+  /**
+   * The validated standard Skill name.
+   */
+  name: string;
+  /**
+   * The validated standard Skill description.
+   */
+  description: string;
+  /**
+   * The canonical absolute host path of the package's `SKILL.md`. The
+   * model passes it to Read, and resolves the Skill's own relative
+   * references against its parent directory.
+   */
+  location: string;
+}
+/**
+ * The provenance record of one effective Skill identity.
+ *
+ * This is generation/inspection metadata. It deliberately never enters the
+ * model-facing catalog: a Skill's instructions are not improved by knowing
+ * which root won it.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillProvenance".
+ */
+export interface SkillProvenance {
+  /**
+   * The effective logical Skill identity.
+   */
+  name: string;
+  /**
+   * The source that owns the effective package.
+   */
+  source: 'user' | 'workspace';
+  /**
+   * The effective package's `SKILL.md` location.
+   */
+  location: string;
+  /**
+   * Valid same-identity packages that lost the merge, in canonical order.
+   */
+  shadowed: ShadowedSkill[];
+}
+/**
+ * One valid package that a higher-precedence source shadowed.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ShadowedSkill".
+ */
+export interface ShadowedSkill {
+  /**
+   * The source whose package was shadowed.
+   */
+  source: 'user' | 'workspace';
+  /**
+   * The shadowed package's `SKILL.md` location.
+   */
+  location: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillContent".
+ */
+export interface SkillContent {
+  skill: SkillDescriptor;
+  revision: string;
+  kind: SkillContentKind;
+  data_base64: string;
+  next_offset?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ExecResult".
+ */
+export interface ExecResult {
+  exitCode?: number | null;
+  status: ExecStatus;
+  stdoutBase64: string;
+  stderrBase64: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "FileChunk".
+ */
+export interface FileChunk {
+  dataBase64: string;
+  offset: string;
+  nextOffset?: string | null;
+  metadata: FileMetadata;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "FileMetadata".
+ */
+export interface FileMetadata {
+  isDirectory: boolean;
+  isFile: boolean;
+  isSymlink: boolean;
+  size: string;
+  revision: string;
+  identity: string;
+  modifiedAtMs?: number | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "DirectoryPage".
+ */
+export interface DirectoryPage {
+  entries: DirectoryEntry[];
+  nextOffset?: number | null;
+  revision: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "DirectoryEntry".
+ */
+export interface DirectoryEntry {
+  fileName: string;
+  metadata: FileMetadata;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -15532,50 +15913,6 @@ export interface ToolInspection {
   origin: ToolOrigin;
 }
 /**
- * The provenance record of one effective Skill identity.
- *
- * This is generation/inspection metadata. It deliberately never enters the
- * model-facing catalog: a Skill's instructions are not improved by knowing
- * which root won it.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SkillProvenance".
- */
-export interface SkillProvenance {
-  /**
-   * The effective logical Skill identity.
-   */
-  name: string;
-  /**
-   * The source that owns the effective package.
-   */
-  source: 'user' | 'workspace';
-  /**
-   * The effective package's `SKILL.md` location.
-   */
-  location: string;
-  /**
-   * Valid same-identity packages that lost the merge, in canonical order.
-   */
-  shadowed: ShadowedSkill[];
-}
-/**
- * One valid package that a higher-precedence source shadowed.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ShadowedSkill".
- */
-export interface ShadowedSkill {
-  /**
-   * The source whose package was shadowed.
-   */
-  source: 'user' | 'workspace';
-  /**
-   * The shadowed package's `SKILL.md` location.
-   */
-  location: string;
-}
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ExtensionInspection".
  */
@@ -18508,6 +18845,82 @@ export interface McpProbeResult {
   id: McpServerId;
   revision: string;
   outcome: McpProbeOutcome;
+  page?: CatalogPage | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CatalogPage".
+ */
+export interface CatalogPage {
+  capabilities: McpNegotiatedCapabilities;
+  kind: CatalogKind;
+  tools: CanonicalMcpTool[];
+  resources: ResourceDescriptor[];
+  templates: TemplateDescriptor[];
+}
+/**
+ * Capability facts captured by one successful server handshake.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpNegotiatedCapabilities".
+ */
+export interface McpNegotiatedCapabilities {
+  /**
+   * The server accepts ordinary MCP tool operations.
+   */
+  tools: boolean;
+  /**
+   * The server accepts the standard read-only Resource operations.
+   */
+  resources: boolean;
+}
+/**
+ * A canonicalized MCP tool definition at the adapter boundary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CanonicalMcpTool".
+ */
+export interface CanonicalMcpTool {
+  /**
+   * Remote model-facing name.
+   */
+  name: string;
+  /**
+   * Remote description, normalized to a string.
+   */
+  description: string;
+  /**
+   * Canonical JSON schema.
+   */
+  input_schema: {
+    [k: string]: unknown;
+  };
+  /**
+   * The declared schema of the tool's `structuredContent`, when it has one.
+   */
+  output_schema?: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourceDescriptor".
+ */
+export interface ResourceDescriptor {
+  uri: string;
+  name: string;
+  description?: string | null;
+  mime_type?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TemplateDescriptor".
+ */
+export interface TemplateDescriptor {
+  uri_template: string;
+  name: string;
+  description?: string | null;
+  mime_type?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -19215,6 +19628,27 @@ export interface RpcError {
   code: number;
   message: string;
   data?: ErrorData | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "OutputDelta".
+ */
+export interface OutputDelta {
+  processId: string;
+  sequence: string;
+  stream: OutputStream;
+  deltaBase64: string;
+  capReached: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed".
+ */
+export interface Changed {
+  watchId: string;
+  changedPaths: string[];
+  resyncRequired: boolean;
+  retired: boolean;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

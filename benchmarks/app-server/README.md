@@ -51,3 +51,21 @@ The comparable Host modes all issue exactly 40 model requests for 20 Turns.
 Tool continuations and extra subscribers do not add native Turns or model calls.
 The no-Host mode has a different workload (20 model requests), so its lower cost
 must not be interpreted as the isolated cost of callback arbitration.
+
+## Environment-service extension (#533)
+
+The existing Turn workload remains the comparison against the merged #532
+baseline. `environment.mts` adds five warmups and twenty sequential native
+write/read/watch/argv/unwatch/remove cycles per mode, plus a separate peak of
+four live commands and eight watches. It uses the existing product client and
+an existing zero-request provider fixture; any model request fails the run.
+
+```sh
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 node benchmarks/app-server/environment.mts /tmp/environment-measurements.json
+```
+
+`process.mts` shares the Linux/proxy measurement helpers between both harnesses.
+The environment harness also records descriptor counts, reaped child CPU and
+process-tree cleanup. Summed process RSS counts shared pages repeatedly. The
+[issue delivery report](../../docs/issue-533/README.md) records the baseline,
+candidate and environment samples with their source and binary identities.

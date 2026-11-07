@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { RuntimeClientGoalSnapshot, RuntimeClientJob } from '../../../protocol/app-server/v74';
+import type { RuntimeClientGoalSnapshot, RuntimeClientJob } from '../../../protocol/app-server/v75';
 import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { useWorkflowContent } from '../../src/app/agent/useWorkflowContent';
 import { WorkflowRunPanel } from '../../src/app/agent/WorkflowRunPanel';

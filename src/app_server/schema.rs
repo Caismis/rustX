@@ -824,6 +824,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     workflow_fixtures(&mut fixtures);
     schedule_fixtures(&mut fixtures);
     reasoning_order_fixtures(&mut fixtures);
+    environment_fixtures(&mut fixtures);
     fixtures
 }
 
@@ -1425,6 +1426,142 @@ fn report_reference(
     }
 }
 
+#[allow(clippy::too_many_lines)] // Canonical constructors exercise every new method family.
+fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
+    let source = crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+        directory: "/workspace".into(),
+    };
+    let path = "/workspace/file".to_owned();
+    let params = super::command::ExecParams {
+        command: vec!["/usr/bin/printf".into(), "%s".into(), "literal".into()],
+        cwd: "/workspace".into(),
+        env: std::collections::BTreeMap::new(),
+        process_id: Some("process-fixture".into()),
+        tty: false,
+        stream_stdin: true,
+        stream_stdout_stderr: true,
+        output_bytes_cap: Some(65536),
+        timeout_ms: Some(60000),
+        size: None,
+    };
+    let methods = vec![
+        Method::CommandExec(params),
+        Method::CommandWrite(super::command::WriteParams {
+            process_id: "process-fixture".into(),
+            delta_base64: Some("AP8=".into()),
+            close_stdin: true,
+        }),
+        Method::CommandResize {
+            process_id: "process-fixture".into(),
+            size: super::command::TerminalSize { rows: 24, cols: 80 },
+        },
+        Method::CommandTerminate {
+            process_id: "process-fixture".into(),
+        },
+        Method::FsReadFile {
+            path: path.clone(),
+            offset: 0,
+            max_bytes: 65536,
+            expected_revision: None,
+        },
+        Method::FsWriteFile {
+            path: path.clone(),
+            data_base64: "aGk=".into(),
+            expected_revision: Some("native-revision".into()),
+        },
+        Method::FsGetMetadata { path: path.clone() },
+        Method::FsReadDirectory {
+            path: "/workspace".into(),
+            offset: 0,
+            limit: 32,
+            expected_revision: None,
+        },
+        Method::FsCreateDirectory {
+            path: "/workspace/new".into(),
+            recursive: true,
+        },
+        Method::FsCopy {
+            source_path: path.clone(),
+            destination_path: "/workspace/copy".into(),
+            recursive: false,
+        },
+        Method::FsRemove {
+            path,
+            recursive: false,
+            force: false,
+        },
+        Method::FsWatch {
+            watch_id: "watch-fixture".into(),
+            path: "/workspace".into(),
+        },
+        Method::FsUnwatch {
+            watch_id: "watch-fixture".into(),
+        },
+        Method::SkillsList {
+            target: source.clone(),
+            offset: 0,
+            limit: 32,
+            expected_revision: None,
+        },
+        Method::SkillsRead {
+            target: source.clone(),
+            name: "example".into(),
+            kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
+            offset: 0,
+            max_bytes: 65536,
+            expected_revision: None,
+        },
+        Method::McpCatalog {
+            target: source,
+            id: crate::runtime::identity::McpServerId::new("example"),
+            expected_revision: "source-revision".into(),
+            kind: crate::tools::mcp::catalog::CatalogKind::Resources,
+        },
+    ];
+    for (index, call) in methods.into_iter().enumerate() {
+        fixtures.push(ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String(format!("environment-{index}")),
+            call,
+        })));
+    }
+    fixtures.push(ProtocolMessage::Response(Response::Success(Box::new(
+        Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("command-final".into()),
+            result: MethodResult::CommandExec {
+                result: super::command::ExecResult {
+                    exit_code: Some(0),
+                    status: super::command::ExecStatus::Completed,
+                    stdout_base64: String::new(),
+                    stderr_base64: String::new(),
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                },
+            },
+        },
+    ))));
+    fixtures.push(ProtocolMessage::Notification(Notification {
+        jsonrpc: JsonRpcVersion::V2,
+        notification: NotificationMethod::CommandOutputDelta(super::command::OutputDelta {
+            process_id: "process-fixture".into(),
+            sequence: 9_007_199_254_740_993,
+            stream: super::command::OutputStream::Stdout,
+            delta_base64: "AP8=".into(),
+            cap_reached: false,
+        }),
+    }));
+    fixtures.push(ProtocolMessage::Notification(Notification {
+        jsonrpc: JsonRpcVersion::V2,
+        notification: NotificationMethod::FsChanged(super::filesystem::Changed {
+            watch_id: "watch-fixture".into(),
+            changed_paths: vec!["/workspace/file".into()],
+            resync_required: true,
+            retired: false,
+        }),
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1630,9 +1767,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v74.schema.json", "v74.ts"]);
+        assert_eq!(generations, ["v75.schema.json", "v75.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v74.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v75.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

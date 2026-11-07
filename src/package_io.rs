@@ -26,33 +26,87 @@ const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::CLOEXEC);
 
 /// Every component is resolved relative to an already opened directory.
-pub(crate) struct PackageDirectory(OwnedFd);
+pub(crate) struct PackageDirectory {
+    fd: std::sync::Arc<OwnedFd>,
+    ancestors: Vec<(std::sync::Arc<OwnedFd>, std::ffi::OsString)>,
+}
 
 impl PackageDirectory {
+    pub(crate) fn descriptor(&self) -> &OwnedFd {
+        &self.fd
+    }
     pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
-        let mut fd = open("/", DIRECTORY, Mode::empty())?;
+        let mut directory = Self {
+            fd: std::sync::Arc::new(open("/", DIRECTORY, Mode::empty())?),
+            ancestors: Vec::new(),
+        };
         if !path.is_absolute() {
             return Err(std::io::Error::other("package root must be absolute"));
         }
         for part in path.components() {
             match part {
                 Component::RootDir => {}
-                Component::Normal(name) => fd = openat(&fd, name, DIRECTORY, Mode::empty())?,
+                Component::Normal(name) => directory = directory.child(name)?,
                 _ => return Err(std::io::Error::other("unsafe package root")),
             }
         }
-        Ok(Self(fd))
+        Ok(directory)
+    }
+
+    pub(crate) fn verify(&self) -> std::io::Result<()> {
+        for (index, (parent, name)) in self.ancestors.iter().enumerate() {
+            let child = self
+                .ancestors
+                .get(index + 1)
+                .map_or(&self.fd, |(descriptor, _)| descriptor);
+            let current =
+                rustix::fs::statat(parent.as_ref(), name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+            let retained = rustix::fs::fstat(child.as_ref())?;
+            if (current.st_dev, current.st_ino) != (retained.st_dev, retained.st_ino) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "authorized directory replaced",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Detect a physical descendant, including case aliases on native filesystems.
+    pub(crate) fn contains(&self, file: &File) -> std::io::Result<bool> {
+        let source = rustix::fs::fstat(file)?;
+        for descriptor in
+            std::iter::once(&self.fd).chain(self.ancestors.iter().map(|(descriptor, _)| descriptor))
+        {
+            let current = rustix::fs::fstat(descriptor.as_ref())?;
+            if (source.st_dev, source.st_ino) == (current.st_dev, current.st_ino) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(crate) fn child(&self, name: &std::ffi::OsStr) -> std::io::Result<Self> {
-        Ok(Self(openat(&self.0, name, DIRECTORY, Mode::empty())?))
+        self.verify()?;
+        let fd = openat(self.fd.as_ref(), name, DIRECTORY, Mode::empty())?;
+        let mut ancestors = self.ancestors.clone();
+        if name != "." {
+            ancestors.push((self.fd.clone(), name.to_os_string()));
+        }
+        let directory = Self {
+            fd: std::sync::Arc::new(fd),
+            ancestors,
+        };
+        directory.verify()?;
+        Ok(directory)
     }
 
     pub(crate) fn names(&self, limit: usize) -> std::io::Result<Vec<PathBuf>> {
         #[cfg(test)]
         DIRECTORY_LISTS.with(|count| count.set(count.get() + 1));
+        self.verify()?;
         let mut names = Vec::new();
-        for entry in rustix::fs::Dir::read_from(&self.0)? {
+        for entry in rustix::fs::Dir::read_from(self.fd.as_ref())? {
             let entry = entry?;
             let name = entry.file_name().to_bytes();
             if name == b"." || name == b".." {
@@ -65,6 +119,7 @@ impl PackageDirectory {
             }
             names.push(PathBuf::from(std::ffi::OsStr::from_bytes(name)));
         }
+        self.verify()?;
         names.sort();
         Ok(names)
     }
@@ -72,13 +127,14 @@ impl PackageDirectory {
     pub(crate) fn file(&self, relative: &Path) -> std::io::Result<File> {
         #[cfg(test)]
         OPENED_FILES.with(|files| files.borrow_mut().push(relative.to_path_buf()));
+        self.verify()?;
         let mut parts = relative.components().peekable();
         let mut directory = None;
         while let Some(part) = parts.next() {
             let Component::Normal(name) = part else {
                 return Err(std::io::Error::other("unsafe package-relative path"));
             };
-            let parent = directory.as_ref().unwrap_or(&self.0);
+            let parent = directory.as_ref().unwrap_or(self.fd.as_ref());
             if parts.peek().is_none() {
                 let file = File::from(openat(
                     parent,

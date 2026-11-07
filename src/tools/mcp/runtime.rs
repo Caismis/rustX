@@ -25,7 +25,9 @@ use super::test_sync;
 use super::{McpError, bound_error, framing, streamable_http};
 
 /// Capability facts captured by one successful server handshake.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct McpNegotiatedCapabilities {
     /// The server accepts ordinary MCP tool operations.
     pub tools: bool,

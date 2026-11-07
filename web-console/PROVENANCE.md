@@ -811,7 +811,7 @@ sidebar still predated main's Workflows entry; dialog geometry is unchanged.
 The branch also merges main at `d730966ce54ba330529bffb0279d6e0c4a44fd17`
 (PR #494). Native temporary questions and classification retain their execution,
 publication and cancellation owners. The combined vocabulary is App Server v54,
-Runtime Client v74, SQLite v77 and archive v10; request inspection retains schema 5
+Runtime Client v75, SQLite v77 and archive v10; request inspection retains schema 5
 without declared reasoning metadata. Generated artifacts contain both workspace
 change inspection and auxiliary delivery. The existing simplified header, Fork
 presentation, model editor and right-sidebar interactions are preserved.

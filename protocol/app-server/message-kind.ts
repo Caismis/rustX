@@ -1,4 +1,4 @@
-import type {InboundKind} from './v74.ts';
+import type {InboundKind} from './v75.ts';
 
 /** Mailbox queue intent is still ordinary user content in every client surface. */
 export function isPlainMessageKind(kind: InboundKind | null | undefined): kind is 'message' | 'queued_message' | null | undefined {

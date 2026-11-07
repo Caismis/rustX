@@ -915,14 +915,14 @@ fn run_inner() -> i32 {
     let fail_wait = std::env::var(FAIL_WAIT_ENV).is_ok();
     let fail_signal = std::env::var(FAIL_SIGNAL_ENV).is_ok();
     let force_anchor_loss = std::env::var(FORCE_ANCHOR_LOSS_ENV).is_ok();
-    let bash = match Command::new("/bin/bash")
-        .arg("-c")
-        .arg(&shell_command)
-        .stdin(Stdio::null())
-        .env_clear()
-        .envs(command_environment)
-        .spawn()
-    {
+    let mut invocation = match standalone_invocation(&shell_command) {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            let _ = stream.write_preownership_failure(&error);
+            return INNER_EXIT_NORMAL;
+        }
+    };
+    let bash = match invocation.0.env_clear().envs(command_environment).spawn() {
         Ok(child) => child,
         Err(error) => {
             let _ = stream.write_preownership_failure(&format!("cannot spawn /bin/bash: {error}"));
@@ -1086,6 +1086,49 @@ fn run_inner() -> i32 {
             return INNER_EXIT_CONTAINMENT;
         }
         wait_for_supervisor_event(true);
+    }
+}
+
+/// Configure business I/O only after the shared ownership/start gate. Opening
+/// the slave in the session leader gives it the controlling terminal. The
+/// supervisor control socket remains separate from all business streams.
+fn standalone_invocation(shell_command: &str) -> Result<(Command, Option<std::fs::File>), String> {
+    use std::os::unix::fs::MetadataExt;
+    let Some(encoded) = std::env::var_os(crate::runtime::process_runner::PROGRAM_INVOCATION_ENV)
+    else {
+        let mut command = Command::new("/bin/bash");
+        command.arg("-c").arg(shell_command).stdin(Stdio::null());
+        return Ok((command, None));
+    };
+    let invocation: crate::runtime::process_runner::ProgramInvocation =
+        serde_json::from_str(encoded.to_str().ok_or("invalid program invocation")?)
+            .map_err(|_| "invalid program invocation")?;
+    let metadata = std::fs::metadata(".").map_err(|_| "command directory unavailable")?;
+    if (metadata.dev(), metadata.ino()) != invocation.cwd_identity {
+        return Err("command directory identity changed".into());
+    }
+    let (program, arguments) = invocation.argv.split_first().ok_or("empty command argv")?;
+    let mut command = Command::new(program);
+    command.args(arguments);
+    if let Some(path) = invocation.terminal {
+        let terminal = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|_| "cannot open command terminal")?;
+        command.stdin(terminal.try_clone().map_err(|_| "cannot clone terminal")?);
+        command.stdout(terminal.try_clone().map_err(|_| "cannot clone terminal")?);
+        command.stderr(terminal.try_clone().map_err(|_| "cannot clone terminal")?);
+        Ok((command, Some(terminal)))
+    } else {
+        if let Some(path) = invocation.stdin_socket {
+            let input = std::os::unix::net::UnixStream::connect(path)
+                .map_err(|_| "cannot connect command stdin")?;
+            command.stdin(Stdio::from(std::os::fd::OwnedFd::from(input)));
+        } else {
+            command.stdin(Stdio::null());
+        }
+        Ok((command, None))
     }
 }
 

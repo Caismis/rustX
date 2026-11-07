@@ -132,6 +132,7 @@
 #[doc(hidden)]
 pub mod fixture;
 
+pub mod catalog;
 mod connect;
 mod connection;
 mod dispatch;

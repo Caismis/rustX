@@ -613,6 +613,7 @@ struct RuntimeRegistry(Mutex<RegistryState>);
 /// current configuration sources to `configuration`, and execution to each core.
 #[derive(Clone)]
 pub struct SessionRuntimeManager {
+    pub(crate) environment: Arc<super::environment::Environment>,
     status: Arc<status::StatusPublisher>,
     interaction_lifecycle:
         Arc<std::sync::OnceLock<Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>>>,
@@ -623,6 +624,7 @@ pub struct SessionRuntimeManager {
     pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
     pub(super) applications: super::configuration::application::ConfigurationApplications,
     pub(crate) mcp_drafts: Arc<super::mcp_drafts::McpDraftRegistry>,
+    pub(crate) mcp_probes: Arc<super::mcp_probe::McpProbeRegistry>,
     dependencies: Arc<LocalRuntimeDependencies>,
     clock: Arc<dyn MonotonicClock>,
     schedule_clock: Arc<dyn crate::runtime::types::RuntimeClock>,
@@ -793,7 +795,15 @@ impl SessionRuntimeManager {
         sessions.runtime_owner.set(()).map_err(|()| {
             error("SessionController already allocated its runtime manager; clone that manager")
         })?;
+        let environment = Arc::new(super::environment::Environment::default());
+        environment.configure(
+            &configuration
+                .app_server_policy()
+                .map_err(error)?
+                .environment_roots,
+        );
         Ok(Self {
+            environment,
             status: Arc::default(),
             sessions,
             registry: Arc::new(RuntimeRegistry(Mutex::new(RegistryState {
@@ -848,6 +858,7 @@ impl SessionRuntimeManager {
             credentials,
             applications: super::configuration::application::ConfigurationApplications::default(),
             mcp_drafts: Arc::default(),
+            mcp_probes: Arc::default(),
             dependencies: Arc::new(dependencies),
             interaction_lifecycle: Arc::default(),
             clock: Arc::new(SystemMonotonicClock::new()),

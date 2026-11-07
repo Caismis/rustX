@@ -13,6 +13,8 @@ use std::{
 };
 use tokio::sync::watch;
 
+const FILE_OBSERVERS: u32 = 32;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HostAdmissionError {
     ServerDraining,
@@ -52,6 +54,7 @@ struct HostInner {
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
+    environment_stop: tokio_util::sync::CancellationToken,
     /// A finite chain of admitted intent jobs. The host request limit bounds
     /// these owners; completion order, rather than reply polling, orders clocks.
     submission_intent_tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
@@ -236,6 +239,9 @@ impl AppServerHost {
     pub(crate) fn file_observers(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.file_observers.clone()
     }
+    pub(crate) fn environment_stop(&self) -> tokio_util::sync::CancellationToken {
+        self.0.environment_stop.child_token()
+    }
     pub(crate) fn authority_id(&self) -> &str {
         &self.0.authority_id
     }
@@ -264,6 +270,7 @@ impl AppServerHost {
             manager,
             state: Mutex::default(),
             requests: watch::channel(0).0,
+            environment_stop: tokio_util::sync::CancellationToken::new(),
             submission_intent_tail: Mutex::new(None),
             upload_operations: watch::channel(0).0,
             transport: Arc::default(),
@@ -273,7 +280,7 @@ impl AppServerHost {
                 crate::tools::session_files::SESSION_FILE_MAX_READS,
             )),
             file_routes: Mutex::default(),
-            file_observers: Arc::new(tokio::sync::Semaphore::new(32)),
+            file_observers: Arc::new(tokio::sync::Semaphore::new(FILE_OBSERVERS as usize)),
         }))
     }
     #[must_use]
@@ -389,6 +396,9 @@ impl AppServerHost {
             }
             initializations
         };
+        // Independent commands retain request admission through physical
+        // settlement. Cancel them before drain waits for those same owners.
+        self.0.environment_stop.cancel();
         // Native cancellation arbitrates with recovery under its own
         // coordinator. Neither host nor registry locks cover durable work.
         for initialization in initializations {
@@ -422,6 +432,7 @@ impl AppServerHost {
         self.uploads().settle_actors().await;
         failures.extend(self.manager().drain_all_runtimes().await);
         failures.extend(self.manager().mcp_drafts.settle().await);
+        failures.extend(self.manager().mcp_probes.failures());
         failures.sort();
         failures.dedup();
         if !failures.is_empty() {
@@ -429,17 +440,30 @@ impl AppServerHost {
         }
         failures
     }
+    /// Called after carrier teardown has dropped every native watch registry.
+    /// A notify handle's Drop requests shutdown; only callback destruction
+    /// returns its permit and proves that the native event loop has settled.
+    pub(crate) async fn settle_file_observers(&self) {
+        let _settled = self
+            .0
+            .file_observers
+            .acquire_many(FILE_OBSERVERS)
+            .await
+            .expect("file observer capacity stays open");
+    }
     pub(crate) fn finish_drain(&self) -> Result<(), String> {
         let mut state = self.0.state.lock().expect("host mutex");
         if state.lifecycle != ServerLifecycle::Draining
             || !self.manager().is_empty()
             || !self.manager().mcp_drafts.is_settled()
+            || !self.manager().mcp_probes.is_settled()
             || *self.0.requests.borrow() != 0
             || *self.0.upload_operations.borrow() != 0
             || !self.uploads().is_empty()
             || self.uploads().actor_count() != 0
             || state.attachments != 0
             || self.0.transport.has_connections()
+            || self.0.file_observers.available_permits() != FILE_OBSERVERS as usize
         {
             return Err("server settlement is not proven".into());
         }
@@ -451,12 +475,14 @@ impl AppServerHost {
             self.0.state.lock().expect("host mutex").shutdown_timeouts += 1;
         }
         format!(
-            "{}; pending_protocol_operations={}; physical_connections_remain={}; active_uploads={}; upload_actors={}",
+            "{}; pending_protocol_operations={}; physical_connections_remain={}; active_uploads={}; upload_actors={}; active_file_observers={}; mcp_management_failures={:?}",
             self.manager().unproven_resources(),
             *self.0.requests.borrow(),
             self.0.transport.has_connections(),
             *self.0.upload_operations.borrow(),
-            self.uploads().actor_count()
+            self.uploads().actor_count(),
+            FILE_OBSERVERS as usize - self.0.file_observers.available_permits(),
+            self.manager().mcp_probes.failures()
         )
     }
     /// Observations are never used as settlement or admission authority.

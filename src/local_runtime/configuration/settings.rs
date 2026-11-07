@@ -888,29 +888,7 @@ impl UserConfigManager {
                     &error,
                 )),
         }
-        let skills = if let Some(workspace) = workspace {
-            crate::tools::workspace::Workspace::new(workspace)
-                .ok()
-                .map(|workspace| {
-                    crate::skills::SkillDiscovery::with_config(
-                        &workspace,
-                        crate::skills::SkillDiscoveryConfig {
-                            automatic: crate::skills::automatic_skill_roots(
-                                Some(&self.sources.home_directory),
-                                workspace.root(),
-                            ),
-                        },
-                    )
-                    .with_cancellation(self.resource_io.clone())
-                    .discover()
-                })
-        } else {
-            Some(
-                crate::skills::SkillDiscovery::user_root(user.join("skills"))
-                    .with_cancellation(self.resource_io.clone())
-                    .discover(),
-            )
-        };
+        let skills = self.discover_skills(workspace);
         if let Some(skills) = skills {
             inventory.definitions.extend(
                 skills
@@ -944,6 +922,38 @@ impl UserConfigManager {
         inventory
     }
 
+    #[must_use]
+    pub(crate) fn discover_skills(
+        &self,
+        workspace: Option<&Path>,
+    ) -> Option<crate::skills::SkillDiscoveryOutcome> {
+        let user = self.resource_root(&SourceTarget::User);
+        if let Some(workspace) = workspace {
+            crate::tools::workspace::Workspace::new(workspace)
+                .ok()
+                .map(|workspace| {
+                    crate::skills::SkillDiscovery::with_config(
+                        &workspace,
+                        crate::skills::SkillDiscoveryConfig {
+                            automatic: crate::skills::automatic_skill_roots(
+                                Some(&self.sources.home_directory),
+                                workspace.root(),
+                            ),
+                        },
+                    )
+                    .with_cancellation(self.resource_io.clone())
+                    .discover()
+                })
+        } else {
+            Some(
+                crate::skills::SkillDiscovery::user_root(user.join("skills"))
+                    .with_cancellation(self.resource_io.clone())
+                    .discover(),
+            )
+        }
+    }
+
+    /// The native resource root of one source scope.
     #[must_use]
     pub fn resource_root(&self, target: &SourceTarget) -> PathBuf {
         match target {
@@ -1159,6 +1169,7 @@ impl UserConfigManager {
         let result = SourceSettings {
             target: target.clone(),
             process_policy_impacts: [
+                ("environment_roots", ProcessPolicyImpact::Hot),
                 ("max_resident_runtimes", ProcessPolicyImpact::Hot),
                 ("max_connections", ProcessPolicyImpact::Hot),
                 ("max_external_attachments", ProcessPolicyImpact::Hot),

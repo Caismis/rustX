@@ -1038,3 +1038,37 @@ fn resource_blob_identity_is_typed_and_remote_artifact_id_metadata_is_ordinary_d
         );
     }
 }
+
+#[tokio::test]
+async fn management_catalog_reads_bounded_pages_without_business_calls() {
+    let peer = HttpPeer::start(FixtureServer {
+        resources_supported: true,
+        tools_empty: true,
+        ..FixtureServer::default()
+    })
+    .await;
+    let (_directory, tools) = runtime("conv_01900000-0000-7000-8000-000000000533");
+    let connection = peer.connect(&tools).await;
+    let transport = connection.acquire().await.unwrap();
+    let page = transport
+        .runtime()
+        .catalog_inventory(crate::tools::mcp::catalog::CatalogKind::Resources)
+        .await
+        .unwrap();
+    assert!(page.capabilities.resources);
+    assert!(!page.resources.is_empty());
+    assert_eq!(peer.fixture.resource_state.lists.load(Ordering::SeqCst), 2);
+    assert_eq!(page.resources.len(), 2);
+    assert_eq!(peer.fixture.resource_state.reads.load(Ordering::SeqCst), 0);
+    let templates = transport
+        .runtime()
+        .catalog_inventory(crate::tools::mcp::catalog::CatalogKind::Templates)
+        .await
+        .unwrap();
+    assert_eq!(templates.templates[0].uri_template, "fixture://{name}");
+    assert_eq!(
+        peer.fixture.resource_state.templates.load(Ordering::SeqCst),
+        2
+    );
+    peer.close(&connection).await;
+}

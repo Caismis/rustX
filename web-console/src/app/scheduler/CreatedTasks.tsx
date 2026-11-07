@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { findNodeAtLocation, getNodeValue, parseTree, type ParseError } from 'jsonc-parser';
-import type { ForegroundToolExecution, ScheduleHeader, ScheduleSpec } from '../../../../protocol/app-server/v74';
+import type { ForegroundToolExecution, ScheduleHeader, ScheduleSpec } from '../../../../protocol/app-server/v75';
 import { ContentCache } from '../../../../protocol/app-server/content-cache';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { readContentText } from '../../client/content-text';

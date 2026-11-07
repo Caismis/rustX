@@ -13,6 +13,7 @@ mod catalog;
 mod configuration;
 mod control;
 pub(crate) mod delivery;
+pub(crate) mod environment;
 mod history;
 mod model_catalog;
 mod projection;

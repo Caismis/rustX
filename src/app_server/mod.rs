@@ -27,3 +27,8 @@ pub mod upload_transfer;
 pub(crate) mod workflow_documents;
 
 pub mod thread_status;
+
+pub mod command;
+mod service_events;
+
+pub mod filesystem;

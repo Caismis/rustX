@@ -1,4 +1,4 @@
-import type { WorkflowCheckReport, WorkflowDependencyFailure } from '../../../../../protocol/app-server/v74';
+import type { WorkflowCheckReport, WorkflowDependencyFailure } from '../../../../../protocol/app-server/v75';
 import { locate } from './diagnostics';
 import { nodePresentation } from './geometry';
 import { blockAt, blockKey, childSteps, edgesOf, isContainer, nodeAt, startOf, type Block, type BlockPath, type NodeDefinition, type Value, type WorkflowDocument } from './model';

@@ -1,5 +1,5 @@
 import {threadStatusText,ThreadStatusNotifications} from '../../../protocol/app-server/thread-status.ts';
-import type {ThreadStatusEntry} from '../../../protocol/app-server/v74.ts';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v75.ts';
 import { readSourceRepairFields, type SourceRepairRead } from '../../../protocol/app-server/source-observation.ts';
 import { materializeSettings } from '../../../protocol/app-server/settings-observation.ts';
 import { readEditor } from '../../../protocol/app-server/editor.ts';
@@ -133,6 +133,8 @@ function sessionIdOf(notification: Notification): string | undefined {
     case "thread/status/changed":
     case "thread/status/resyncRequired":
     case "schedule/changed":
+    case "command/exec/outputDelta":
+    case "fs/changed":
       return undefined;
     case "session/ownershipRetired":
     case "session/summaryInvalidated":
@@ -738,7 +740,7 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: import("../../../protocol/app-server/v74.ts").CanonicalContentLocator,
+    boundary?: import("../../../protocol/app-server/v75.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
@@ -761,7 +763,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: import("../../../protocol/app-server/v74.ts").CanonicalContentLocator,
+    boundary: import("../../../protocol/app-server/v75.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
@@ -869,7 +871,7 @@ export class AppServerHost {
 
 async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor?: import('../../../protocol/app-server/v74.ts').EditorLocator | null;
+  editor?: import('../../../protocol/app-server/v75.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
 }): Promise<SessionTransition> {
   return {

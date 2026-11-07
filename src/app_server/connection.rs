@@ -9,7 +9,9 @@
 mod auxiliary;
 mod catalog;
 mod configuration;
+mod environment;
 mod family;
+pub(super) use environment::error as environment_error;
 mod history;
 mod mcp_drafts;
 mod notifications;
@@ -191,6 +193,9 @@ pub struct AppServerConnection {
     associations: Arc<super::admission::Associations>,
     mcp_draft: crate::local_runtime::mcp_drafts::McpDraftScope,
     workflow_documents: Arc<super::workflow_documents::WorkflowDocuments>,
+    pub(super) service_events: Arc<super::service_events::Events>,
+    commands: Arc<super::command::Commands>,
+    watches: Arc<super::filesystem::Watches>,
 }
 
 /// One response and, for a delivery request, the owner of its publication
@@ -358,6 +363,9 @@ impl AppServerConnection {
             sessions,
             mcp_draft: host.manager().mcp_draft_scope(),
             workflow_documents: Arc::default(),
+            service_events: Arc::new(super::service_events::Events::new(host.environment_stop())),
+            commands: Arc::default(),
+            watches: Arc::default(),
             host,
             initialized: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(RouteTable::default())),
@@ -370,6 +378,15 @@ impl AppServerConnection {
             deliveries: Arc::default(),
             associations: Arc::default(),
         }
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn environment_events_idle_for_test(&self) -> bool {
+        self.service_events.idle()
+    }
+    #[cfg(test)]
+    pub(crate) async fn command_admitted_for_test(&self, id: &str) {
+        self.commands.admitted_for_test(id).await;
     }
 
     /// Bind transport lifetime to the same ordinary API eligibility. Closing
@@ -480,10 +497,17 @@ impl AppServerConnection {
             route.external.release();
             route.capacity.release();
         }
+        self.close_environment();
         self.mcp_draft.close();
         self.workflow_documents.clear();
         self.associations.close();
         self.changed.notify_one();
+    }
+
+    pub(super) fn close_environment(&self) {
+        self.commands.close();
+        self.watches.close();
+        self.service_events.closed.cancel();
     }
 
     #[cfg(test)]
@@ -1061,7 +1085,8 @@ impl AppServerConnection {
             Family::Catalog => self.catalog(method, request_owner).await,
             Family::Scheduler => self.schedule(method, request_owner).await,
             Family::History => self.history(method).await,
-            Family::Configuration => self.configuration(method).await,
+            Family::Configuration => self.configuration(method, request_owner).await,
+            Family::Environment => self.environment(method, request_owner).await,
             // Deliveries are registered by `execute`; runtime operations
             // were admitted above.
             Family::Delivery | Family::Runtime(_) => Err(domain(ErrorData::OperationFailed)),
