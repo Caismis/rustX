@@ -1,3 +1,184 @@
+## Combined-shell reference verification (2026-11-07)
+
+The UI-experience branch incorporates main's dual-sidebar shell. Nineteen
+references are recaptured under the pinned browser to retain the branch's quiet
+empty/loading surfaces, single confirmed queue row and Bash execution description
+within that layout. Existing screenshot comparison and timeout settings remain.
+
+The unchanged main deletion-confirmation reference has a separately measured
+63-pixel difference on its blurred background Delete icon, with maximum channel
+delta 1. Two stable local observations agree byte-for-byte; relevant rendering
+sources match main, and every foreground/geometry pixel matches the reference.
+The internal browser cause is unestablished. The raw captured PNG, its hash, the
+unchanged reference hash and every RGBA pair are retained by the existing
+reference-local noise mechanism. Exactly 63 disjoint 1x1 sites allow a one-level
+delta. Contract tests reject neighboring pixels, larger deltas, foreground edits
+and reuse under another reference; no rectangle or global threshold is added.
+
+The unchanged main CAS-conflict reference has a separate two-pixel observation
+on the provider panel edge, bounded individually at channel deltas 5 and 10.
+Its raw capture and hashes are retained too. The prior ten Disclosure-triangle
+sites remain a separate observation with their original bounds; the policy is
+their disjoint union, not a claimed twelve-pixel capture. Negative contracts
+continue to reject triangle neighbors and excess delta, and additionally reject
+panel neighbors, delta 6/11, foreground edits and foreign-reference reuse.
+
+The unchanged Workflow reference has a third measured FULL CI observation
+(run 42313212047): 608 changed pixels, adding 19 sites and exceeding 63 previous
+per-site maxima. The raw PNG, complete RGBA pairs, reference/capture/trace hashes
+and current graph/CSS hashes are retained. Its three screenshot checkpoints have
+the same serialized graph. Compared with main, only invisible insertion-button
+portal sibling order differs; their coordinate/content sets match, and sorting
+only those siblings produces exactly the main graph. SVG paths and their paint
+order, node DOM, transforms, selection and visible content remain exact. The
+Workflow stylesheet and three shared stylesheets match byte-for-byte; index CSS
+changes belong to unrelated preview, Files, empty-home, streaming and composer
+modules.
+
+The browser's internal cause remains unestablished. The policy retains both prior
+captures and allows only the three-capture measured union: 658 separate 1x1 sites,
+each at its largest observed delta (maximum 32). Contract tests bind the new raw PNG to its
+unchanged reference, preserve both older observations, and reject excess delta,
+neighbors, foreground changes and use with another reference.
+
+## PDF reference geometry and cancellable page rendering (2026-11-07)
+
+Document zoom now reads one cached, finite first-page geometry from the existing
+PDF.js metadata API, independently of viewport-owned bitmap rendering. Scrolling
+away while page 1 renders leaves Zoom, its percentage menu and Fit width usable
+on later pages. The document page count still appears immediately; no all-page
+geometry scan or extra offscreen bitmap work is introduced. The load watchdog
+covers reference metadata, and document retirement fences late geometry results.
+Tests exercise the real preview, zoom viewport and resource owner through first
+bitmap cancellation and page 20 rendering, metadata limits/timeouts and teardown.
+
+## Independent review: floating navigator replacement (2026-11-06)
+
+The pane navigator now replaces content through a single DockKit intent built
+from its existing reversible operations. A floating preview keeps its pane ID,
+rectangle, navigator state and focus when selecting another file, including a
+file already open elsewhere. Other copies remain independent. The replaced
+tab receives a new identity so the existing preview owner disposes its readers,
+document worker and observation rather than retaining the closed file. No new
+layout operation or persisted schema is introduced. Controller undo/redo,
+actual Workbench ownership tests and the pinned-browser floating navigator
+regression cover this rustX adaptation to the retained Harness docking port.
+
+## Remember an unsent Workspace choice (2026-11-06)
+
+Harness `ce7073d51254c26cd63b22a60835b8f948deb447` persists the current
+blank Session before sending (`ui-workspace/src/client/navigation.ts`,
+`MainSelection` and `replaceMain`). rustX retains its native draft ownership and
+records an explicit Workspace registration preference at the picker/sidebar
+gesture. Browser preference keys use normalized endpoint identity for immediate
+reload. The scoped Product Host selection write persists a selected flag in its
+registration metadata; ordered per-page intents prevent delayed older choices
+from replacing a newer one, and the small HTTP write uses keepalive during unload.
+The local launcher retains registration metadata outside secret scratch, with
+stable canonical-root handles and a profile keyed by the root set and opaque
+native arguments. A full restart restores the preference through a fresh Host
+catalog even when native/Web ports or browser origins change. Removed
+registrations fall through to the ordinary default.
+The remembered choice precedes native activity recency. The unsent route is
+persisted too, so an older open Session cannot replace it during restoration.
+Current Session navigation remains independent. Preference writes start
+at the accepted gesture, before a possible refresh; no source bytes, paths,
+credentials, draft contents or authorization are persisted by this preference.
+
+## Startup and New Conversation Workspace selection (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,
+`ui-workspace/src/client/navigation.ts` (`startSession`, `restoreSelection`,
+`recentWorkspace`). Explicit Workspace choices win; unscoped New inherits the
+current Session's confirmed Workspace before selecting the most recent native
+Session activity. Startup preserves restored Session navigation. Native transport
+connection already waits for the initial Session catalog; automatic selection
+also waits for the matching Host catalog and classification. Equal/no known
+activity uses stable Host order (the rustX registration contract has no creation
+timestamp). The existing 128-entry association cache retains activity metadata
+across list searches, without new reads or persisted selection authority.
+The resident draft keeps its editor/binding while its default is filled. A
+pending origin remains navigation-owned until classification settles; newer
+manual choices or navigation supersede it. Native Send admission and the
+existing draft/MCP preparation lifecycle remain the owners; no eager upstream
+Session creation or default-directory initialization is introduced.
+
+## Shared sidebar preview and reusable Office converter (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`.
+`PreviewFrame`, `LoadingIndicator`, plain source lines, image layout/panning and
+`ui-sidebar-files` pane navigator geometry/presentation are ported or adapted
+under MIT, with exact paths, hashes and import closures in source-inventory.json.
+Native React owners supply source bytes and pane state; Cordis/Remote authority,
+plugin slots and filesystem APIs are not introduced into presentation.
+The Files page and adjacent preview navigator share pane-owned directory state;
+wide/overlay/fill layouts, resize, Escape, selection and file replacement follow
+the inspected implementation. Markdown, HTML, code, Excel and zoom retain their
+existing source ports. Supported-format admission remains native.
+
+Office conversion follows `document/office-to-pdf/src/index.ts` converter-slot
+ownership: initialize once and render multiple private files. Linux retains a
+sandboxed UNO Desktop through a private named pipe; macOS retains the existing
+kit's createConverter instance in a Seatbelt worker. A framed PDF response ends
+with an explicit document-close/output-cleanup trailer. Per-job manager timers,
+physical cancellation, Host disposal and bounded ready-PDF reuse retain native
+resource and authorization boundaries. No per-file CLI converter path remains.
+
+## Office preview latency and Harness alignment (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,
+`ui-sidebar-documentpreview/src/client/office/{cache.ts,OfficeBody.tsx}`,
+`pdf/{pdf.tsx,document.ts,PdfBody.module.css}` and
+`document/office-to-pdf/src/{index,queue}.ts`.
+The Office preview uses the same Office-to-PDF/continuous-page presentation:
+opening the PDF exposes its page count immediately; viewport-local pages render
+without a preliminary all-page geometry scan. Quiet 3:4 placeholders become
+actual page geometry after rendering. Existing rustX zoom, native worker and
+bitmap budgets, cancellation, and tab reading metadata remain the owners.
+Successful conversions use a Host-owned bounded LRU keyed by extension and
+source SHA-256, following Harness's content-addressed PDF reuse. Each caller
+still reads its authorized current source and rechecks it before publication;
+retained bytes confer no path, Session or delivery authority. Host close clears
+the cache. The existing platform converter isolation and physical settlement
+remain in place; the Harness Cordis/Remote stack is not introduced.
+
+## Trace location and live continuation (2026-11-06)
+
+Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-trajectory/src/client/TrajectoryTable.tsx`: location and reading position
+remain independent of live appends. Root and child rustX Trace caches keep
+updating throughout historical navigation, retaining loaded records, selection,
+detail readers and the navigation epoch. Disjoint native intervals retain their
+own bounded history continuation between the ranges; loading a middle boundary
+never replaces the latest tail. Lifecycle-only interest pages repair existing
+rows without extending the ledger. The ledger follows appends only at the tail;
+reading elsewhere, including loading a middle boundary, retains the visible
+row and its viewport offset. Live row refreshes never scroll to an unchanged
+selection; replacement DOM nodes recover keyboard focus with preventScroll,
+including when appends enable virtualization.
+
+## Bash execution-reason summaries (2026-11-06)
+
+Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-tool/.../tool-call-model.ts`, `terminal-card-model.ts`,
+`toolviews/bash-sample.tsx` and `shell/tool-bash/src/index.ts`.
+Bash rows show the first line of the authored `description`, including after
+failure; commands remain in the expanded terminal. Missing descriptions leave
+the summary empty. Native tool instructions request the execution reason before
+the command; the native invocation contract and execution authority are unchanged.
+
+## Quiet conversation loading (2026-11-06)
+
+Read-only study of sibling Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-conversation/src/client/skeleton/ConversationContent.tsx`,
+`ConversationSession.tsx` and `ConversationPanel.tsx`: retain the resident
+composer and scroll body, and resolve labels from already observed state.
+Existing rustX components keep those patterns. Initial configuration controls
+reserve their seats while loading; background reads avoid temporary copy.
+Accepted input keeps its dispatch-time presentation until native observation
+names its exact MessageId. This changes presentation only, with no protocol,
+native message, submission replay or read-authority change.
+
 ## Issue #536 — dual-sidebar navigation shell
 
 The approved Codex-style navigation hierarchy informs original rustX composition;

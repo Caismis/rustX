@@ -67,7 +67,7 @@ it('attachment replacement cannot adopt a late child detail', async () => {
   server.client.disconnect(); server.reply(request, old); await work;
   expect(reader.snapshot().details['trace:1'].detail).toBeUndefined();
 });
-it('a live rebase retires old paging without stranding or clearing the new page owner', async () => {
+it('disjoint child appends keep an older read active and allow filling its separate middle gap', async () => {
   const proof = await setup();
   server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(10)], next_cursor: 'trace:10' } }));
   const reader = new AgentTraceReader(server.client, 'A', proof, scope('child')); await reader.refresh();
@@ -76,13 +76,22 @@ it('a live rebase retires old paging without stranding or clearing the new page 
   const live = reader.refresh(); const liveRequest = await server.waitFor('agent/trace', 3);
   server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(20)], next_cursor: 'trace:20' } }));
   server.reply(liveRequest); await live;
-  expect(reader.snapshot().loading).toBe(false);
-  const newOlder = reader.earlier(); const newRequest = await server.waitFor('agent/trace', 4);
-  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(9)], next_cursor: 'trace:9' } }));
-  server.reply(oldRequest); await older;
   expect(reader.snapshot().loading).toBe(true);
-  expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:20']);
-  reader.retire(); server.reply(newRequest); await newOlder;
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(9)], next_cursor: null } }));
+  server.reply(oldRequest);
+  const repair = await server.waitFor('agent/trace', 4);
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: [traceRecord(20)], next_cursor: 'trace:20' } }));
+  server.reply(repair); await older;
+  expect(reader.snapshot().loading).toBe(false);
+  expect(reader.snapshot().page.records.map(record => record.id)).toEqual(['trace:9', 'trace:10', 'trace:20']);
+  const middle = reader.earlier(false, 'trace:20'); const middleRequest = await server.waitFor('agent/trace', 5);
+  expect(middleRequest.params).toMatchObject({before:'trace:20'});
+  server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut:childCut(),records: Array.from({length:10},(_,n)=>traceRecord(n+10)), next_cursor: 'trace:10' } }));
+  server.reply(middleRequest);
+  const middleRepair = await server.waitFor('agent/trace', 6);
+  reader.retire(); server.reply(middleRepair); await middle;
+  expect(reader.snapshot().gaps).toEqual([]);
+  expect(reader.snapshot().page.records.map(record => record.id)).toEqual(Array.from({length:12},(_,n)=>`trace:${n+9}`));
 });
 it('returning to latest still refreshes when the superseded request fails', async () => {
   const proof = await setup();

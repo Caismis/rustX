@@ -95,6 +95,16 @@ impl core::fmt::Debug for CapabilitySnapshot {
 }
 
 impl CapabilitySnapshot {
+    /// Replace inert discovery metadata without changing executable capability
+    /// identity or its physical resource owners.
+    pub(crate) fn with_skills(mut self, skills: Arc<SkillSnapshot>) -> Self {
+        if self.skills == skills {
+            return self;
+        }
+        self.skills = skills;
+        let profile = self.resolved_profile.clone();
+        self.with_resolved_profile(profile)
+    }
     pub(crate) fn with_resolved_profile(
         mut self,
         profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,

@@ -146,8 +146,8 @@ mod subagent_child;
 mod tests;
 
 pub(crate) use resources::LocalRuntimeResourceLoader;
-pub(in crate::local_runtime) use resources::admitted_source_demand;
 pub(crate) use resources::captured_mcp_bindings;
+pub(in crate::local_runtime) use resources::{admitted_source_demand, delegated_skill_selections};
 pub use runtimes::{
     HeadlessConversationRuntime, LocalConversationRuntime, LocalConversationShutdownError,
     LocalProjectionJoinFailure,
@@ -779,6 +779,11 @@ impl LocalConversationCore {
                         admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
                         admitted_workflows: workflows.entries().keys().cloned().collect(),
                         project_files: paths.root_agent_project_files.clone(),
+                        delegated_skills: delegated_skill_selections(
+                            &runtime_config,
+                            &subagent_catalog,
+                            &workflows,
+                        ),
                     },
                     skill_discovery,
                     mcp_servers: captured_mcp_bindings(&runtime_config, &paths.credentials)?,

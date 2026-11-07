@@ -1,0 +1,3 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived plain-text lines; see PROVENANCE.md. */
+.page { margin: 0; font: var(--dsw-font-markdown-code-block); white-space: inherit; }
+.line { min-height: 1lh; }

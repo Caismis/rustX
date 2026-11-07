@@ -2742,16 +2742,16 @@ ownership commits. Global invocation policies remain global, not profile prose.
 
 ### Skills and frozen resources
 
-- **The frozen `SkillId` + `SkillVersionId` stays authoritative in the
-  child.** The child copies exactly the frozen file set into its own runtime
-  root, recomputes `package_version_id` over the copy, compares it to the
-  frozen version, and fails child composition on mismatch. A host path is a
-  materialization source, never an identity.
-- **Discovery is never restarted in the child, and progressive disclosure is
-  intact.** Only bytes on disk are materialized; no `SKILL.md` body is
-  preloaded into the child prompt, and the model-visible location is remapped
-  onto the child's own copy so the identity does not depend on mutable child
-  workspace ancestry.
+- **Definitions and authorization are frozen; resource bytes are live.** The
+  parent freezes the selected Skill IDs, normalized frontmatter versions, catalog
+  metadata and effective source/location bindings. Children install them without
+  discovery, file lists, content verification or copying. They cannot acquire a
+  newly discovered Skill. Ordinary Native Tools read the actual host files under
+  their existing execution/approval rules.
+- **Discovery, capture and rescan never traverse Skill assets.** Only direct
+  candidate identities and bounded frontmatter prefixes participate. Body and
+  asset edits cause no Skill configuration application or Journal change fact.
+  New definitions publish at the existing safe commit boundary.
 
 ### Child preparation
 
@@ -8339,19 +8339,16 @@ See [the storage and lifecycle contract](issue-520/README.md).
 
 ## Large local resources (Issue #527)
 
-- Skill package, supporting-file and `SKILL.md` admission has no fixed byte
-  ceiling. Discovery retains frontmatter/catalog metadata, never the Markdown
-  body. Complete accepted bytes, binary assets and raw relative filenames affect
-  identity. Existing source precedence, invalid-Workspace shadowing and exact
-  traversal/count policies remain authoritative.
-- A package read validates the opened regular descriptor, actual consumed length
-  and its anchored name. Truncation, growth, replacement or detectable in-place
-  mutation fails the read. No atomic snapshot of mutable external paths is
-  claimed. A materialized child copy must reproduce the frozen full digest.
+- Skill bodies and assets have no discovery byte ceiling because discovery never
+  reads them. The YAML frontmatter prefix is bounded to 1 MiB to bound malformed
+  input, with cancellable 4 KiB read-ahead. Only a normalized validated definition
+  affects SkillVersionId; source/location facts are compared separately. Root
+  escape and symlinked package/entry rejection remain discovery rules; internal
+  resource access belongs to ordinary Tools.
 - Managed Python authorization freezes disk-backed bytes, declarations and
   identity together. Later path edits cannot alter that source object. Capture
   and installation use fixed byte buffers, with no eager whole-package vector.
-- Source capture uses complete content revisions. A length/mtime marker is never
+- Non-Skill source capture uses complete content revisions. A length/mtime marker is never
   proof that accepted large resources are unchanged. Incomplete inspection is
   explicit and cannot certify equality or publish a silently unverified capture.
 - Workflow serialized source and normalized expanded document must each fit

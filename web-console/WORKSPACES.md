@@ -23,8 +23,11 @@ scope enforces `erasableSyntaxOnly`, and a clean native child regression exercis
 real Host classification and HTTP authority-error serialization.
 
 Normal local development uses [the dev launcher](../DEVELOPMENT.md), which owns
-the ephemeral config and metadata. The following describes the distinct case of
-an independently managed Product Host with persistent operator-owned metadata.
+the ephemeral Product Host configuration and a persistent Workspace registry at
+`$XDG_STATE_HOME/rustx/web/<profile>/workspaces.json` (defaulting to
+`~/.local/state`). Registrations, order, names and the manually selected Workspace
+survive launcher restarts. The following describes the distinct case of an
+independently managed Product Host with operator-owned configuration and metadata.
 The launcher carrier authenticates browser requests before the Workspace middleware.
 Its bootstrap DTO contains only native transport admission material, never roots.
 Browser authentication cannot add roots; Remote Settings cannot grant filesystem access.

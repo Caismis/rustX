@@ -1740,7 +1740,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1752,7 +1752,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -2086,7 +2086,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2098,7 +2098,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -2432,7 +2432,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2444,7 +2444,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -2778,7 +2778,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2790,7 +2790,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -3124,7 +3124,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3136,7 +3136,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -3470,7 +3470,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3482,7 +3482,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -3816,7 +3816,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3828,7 +3828,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },

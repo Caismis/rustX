@@ -123,7 +123,7 @@ export function WorkspaceNavigation({ associations, host, client, state, transit
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => edit('add', '', '') : undefined}
       refresh={() => { associations.refresh(); search(query, offset); }} previous={connected && offset > 0 ? () => search(query, Math.max(0, offset - 32)) : undefined}
       next={connected && state.nextOffset != null ? () => search(query, state.nextOffset!) : undefined}
-      notices={<>{status && status !== 'ready' && status !== 'disconnected' && <p role="status">{tx(status === 'unavailable' ? 'workspace:association.unavailable' : 'workspace:association.refreshing')}</p>}{catalog && !bound && <p role="status">{tx('workspace:workspace-navigation.this-workspace-host-belongs-to')}{' '}{catalog.endpoint}.</p>}</>} />
+      notices={<>{status === 'unavailable' && <p role="status">{tx('workspace:association.unavailable')}</p>}{catalog && !bound && <p role="status">{tx('workspace:workspace-navigation.this-workspace-host-belongs-to')}{' '}{catalog.endpoint}.</p>}</>} />
     {!dialog && error && <Toast key={notice?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setError('')}/>}
     {renaming && <RenameSession key={renaming.id} client={client} id={renaming.id} title={renaming.title} close={() => setRenaming(undefined)}/>}
     {toast && <Toast key={toast.sequence} anchor={null} tone={toast.copied ? 'success' : undefined} text={tx(toast.copied ? 'workspace:toast.sessionIdCopied' : 'workspace:toast.sessionIdCopyFailed')} icon={toast.copied ? <IconCheckOutline16/> : <IconWarningOutline16/>} onDone={() => setToast(undefined)}/>}

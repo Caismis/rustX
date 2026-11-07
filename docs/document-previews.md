@@ -26,7 +26,7 @@ Spreadsheet parsing uses ExcelJS for XLSX and Papa Parse for CSV/TSV. The
 unsupported legacy XLS adapter and its SheetJS/CDN install dependency are removed.
 macOS uses the bundled LibreOffice kit inside the existing clean-environment Seatbelt process group. Neither platform has an unsandboxed conversion fallback.
 Missing Linux sandbox/converter prerequisites fail closed. No runtime binary
-download is performed. The operator installs and maintains LibreOffice and fonts.
+download is performed. The operator installs and maintains LibreOffice, `python3-uno` and fonts. Python UNO runs from `/usr/bin/python3` inside the private sandbox.
 
 Every Download remains the original authorized source bytes and original name,
 including Unicode/spaces. A generated PDF or browser workbook model never replaces
@@ -68,7 +68,7 @@ retires every incompatible active occurrence lease, including its original URL.
 | Browser spreadsheet source / rectangular cell area / parser deadline | 16 MiB / 250,000 cells across worksheets / 15 seconds |
 | Browser XLSX ZIP entries / path bytes | 10,000 / 240 |
 | Browser XLSX ZIP individual / total expansion / declared ratio | 32 MiB / 64 MiB / 200:1 |
-| Office service runtime / aggregate CPU rate | 60 seconds (external systemd timer); one CPU quota, 100 ms per 100 ms period across the complete cgroup |
+| Each active Office job / aggregate CPU rate | 60 seconds (renewed external systemd timer); one CPU quota, 100 ms per 100 ms period across the complete cgroup |
 | Converter writable filesystem | One 256 MiB private tmpfs at `/tmp`, including `/dev/shm`; root and input read-only. Private Host snapshot ≤50 MiB plus fixed profile seed |
 | Converter aggregate memory / swap / tasks | 512 MiB cgroup memory, zero swap, 64 tasks including threads and descendants; whole-cgroup OOM kill |
 | Converter per-file / per-process FD limits | 100 MiB / 128 (supplementary; not aggregate limits) |
@@ -95,6 +95,11 @@ PDF main-thread timers are cooperative watchdogs, not hard CPU/preemption
 limits. Synchronous render/text work can delay their dispatch. Worker termination
 retires worker execution once requested; it cannot preempt synchronous browser
 main-thread work. This deliberately differs from the external Office service timer.
+Once a page acquires the serial execution slot, its watchdog covers page parsing,
+bitmap rendering and text work until physical settlement or document retirement.
+Visibility cancellation ends the caller's wait but does not remove that deadline.
+Queued pages can cancel immediately before acquiring the slot. Expiry retires the
+document worker and surfaces a retryable preview error.
 PDF fonts use the built-in glyph-path renderer (`disableFontFace`); previews do not register document FontFaces in application state. Text selection uses a fallback font layer and can differ in glyph appearance. Public PDF filter resources, selected-page buffers and owner references are released explicitly even when a failed worker cannot acknowledge PDF.js destruction.
 
 The spreadsheet parser rejects a source or rectangular cell area above its budget;
@@ -173,6 +178,12 @@ loading completion.
 Host retirement aborts parser/converter work. Its slot is held until the worker
 terminates and the process pipes close and temporary directory cleanup completes.
 There are no automatic retries or unknown-outcome conversion joins.
+Converter startup belongs to the Host and may overlap request-owned OOXML
+preflight. After its parser has terminated, a cancelled request stops waiting
+for startup and releases document admission immediately. The same warming slot
+remains available to the next request; Host close still retires and awaits it.
+Once a request starts rendering, cancellation retains admission until the
+converter's physical retirement and private-file cleanup finish.
 
 Physical settlement failures preserve the owner whose obligation is unknown:
 
@@ -235,7 +246,8 @@ schema, authority or filesystem policy changes.
 
 ## Office boundary
 
-The Host preflights OOXML in a Node worker before starting LibreOffice. VBA,
+The Host preflights OOXML in a Node worker before submitting document bytes to
+LibreOffice; its Host-owned converter may warm concurrently. VBA,
 ActiveX, embeddings, external links/relationships and DTDs are rejected. Only
 DOCX and PPTX are submitted to the converter. A fresh private profile sets macro
 security to level 3. This setting alone is not the sandbox boundary.
@@ -289,8 +301,7 @@ depend on whether an upstream release has fixed that behavior.
 
 The Host never changes global cgroup policy or starts a privileged conversion service.
 CI provisions the runner's user manager with loginctl enable-linger and verifies
-the actual production admission path before tests. macOS remains unsupported for
-Office; there is no alternate conversion mode.
+the actual production admission path before tests. macOS uses the bundled LibreOffice kit in a clean-environment Seatbelt process group; the Host retains one converter instance until retirement.
 
 Bubblewrap unshares user, network, PID, IPC and UTS namespaces, disables further
 user namespaces, drops capabilities, creates a new session and uses die-with-parent.
@@ -329,8 +340,7 @@ Before permitting payload execution, the Host opens the actual cgroup.kill and
 watches cgroup.events outside the sandbox. Cancellation/oversize uses cgroup.kill
 to SIGKILL the complete tree. No process can migrate out because the sandbox has
 no cgroup mount or inherited control descriptor.
-RuntimeMaxSec=15 is enforced by the external manager, even if the Node event loop
-is blocked; the Node timer provides an additional cooperative error watchdog.
+The reusable service has no idle runtime expiry. A separate transient systemd timer is armed before startup admission and renewed before each active document, enforcing 60 seconds even if the Node event loop is blocked. It is disarmed after a settled document; the Node timer is an additional cooperative watchdog.
 KillMode=control-group, KillSignal=SIGKILL and ExitType=cgroup prevent a main-process
 exit from hiding surviving descendants. A late-starting service cannot receive
 its stdin permit after cancellation. The systemd-run wait client is never killed
@@ -340,10 +350,9 @@ cgroup) before closing its control handles. Thus even an unexpectedly failed wai
 client cannot hide surviving descendants. If retirement cannot be established, the
 Host retains its admission slot and reports converter_unavailable; it does not
 admit another operation on an unknown outcome.
-Only then is the private input directory removed; only after that awaited cleanup
-does LocalWorkspaceHost release the one derivation slot. Failed/oversized output
-never publishes. --collect retires the transient unit; no derived cache remains.
-stderr is discarded rather than exposing converter internals or filesystem paths.
+A healthy job closes its UNO document and removes the private output before sending a settlement trailer. The Host then removes the staged source and disarms its deadline before releasing the derivation seat. The private UNO Desktop, process tree, profile and converter slot remain for the next document. Cancellation after rendering admission, timeout, malformed output or an idle crash retires the whole tree and removes the private directory before replacement. Unknown retirement poisons the slot. Host close retires the converter and clears the bounded PDF cache. Failed/oversized output never publishes; stderr is discarded.
+
+The Linux worker uses a private UNO named pipe with no Host socket mount or network listener. Hidden, read-only loading disables macro execution and linked-content updates. macOS retains one kit `createConverter` in its worker, matching Harness's converter-instance ownership. The kit's internal helper lifecycle is library-owned. Linux process reuse is covered by a real four-document test, independently of the successful-PDF cache. Local different-file measurements: initial startup and DOCX 1,795 ms, then DOCX 30 ms, PPTX 85 ms and a second PPTX 43 ms, with unchanged worker/engine identity. The first engine bootstrap remains a one-time cost.
 
 ## Document contract ownership
 
@@ -395,8 +404,7 @@ The Harness checkout was clean at `477b4f420553e8a52c2fbccc464d7561b239c443` and
 was inspected read-only using `git show` at approved pin
 `639ed015397290b3745d163aafe02ffee4aa3f84`. Exact inspected paths and hashes are in
 `web-console/source-inventory.json`. Adapted ideas are document lifetimes, lazy
-PDF page cleanup, authorized bounded conversion and isolated HTML. No Harness
-code was copied for the new implementation. Cordis, slots, registries, background
+PDF page cleanup, authorized bounded conversion and isolated HTML. The initial implementation used inspected patterns; subsequent presentation ports are individually licensed and inventoried in `web-console/source-inventory.json`. Cordis, slots, registries, background
 work and broad legacy-format/HTML authority were excluded. The current business
 alignment uses the fixed `687f282e8625c6b8d11ff58211a90524be2e4317` implementation;
 its [behavior comparison](dsh-preview-behavior-alignment.md) documents bounded
@@ -420,8 +428,7 @@ Bubblewrap 0.9.0 package layout, including its external system registry.
   `test/document-converter.test.ts` gate physical termination/pipe close and
   use controlled timers, proving settlement, cleanup and admission ordering.
 - `test/document-integration.test.ts` runs the real sandbox and real DOCX/PPTX
-  bytes on Linux. macOS explicitly checks converter unavailability; it does not
-  silently skip an unsandboxed conversion path.
+  bytes, including different-file process reuse, on supported platforms. Native macOS integration is skipped on Linux; process-group lifecycle has separate controlled tests.
 - `test/document-http-lifetime.test.ts` gates real HTTP header acknowledgement,
   exact cancellation and physical settlement; cancellation-before-ACK and wrong
   scope/token cannot race Host capacity.

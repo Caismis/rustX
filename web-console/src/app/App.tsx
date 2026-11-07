@@ -27,6 +27,9 @@ import type { WorkbenchTarget } from '../workspaces/workbench';
 import { HttpWorkspaceHost } from '../workspaces/http-host';
 import { WorkspaceAuthority } from '../workspaces/authority';
 import { WorkspaceAssociations } from '../workspaces/associations';
+import { preferredWorkspace } from '../workspaces/preferred';
+import { WorkspaceSelectionPreference } from '../workspaces/selection';
+import { sameEndpoint } from '../workspaces/endpoint';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { WorkspaceSessionAdmission } from '../workspaces/session-admission';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -79,10 +82,10 @@ import schedulerCss from './scheduler/scheduler.module.css';
 import { readShellLayout, saveShellLayout } from './shell-preferences';
 
 const PREFERENCES = 'rustx-console-view-v2';
-function readPreferences(): { endpoint?: string; openViews: string[] } {
+function readPreferences(): { endpoint?: string; openViews: string[]; draft?: boolean } {
   try {
     const value = JSON.parse(localStorage.getItem(PREFERENCES) ?? 'null');
-    if (value && typeof value.endpoint === 'string' && Array.isArray(value.openViews)) return { endpoint: value.endpoint, openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))].slice(0, 32) };
+    if (value && typeof value.endpoint === 'string' && Array.isArray(value.openViews)) return { endpoint: value.endpoint, openViews: [...new Set<string>(value.openViews.filter((id: unknown) => typeof id === 'string'))].slice(0, 32), draft: value.draft === true };
   } catch { /* Preferences are optional presentation, never recovery input. */ }
   return { openViews: [] };
 }
@@ -102,7 +105,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
     inspected: inspectionAcknowledger(client, repairAcknowledgements),
   } });
   const [preferences] = useState(readPreferences);
-  const first = preferences.endpoint === client.getSnapshot().endpoint ? preferences.openViews[0] : undefined;
+  const first = !preferences.draft && sameEndpoint(preferences.endpoint, client.getSnapshot().endpoint) ? preferences.openViews[0] : undefined;
   const drafts = draftPreparations(client, workspaceHost, workspaceAuthority);
   const [composerDraft] = useState(() => new ComposerDraft());
   // Browser-lifetime Workflows surface: its open file target and unsaved
@@ -149,8 +152,13 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const [requestedConversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const conversationMode = displayPreferences.codingView ? requestedConversationMode : 'chat';
   const [preferences] = useState(readPreferences);
+  const [workspaceSelection] = useState(() => {
+    let storage: Storage | undefined;
+    try { storage = globalThis.localStorage; } catch { /* Browser storage may be disabled. */ }
+    return new WorkspaceSelectionPreference(storage);
+  });
   const endpoint = state.endpoint ?? '';
-  const initialViews = preferences.endpoint === state.endpoint ? preferences.openViews : [];
+  const initialViews = sameEndpoint(preferences.endpoint, state.endpoint) ? preferences.openViews : [];
   const [openViews, setOpenViews] = useState<string[]>(initialViews);
   const routeState = useSelector(shell, snapshot => snapshot);
   useEffect(() => { const subscription = shell.subscribe(() => client.recheckAdmissions()); return () => subscription.unsubscribe(); }, [shell, client]);
@@ -164,7 +172,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const command = routeState.context.command;
   const restored = routeState.context.restored;
   const commandCurrent = () => !!command && shell.getSnapshot().context.command === command && shell.getSnapshot().context.route === command.route && client.getSnapshot().generation === command.generation;
-  useEffect(() => associations.select(selected), [associations, selected]);
+  const draftWorkspaceSession = center.kind === 'new-conversation' ? routeState.context.draftWorkspaceSession : undefined;
+  useEffect(() => associations.select(selected ?? draftWorkspaceSession), [associations, selected, draftWorkspaceSession]);
+  const workspaceAssociations = useSyncExternalStore(associations.subscribe, associations.getSnapshot);
   const selectedCwd = state.sessions.find(row => row.id === selected)?.cwd ?? (selected ? state.views[selected]?.summary?.cwd ?? state.views[selected]?.settings?.cwd : undefined);
   const associatedWorkspace = useSyncExternalStore(associations.subscribe, () => {
     const association = selected ? associations.getSnapshot().entries.get(selected) : undefined;
@@ -249,20 +259,30 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   useEffect(() => {
     if (!endpoint || state.connection !== 'connected' || settingsOpen || preferencesApplied.current) return;
     preferencesApplied.current = true;
-    if (preferences.endpoint !== endpoint || shell.getSnapshot().context.route.kind !== 'new-conversation' || shell.getSnapshot().context.binding !== 0 || shell.getSnapshot().context.pending) return;
+    if (!sameEndpoint(preferences.endpoint, endpoint) || shell.getSnapshot().context.route.kind !== 'new-conversation' || shell.getSnapshot().context.binding !== 0 || shell.getSnapshot().context.pending) return;
     client.restoreViews(preferences.openViews);
     setOpenViews(preferences.openViews);
-    if (preferences.openViews[0]) shell.send({ type: 'OPEN', destination: { kind: 'restore-session', sessionId: preferences.openViews[0], sidebar: false } });
-    if (client.getSnapshot().connection === 'connected') for (const id of preferences.openViews.filter(id => id !== preferences.openViews[0])) {
+    const primary = preferences.draft ? undefined : preferences.openViews[0];
+    if (primary) shell.send({ type: 'OPEN', destination: { kind: 'restore-session', sessionId: primary, sidebar: false } });
+    if (client.getSnapshot().connection === 'connected') for (const id of preferences.openViews.filter(id => id !== primary)) {
       if (!client.getSnapshot().views[id]?.target && (!firstSubmissions(client).session(id) || ['admitted', 'discarded'].includes(firstSubmissions(client).session(id)!.phase))) void client.attach(id).catch(() => {});
     }
   }, [client, shell, endpoint, preferences, state.connection, settingsOpen]);
   useEffect(() => {
+    // Restore saved views before choosing a draft: selecting a Workspace owns
+    // real preparation, even while its loading UI stays silent.
+    if (!endpoint || state.connection !== 'connected' || settingsOpen || !preferencesApplied.current) return;
+    const context = shell.getSnapshot().context;
+    if (context.control !== routeState.context.control || context.route.kind !== 'new-conversation' || context.route.workspaceId || context.pending) return;
+    const workspaceId = preferredWorkspace(associations.getSnapshot(), client.getSnapshot(), context.draftWorkspaceSession, workspaceSelection.read(client.getSnapshot().endpoint));
+    if (workspaceId) shell.send({ type: 'DRAFT.WORKSPACE', workspaceId });
+  }, [associations, workspaceAssociations, workspaceSelection, client, shell, routeState.context.control, center, endpoint, state.connection, settingsOpen]);
+  useEffect(() => {
     try {
       // Persist only safe navigation. Never the token, drafts, snapshots or requests.
-      if (endpoint) localStorage.setItem(PREFERENCES, json({ endpoint, openViews: JSON.parse(resumeViews) }));
+      if (endpoint) localStorage.setItem(PREFERENCES, json({ endpoint, openViews: JSON.parse(resumeViews), draft: center.kind === 'new-conversation' }));
     } catch { /* Storage may be disabled in a trusted browser. */ }
-  }, [endpoint, resumeViews]);
+  }, [endpoint, resumeViews, center.kind]);
   const focusSession = (id?: string) => {
     if (id) shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: false } });
     else shell.send({ type: 'DRAFT' });
@@ -283,8 +303,20 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     runGlobal(() => Promise.all(closing.map(id => client.release(id))));
   };
   const focusDraft = () => document.querySelector<HTMLTextAreaElement>('[data-resident-composer] textarea')?.focus();
-  const createInWorkspace = (id?: string) => {
-    shell.send({ type: 'DRAFT', workspaceId: id }); focusDraft();
+  const rememberWorkspace = (id: string) => {
+    const native = client.getSnapshot(), catalog = workspaceAuthority.getCatalog(), route = shell.getSnapshot().context.route;
+    if (!native.endpoint || !sameEndpoint(catalog?.endpoint, native.endpoint) || !catalog?.workspaces.some(row => row.id === id)
+      || route.kind !== 'new-conversation' || route.workspaceId !== id) return;
+    const intent = workspaceSelection.select(native.endpoint, id);
+    if (intent) runGlobal(() => workspaceHost.selectWorkspace({ authorityId: catalog.authorityId, endpoint: catalog.endpoint }, id, intent), () => workspaceSelection.current(intent));
+    // Commit the unsent route at the gesture too, so an immediate refresh
+    // cannot restore an older Session before React's persistence effect runs.
+    try { localStorage.setItem(PREFERENCES, json({ endpoint: native.endpoint, openViews, draft: true })); } catch { /* Storage disabled. */ }
+  };
+  const createInWorkspace = (id = workspace, remember = false) => {
+    shell.send({ type: 'DRAFT', workspaceId: id });
+    if (remember && id) rememberWorkspace(id);
+    focusDraft();
   };
   const newConversationCurrent = useMemo(() => committedRouteCurrent(shell), [shell, routeState.context.control, state.generation, state.authorityRevision]);
   const startupCurrent = useMemo(() => routeState.context.draftSession ? draftSessionCurrent(shell, routeState.context.draftSession.intent) : newConversationCurrent, [shell, routeState.context.draftSession, newConversationCurrent]);
@@ -313,8 +345,8 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       browser={<WorkspaceNavigation transition={sessionTransition} associations={associations} key={state.authorityRevision ?? 0} host={workspaceHost} client={client} state={state} endpoint={endpoint}
         metadataChanged={removed => { if (removed && center.kind === 'new-conversation' && center.workspaceId === removed) shell.send({ type: 'DRAFT' }); }}
         workspaceSettings={(id, label) => { openSettings(workspaceSettingsTarget(id, label)); geometry.dismissSidebar(); }} workspace={workspace} selected={selected}
-        draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={id => { createInWorkspace(id); geometry.dismissSidebar(); }}
-        openSession={id => open(id, undefined, geometry)} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={id => { createInWorkspace(id); geometry.dismissSidebar(); }} deleteSession={setDeletingSession}
+        draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={id => { createInWorkspace(id, true); geometry.dismissSidebar(); }}
+        openSession={id => open(id, undefined, geometry)} openViews={openViews} closeView={closeView} closeAllViews={closeAllViews} createSession={id => { createInWorkspace(id, true); geometry.dismissSidebar(); }} deleteSession={setDeletingSession}
         forkSession={id => shell.send({ type: 'OPEN', destination: { kind: 'fork-session', sessionId: id, sidebar: !!geometry.overlay } })} />}/>}
     rightOpen={home && previews.mode !== 'collapsed'} rightPanel={geometry => <RightPanel docked={previews.mode !== 'preview'} {...geometry} fullscreen={previews.mode === 'workbench' ? workbenchFullscreen : previews.mode === 'preview' && previews.workspace?.fullscreen} open={home && previews.mode !== 'collapsed'} title={previews.mode === 'preview' ? tx('artifacts:workspace.title') : tx('artifacts:workbench.start')}>
       <Workbench renderTaskTitle={(id, fallback) => <TaskTabTitle client={client} identity={id} fallback={fallback}/>} renderTask={id => { const task = parseTaskKey(id); return task && <div className={schedulerCss.taskTab}><TaskDetail client={client} task={task} openSession={openTaskSession}/></div>; }} renderAgent={(id, visible) => <SubagentAside id={id} visible={visible}/>} fileRef={fileWorkbench} key={JSON.stringify([state.generation, state.authorityRevision, selected, view?.target, workbenchTarget, fileAuthority])} closePanel={resetPresentation=>{if(resetPresentation)setWorkbenchFullscreen(false);collapsePanel();}} host={workspaceHost} previews={workbenchPreviews} scope={workspaceAuthority.getCatalog()} target={workbenchTarget} active={home} visible={previews.mode === 'workbench'} floatingVisible={previews.mode === 'workbench' || previews.mode === 'collapsed'} fullscreen={workbenchFullscreen || !geometry.canShow} toggleFullscreen={() => { if (!geometry.canShow) {setWorkbenchFullscreen(false);collapsePanel();} else setWorkbenchFullscreen(value => !value); }}/>
@@ -376,7 +408,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
       <ConversationSeat intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
-        workspacePicked={id => { if (newConversationCurrent()) shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); }}
+        workspacePicked={id => { if (newConversationCurrent()) { shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); rememberWorkspace(id); } }}
         transitioning={!!routeState.context.retry} binding={String(draftBinding)} current={center.kind !== 'session' && routeState.context.draftSession ? startupCurrent : newConversationCurrent} executable={home && center.kind === 'session'} consumed={consumed} restored={restored}
         onCommand={id => { if (id !== 'model') invokeCommand({ id }); }}
         preparePublication={() => {

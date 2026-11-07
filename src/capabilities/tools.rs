@@ -16,6 +16,9 @@ pub struct AgentActivation {
     pub admitted_agents: BTreeSet<crate::runtime::subagent::SubagentName>,
     pub admitted_workflows: BTreeSet<crate::runtime::workflow::WorkflowId>,
     pub project_files: Vec<crate::runtime::resources::ProjectContextFile>,
+    /// Skill selections of admitted Named Agents/Workflow nodes for capture
+    /// comparison. Each Agent prepares its own selected dependency environment.
+    pub delegated_skills: Vec<crate::runtime::agent_profile::AgentSkillSelection>,
 }
 
 impl Default for AgentActivation {
@@ -25,6 +28,7 @@ impl Default for AgentActivation {
             admitted_agents: BTreeSet::new(),
             admitted_workflows: BTreeSet::new(),
             project_files: Vec::new(),
+            delegated_skills: Vec::new(),
         }
     }
 }
@@ -62,6 +66,34 @@ fn reject_extension_tool(name: &str, label: &str) -> Result<(), String> {
 }
 
 impl AgentActivation {
+    pub(crate) fn selects_root_skill(&self, package: &crate::skills::SkillPackage) -> bool {
+        !package.disable_model_invocation()
+            && self
+                .profile
+                .skills
+                .as_ref()
+                .is_some_and(|selection| match selection {
+                    crate::runtime::agent_profile::AgentSkillSelection::All => true,
+                    crate::runtime::agent_profile::AgentSkillSelection::Exact(names) => {
+                        names.iter().any(|name| name == package.name())
+                    }
+                })
+    }
+
+    pub(crate) fn selects_skill(&self, package: &crate::skills::SkillPackage) -> bool {
+        !package.disable_model_invocation()
+            && (self.selects_root_skill(package)
+                || self
+                    .delegated_skills
+                    .iter()
+                    .any(|selection| match selection {
+                        crate::runtime::agent_profile::AgentSkillSelection::All => true,
+                        crate::runtime::agent_profile::AgentSkillSelection::Exact(names) => {
+                            names.iter().any(|name| name == package.name())
+                        }
+                    }))
+    }
+
     /// The Agent profile is the sole capability selection authority.
     /// # Errors
     /// Rejects invalid selections and names owned by Plugins.

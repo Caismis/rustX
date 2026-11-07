@@ -92,7 +92,8 @@ object (the native `json_schema_output` capability). Initialization requires v72
 WebSocket negotiation requires `rustx.app-server.v72`. v71 and earlier peers are rejected
 before attachment or configuration/catalog reads; Web and TUI upgrade together.
 Rust remains the schema authority, and validators keep rejecting unknown fields.
-Runtime Client v83 carries Workflow Model observations. Child IPC v37 carries typed
+Runtime Client v83 carries Workflow Model observations. Child IPC v38 carries frozen Skill definitions and live resource locations
+(without package file lists), alongside typed
 Workflow/interaction origins and freezes independent MCP Resource source authority
 alongside model views and the JSON Schema capability. MCP Resource calls use the
 ordinary Tool event/result protocol; there are no separate Resource browsing RPCs.

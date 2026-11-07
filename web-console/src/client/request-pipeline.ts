@@ -13,6 +13,7 @@ interface Pending {
   acknowledged?: (result: MethodResult) => void;
   request: Request;
   sessionId?: string;
+  submittedWhileRunning: boolean;
   mutation: boolean;
   sent: boolean;
   expected: MethodResult['type'];
@@ -125,7 +126,7 @@ export class RequestPipeline {
     const work = new Promise<MethodResult>((resolve, reject) => {
       const params = operation.params;
       const sessionId = 'target' in params && 'session_id' in params.target ? params.target.session_id : 'session_id' in params ? params.session_id ?? undefined : undefined;
-      this.pending.set(id, { request, sessionId, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
+      this.pending.set(id, { request, sessionId, submittedWhileRunning: false, mutation: mayCommit(operation), sent: false, expected, resolve, reject, dispatchCurrent, authority, acknowledged: result => acknowledged?.(result as Extract<MethodResult, { type: T }>) });
       abortObservation = () => {
         const auxiliaryRead = ['auxiliary/status', 'auxiliary/result', 'auxiliary/submissionLookup'].includes(operation.method);
         if (operation.method !== 'agent/observe' && !auxiliaryRead) return;
@@ -238,6 +239,10 @@ export class RequestPipeline {
     if (socket.readyState !== 1) { this.port.lose(generation); return; }
     // No external observer runs between this final proof and send invocation.
     // sent means transmission attempted, never native acceptance.
+    if (pending.request.method === 'turn/start' || pending.request.method === 'turn/steer') {
+      const attempt = this.port.state().views[pending.request.params.target.session_id]?.snapshot?.attempt;
+      pending.submittedWhileRunning = !!attempt && ['admitted', 'running'].includes(attempt.phase.type);
+    }
     pending.sent = true;
     if (hasResponseDeadline(pending.request.method) && ['rpc', 'metadata'].includes(requestLane(pending.request.method))) pending.timer = setTimeout(() => this.port.lose(generation), this.port.timeoutMs());
     try { socket.send(raw); } catch { this.port.lose(generation); }
@@ -273,7 +278,7 @@ export class RequestPipeline {
       if (operation.method === 'turn/start' || operation.method === 'turn/steer') {
         const target = operation.params.target;
         const accepted = 'result' in value && value.result.type === 'inbound_accepted' && sameTarget(this.port.state().views[target.session_id]?.target, target)
-          ? { messageId: value.result.message_id, content: operation.params.content } : undefined;
+          ? { messageId: value.result.message_id, content: operation.params.content, submittedWhileRunning: pending.submittedWhileRunning } : undefined;
         // One publication hands request ownership to exact acknowledged identity.
         // Never publish a zero count before publishing the accepted MessageId.
         this.port.inboundAnswered(target.session_id, accepted);

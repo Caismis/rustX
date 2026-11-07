@@ -113,7 +113,8 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 36 freezes source-wide Resources authority independently of exact Tools.
 /// Version 37 combines frozen Resources authority with Scheduled Workflow and
 /// interaction origins and prepared execution inputs.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 37;
+/// Version 38 freezes Skill definitions and live locations; no package file lists.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 38;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -1037,13 +1038,12 @@ mod tests {
                     skill_id: crate::runtime::identity::SkillId::new("skill-repository-navigation"),
                     version_id: crate::runtime::identity::SkillVersionId::new("sha256:skill-v1"),
                 },
+                dependencies: crate::skills::DependencyManifest::default(),
                 catalog_entry: crate::skills::SkillCatalogEntry {
                     name: "repository-navigation".to_owned(),
                     description: "Navigate the repository.".to_owned(),
                     location: "/w/.agents/skills/nav/SKILL.md".to_owned(),
                 },
-                source_root: PathBuf::from("/w/.agents/skills/nav"),
-                files: vec![PathBuf::from("SKILL.md"), PathBuf::from("ref/guide.md")],
             }],
             project_instructions: vec![crate::runtime::resources::ProjectContextFile {
                 path: PathBuf::from("/w/AGENTS.md"),
@@ -1224,7 +1224,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 37);
+        assert_eq!(SUBAGENT_IPC_VERSION, 38);
     }
 
     #[test]

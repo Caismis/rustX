@@ -37,19 +37,24 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh']) test(`silent
     native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     const wire = await wireProbe(page); await routeWorkspaceHost(page, fixture);
     await page.setViewportSize({ width, height: 900 }); await page.goto('/');
+    const selectedAt = performance.now();
     await connectRemote(page, fixture.endpoint, fixture.token);
     if (locale === 'zh') await chinese(page);
     await expect(page).toHaveTitle(/rustX/);
     await expect(page.locator('html')).toHaveAttribute('lang', locale === 'zh' ? 'zh-CN' : 'en');
     expect((await native.listSessions()).sessions).toHaveLength(0);
-    expect(gate.counts.processes).toBe(0);
-    const selectedAt = performance.now();
-    await pick(page, locale, 'Workspace A');
+    await expect(page.getByRole('button', { name: locale === 'zh' ? '选择工作区' : 'Choose Workspace', exact: true })).toContainText('Workspace A');
     await startupWait(() => gate!.reached, cancellation.signal);
+    expect(gate.counts.processes).toBe(1);
     const editor = page.getByRole('textbox', { name: locale === 'zh' ? '消息' : 'Message', exact: true });
     const send = page.getByRole('button', { name: locale === 'zh' ? '发送' : 'Send', exact: true });
     await expect(editor).toBeEditable();
     await editor.fill('mcp startup from a ready draft'); await expect(send).toBeEnabled();
+    // Connection/Home navigation can still be expanding the sidebar. Finish
+    // that user-navigation transition before measuring MCP-only stability.
+    await page.locator('[data-harness-frame]').evaluate(async frame => {
+      await Promise.allSettled(frame.getAnimations().map(animation => animation.finished));
+    });
     const composer = page.locator('[data-resident-composer]');
     const pendingText = await composer.innerText();
     const pendingBounds = await composer.boundingBox();
@@ -88,7 +93,7 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh']) test(`silent
     await fixture.release('startup-request');
     await expect(page.getByText('Ready tools received.', { exact: true })).toBeVisible();
     expect(errors).toEqual([]);
-    const evidence = { scenario: 'send_after_ready', width, locale, selection_to_ready_ms: readyAt - selectedAt, controlled_list_gate_ms: releasedAt - gate.events.find(event => event.kind === 'L')!.at, send_to_first_model_request_ms: requestedAt - sentAt, composer_bounds: pendingBounds, counts: gate.counts, processes: gate.processes, events: gate.events, first_request_tools: requests[0].body.tools, provider_requests: requests.length, clock: 'Node performance.now; readiness is the native diagnostic, request is the emulator gate', limits: 'Single fixture sample; includes the controlled discovery gate, browser, Host and observation overhead; no claim of faster MCP networking.' };
+    const evidence = { scenario: 'send_after_ready', width, locale, startup_to_ready_ms: readyAt - selectedAt, controlled_list_gate_ms: releasedAt - gate.events.find(event => event.kind === 'L')!.at, send_to_first_model_request_ms: requestedAt - sentAt, composer_bounds: pendingBounds, counts: gate.counts, processes: gate.processes, events: gate.events, first_request_tools: requests[0].body.tools, provider_requests: requests.length, clock: 'Node performance.now from connection start; readiness is the native diagnostic, request is the emulator gate', limits: 'Single fixture sample; includes the controlled discovery gate, browser, Host and observation overhead; no claim of faster MCP networking.' };
     writeFileSync(info.outputPath('prewarm-evidence.json'), JSON.stringify(evidence, null, 2) + '\n');
     await info.attach('prewarm-evidence', { path: info.outputPath('prewarm-evidence.json'), contentType: 'application/json' });
     passed = true;

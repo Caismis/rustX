@@ -1,6 +1,6 @@
 import { promptText } from './summary';
 import { branchGeometry, conditionsOf } from '../../document/branch';
-import { createContext, memo, useContext, useEffect, type CSSProperties } from 'react';
+import { createContext, memo, useContext, useEffect, useRef, type CSSProperties } from 'react';
 import { Handle, NodeResizer, Position, useNodeConnections, useUpdateNodeInternals, type NodeProps, type ResizeParams } from '@xyflow/react';
 import clsx from 'clsx';
 import { useTranslation } from '../../../../locale/react';
@@ -47,9 +47,16 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
   const tx = useTranslation(), actions = useContext(CanvasActions), connections = useNodeConnections();
   const node = data.definition, ports = node ? portsOf(node) : data.view === 'start' ? ['next'] as const : [];
   const updateNodeInternals = useUpdateNodeInternals();
+  const measuredDefinition = useRef(node);
   // Port identities and row positions can change without resizing the card.
-  // Keep React Flow's hit-testing bounds in sync after semantic node edits.
-  useEffect(() => { if (node) updateNodeInternals(id); }, [id, node, updateNodeInternals]);
+  // React Flow batches initial measurements through its ResizeObserver. Only
+  // semantic edits need an explicit update; one forced update per initial node
+  // would repeatedly publish the entire graph's internals during startup.
+  useEffect(() => {
+    if (measuredDefinition.current === node) return;
+    measuredDefinition.current = node;
+    if (node) updateNodeInternals(id);
+  }, [id, node, updateNodeInternals]);
   const container = data.container, branch = node?.type === 'branch' ? branchGeometry(node) : undefined;
   if (data.view === 'note' && data.note) return <NoteNode id={id} note={data.note} selected={selected}
     resizer={<NodeResizer isVisible={selected} minWidth={240} minHeight={88} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />} />;

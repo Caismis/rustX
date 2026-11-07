@@ -1,7 +1,9 @@
 //! Confined, fixed-buffer I/O for local package owners. This is not a cache.
 use sha2::{Digest, Sha256};
 use std::fs::{File, Metadata};
-use std::io::{Read, Seek, Write};
+#[cfg(test)]
+use std::io::Write;
+use std::io::{Read, Seek};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -14,6 +16,8 @@ use crate::runtime::CancellationSignal;
 pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
 #[cfg(test)]
 thread_local! {
+    pub(crate) static OPENED_FILES: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+    pub(crate) static DIRECTORY_LISTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     pub(crate) static STREAMED_FILE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 const DIRECTORY: OFlags = OFlags::RDONLY
@@ -45,6 +49,8 @@ impl PackageDirectory {
     }
 
     pub(crate) fn names(&self, limit: usize) -> std::io::Result<Vec<PathBuf>> {
+        #[cfg(test)]
+        DIRECTORY_LISTS.with(|count| count.set(count.get() + 1));
         let mut names = Vec::new();
         for entry in rustix::fs::Dir::read_from(&self.0)? {
             let entry = entry?;
@@ -64,6 +70,8 @@ impl PackageDirectory {
     }
 
     pub(crate) fn file(&self, relative: &Path) -> std::io::Result<File> {
+        #[cfg(test)]
+        OPENED_FILES.with(|files| files.borrow_mut().push(relative.to_path_buf()));
         let mut parts = relative.components().peekable();
         let mut directory = None;
         while let Some(part) = parts.next() {
@@ -197,21 +205,6 @@ fn read_pass(
         ));
     }
     Ok(hash.finalize().into())
-}
-
-pub(crate) fn copy(
-    directory: &PackageDirectory,
-    relative: &Path,
-    destination: &Path,
-    signal: &CancellationSignal,
-) -> std::io::Result<()> {
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut output = File::create_new(destination)?;
-    let evidence = stream(directory, relative, signal, |bytes| output.write_all(bytes))?;
-    output.set_permissions(evidence.metadata.permissions())?;
-    Ok(())
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ import { childMessageContinuation } from './child-message-continuation';
 import { childObservationRecovery } from './child-observation-recovery';
 import { childParentMessages } from './child-parent-messages';
 import { messageAttachments } from './message-attachments';
-import { liveTrace } from './trace-live';
+import { liveTrace, traceFollowing } from './trace-live';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { ComposerDraft } from '../../src/app/composer/draft';
@@ -47,7 +47,12 @@ server.handlers.set('session/model', request => {
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
+let releaseSource!: () => void;
+const sourceGate = new Promise<void>(resolve => { releaseSource = resolve; });
+if (!new URL(location.href).searchParams.has('source-gate')) releaseSource();
 server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
+const configureWorkspace = server.workspaceHost.configureWorkspace;
+server.workspaceHost.configureWorkspace = async (...args) => { await sourceGate; return configureWorkspace(...args); };
 if (new URL(location.href).searchParams.has('models')) {
   const saved = server.snapshots.get('A')!;
   saved.model = cfg3Effective().effective_model;
@@ -189,6 +194,7 @@ const releaseChildObservation = new URL(location.href).searchParams.has('subagen
 if (new URL(location.href).searchParams.has('parent-messages')) childParentMessages(server);
 if (new URL(location.href).searchParams.has('message-attachments')) messageAttachments(server);
 if (new URL(location.href).searchParams.has('trace-live')) liveTrace(server);
+if (new URL(location.href).searchParams.has('trace-following')) traceFollowing(server, new URL(location.href).searchParams.has('trace-history'));
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 if (new URL(location.href).searchParams.has('child-message-continuation')) childMessageContinuation(server);
 let nativeDefault = 'fixture/native';
@@ -214,6 +220,7 @@ const render = () => root.render(<AppSurface composerDraft={composerDraft} clien
 render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {
+  releaseSource,
   releaseChildObservation: () => releaseChildObservation?.(),
   advanceHistory: () => advanceHistory?.(),
   history: () => server.client.getSnapshot().views.A?.history,

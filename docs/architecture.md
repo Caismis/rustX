@@ -7531,16 +7531,16 @@ and pending authority. No deletion or successful cleanup follows failed proof.
 
 ## Local resource byte policies (Issue #527)
 
-Skill discovery streams complete package bytes, retaining only `SKILL.md`
-frontmatter for standard metadata/dependency validation. Supporting assets and
-Markdown bodies have no fixed byte admission ceiling. Native Read remains the
-progressive-disclosure path. The v2 Skill digest length-frames raw relative OS
-path bytes, lengths and verified full-file SHA-256 digests, preserving binary
-and non-UTF-8 filename identity without timestamps or host locations. Two
-matching complete reads, metadata on the opened regular descriptor and the
-reopened anchored name detect changed reads.
-This is content evidence for those reads, not an atomic snapshot of a mutable
-external directory.
+Skill discovery enumerates direct candidates and reads only `SKILL.md`
+frontmatter for standard metadata/dependency validation. The prefix is bounded
+to 1 MiB with cancellable 4 KiB read-ahead and two matching anchored prefix reads.
+Bodies and supporting assets have no discovery size ceiling because they are
+not discovery inputs. The definition digest hashes normalized frontmatter under
+`rustx-skill-definition-v1`; source/location bindings are compared separately.
+Native Read remains the progressive-disclosure path for current runtime bytes.
+Revision/rescan reuse definition discovery, while children inherit frozen
+metadata and actual host locations without copying resources. See
+[Skill discovery](skill-discovery.md) for the four-path structural evidence.
 
 Managed Python captures use an anonymous file with per-file offsets rather than
 retaining package bodies. The source object is immutable outside its owner;
@@ -7550,8 +7550,8 @@ verifies the whole staged state again and atomically renames it into the existin
 Python store. The build owner awaits copying, subprocesses, verification and
 cleanup before publishing its terminal result. The store retains failed staging
 cleanup and retries it at its next preparation; anonymous capture has kernel
-cleanup ownership. Child Skill copies likewise remain private until their frozen
-digest is verified, with the existing child runtime lifecycle owning any residue.
+cleanup ownership. Skill resources retain ordinary live-file Tool semantics;
+the child lifecycle owns selected dependency preparation and physical settlement.
 
 The Workflow owner admits serialized source bytes and normalized JSON document
 bytes independently at 16 MiB, inclusive. Its executable definition no longer has

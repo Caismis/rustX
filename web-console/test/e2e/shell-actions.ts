@@ -16,8 +16,11 @@ export async function returnHome(page: Page) {
 }
 export async function chooseWorkspace(page: Page, label: string) {
   await returnHome(page);
-  if (!await page.getByRole('button', { name: 'New Conversation', exact: true }).isVisible()) await page.getByRole('button', { name: 'Home', exact: true }).click();
-  await page.getByRole('button', { name: 'New Conversation', exact: true }).click();
+  // The sidebar action owns creation; the provisional history row can have
+  // the same accessible name while an unsent draft is selected.
+  const create = page.locator('#home-sidebar button[aria-label="New Conversation"]');
+  if (!await create.isVisible()) await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await create.click();
   await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
   await page.getByRole('menuitem', { name: label, exact: true }).click();
 }

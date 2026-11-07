@@ -352,7 +352,8 @@ it('cold sessions accept a prompt while initialization is held, then admit it ex
   const intent = await server.waitFor('session/submissionIntent', 1);
   expect(intent.params).toEqual({ session_id: 'A', node_id: 'node-A' });
   expect(screen.getByText('send while connecting')).toBeTruthy();
-  expect(document.querySelector('[data-first-submission="attaching"]')?.textContent).toContain('Connecting');
+  expect(document.querySelector('[data-first-submission="attaching"]')?.getAttribute('aria-label')).toBe('Sending…');
+  expect(document.querySelector('[data-first-submission="attaching"]')?.textContent).toBe('');
   expect(message.value).toBe('');
   expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
   await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' })));

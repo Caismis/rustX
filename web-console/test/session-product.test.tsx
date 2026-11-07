@@ -28,7 +28,8 @@ it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progres
 it.each([
   ['idle', {}, {}, 'idle', undefined],
   ['working', { snapshot: { ...snapshot(), attempt: running() } }, {}, 'working', undefined],
-  ['queued accepted input', { submissions: [{ messageId: 'accepted', content: [] }] }, {}, 'queued', undefined],
+  ['queued accepted input', { submissions: [{ messageId: 'accepted', content: [], submittedWhileRunning: true }] }, {}, 'queued', undefined],
+  ['accepted idle input', { submissions: [{ messageId: 'accepted', content: [], submittedWhileRunning: false }] }, {}, 'idle', undefined],
   ['unaccepted request is not queued', { inboundRequests: 1 }, {}, 'idle', undefined],
   ['stopping outranks working', { snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'private-attempt', status: 'acknowledged' } }, {}, 'stopping', undefined],
   ['another native receipt does not label stale working as stopping', { snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'actual-other-attempt', status: 'acknowledged' } }, {}, 'working', undefined],

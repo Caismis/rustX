@@ -615,8 +615,11 @@ Skills use standard Agent Skills packages at `skills/<name>/SKILL.md`. `skills`
 selection is prompt visibility, not a filesystem ACL. The system prompt provides
 the resolved absolute User and Workspace Skill collection roots without listing
 every absolute Skill path. Metadata supports progressive disclosure; bodies are
-read through ordinary model-independent Tool behavior. A child receives captured
-package bytes and resolved roots; it does not rediscover current files.
+read through ordinary model-independent Tool behavior. Discovery and source
+revisions read only normalized frontmatter definitions; bodies and assets never
+affect configuration identity. A child inherits frozen definitions, effective
+source roots and actual SKILL.md locations, without discovery or package copying.
+Tools read current runtime files. See [Skill discovery](skill-discovery.md).
 
 Named Agents use complete TOML profiles at `agents/<name>.toml` with description,
 instructions, optional model selection, Native/source Tools, Skills, Plugins,
@@ -1008,8 +1011,9 @@ generation or rebuild resources.
 A bounded native watcher (the `notify` crate) feeds external edits into the same
 path as a native write. Coverage is the User document's directory, for that one
 file; the User resource root `~/rustx/.agents` for `mcp.toml`, with its
-`agents`, `skills`, `tools` and `workflows` directories recursively (its parent
-until it exists); each Workspace that holds source authority or a Session's
+`agents`, `tools` and `workflows` directories recursively (its parent
+until it exists), plus the Skill collection and each direct candidate directory
+non-recursively for candidate changes and `SKILL.md` replacement; each Workspace that holds source authority or a Session's
 configuration, for `rustx.toml`, root `*.md` and the guidance files; and that
 Workspace's `.agents` in the same way. The guidance files are exactly the
 loader's (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`,

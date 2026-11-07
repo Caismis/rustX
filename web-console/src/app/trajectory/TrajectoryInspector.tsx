@@ -582,7 +582,8 @@ export interface TrajectoryInspectorProps {
   /** Assistant record id → its loaded matching Tool executions. */
   executions: ReadonlyMap<string, readonly TraceRecord[]>;
   requestNumbers: ReadonlyMap<string, number>;
-  /** Whether the loaded window starts at the conversation's first record. */
+  /** Every native record from the conversation start through this item's
+   * owner is loaded, with no intervening history gap. */
   completeHistory: boolean;
   /** Open another loaded record's summary (or a named tab). */
   onOpen: (recordId: string, facet?: TrajectoryFacet) => void;

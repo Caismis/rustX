@@ -3,25 +3,20 @@ import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { expect, it, vi } from 'vitest';
-const boundary = vi.hoisted(() => ({ read: vi.fn(), sandbox: vi.fn(), cleanup: vi.fn() }));
+const boundary = vi.hoisted(() => ({ read: vi.fn(), sandbox: vi.fn() }));
 vi.mock('../host/file-read.ts', async original => ({ ...await original<typeof import('../host/file-read.ts')>(), readNativeSource: boundary.read }));
-vi.mock('../host/documents/office-sandbox.ts', () => ({ runOfficeSandbox: boundary.sandbox }));
-vi.mock('node:fs/promises', async original => {
-  const actual = await original<typeof import('node:fs/promises')>();
-  return { ...actual, rm: async (...args: Parameters<typeof actual.rm>) => { await actual.rm(...args); await boundary.cleanup(); } };
-});
+vi.mock('../host/documents/converter.ts', () => ({ OfficeConverter: class { warm = async () => {}; render = boundary.sandbox; dispose = async () => {}; } }));
 import { OfficeSettlementError } from '../host/documents/office-cgroup.ts';
 import { LocalWorkspaceHost } from '../host/workspaces.ts';
 function gate() { let release!: () => void; const promise = new Promise<void>(r => { release = r; }); return { promise, release }; }
-it.each(['cgroup', 'input cleanup'] as const)('%s failure: Host capacity spans converter physical settlement AND input cleanup; cancellation cannot publish and the next operation is admitted', async failure => {
-  boundary.read.mockReset(); boundary.sandbox.mockReset(); boundary.cleanup.mockReset();
+it('Host capacity spans converter settlement and cleanup; cancellation cannot publish and unknown retirement blocks replacement', async () => {
+  boundary.read.mockReset(); boundary.sandbox.mockReset();
   const directory = mkdtempSync(join(tmpdir(), 'document-host-'));
   const host = new LocalWorkspaceHost({ endpoint: 'ws://127.0.0.1:1234/', transportToken: 'browser', productHostToken: 'private', metadataFile: join(directory, 'workspaces.json'), picker: true, roots: [{ id: 'a', cwd: directory, displayName: 'A' }] });
   const entered = gate(), closed = gate(), cleaning = gate(), cleaned = gate();
   const bytes = readFileSync(new URL('./fixtures/documents/sample.docx', import.meta.url));
   boundary.read.mockResolvedValue({ data: Uint8Array.from(bytes) });
-  boundary.sandbox.mockImplementationOnce(async () => { entered.release(); await closed.promise; return Buffer.from('%PDF-late'); }).mockResolvedValue(Buffer.from('%PDF-next'));
-  boundary.cleanup.mockImplementationOnce(async () => { cleaning.release(); await cleaned.promise; });
+  boundary.sandbox.mockImplementationOnce(async () => { entered.release(); await closed.promise; cleaning.release(); await cleaned.promise; return Buffer.from('%PDF-late'); }).mockResolvedValue(Buffer.from('%PDF-next'));
   try {
     const scope = await host.listWorkspaces();
     const request = { target: { session_id: 's', conversation_id: 'c', runtime_incarnation: '1', attachment_id: 'a' }, source: { kind: 'artifact' as const, artifact_id: 'artifact_1' }, extension: 'docx' as const };
@@ -34,9 +29,12 @@ it.each(['cgroup', 'input cleanup'] as const)('%s failure: Host capacity spans c
     cleaned.release(); await rejected;
     expect((await host.previewDocument(scope, request)).preview).toEqual({ kind: 'pdf', data: new TextEncoder().encode('%PDF-next') });
     expect(boundary.sandbox).toHaveBeenCalledTimes(2);
-    if (failure === 'cgroup') boundary.sandbox.mockRejectedValueOnce(new OfficeSettlementError());
-    else boundary.cleanup.mockRejectedValueOnce(new Error('input cleanup denied'));
-    await expect(host.previewDocument(scope, request)).rejects.toThrow('converter_unavailable');
-    await expect(host.previewDocument(scope, request)).rejects.toThrow('capacity');
-  } finally { closed.release(); cleaned.release(); host.close(); rmSync(directory, { recursive: true, force: true }); }
+    // Exercise physical settlement with new content, rather than the now
+    // successfully cached first Artifact's conversion.
+    boundary.read.mockResolvedValue({ data: Uint8Array.from(readFileSync(new URL('./fixtures/documents/linked.docx', import.meta.url))) });
+    const next = { ...request, source: { kind: 'artifact' as const, artifact_id: 'artifact_2' } };
+    boundary.sandbox.mockRejectedValueOnce(new OfficeSettlementError());
+    await expect(host.previewDocument(scope, next)).rejects.toThrow('converter_unavailable');
+    await expect(host.previewDocument(scope, next)).rejects.toThrow('capacity');
+  } finally { closed.release(); cleaned.release(); await host.close(); rmSync(directory, { recursive: true, force: true }); }
 });

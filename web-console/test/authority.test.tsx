@@ -116,7 +116,7 @@ it('authority replacement clears open/focused browser Session A before B can reu
   expect(screen.queryByLabelText('Session title')).toBeNull();
   expect(screen.queryByRole('dialog', { name: 'Rename session' })).toBeNull();
   expect(screen.getByText('What would you like to build?')).toBeTruthy();
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!)).toEqual({ endpoint: remote, openViews: [] });
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!)).toEqual({ endpoint: remote, openViews: [], draft: true });
   expect(b.requests.some(row => row.request.method === 'session/attach')).toBe(false);
   await act(async () => owner.disconnect());
 });

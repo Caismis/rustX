@@ -632,7 +632,7 @@ export class AppServerClient {
     coldScope: (id, admitted) => this.cold.scope(id, admitted),
     readContent: (...args) => this.reads.readContent(...args),
   });
-  loadEarlierTrace(id: string) { return this.traces.loadEarlierTrace(id); }
+  loadEarlierTrace(id: string, gapBefore?: string) { return this.traces.loadEarlierTrace(id, false, gapBefore); }
   loadInitialTrace(id: string) { return this.traces.loadInitialTrace(id); }
   locateToolTrace(id: string, locator: TraceToolLocator) { return this.traces.locateToolTrace(id, locator); }
   returnToLatestTrace(id: string) { return this.traces.returnToLatestTrace(id); }

@@ -55,6 +55,8 @@ export interface ShellNavigationContext extends Omit<Input, 'route'> {
   command?: { request: CommandRequest; route: ShellRoute; generation: number };
   restored?: { conversation: string; content: UserInputBlock[] };
   draftSession?: { sessionId: string; intent: Pending };
+  /** Keep an unscoped New action's origin until its Workspace is classified. */
+  draftWorkspaceSession?: string;
   publication?: { sidebar: boolean; intent?: Pending; control: object };
   dismissedSidebar?: Pending;
   generation: number; authority: number | undefined;
@@ -417,13 +419,16 @@ export const shellNavigationMachine = setup({
       const resident = context.route.kind === 'new-conversation' && !context.pending && (!flow || !submitted && ['rejected', 'discarded'].includes(flow.phase));
       const preserve = !submitted && (event.type === 'DRAFT.WORKSPACE' || resident && context.route.kind === 'new-conversation' && (event.workspaceId !== undefined || context.route.workspaceId === event.workspaceId));
       const route = preserve && event.type === 'DRAFT' && context.route.kind === 'new-conversation' && context.route.workspaceId === event.workspaceId ? context.route : { kind: 'new-conversation' as const, workspaceId: event.workspaceId };
-      return { retry: undefined, draftSession: undefined, binding: preserve ? context.binding : context.binding + 1, control: preserve ? context.control : {}, route, pending: undefined, command: undefined, restored: undefined, error: undefined };
+      const draftWorkspaceSession = event.type === 'DRAFT' && event.workspaceId === undefined
+        ? 'sessionId' in context.home ? context.home.sessionId : context.draftWorkspaceSession
+        : undefined;
+      return { retry: undefined, draftSession: undefined, draftWorkspaceSession, binding: preserve ? context.binding : context.binding + 1, control: preserve ? context.control : {}, route, pending: undefined, command: undefined, restored: undefined, error: undefined };
     }),
     created: assign(({ context, event }) => event.type === 'CREATED' ? { retry: undefined, draftSession: undefined, binding: context.binding, control: context.control, route: { kind: 'session' as const, sessionId: event.sessionId }, pending: undefined, command: undefined, error: undefined } : {}),
     command: assign(({ context, event }) => ({ retry: undefined, pending: undefined, command: event.type === 'COMMAND' && event.request ? { request: event.request, route: context.route, generation: context.client.getSnapshot().generation } : undefined })),
     retireSettings: ({ context, event }) => { if (event.type === 'AUTHORITY' && context.authority !== event.authority) context.settings.send({ type: 'RETIRE' }); },
     settings: ({ context, event }) => { if (event.type === 'SETTINGS') context.settings.send(event.destination ?? { type: 'SUSPEND' }); },
-    authority: assign(({ context, event }) => event.type === 'AUTHORITY' ? { dismissedSidebar: undefined, retry: undefined, draftSession: context.authority !== event.authority ? undefined : context.draftSession, binding: context.authority !== event.authority ? context.binding + 1 : context.binding, control: {}, generation: event.generation, authority: event.authority, pending: undefined, command: undefined, error: undefined,
+    authority: assign(({ context, event }) => event.type === 'AUTHORITY' ? { dismissedSidebar: undefined, retry: undefined, draftWorkspaceSession: context.authority !== event.authority ? undefined : context.draftWorkspaceSession, draftSession: context.authority !== event.authority ? undefined : context.draftSession, binding: context.authority !== event.authority ? context.binding + 1 : context.binding, control: {}, generation: event.generation, authority: event.authority, pending: undefined, command: undefined, error: undefined,
       ...(context.authority !== event.authority ? { home: { kind: 'new-conversation' as const }, route: { kind: 'new-conversation' as const }, leaving: undefined, approvedLeave: undefined } : {}),
     } : {}),
     dismissError: assign({ error: () => undefined }),

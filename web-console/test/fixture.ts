@@ -103,7 +103,7 @@ export class Server {
     ], picker: { kind: 'configured', locations: [{ id: 'workspace-a', displayName: 'Workspace A' }, { id: 'workspace-b', displayName: 'Workspace B' }] } }),
     classifyLocations: async cwds => cwds.map(cwd => ['/workspace', '/workspace/A', '/workspace/B', '/workspace/child', '/workspace/created', '/workspace/fork-child'].includes(cwd) ? { authorized: true } : { authorized: false, reason: 'denied' }),
     resolveWorkspace: async () => { throw new Error('No test registration'); },
-    adoptWorkspace: async () => {}, renameWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
+    adoptWorkspace: async () => {}, renameWorkspace: async () => {}, selectWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
   };
 
   authorityId = 'fixture-app-server-authority';

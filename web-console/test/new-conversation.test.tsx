@@ -72,6 +72,26 @@ async function openModelMenu() {
   if (document.querySelector('[data-model-menu]')?.getAttribute('data-pane') === 'root') fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
 }
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+it('loads initial permissions and models silently without replacing the editor or its draft', async () => {
+  const source = gate<{ kind: 'read'; projection: SourceSettings }>();
+  await mount({ configureWorkspace: () => source.promise, ready: false });
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  input.focus(); input.setSelectionRange(2, 7);
+  expect(screen.queryByText('Awaiting authoritative Workspace permissions.')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Model and thinking effort' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Workspace permissions' })).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+  fireEvent.change(input, { target: { value: 'Typed while loading' } });
+  input.setSelectionRange(2, 7);
+  await act(async () => source.resolve({ kind: 'read', projection: workspaceSource() }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false));
+  expect(screen.getByRole('textbox', { name: 'Message' })).toBe(input);
+  expect(input.value).toBe('Typed while loading'); expect(document.activeElement).toBe(input);
+  expect([input.selectionStart, input.selectionEnd]).toEqual([2, 7]);
+  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('fixture/native');
+  expect(screen.getByRole('button', { name: 'Workspace permissions' }).textContent).toBe('Policy');
+});
 it.each(['current', 'replacement'] as const)('Composer Add Workspace dispatches its opened picker scope to the %s Host', async kind => {
   let catalog: WorkspaceCatalog = { authorityId: 'host-A', endpoint,
     workspaces: [{ id: 'workspace-a', location: 'a', displayName: 'Workspace A', displayPath: '/workspace' }],

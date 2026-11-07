@@ -50,8 +50,8 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
       feed.release(operationId); throw error;
     }
   }
-  private async call<T>(method: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
-    const response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  private async call<T>(method: string, body: unknown = {}, signal?: AbortSignal, keepalive = false): Promise<T> {
+    const response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal, keepalive });
     if (!response.ok) throw hostFailure(await response.json());
     return response.json();
   }
@@ -121,6 +121,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });
   renameWorkspace = (scope: WorkspaceAuthorityScope, id: string, displayName: string) => this.call<void>('rename', { scope, id, displayName });
   reorderWorkspace = (scope: WorkspaceAuthorityScope, id: string, before?: string) => this.call<void>('reorder', { scope, id, before });
+  selectWorkspace = (scope: WorkspaceAuthorityScope, id: string, intent: import('./host.ts').WorkspaceSelectionIntent) => this.call<void>('select', { scope, id, intent }, undefined, true);
   removeWorkspace = (scope: WorkspaceAuthorityScope, id: string) => this.call<void>('remove', { scope, id });
   resolveWorkspace = (id: string, endpoint: string) => this.call<{ cwd: string }>('resolve', { id, endpoint });
   classifyLocations = async (cwds: readonly string[], endpoint: string, authorityId?: string, signal?: AbortSignal) => {

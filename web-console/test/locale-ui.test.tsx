@@ -13,7 +13,11 @@ afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); 
 const text = (key: TranslationKey) => translator(localeController.getSnapshot().active)(key);
 
 it('switches the complete active shell and General through Language, preserving the composer and making zero server requests', async () => {
-  server = new Server(); await server.connect();
+  server = new Server();
+  // Automatic defaults select the advertised registration. Returning Home
+  // reauthorizes it, so this locale fixture must provide its real directory.
+  server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace' });
+  await server.connect();
   await act(async () => { render(<App client={server!.client} workspaceHost={server!.workspaceHost}/>); });
   expect(screen.getByRole('tree', { name: 'Session browser' })).toBeTruthy();
   const composer = screen.getByRole('textbox', { name: 'Message' });

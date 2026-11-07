@@ -312,6 +312,8 @@ export function selectionOf(item: InspectableDisplayItem): TrajectorySelection {
 export interface TrajectoryLedgerRow {
   display_key: string;
   kind: 'semantic' | 'marker' | 'structure' | 'summary' | 'history';
+  /** A middle boundary loads its own native continuation, not the oldest page. */
+  historyBefore?: string;
   height: 30 | 20 | 10;
   item?: InspectableDisplayItem;
   turn?: TurnStructure;
@@ -327,6 +329,36 @@ export interface TrajectoryLedgerRow {
   callsOwner?: string;
   /** End the workflow's visual branch on its last loaded node, including virtual rows. */
   workflowLast?: boolean;
+}
+
+export function withHistoryGaps(rows: TrajectoryLedgerRow[], records: readonly TraceRecord[], gaps: readonly { before: string }[] = []): TrajectoryLedgerRow[] {
+  if (!gaps.length) return rows;
+  const positions = new Map(records.map((record, index) => [record.id, index]));
+  const insertions = new Map<number, TrajectoryLedgerRow[]>();
+  const boundaries = gaps.map(gap => ({ gap, boundary: positions.get(gap.before) ?? records.length }))
+    .sort((left, right) => left.boundary - right.boundary);
+  for (const { gap, boundary } of boundaries) {
+    const successor = rows.findIndex(row => {
+      const owner = row.item?.owner_record_id ?? row.callsOwner;
+      return owner !== undefined && (positions.get(owner) ?? -1) >= boundary;
+    });
+    // Audit-only intervals, folding and search can leave no visible successor.
+    // The native gap still owns a paging control at that ledger boundary.
+    const index = successor < 0 ? rows.length : successor;
+    insertions.set(index, [...(insertions.get(index) ?? []), {
+      display_key: displayKey('history-gap', gap.before), historyBefore: gap.before, kind: 'history', height: 30, turnStart: false,
+    }]);
+  }
+  return [...rows.flatMap((row, index) => [...(insertions.get(index) ?? []), row]), ...(insertions.get(rows.length) ?? [])];
+}
+
+/** A cumulative fact requires the whole native prefix through its selected
+ * owner. Later gaps do not invalidate an earlier, already complete prefix. */
+export function completeHistoryThrough(records: readonly TraceRecord[], owner: string, nextCursor: string | null | undefined, gaps: readonly { before: string }[] = []): boolean {
+  if (nextCursor !== null) return false;
+  const positions = new Map(records.map((record, index) => [record.id, index]));
+  const selected = positions.get(owner);
+  return selected !== undefined && gaps.every(gap => (positions.get(gap.before) ?? -1) > selected);
 }
 
 export function ledgerRows(tx: Translate, projection: TrajectoryProjection, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {

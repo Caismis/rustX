@@ -44,7 +44,7 @@ function realHost(server: Server) {
     classifyLocations: async (cwds, target, authorityId) => {
       const locations = await local.classifyLocations(cwds, target, authorityId); classified.push({ authorityId, locations }); return locations;
     },
-    adoptWorkspace: unused, renameWorkspace: unused, reorderWorkspace: unused, removeWorkspace: unused,
+    adoptWorkspace: unused, renameWorkspace: unused, selectWorkspace: async () => {}, reorderWorkspace: unused, removeWorkspace: unused,
     resolveWorkspace: (id, endpoint) => local.resolveWorkspace(id, endpoint),
   };
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd },'0')));

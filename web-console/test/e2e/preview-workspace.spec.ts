@@ -155,7 +155,11 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await textPane.getByRole('button', { name: 'Move tab to other pane', exact: true }).focus(); await page.keyboard.press('Enter');
     await expect(panes).toHaveCount(2); await expect(tabs).toHaveCount(3);
 
-    await open('sample.docx'); await expect(panel.locator('[data-pdf-page="1"] .textLayer').filter({ hasText: 'rustX document preview' })).toBeVisible();
+    await open('sample.docx');
+    const officePage = panel.locator('[data-pdf-page="1"] .textLayer').filter({ hasText: 'rustX document preview' });
+    // Conversion can consume most of this existing readiness budget. Sample
+    // visibility throughout its final window rather than backing off past it.
+    await expect.poll(() => officePage.isVisible(), { timeout: 5_000, intervals: [50] }).toBe(true);
     await expect(panel.locator('[data-pdf-preview]')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
     const officePane = panes.filter({ has: page.getByRole('tab', { name: 'sample.docx', exact: true }) });
     const pdfPane = panes.filter({ hasNot: page.getByRole('tab', { name: 'sample.docx', exact: true }) });

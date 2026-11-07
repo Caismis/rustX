@@ -38,7 +38,7 @@ function hostWith(list: () => Promise<WorkspaceCatalog>): ProductHostWorkspaces 
     listWorkspaces: list,
     classifyLocations: async cwds => cwds.map(cwd => ['/workspace/A', '/workspace/B'].includes(cwd) ? { authorized: true as const, workspaceId: cwd === '/workspace/A' ? 'wA' : 'wB' } : { authorized: false as const, reason: 'denied' as const }),
     resolveWorkspace: async () => ({ cwd: '/workspace/A' }),
-    adoptWorkspace: async () => {}, renameWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
+    adoptWorkspace: async () => {}, renameWorkspace: async () => {}, selectWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
     configureWorkspace: async () => { throw new Error('not used'); },
   };
 }

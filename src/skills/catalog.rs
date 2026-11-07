@@ -73,8 +73,8 @@ pub struct SkillSnapshot {
 
 impl SkillSnapshot {
     /// Install the selected metadata and proven bindings of a one-shot child.
-    /// Packages were validated by the parent and physically verified by the
-    /// materializer. No discovery, parsing, or body loading occurs here.
+    /// Definitions and source bindings were validated and frozen by the parent.
+    /// No discovery, parsing, file validation, or resource copying occurs here.
     pub(crate) fn from_frozen(
         mut entries: Vec<(SkillCatalogEntry, SkillBinding, SkillProvenance)>,
         roots: Vec<crate::skills::AutomaticSkillRoot>,
