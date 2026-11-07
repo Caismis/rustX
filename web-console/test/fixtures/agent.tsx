@@ -29,9 +29,6 @@ import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
 const mode = new URLSearchParams(location.search).get('mode') ?? 'settled';
 const server = new Server();
-// This static presentation fixture does not implement Auxiliary APIs. Keep its
-// advertised feature set explicit; live App Server admission is covered separately.
-server.capabilities = {...server.capabilities,delivery_access:false};
 if (mode === 'desktop') {
   const desktop = { catalogs: [] as boolean[], launches: [] as unknown[], unavailable: false, failure: false, requests: () => server.requests.map(row => row.request.method) };
   server.workspaceHost.desktopCatalog = async (_scope, refresh = false) => { desktop.catalogs.push(refresh); return desktop.unavailable ? { available: false, reason: 'headless' } : { available: true, applications: [{ id: 'files', label: 'File manager' }, { id: 'code', label: 'Visual Studio Code' }] }; };

@@ -65,7 +65,7 @@ for (const width of [1440, 390]) test(`dual-sidebar primary routes preserve the 
     expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(facts);
   }
   const delta = (await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length);
-  expect(delta.filter(row => /^(turn\/|session\/(attach|detach|create|submissionIntent|switchNode|uploadPrepare)$)/.test(row.method))).toEqual([]);
+  expect(delta.filter(row => /^(turn\/|thread\/(start|resume|fork)$|inbound\/(queue|edit|remove)$|session\/(detach|submissionIntent|switchNode|uploadPrepare)$)/.test(row.method))).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   expect(errors).toEqual([]);
 });

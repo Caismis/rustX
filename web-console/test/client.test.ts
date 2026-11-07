@@ -53,7 +53,7 @@ describe('native App Server connection', () => {
   it('initializes with browser admission and generated protocol capabilities', async () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
-    expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
+    expect(s.client.getSnapshot().capabilities).toEqual(s.capabilities);
     expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 73 } });
     expect(JSON.stringify(s.client.getSnapshot())).not.toContain(TOKEN);
   });

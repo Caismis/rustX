@@ -18,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); server.client.disconnect(); });
 const idle = (actor: ShellNavigationActor) => waitFor(actor, snapshot => snapshot.matches('idle'));
-const executableRequests = (at = 0) => server.requests.slice(at).filter(({ request }) => /^(turn\/|session\/(attach|detach|create|switchNode|submissionIntent|uploadPrepare)$|workflow\/(start|cancel)|schedule\/(create|cancel|update))/.test(request.method));
+const executableRequests = (at = 0) => server.requests.slice(at).filter(({ request }) => /^(turn\/|thread\/(start|resume|fork)$|inbound\/(queue|edit|remove)$|session\/(detach|switchNode|submissionIntent|uploadPrepare)$|workflow\/(start|cancel)|schedule\/(create|cancel|update))/.test(request.method));
 async function mounted(session = true) {
   await server.attached('A');
   render(<App client={server.client} workspaceHost={server.workspaceHost}/>);

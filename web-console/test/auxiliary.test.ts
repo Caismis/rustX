@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { Server } from './fixture';
+import { capabilities, Server } from './fixture';
 import type { AuxiliaryResult, AuxiliarySegment } from '../../protocol/app-server/v73';
 const servers: Server[] = [];
 afterEach(() => { for (const server of servers.splice(0)) server.client.disconnect(); vi.useRealTimers(); });
@@ -139,7 +139,7 @@ it('a pending native CallId never becomes a confirmed receipt before preparation
 });
 
 it('ordinary trusted attachments have Auxiliary API eligibility without another credential',async()=>{
-  const server=new Server();servers.push(server);await server.attached('A');
+  const server=new Server();server.capabilities=capabilities;servers.push(server);await server.attached('A');
   expect(server.client.hasAuxiliaryAuthority('A')).toBe(true);
   expect(server.requests.some(row=>row.request.method==='auxiliary/btw')).toBe(false);
 });

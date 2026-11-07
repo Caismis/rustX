@@ -481,7 +481,7 @@ describe('restored native editor content', () => {
     expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([2, 8, 'backward']);
     expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
     expect(server.client.target('child')).toBe(target);
-    expect(server.requests.slice(before).filter(row => /^(turn\/|session\/(attach|detach|switchNode|uploadPrepare|snapshot)$)/.test(row.request.method))).toEqual([]);
+    expect(server.requests.slice(before).filter(row => /^(turn\/|thread\/(start|resume|fork)$|inbound\/(queue|edit|remove)$|session\/(detach|switchNode|uploadPrepare)$)/.test(row.request.method))).toEqual([]);
     expect(methods().filter(method => method === 'thread/fork')).toHaveLength(1);
   });
   it('supported restored input round-trips exact native order without changes', async () => {

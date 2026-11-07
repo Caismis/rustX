@@ -49,7 +49,7 @@ above and the completed implementation, including the independent review fixes.
 | TUI typecheck and required-emulator full suite | Pass; 1326 passed, 1 skipped |
 | Web typecheck and full deterministic suite | Pass; 4181 passed, 4 skipped |
 | Web production build, i18n, provenance and notices | Pass; 347 source records, 349 production package notices |
-| Pinned-container browser acceptance | Full local traversal exposed an obsolete delivery-permission assertion; the corrected delivery spec passed 2/2. The complete final-head browser-shard and coverage verdict is recorded on [the primary PR](https://github.com/Caismis/rustX/pull/540) |
+| Pinned-container browser acceptance | Local traversal exposed obsolete permission, capability and wire assertions. Focused repairs passed delivery 2/2, presentation 3/3 and all 60 Shell/navigation cases across two runs. The complete final-head browser-shard and coverage verdict is recorded on [the primary PR](https://github.com/Caismis/rustX/pull/540) |
 | Five-mode real-process performance measurement | Pass; 100 native Turns, exact 20/40 model requests per mode; [raw data and method](../../benchmarks/app-server/README.md) |
 | `git diff --check` | Pass |
 
@@ -78,12 +78,18 @@ Follow-up source review also checked the browser wire probe's native Thread-to-
 Session mapping and physical receipt barriers, the corrected ordinary-delivery
 assertions, and the canonical integration documentation. The browser's real
 history/reconnect test and the 21-test probe suite pass after the probe repair.
+It also verified finite fake-server capabilities, current mutation guards and
+the exact Attempt ID in interrupt assertions; 242 affected unit tests pass.
 
 The final independent source review found no remaining blocking issues. It also
 checked native lifecycle/cancellation/broker lock order and the main branch's
 submission-activity sampling. No WebUI/TUI controls, layouts, styles or screenshot
 references were added, removed or redesigned. Product changes adapt protocol,
 identity and state synchronization behind the existing UI.
+Static presentation fixtures declare only their implemented API subset. Their
+unchanged references do not assert unchanged feature visibility against Native:
+common ordinary API eligibility can make the existing side-question control
+available on connections that previously lacked the extra delivery credential.
 
 ## Deliberate limits
 

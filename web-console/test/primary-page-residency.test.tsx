@@ -46,7 +46,7 @@ it('an uncertain Attach across Settings retains the selected local editor withou
   expect(editor.value).toBe('Keep this while Attach needs verification');
   expect(screen.getByText('uncertain.txt')).toBeTruthy();
   expect(document.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
-  expect(server.requests.slice(at).filter(({ request }) => /^(turn\/|session\/(attach|detach|create|submissionIntent|uploadPrepare)$)/.test(request.method))).toEqual([]);
+  expect(server.requests.slice(at).filter(({ request }) => /^(turn\/|thread\/(start|resume|fork)$|inbound\/(queue|edit|remove)$|session\/(detach|submissionIntent|uploadPrepare)$)/.test(request.method))).toEqual([]);
 });
 
 async function firstSend(hold?: 'thread/resume' | 'session/subscribe', file?: File) {

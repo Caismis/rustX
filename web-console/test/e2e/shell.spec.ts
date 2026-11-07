@@ -358,7 +358,7 @@ test('primary sidebar navigation retires the narrow overlay without changing run
   const composer = page.getByRole('textbox', { name: 'Message', exact: true });
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
   await page.evaluate(() => window.sessionFixture.readyNavigation());
-  const before = await page.evaluate(() => window.sessionFixture.requests().filter(request => /^(session\/(attach|detach|switchNode|unload|create)|turn\/)/.test(request.method)));
+  const before = await page.evaluate(() => window.sessionFixture.requests().filter(request => /^(thread\/(start|resume|fork)$|session\/(detach|switchNode|unload)$|turn\/|inbound\/(queue|edit|remove)$)/.test(request.method)));
   for (const destination of ['session', 'new', 'workspace'] as const) {
     await expand.click();
     await expect(frame).toHaveAttribute('data-sidebar-overlay', 'true');
@@ -375,7 +375,7 @@ test('primary sidebar navigation retires the narrow overlay without changing run
     await composer.fill(`Destination ${destination}`); await expect(composer).toBeFocused();
     expect(await composer.evaluate(el => el.closest('[inert]') === null)).toBe(true);
   }
-  expect(await page.evaluate(() => window.sessionFixture.requests().filter(request => /^(session\/(attach|detach|switchNode|unload|create)|turn\/)/.test(request.method)))).toEqual(before);
+  expect(await page.evaluate(() => window.sessionFixture.requests().filter(request => /^(thread\/(start|resume|fork)$|session\/(detach|switchNode|unload)$|turn\/|inbound\/(queue|edit|remove)$)/.test(request.method)))).toEqual(before);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.locator('button[data-session-id="A"]').click();
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
@@ -477,7 +477,11 @@ for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as con
   await page.evaluate(() => window.sessionFixture.settleInput());
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v73').Request[]) => requests.filter(request => /^(session\/(attach|detach|switchNode|unload)|turn\/)/.test(request.method));
+const nativeMutations = (requests: import('../../../protocol/app-server/v73').Request[]) => requests.filter(request => [
+  'thread/start', 'thread/resume', 'thread/fork', 'thread/archive', 'thread/unarchive', 'thread/name/set',
+  'session/detach', 'session/switchNode', 'session/unload',
+  'turn/start', 'turn/steer', 'turn/interrupt', 'inbound/queue', 'inbound/edit', 'inbound/remove',
+].includes(request.method));
 
 for (const outcome of ['escape', 'backdrop', 'toggle', 'newer', 'success', 'failed', 'replacement', 'breakpoint', 'desktop'] as const) test(`sidebar attachment ownership: ${outcome}`, async ({ page }) => {
   await page.setViewportSize({ width: outcome === 'desktop' ? 1440 : 390, height: 844 });
@@ -714,7 +718,7 @@ async function proveCommittedControls(page: Page) {
   await expect(stop).toBeEnabled(); await stop.click();
   await expect.poll(() => page.evaluate(() => window.sessionFixture.requests().filter(request => request.method === 'turn/interrupt').length)).toBe(1);
   const cancellation = (await page.evaluate(() => window.sessionFixture.requests())).filter(request => request.method === 'turn/interrupt');
-  expect(cancellation[0].params).toEqual({ target });
+  expect(cancellation[0].params).toEqual({ target, turnId: 'attempt-A' });
   // Both new uploads and reconciliation use ConversationSeat's committed fence.
   await page.evaluate(() => window.sessionFixture.uncertainUpload());
   await page.getByLabel('Attach files', { exact: true }).setInputFiles({ name: 'owned.txt', mimeType: 'text/plain', buffer: Buffer.from('committed A') });
@@ -795,7 +799,7 @@ for (const width of [390, 1440]) test(`reselecting the current Session preserves
   await expect(page.locator('[data-editor-incarnation]')).toHaveAttribute('data-editor-incarnation', incarnation!); await expect(page.locator('[data-editor-revision]')).toHaveAttribute('data-editor-revision', revision!);
   expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([4, 9, 'backward']);
   expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(facts);
-  expect((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length).filter(row => /^(turn\/|session\/(attach|detach|switchNode|uploadPrepare|snapshot)$)/.test(row.method))).toEqual([]);
+  expect((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length).filter(row => /^(turn\/|thread\/(start|resume|fork)$|inbound\/(queue|edit|remove)$|session\/(detach|switchNode|uploadPrepare)$)/.test(row.method))).toEqual([]);
   expect(errors).toEqual([]);
 });
 for (const width of [390, 1440]) test(`a native Fork seed remains authored after destination reselect: ${width}px`, async ({ page }) => {
@@ -817,7 +821,7 @@ for (const width of [390, 1440]) test(`a native Fork seed remains authored after
   await expect(page.locator('[data-editor-incarnation]')).toHaveAttribute('data-editor-incarnation', incarnation!); await expect(page.locator('[data-editor-revision]')).toHaveAttribute('data-editor-revision', revision!);
   expect(await editor.evaluate((element: HTMLTextAreaElement) => [element.selectionStart, element.selectionEnd, element.selectionDirection])).toEqual([3, 8, 'backward']);
   expect(await page.evaluate(() => window.sessionFixture.navigationFacts())).toEqual(facts);
-  expect((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length).filter(row => /^(turn\/|session\/(attach|detach|switchNode|uploadPrepare|snapshot)$)/.test(row.method))).toEqual([]);
+  expect((await page.evaluate(() => window.sessionFixture.requests())).slice(requests.length).filter(row => /^(turn\/|thread\/(start|resume|fork)$|inbound\/(queue|edit|remove)$|session\/(detach|switchNode|uploadPrepare)$)/.test(row.method))).toEqual([]);
   expect(requests.filter(row => row.method === 'thread/fork')).toHaveLength(1); expect(errors).toEqual([]);
   await page.screenshot({ path: `/tmp/pr458-seed-reselect-${width}.png` });
 });

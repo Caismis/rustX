@@ -141,7 +141,10 @@ export class Server {
   version = protocolVersion;
   /** Record details this scenario staged, keyed by Trace record identity. */
   readonly traceDetails = new Map<string, TraceDetail>();
-  capabilities = capabilities;
+  // This finite protocol fixture does not implement Auxiliary APIs by default.
+  // Auxiliary tests declare their feature explicitly; real Native admission is
+  // covered by actual-process tests with the generated common capabilities.
+  capabilities = { ...capabilities, delivery_access: false };
   socketFactory = (_url: string, protocols: string[]) => {
     if (protocols[0] !== 'rustx.app-server.v73' || protocols[1] !== credentialSubprotocol(TOKEN)) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); },target=>this.registrations.get(JSON.stringify(target)),target=>{const id=`registration-${++this.registrationSequence}`;this.registrations.set(JSON.stringify(target),id);return id;}); socket.onReply=reply=>{for(const wake of this.replyWaiters.splice(0))wake(); if(!this.holdCallbackReplies)queueMicrotask(()=>this.settleReply(reply,socket));}; this.sockets.push(socket);
