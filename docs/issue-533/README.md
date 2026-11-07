@@ -303,3 +303,42 @@ client p95 increases from 599.9 to 609.7 ms. The baseline's no-Host p95 of 5829.
 is a large shared-host outlier relative to earlier pairs. It remains in the raw
 samples and table; neither it nor the opposite-direction earlier regressions
 justify attributing a performance gain or loss to this PTY allocation change.
+
+## Browser screenshot checkpoint follow-up
+
+FULL attempts 1 and 2 on `357796f0fad4ed5454880b38ace3b94ff4d7837f`
+passed all Linux and native macOS checks. Linux completed 6,042 tests with 20
+existing ignored cases; macOS included the new PTY endpoint-isolation and native
+watch child/capacity/teardown boundaries. Browser shard 2 passed all 344 cases.
+
+Attempt 1 passed 322/323 cases in shard 1; the Workflow Editor reference had
+sixteen changed Bezier-edge pixels, with four above their existing individual
+bounds. Independent reconstruction found all six graph screenshot checkpoints,
+SVG paths/order/transforms, ancestor geometry and all five CSS resources identical
+to retained reference captures. The complete original test passed in the pinned
+local browser, then also passed in the second complete shard attempt. No raster
+allowance or reference was changed, and the browser's internal cause is unknown.
+
+Attempt 2 passed 322/323 cases; the sole failure moved to the narrow Light
+Providers reference. Its 2,458 changed pixels were confined to the Provider strip
+at x25..308, y307..346. Trace `22843` proves Playwright's click auto-scroll changed
+the grid's `scrollLeft` from zero to nine before dispatching the click. The row
+was then correctly selected and focused; all three stable screenshot checkpoints
+retained the nine-pixel offset. The remaining page matched its frozen reference.
+This was a real viewport difference, not raster noise or a product-source change.
+
+The screenshot test now verifies the actual selected/focused row, sets the
+Provider strip to its explicit origin once, asserts `scrollLeft === 0`, and then
+uses the original exact screenshot comparison. Other repository screenshots use
+the same explicit scroll-position setup. There is no conditional retry based on
+pixels, extra wait, timeout increase, baseline update or tolerance change. Product
+WebUI/TUI components, CSS and UX are unchanged. Web typecheck and all four original
+Light/Dark x 1440/390 complete editor scenarios passed in the pinned browser.
+A separate local diagnosis forced and asserted a persistent nine-pixel offset
+immediately before the new precondition; the complete Light 390 flow passed
+with selection and focus retained. That temporary injection was removed before
+commit, and the independent reviewer verified the diagnostic trace.
+The final committed head requires a new FULL run after this test fix; its exact
+run and verdict belong in the PR. The two preceding attempts are not final
+all-green validation. Product source and all performance captures above are
+unchanged by this test-only follow-up.
