@@ -188,6 +188,31 @@ pub(crate) fn metadata(root: &Root, relative: &Path) -> io::Result<FileMetadata>
     )?)
 }
 
+/// Retain the exact native watch source instead of resolving its pathname again
+/// inside an OS watcher. Both files and directories use no-follow traversal.
+pub(crate) fn watch_source(root: &Root, relative: &Path) -> io::Result<(File, FileMetadata)> {
+    let before = metadata(root, relative)?;
+    if !before.is_file && !before.is_directory {
+        return Err(denied());
+    }
+    let file = if relative.as_os_str().is_empty() {
+        File::from(root.directory.descriptor().try_clone()?)
+    } else {
+        let (directory, leaf) = parent(root, relative)?;
+        let file = open(&directory, &leaf)?;
+        directory.verify()?;
+        file
+    };
+    let retained = FileMetadata::of(&file)?;
+    if (!retained.is_file && !retained.is_directory)
+        || before.identity != retained.identity
+        || metadata(root, relative)?.identity != retained.identity
+    {
+        return Err(denied());
+    }
+    Ok((file, retained))
+}
+
 /// Shared descriptor-relative range reader for native file and Skill sources.
 /// It retains only the requested bytes and verifies descriptor/path identity.
 pub(crate) fn read_range(

@@ -79,8 +79,12 @@ membership, timeout/cancellation arbitration, containment and reap proof. Comman
 stdin and PTY descriptors are separate from supervisor control. Cwd identity is
 verified inside the supervisor before the business process starts. PTYs use the
 existing Unix ownership model and safe nix/rustix terminal operations. PTY EOF
-sends the terminal's canonical EOF character; it is not a portable half-close of
-a terminal in raw mode.
+reads the current canonical terminal settings and sends three configured EOF
+characters, allowing for a pending literal-next quote and a pending input line.
+Quoted control bytes retain their normal terminal meaning. Raw mode, a disabled
+EOF character, or an EOF setting conflicting with another active control or
+input translation rejects `closeStdin` before writing that batch; a terminal has
+no portable stdin half-close in those modes.
 
 Only `ToolEnvironment`'s four native baseline variables and explicit validated
 entries reach the business program. Parent process/provider/App Server credentials
@@ -156,6 +160,17 @@ Directory/tree operations can be partial on failure. Re-read source and destinat
 before deciding the next action; never automatically replay an uncertain mutation.
 Commands, Agent tools and file RPCs can share a Workspace under their own native
 owners, without a whole-Workspace lock or transaction guarantee.
+
+Native registration retains the descriptor for the exact authorized source;
+replacing and restoring its pathname cannot redirect the observer. Linux uses
+that descriptor through `/proc/self/fd` and translates only its exact event prefix
+back to authorized paths. macOS registers vnode descriptors directly, including
+immediate files and child-directory metadata without observing grandchildren.
+Directory membership is bounded to 4,096 names and the instance shares 1,024
+child-descriptor slots. Initial exhaustion refuses registration; subsequent
+reconciliation failure retires the watch with a resync hint. Coalesced vnode hints
+always require rereads. Native teardown retains these descriptors and admission
+through actual observer exit; macOS cancellation wakes its queue without polling.
 
 Watch IDs belong to one connection and cannot address another connection's watch.
 There are at most eight per connection and 32 shared native file-observation

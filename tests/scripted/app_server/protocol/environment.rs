@@ -299,6 +299,361 @@ pub(crate) async fn terminal_scenario() {
     connection.close();
 }
 
+async fn terminal_completion(
+    connection: &AppServerConnection,
+    command: tokio::task::JoinHandle<MethodResult>,
+) -> (crate::app_server::command::ExecResult, Vec<u8>) {
+    let (response, bytes) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::pin!(command);
+        let mut bytes = Vec::new();
+        loop {
+            tokio::select! {
+                response = &mut command => break (response.unwrap(), bytes),
+                notification = connection.next_notification() => {
+                    if let NotificationMethod::CommandOutputDelta(delta) = notification.notification {
+                        bytes.extend(base64::engine::general_purpose::STANDARD.decode(delta.delta_base64).unwrap());
+                    }
+                },
+            }
+        }
+    }).await.expect("terminal must finish naturally before the command timeout");
+    let MethodResult::CommandExec { result } = response else {
+        panic!("PTY completion")
+    };
+    assert_eq!(result.status, ExecStatus::Completed);
+    assert_eq!(result.exit_code, Some(0));
+    (result, bytes)
+}
+
+pub(crate) async fn terminal_eof_scenario() {
+    let fixture = Fixture::with_session_count(None, 0).await;
+    grant(&fixture);
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    let cases: [(&str, bool, &[u8], &[u8]); 5] = [
+        ("stty -echo", false, b"abc", b"abc"),
+        ("stty -echo eof '^A'", false, b"abc", b"abc"),
+        ("stty -echo", true, b"abc", b"abc"),
+        ("stty -echo", false, b"abc\x16", b"abc\x04"),
+        ("stty -echo", true, b"abc\x16", b"abc\x04"),
+    ];
+    for (setup, split, payload, expected) in cases {
+        let script = format!("{setup}; printf READY; exec /bin/cat");
+        let mut params = parameters(&fixture, &["/bin/sh", "-c", &script]);
+        params.process_id = Some("canonical-eof".into());
+        params.tty = true;
+        let worker = connection.clone();
+        let command =
+            tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
+        assert_eq!(output(&connection, "canonical-eof").await, b"READY");
+        if split {
+            call(
+                &connection,
+                2,
+                Method::CommandWrite(WriteParams {
+                    process_id: "canonical-eof".into(),
+                    delta_base64: Some(base64::engine::general_purpose::STANDARD.encode(payload)),
+                    close_stdin: false,
+                }),
+            )
+            .await;
+        }
+        call(
+            &connection,
+            3,
+            Method::CommandWrite(WriteParams {
+                process_id: "canonical-eof".into(),
+                delta_base64: (!split)
+                    .then(|| base64::engine::general_purpose::STANDARD.encode(payload)),
+                close_stdin: true,
+            }),
+        )
+        .await;
+        let (_, bytes) = terminal_completion(&connection, command).await;
+        assert_eq!(bytes, expected);
+    }
+    let rejected_cases: [(&str, &[u8]); 3] = [
+        ("stty raw -echo", b"x"),
+        ("stty -echo eof undef", b"x\n"),
+        ("stty -echo eof '^C'", b"x\n"),
+    ];
+    for (setup, accepted) in rejected_cases {
+        let script = format!("{setup}; printf READY; head -c 1");
+        let mut params = parameters(&fixture, &["/bin/sh", "-c", &script]);
+        params.process_id = Some("rejected-eof".into());
+        params.tty = true;
+        let worker = connection.clone();
+        let command =
+            tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
+        assert_eq!(output(&connection, "rejected-eof").await, b"READY");
+        assert_eq!(
+            rejected(
+                &connection,
+                2,
+                Method::CommandWrite(WriteParams {
+                    process_id: "rejected-eof".into(),
+                    delta_base64: Some(
+                        base64::engine::general_purpose::STANDARD.encode(b"must-not-be-written")
+                    ),
+                    close_stdin: true,
+                })
+            )
+            .await,
+            ErrorData::InvalidParams
+        );
+        call(
+            &connection,
+            3,
+            Method::CommandWrite(WriteParams {
+                process_id: "rejected-eof".into(),
+                delta_base64: Some(base64::engine::general_purpose::STANDARD.encode(accepted)),
+                close_stdin: false,
+            }),
+        )
+        .await;
+        let (_, bytes) = terminal_completion(&connection, command).await;
+        assert_eq!(
+            bytes, b"x",
+            "invalid EOF must leave stdin open and write none of its batch"
+        );
+    }
+    connection.close();
+}
+
+pub(crate) async fn watch_registration_scenario() {
+    let fixture = Fixture::with_session_count(None, 0).await;
+    grant(&fixture);
+    let connection = AppServerConnection::new(fixture.host.clone());
+    initialize(&connection).await;
+    for (symlink, capture, directory) in [
+        (true, false, true),
+        (false, false, true),
+        (false, true, true),
+        (true, false, false),
+        (false, false, false),
+    ] {
+        let source = fixture.workspaces[0].join("watch-source");
+        let saved = fixture.workspaces[0].join("saved-source");
+        let outside_root = tempfile::tempdir().unwrap();
+        let outside = outside_root.path().join("outside");
+        if directory {
+            std::fs::create_dir(&source).unwrap();
+            std::fs::create_dir(&outside).unwrap();
+        } else {
+            std::fs::write(&source, b"inside").unwrap();
+            std::fs::write(&outside, b"outside").unwrap();
+        }
+        crate::app_server::filesystem::expect_native_source(
+            source.clone(),
+            std::fs::metadata(if capture { &outside } else { &source }).unwrap(),
+        );
+        let (before_source, before_saved, before_outside) =
+            (source.clone(), saved.clone(), outside.clone());
+        let (after_source, after_saved, after_outside) =
+            (source.clone(), saved.clone(), outside.clone());
+        let before: Box<dyn FnOnce() + Send> = Box::new(move || {
+            std::fs::rename(&before_source, &before_saved).unwrap();
+            if symlink {
+                std::os::unix::fs::symlink(&before_outside, &before_source).unwrap();
+            } else {
+                std::fs::rename(&before_outside, &before_source).unwrap();
+            }
+        });
+        let after: Box<dyn FnOnce() + Send> = Box::new(move || {
+            if symlink {
+                std::fs::remove_file(&after_source).unwrap();
+            } else {
+                std::fs::rename(&after_source, &after_outside).unwrap();
+            }
+            std::fs::rename(&after_saved, &after_source).unwrap();
+        });
+        if capture {
+            crate::app_server::filesystem::registration_hooks(
+                source.clone(),
+                Box::new(|| {}),
+                after,
+            );
+            crate::app_server::filesystem::capture_hook(&source, before);
+        } else {
+            crate::app_server::filesystem::registration_hooks(source.clone(), before, after);
+        }
+        let watch = Method::FsWatch {
+            watch_id: "inode".into(),
+            path: source.display().to_string(),
+        };
+        if capture {
+            assert_eq!(
+                rejected(&connection, 1, watch).await,
+                ErrorData::EnvironmentUnauthorized
+            );
+            std::fs::remove_dir_all(&source).unwrap();
+            continue;
+        }
+        call(
+            &connection,
+            1,
+            Method::FsWatch {
+                watch_id: "inode".into(),
+                path: source.display().to_string(),
+            },
+        )
+        .await;
+        // The outside name must never be translated beneath the restored grant.
+        if directory {
+            std::fs::write(outside.join("outside-private-name"), b"outside").unwrap();
+        }
+        let sentinel = if directory {
+            source.join("authorized-sentinel")
+        } else {
+            source.clone()
+        };
+        std::fs::write(&sentinel, b"inside").unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let notification = connection.next_notification().await;
+                if let NotificationMethod::FsChanged(changed) = notification.notification {
+                    assert!(!changed.retired);
+                    assert!(
+                        changed
+                            .changed_paths
+                            .iter()
+                            .all(|path| path.starts_with(&source))
+                    );
+                    assert!(!changed.changed_paths.iter().any(|path| {
+                        path.file_name()
+                            .is_some_and(|name| name == "outside-private-name")
+                    }));
+                    if changed.changed_paths.contains(&sentinel)
+                        || cfg!(target_os = "macos") && changed.resync_required
+                    {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("only the retained authorized directory must produce the sentinel hint");
+        call(
+            &connection,
+            2,
+            Method::FsUnwatch {
+                watch_id: "inode".into(),
+            },
+        )
+        .await;
+        if directory {
+            std::fs::remove_dir_all(&source).unwrap();
+        } else {
+            std::fs::remove_file(&source).unwrap();
+        }
+    }
+    connection.close();
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) async fn macos_watch_scenario() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::with_session_count(None, 0).await;
+    grant(&fixture);
+    let connection = AppServerConnection::new(fixture.host.clone());
+    initialize(&connection).await;
+    let source = fixture.workspaces[0].join("bounded-watch");
+    std::fs::create_dir(&source).unwrap();
+    let existing = source.join("existing");
+    std::fs::write(&existing, b"before").unwrap();
+    let child_directory = source.join("directory");
+    std::fs::create_dir(&child_directory).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), source.join("outside-symlink")).unwrap();
+    let capacity = fixture.manager.environment.watch_files.clone();
+    let _reserved = capacity.clone().acquire_many_owned(1021).await.unwrap();
+    let watch = || Method::FsWatch {
+        watch_id: "macos".into(),
+        path: source.display().to_string(),
+    };
+    call(&connection, 1, watch()).await;
+    assert_eq!(
+        capacity.available_permits(),
+        1,
+        "only the two immediate native sources consume descriptors"
+    );
+    async fn hint(connection: &AppServerConnection, expected: &Path, retired: bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let event = connection.next_notification().await;
+                if let NotificationMethod::FsChanged(changed) = event.notification {
+                    assert!(changed.resync_required);
+                    if changed.retired == retired
+                        && (retired || changed.changed_paths.contains(&expected.to_path_buf()))
+                    {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("native descriptor event / physical retirement");
+    }
+    std::fs::write(&existing, b"after").unwrap();
+    hint(&connection, &existing, false).await;
+    let mode = std::fs::metadata(&child_directory)
+        .unwrap()
+        .permissions()
+        .mode();
+    std::fs::set_permissions(
+        &child_directory,
+        std::fs::Permissions::from_mode(mode ^ 0o100),
+    )
+    .unwrap();
+    hint(&connection, &child_directory, false).await;
+    let created = source.join("created");
+    std::fs::write(&created, b"new").unwrap();
+    hint(&connection, &source, false).await;
+    assert_eq!(capacity.available_permits(), 0);
+    std::fs::write(&created, b"changed").unwrap();
+    hint(&connection, &created, false).await;
+    std::fs::remove_file(&created).unwrap();
+    hint(&connection, &source, false).await;
+    assert_eq!(capacity.available_permits(), 1);
+    let renamed = source.join("renamed");
+    std::fs::rename(&existing, &renamed).unwrap();
+    hint(&connection, &source, false).await;
+    std::fs::write(&renamed, b"changed again").unwrap();
+    hint(&connection, &renamed, false).await;
+    call(
+        &connection,
+        2,
+        Method::FsUnwatch {
+            watch_id: "macos".into(),
+        },
+    )
+    .await;
+    let all = bounded(capacity.clone().acquire_many_owned(3))
+        .await
+        .unwrap();
+    drop(all);
+    // Initial refusal releases every partially registered source.
+    std::fs::write(&created, b"third").unwrap();
+    let held = capacity.clone().acquire_owned().await.unwrap();
+    assert_eq!(
+        rejected(&connection, 3, watch()).await,
+        ErrorData::EnvironmentCapacityOrConflict
+    );
+    assert_eq!(capacity.available_permits(), 2);
+    drop(held);
+    std::fs::remove_file(&created).unwrap();
+    call(&connection, 4, watch()).await;
+    let held = capacity.clone().acquire_owned().await.unwrap();
+    std::fs::write(&created, b"overflow").unwrap();
+    hint(&connection, &source, true).await;
+    drop(held);
+    let all = bounded(capacity.clone().acquire_many_owned(3))
+        .await
+        .unwrap();
+    drop(all);
+    connection.close();
+}
+
 pub(crate) async fn filesystem_scenario() {
     let fixture = Fixture::new().await;
     grant(&fixture);

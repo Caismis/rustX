@@ -1,7 +1,7 @@
 //! Bounded connection-owned filesystem hints; reads remain authoritative.
 use super::protocol::{ErrorData, NotificationMethod, RequestId, RpcError};
 use super::rpc_error::domain;
-use notify::Watcher as _;
+mod native;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,7 +17,7 @@ pub struct Changed {
     pub retired: bool,
 }
 struct Entry {
-    watcher: Option<notify::RecommendedWatcher>,
+    watcher: Option<native::Watcher>,
     stop: CancellationToken,
     generation: Arc<()>,
 }
@@ -69,8 +69,9 @@ impl Watches {
             let capacity=Arc::new(permit);
             environment.with_paths(&[&path], |paths| {
                 let (absolute, root, relative) = &paths[0];
-                let before = crate::local_runtime::environment::files::metadata(root,relative)?;
-                if before.is_symlink || (!before.is_file && !before.is_directory) { return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"watch requires an authorized source")); }
+                #[cfg(test)]
+                registration_phase(absolute, 0);
+                let (source, before) = crate::local_runtime::environment::files::watch_source(root, relative)?;
                 let root_retired = root.cancelled.clone();
                 let source_retired = CancellationToken::new();
                 let stop = CancellationToken::new();
@@ -84,9 +85,13 @@ impl Watches {
                 let armed = Arc::new(AtomicBool::new(false));
                 let active = armed.clone();
                 let retained_capacity=capacity.clone();
-                let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                #[cfg(test)]
+                registration_phase(absolute, 1);
+                let watcher = native::Watcher::new(source, absolute.clone(), move |event: notify::Result<notify::Event>| {
                     let _retained_capacity=&retained_capacity;
-                    if !active.load(Ordering::Acquire) || stopped.is_cancelled() || root_retired.is_cancelled() { return; }
+                    if stopped.is_cancelled() || root_retired.is_cancelled() { return; }
+                    if event.is_err() { invalidated.cancel(); return; }
+                    if !active.load(Ordering::Acquire) { return; }
                     // Metadata authority checks open directories themselves. Open/read/
                     // close notifications must not feed those checks back into notify.
                     if event.as_ref().is_ok_and(|event| !relevant(event)) {
@@ -110,10 +115,11 @@ impl Watches {
                         Err(_) => (Vec::new(), true),
                     };
                     let _ = output.emit_fenced(NotificationMethod::FsChanged(Changed { watch_id: identity.clone(), changed_paths, resync_required, retired: false }),Some(stopped.clone()));
-                }).map_err(std::io::Error::other)?;
-                watcher.watch(absolute, notify::RecursiveMode::NonRecursive).map_err(std::io::Error::other)?;
-                // A path redirected while notify registered never becomes a live
-                // observation source. Pre-registration callbacks were unarmed.
+                }, #[cfg(target_os = "macos")] environment.watch_files.clone())?;
+                #[cfg(test)]
+                registration_phase(absolute, 2);
+                // Registration uses the retained descriptor, so even a pathname
+                // replacement restored before this check cannot redirect it.
                 if crate::local_runtime::environment::files::metadata(root,relative)?.identity != before.identity { return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied,"watch source replaced")); }
                 let generation = Arc::new(());
                 let mut state = owner.0.lock().expect("filesystem watches");
@@ -169,6 +175,64 @@ fn ignored_access(path: &std::path::Path) {
     let sender = IGNORED_ACCESS.lock().unwrap().remove(path);
     if let Some(sender) = sender {
         let _ = sender.send(());
+    }
+}
+
+#[cfg(test)]
+type RegistrationHook = Box<dyn FnOnce() + Send>;
+#[cfg(test)]
+type RegistrationHooks = BTreeMap<std::path::PathBuf, [Option<RegistrationHook>; 3]>;
+#[cfg(test)]
+static REGISTRATIONS: std::sync::LazyLock<Mutex<RegistrationHooks>> =
+    std::sync::LazyLock::new(Mutex::default);
+#[cfg(test)]
+pub(crate) fn registration_hooks(
+    path: std::path::PathBuf,
+    before: RegistrationHook,
+    after: RegistrationHook,
+) {
+    REGISTRATIONS
+        .lock()
+        .unwrap()
+        .insert(path, [None, Some(before), Some(after)]);
+}
+#[cfg(test)]
+pub(crate) fn capture_hook(path: &std::path::Path, capture: RegistrationHook) {
+    REGISTRATIONS.lock().unwrap().get_mut(path).unwrap()[0] = Some(capture);
+}
+#[cfg(test)]
+fn registration_phase(path: &std::path::Path, phase: usize) {
+    let hook = {
+        let mut hooks = REGISTRATIONS.lock().unwrap();
+        let hook = hooks.get_mut(path).and_then(|hooks| hooks[phase].take());
+        if phase == 2 {
+            hooks.remove(path);
+        }
+        hook
+    };
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+static EXPECTED_SOURCES: std::sync::LazyLock<
+    Mutex<BTreeMap<std::path::PathBuf, std::fs::Metadata>>,
+> = std::sync::LazyLock::new(Mutex::default);
+#[cfg(test)]
+pub(crate) fn expect_native_source(path: std::path::PathBuf, metadata: std::fs::Metadata) {
+    EXPECTED_SOURCES.lock().unwrap().insert(path, metadata);
+}
+#[cfg(test)]
+fn native_registered(path: &std::path::Path, source: &std::fs::File) {
+    use std::os::unix::fs::MetadataExt;
+    if let Some(expected) = EXPECTED_SOURCES.lock().unwrap().remove(path) {
+        let actual = source.metadata().unwrap();
+        assert_eq!(
+            (actual.dev(), actual.ino()),
+            (expected.dev(), expected.ino()),
+            "the descriptor passed to native registration must name the authorized source"
+        );
     }
 }
 

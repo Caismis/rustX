@@ -9,10 +9,23 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-#[derive(Default)]
+#[cfg_attr(not(target_os = "macos"), derive(Default))]
 pub(crate) struct Environment {
     io_gate: std::sync::Mutex<()>,
     roots: RwLock<BTreeMap<PathBuf, Arc<Root>>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) watch_files: Arc<tokio::sync::Semaphore>,
+}
+#[cfg(target_os = "macos")]
+impl Default for Environment {
+    fn default() -> Self {
+        Self {
+            io_gate: std::sync::Mutex::default(),
+            roots: RwLock::default(),
+            #[cfg(target_os = "macos")]
+            watch_files: Arc::new(tokio::sync::Semaphore::new(1024)),
+        }
+    }
 }
 
 pub(crate) struct Root {

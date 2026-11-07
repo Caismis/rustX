@@ -346,6 +346,47 @@ impl Terminal {
         )?;
         Ok(())
     }
+    fn eof(&self) -> std::io::Result<[u8; 3]> {
+        use nix::sys::termios::{InputFlags, LocalFlags, SpecialCharacterIndices as C, tcgetattr};
+        let attributes = tcgetattr(self.master.get_ref())?;
+        let eof = attributes.control_chars[C::VEOF as usize];
+        let conflicts = |characters: &[C]| {
+            characters
+                .iter()
+                .any(|character| attributes.control_chars[*character as usize] == eof)
+        };
+        #[cfg(target_os = "macos")]
+        let platform_conflict = attributes
+            .local_flags
+            .intersects(LocalFlags::ISIG | LocalFlags::IEXTEN)
+            && conflicts(&[C::VDSUSP, C::VSTATUS]);
+        #[cfg(target_os = "linux")]
+        let platform_conflict =
+            eof.is_ascii_uppercase() && attributes.input_flags.contains(InputFlags::IUCLC);
+        if !attributes.local_flags.contains(LocalFlags::ICANON)
+            || attributes.local_flags.contains(LocalFlags::EXTPROC)
+            || platform_conflict
+            || eof == libc::_POSIX_VDISABLE
+            || eof == b'\n'
+            || eof == b'\r'
+                && attributes
+                    .input_flags
+                    .intersects(InputFlags::ICRNL | InputFlags::IGNCR)
+            || eof >= 128 && attributes.input_flags.contains(InputFlags::ISTRIP)
+            || conflicts(&[C::VERASE, C::VKILL, C::VEOL, C::VEOL2])
+            || attributes.local_flags.contains(LocalFlags::ISIG)
+                && conflicts(&[C::VINTR, C::VQUIT, C::VSUSP])
+            || attributes.local_flags.contains(LocalFlags::IEXTEN)
+                && conflicts(&[C::VLNEXT, C::VWERASE, C::VREPRINT, C::VDISCARD])
+            || attributes.input_flags.contains(InputFlags::IXON)
+                && conflicts(&[C::VSTART, C::VSTOP])
+        {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        }
+        // Pending VLNEXT may quote the first byte. A further VEOF releases a
+        // pending canonical line, then the final VEOF ends the following read.
+        Ok([eof; 3])
+    }
 }
 struct PendingInput {
     bytes: Vec<u8>,
@@ -545,7 +586,13 @@ async fn run(
                         } else if pending_input.is_some() {
                             let _ = receipt.send(Err(domain(ErrorData::EnvironmentCapacityOrConflict)));
                         } else {
-                            if terminal.is_some() && close { bytes.push(4); }
+                            if let Some(terminal) = &terminal && close {
+                                if let Ok(eof) = terminal.eof() { bytes.extend_from_slice(&eof); }
+                                else {
+                                    let _ = receipt.send(Err(domain(ErrorData::InvalidParams)));
+                                    continue;
+                                }
+                            }
                             if bytes.is_empty() {
                                 if close { input_closed = true; input.take(); }
                                 let _ = receipt.send(Ok(()));

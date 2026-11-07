@@ -12,8 +12,21 @@ async fn terminal_input_resize_and_output_before_final() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::terminal_scenario()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn canonical_terminal_eof_flushes_partial_line_and_honors_configured_character() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::terminal_eof_scenario()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn filesystem_atomic_conflicts_authority_copy_watch_and_retirement() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::filesystem_scenario()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn watcher_registration_retains_authorized_inode_across_symlink_and_directory_aba() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::watch_registration_scenario()).await;
+}
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn macos_descriptor_watch_covers_children_refresh_capacity_and_physical_teardown() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::macos_watch_scenario()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn output_caps_timeout_and_slow_client_cleanup_preserve_other_clients() {
