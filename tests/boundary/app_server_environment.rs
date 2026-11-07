@@ -16,6 +16,10 @@ async fn canonical_terminal_eof_flushes_partial_line_and_honors_configured_chara
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::terminal_eof_scenario()).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_endpoints_are_not_inherited_by_own_or_other_commands() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::terminal_descriptor_scenario()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn filesystem_atomic_conflicts_authority_copy_watch_and_retirement() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::filesystem_scenario()).await;
 }

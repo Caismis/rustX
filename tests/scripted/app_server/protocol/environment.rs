@@ -325,6 +325,75 @@ async fn terminal_completion(
     (result, bytes)
 }
 
+pub(crate) async fn terminal_descriptor_scenario() {
+    let fixture = Fixture::with_session_count(None, 0).await;
+    grant(&fixture);
+    let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&connection).await;
+    // /dev/fd and shell test are native on both supported Unix platforms.
+    // Stdio is intentional; any extra character-device fd is a leaked PTY.
+    let inspect = r#"for fd in /dev/fd/*; do case "${fd##*/}" in 0|1|2) continue;; esac; if test -c "$fd"; then printf 'EXTRA_FD:%s\n' "$fd"; fi; done"#;
+    let script = format!("{inspect}; printf READY; read line");
+    let mut params = parameters(&fixture, &["/bin/sh", "-c", &script]);
+    params.process_id = Some("descriptor-owner".into());
+    params.tty = true;
+    let worker = connection.clone();
+    let command = tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
+    let mut ready = Vec::new();
+    while !ready.ends_with(b"READY") {
+        ready.extend(output(&connection, "descriptor-owner").await);
+    }
+    assert_eq!(
+        ready, b"READY",
+        "the terminal command must not inherit its raw endpoints"
+    );
+    let observer = Arc::new(AppServerConnection::new(fixture.host.clone()));
+    initialize(&observer).await;
+    let script = format!("{inspect}; printf CHECKED; read line");
+    let mut params = parameters(&fixture, &["/bin/sh", "-c", &script]);
+    params.process_id = Some("descriptor-observer".into());
+    params.stream_stdin = true;
+    params.stream_stdout_stderr = true;
+    let worker = observer.clone();
+    let other = tokio::spawn(async move { call(&worker, 2, Method::CommandExec(params)).await });
+    let mut checked = Vec::new();
+    while !checked.ends_with(b"CHECKED") {
+        checked.extend(output(&observer, "descriptor-observer").await);
+    }
+    assert_eq!(
+        checked, b"CHECKED",
+        "another command must not inherit the live PTY"
+    );
+    call(
+        &connection,
+        3,
+        Method::CommandWrite(WriteParams {
+            process_id: "descriptor-owner".into(),
+            delta_base64: Some(base64::engine::general_purpose::STANDARD.encode(b"done\n")),
+            close_stdin: false,
+        }),
+    )
+    .await;
+    terminal_completion(&connection, command).await;
+    assert!(
+        !other.is_finished(),
+        "the PTY must settle while the unrelated command is still alive"
+    );
+    call(
+        &observer,
+        4,
+        Method::CommandWrite(WriteParams {
+            process_id: "descriptor-observer".into(),
+            delta_base64: Some(base64::engine::general_purpose::STANDARD.encode(b"done\n")),
+            close_stdin: false,
+        }),
+    )
+    .await;
+    terminal_completion(&observer, other).await;
+    observer.close();
+    connection.close();
+}
+
 pub(crate) async fn terminal_eof_scenario() {
     let fixture = Fixture::with_session_count(None, 0).await;
     grant(&fixture);

@@ -86,6 +86,11 @@ EOF character, or an EOF setting conflicting with another active control or
 input translation rejects `closeStdin` before writing that batch; a terminal has
 no portable stdin half-close in those modes.
 
+PTY master and slave descriptors are allocated atomically close-on-exec through
+the existing rustix PTY operations. Neither the command nor a concurrently
+spawned command inherits another terminal's raw endpoints; only its explicitly
+assigned stdin/stdout/stderr cross the native execution boundary.
+
 Only `ToolEnvironment`'s four native baseline variables and explicit validated
 entries reach the business program. Parent process/provider/App Server credentials
 are not inherited. Native runtime-owned environment keys cannot be overridden.

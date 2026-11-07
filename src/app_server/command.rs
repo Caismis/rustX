@@ -9,6 +9,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::os::fd::OwnedFd;
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -59,14 +60,6 @@ impl TerminalSize {
             return Err(domain(ErrorData::InvalidParams));
         }
         Ok(self)
-    }
-    fn native(self) -> nix::pty::Winsize {
-        nix::pty::Winsize {
-            ws_row: self.rows,
-            ws_col: self.cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        }
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -296,17 +289,31 @@ struct Terminal {
 }
 impl Terminal {
     fn open(size: TerminalSize) -> std::io::Result<Self> {
-        let pty = nix::pty::openpty(Some(&size.native()), None)?;
-        let path = nix::unistd::ttyname(&pty.slave)?;
-        nix::fcntl::fcntl(
-            &pty.master,
-            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        use rustix::fs::{Mode, OFlags, open};
+        // Allocate both endpoints close-on-exec atomically. openpty followed by
+        // fcntl leaves a window for another command's concurrent spawn to inherit
+        // the master/slave and keep an unrelated terminal alive.
+        let master = open(
+            "/dev/ptmx",
+            OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
         )?;
-        Ok(Self {
-            master: tokio::io::unix::AsyncFd::new(pty.master)?,
-            slave: Some(pty.slave),
+        rustix::pty::grantpt(&master)?;
+        rustix::pty::unlockpt(&master)?;
+        let name = rustix::pty::ptsname(&master, Vec::new())?;
+        let path = PathBuf::from(std::ffi::OsStr::from_bytes(name.to_bytes()));
+        let slave = open(
+            &path,
+            OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        let terminal = Self {
+            master: tokio::io::unix::AsyncFd::new(master)?,
+            slave: Some(slave),
             path,
-        })
+        };
+        terminal.resize(size)?;
+        Ok(terminal)
     }
     async fn read(&self, buffer: &mut [u8]) -> std::io::Result<usize> {
         loop {
