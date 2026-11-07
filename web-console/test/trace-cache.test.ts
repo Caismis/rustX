@@ -266,7 +266,7 @@ it('native TraceChanged coalesces burst reads independently of durable Session u
   server = new Server(); await server.attached('A');
   server.held.add('session/trace');
   let cursor = 0;
-  const emit = (event: import('../../protocol/app-server/v72').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
+  const emit = (event: import('../../protocol/app-server/v74').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
   emit({ type: 'read_domains_updated', transcript: { entries: [] }, trace: {records:[],next_cursor:null} });
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
   emit({ type: 'trace_changed' });
@@ -336,11 +336,11 @@ it('421: Web consumes the generated bounded Tool vocabulary through the actual c
 });
 
 it('cold trace supports paging and details without runtime attachment, and retires late reads', async () => {
-  server = new Server(); await server.connect(); server.held.add('session/attach');
+  server = new Server(); await server.connect(); server.held.add('thread/resume');
   server.handlers.set('session/traceHistory', request => ({ type: 'session_trace_history', conversation_id: 'conversation-A', page: request.method === 'session/traceHistory' && request.params.before ? {read_cut:rootCut(), records: [entry(9)], next_cursor: null } : {read_cut:rootCut(), records: [entry(10)], next_cursor: 'trace:10' } }));
   server.handlers.set('session/traceHistoryDetail', request => {if(request.method!=='session/traceHistoryDetail')throw Error('method');return {type:'session_trace_history_detail',conversation_id:'conversation-A',page:traceReceipt(detail(Number(request.params.record_id.slice(6)))).page};});
   const attach = server.client.attach('A');
-  const opening = await server.waitFor('session/attach', 1);
+  const opening = await server.waitFor('thread/resume', 1);
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toEqual([entry(10)]);
   expect(server.client.getSnapshot().views.A.target).toBeUndefined();

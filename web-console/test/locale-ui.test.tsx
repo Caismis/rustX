@@ -60,15 +60,15 @@ it('a native approval has identical request count, ordering, methods and payload
     act(() => localeController.setLocale(locale));
     expect(server.requests).toHaveLength(before);
     expect(screen.getByText(/Developer approval required/)).toBeTruthy();
-    server.held.add('interaction/respond');
+
     const allow = text('interactions:approval-takeover.allow-once');
     await act(async () => fireEvent.click(screen.getByRole('button', { name: allow })));
-    await server.waitFor('interaction/respond', 1);
-    sequences.push(server.requests.slice(before).map(row => row.request));
+    await server.waitForReply();
+    sequences.push(server.replies.map(reply=>'result' in reply ? reply.result : reply.error));
     cleanup(); server.client.disconnect();
   }
   expect(sequences[0]).toHaveLength(1);
-  expect(sequences[0][0].method).toBe('interaction/respond');
+  expect(sequences[0][0]).toMatchObject({type:'approval'});
   expect(sequences[1]).toEqual(sequences[0]);
 });
 

@@ -25,7 +25,8 @@ use crate::tools::types::ToolOrigin;
 /// provider-independent `ToolOrigin` provenance to every tool binding.
 /// Version 3 replaces the reasoning profile with the general Model Profile.
 /// Version 4 removes semantic reasoning-enabled metadata.
-pub const MANIFEST_SCHEMA_VERSION: u16 = 4;
+/// Version 5 adds application Host Tool provenance.
+pub const MANIFEST_SCHEMA_VERSION: u16 = 5;
 
 /// The immutable execution description of one attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +224,6 @@ mod tests {
     #[test]
     fn manifest_schema_version_is_explicit() {
         let value = serde_json::to_value(example_manifest()).expect("serialize manifest");
-        assert_eq!(value["schema_version"], 4);
+        assert_eq!(value["schema_version"], 5);
     }
 }

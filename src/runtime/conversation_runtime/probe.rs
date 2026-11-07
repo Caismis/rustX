@@ -44,6 +44,8 @@ use super::{ConversationRuntime, RuntimeInner};
 #[derive(Debug, Default)]
 #[allow(clippy::struct_field_names)]
 pub(crate) struct CoordinatorProbe {
+    /// Parks a status read after its healthy Gate read, before native leaf capture.
+    pub(crate) activity_capture_gate: Option<Arc<Gate>>,
     pub(crate) title_source_reads: Option<Arc<std::sync::atomic::AtomicUsize>>,
     /// Fails the next configuration change record after its generation is
     /// published, as a failed durable append would.

@@ -7,7 +7,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
   await page.goto(fixture);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   await page.setViewportSize({ width, height: 900 });
   await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();

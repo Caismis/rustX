@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../protocol/app-server/v72';
+import type { AttachmentTarget } from '../../protocol/app-server/v74';
 import { checkpoint, snapshot } from './fixture';
 import { wireProbe } from './e2e/wire-probe';
 
@@ -59,6 +59,12 @@ async function harness() {
 const browserBatch = (route: FakeRoute, count = 6) => {
   for (let n = 1; n <= count; n++) route.browser(`browser-${n}`);
 };
+function observeThread(route: FakeRoute) {
+  route.browser('native-metadata', 'session/read', { session_id: 'A' });
+  route.reply('native-metadata', { type: 'session', session: { id: 'A', active_conversation_id: target.conversation_id } });
+  // Setup has settled; occupancy assertions below observe only the test work.
+  route.nativeFrames.length = 0; route.browserFrames.length = 0;
+}
 
 describe('acceptance probe shares only its added physical occupancy', () => {
   it('waits behind six browser requests, then dispatches exactly once after a real response', async () => {
@@ -119,12 +125,13 @@ describe('acceptance probe shares only its added physical occupancy', () => {
 
   it.each([
     ['control', 'session/submissionIntent', { session_id: 'A', node_id: 'node-A' }],
-    ['control cancellation', 'turn/cancel', { target }],
-    ['attachment', 'session/attach', { session_id: 'A', node_id: 'node-A' }],
+    ['control cancellation', 'turn/interrupt', { target, turnId: 'attempt-A' }],
+    ['attachment', 'thread/resume', { threadId: target.conversation_id }],
     ['metadata', 'session/settings', { session_id: 'A' }],
     ['observation', 'agent/observe', { target, agent_id: 'child-A', after: null }],
   ] as const)('forwards the independent %s lane while an artificial read and five ordinary calls are active', async (_lane, method, params) => {
     const { wire, route } = await harness();
+    if (method === 'thread/resume') observeThread(route);
     const read = wire.read('session/checkpoint', target);
     browserBatch(route);
     route.browser('independent', method, params);
@@ -221,9 +228,10 @@ describe('acceptance probe shares only its added physical occupancy', () => {
 
   it('cannot satisfy a replacement attachment with an old physical socket held acknowledgement', async () => {
     const { wire, route, connect } = await harness();
-    const result = (value: AttachmentTarget) => ({ type: 'attached', target: value, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
-    wire.holdNext('session/attach');
-    route.browser('old-attach', 'session/attach', { session_id: 'A', node_id: 'node-A' });
+    observeThread(route);
+    const result = (value: AttachmentTarget) => ({ type: 'attached', target: value, configuration_revision: '0', attachment_kind: 'writable', observation_source: 'live' });
+    wire.holdNext('thread/resume');
+    route.browser('old-attach', 'thread/resume', { threadId: target.conversation_id });
     const old = wire.attachedTarget('A');
     const rejected = expect(old).rejects.toThrow(/transport retired/);
     route.reply('old-attach', result(target));
@@ -232,15 +240,41 @@ describe('acceptance probe shares only its added physical occupancy', () => {
     await rejected;
     const replacement = connect();
     const attached = wire.attachedTarget('A');
-    wire.releaseHeld('session/attach');
+    wire.releaseHeld('thread/resume');
     expect(route.browserFrames).toHaveLength(0);
     expect(replacement.browserFrames).toHaveLength(0);
     const fresh = { ...target, attachment_id: 'replacement-attachment' };
-    replacement.browser('new-attach', 'session/attach', { session_id: 'A', node_id: 'node-A' });
+    replacement.browser('new-attach', 'thread/resume', { threadId: target.conversation_id });
     route.reply('old-attach', result(target));
     replacement.reply('new-attach', result(fresh));
     expect(await attached).toEqual(fresh);
     expect(await wire.attachedTarget('A')).toEqual(fresh);
+  });
+
+  it('cannot satisfy a newer branch resume with a held acknowledgement for the same Session', async () => {
+    const { wire, route } = await harness();
+    observeThread(route);
+    const result = (value: AttachmentTarget) => ({ type: 'attached', target: value, configuration_revision: '0', attachment_kind: 'writable', observation_source: 'live' });
+    wire.holdNext('thread/resume');
+    route.browser('old-attach', 'thread/resume', { threadId: target.conversation_id });
+    route.reply('old-attach', result(target));
+    route.browser('branch-metadata', 'session/node', { session_id: 'A', node_id: 'branch-node' });
+    route.reply('branch-metadata', { type: 'node', node: { id: 'branch-node', conversation_id: 'branch-conversation' } });
+    route.browser('branch-attach', 'thread/resume', { threadId: 'branch-conversation' });
+    const attached = wire.attachedTarget('A');
+    let resolved = false; void attached.then(() => { resolved = true; });
+    wire.releaseHeld('thread/resume');
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    const branch = { ...target, conversation_id: 'branch-conversation', attachment_id: 'branch-attachment' };
+    route.reply('branch-attach', result(branch));
+    expect(await attached).toEqual(branch);
+  });
+
+  it('refuses an unobserved Thread identity instead of deriving a Session ID', async () => {
+    const { route } = await harness();
+    expect(() => route.browser('unknown-attach', 'thread/resume', { threadId: 'unobserved-conversation' })).toThrow(/observed native Session\/Node metadata/);
+    expect(route.nativeFrames).toEqual([]);
   });
 
   it('loses a committed acknowledgement by retiring before any queued probe is activated', async () => {

@@ -7,7 +7,6 @@ import type { AppServerClient } from '../client/app-server';
 import type { ClientView } from '../client/contracts';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
 import { sessionDisplayTitle } from '../bindings/session-title';
-import { activeAttempt } from '../bindings/projection';
 import { deriveSessionProductState, type SessionTransition } from '../bindings/session-product';
 import { actionError } from '../bindings/action-error';
 import { Button } from '../presentation/primitives/Button';
@@ -147,10 +146,19 @@ function LiveSessionNode({ client, node, children, transition }: { client: AppSe
   const tasks = records.filter(row => row.binding.session_id === node.id && row.state === 'enabled').sort((a, b) => (a.next_due_utc ?? '').localeCompare(b.next_due_utc ?? ''));
   const activity = useClientSelector(client, state => {
     const view = state.views[node.id];
-    const current = state.connection === 'connected' && view?.attachment === 'attached' && view.attachmentIntent === 'wanted';
-    const pending = current ? view.snapshot?.pending_interactions?.[0] : undefined;
-    return { running: !!current && activeAttempt(view.snapshot),
-      pendingInteraction: pending ? pending.kind === 'approval' ? 'approval' as const : pending.kind === 'review' ? 'plan-review' as const : 'question' as const : undefined,
+    const row=state.sessions.find(row=>row.id===node.id)??view?.summary;
+    const entry=row?.thread_status;
+    const available=state.connection==='connected'&&state.threadStatusSynchronized!==false&&entry!=null;
+    let runtimeStatus:SessionNode['runtimeStatus'];
+    if(available)switch(entry.status.type) {
+      case 'idle':runtimeStatus={state:'done',labels:[tx('workspace:status.idle')]};break;
+      case 'notLoaded':runtimeStatus={state:'done',labels:[tx('workspace:status.notLoaded')]};break;
+      case 'systemError':runtimeStatus={state:'error',labels:[tx('workspace:status.systemError')]};break;
+      case 'active':runtimeStatus={state:entry.status.activeFlags.length?'warning':'ongoing',labels:entry.status.activeFlags.length?entry.status.activeFlags.map(flag=>tx(flag==='waitingOnApproval'?'workspace:status.waitingApproval':'workspace:status.waitingAnswer')):[tx('workspace:status.running')]};break;
+    }
+    return { running:available&&entry.status.type==='active',
+      runtimeStatus,statusUnavailable:!available,
+      pendingInteraction:undefined,
       observation: sessionObservation(tx, state, node.id, transition) };
   }, sameValue);
   return children({ ...node, ...activity,

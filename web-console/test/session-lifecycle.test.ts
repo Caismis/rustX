@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v72';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v74';
 import { SessionLifecycles } from '../src/client/session-lifecycle/system';
 import { controlCurrent, type LifecycleContext } from '../src/client/session-lifecycle/machine';
 import type { Admission, Attached, FailureKind, SessionLifecyclePort } from '../src/client/session-lifecycle/port';
@@ -29,7 +29,7 @@ class Harness {
       this.hostEntered.resolve(); if (this.host) await this.host.promise;
       return { current, validate: async () => true };
     },
-    attach: (node, admission) => this.rpc<Attached>('attach', admission, { node }),
+    attach: (node, _conversation, admission) => this.rpc<Attached>('attach', admission, { node }),
     detach: (target, admission) => this.rpc<void>('detach', admission, { target }),
     switchNode: (target, node, admission) => this.rpc('switch', admission, { target, node }),
     delete: (_revision, admission) => this.rpc('delete', admission),
@@ -69,7 +69,7 @@ class Harness {
       expect(this.claims.size).toBe(0); this.resident = conversation;
       const target = { session_id: 'S', conversation_id: conversation, runtime_incarnation: '1', attachment_id: String(++this.sequence) };
       if (call.generation === this.generation && this.connected) this.claims.add(target);
-      call.result.resolve({type:'attached', target, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+      call.result.resolve({type:'attached', target, configuration_revision:'0', attachment_kind:'writable', observation_source:'live'});
     } else if (call.kind === 'switch') {
       this.dropClaim(call.target!); this.selected = call.node!; this.resident = `conversation-${call.node}`;
       call.result.resolve({ id: 'S', active_node: call.node, active_conversation_id: this.resident });

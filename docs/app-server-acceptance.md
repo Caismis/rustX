@@ -43,7 +43,7 @@ gates and committed observations establish ordering.
 | G: idle unload | Scripted `idle_grace_detach_eviction_cold_resume_and_session_independence` | Existing manual clock + unload claim; durable list/read/settings/history survive; B remains resident |
 | H: two users/processes | Reference-host process test above | Separate native controllers/roots/config/env; real tool cwd and environment, per-process catalog/read, B death leaves gated A alive |
 | I: transport parity | `tests/support/app_server_conformance.rs::representative_scenario` through direct/stdio/WebSocket; TUI parity | Same DTO version, model/domain vocabulary, snapshot/event transitions and stale attachment rejection |
-| J: same server, both clients | Browser `console.spec.ts` imports actual TUI `AppServerHost` | Browser releases B, remote TUI reads/resyncs B while A runs, releases B back to browser; single-controller refusal first |
+| J: same server, both clients | Browser `console.spec.ts` imports actual TUI `AppServerHost` | Browser releases B, remote TUI reads/resyncs B while A runs, releases B back to browser; independent writable attachments share one native Conversation |
 | K: restart | Reference-host SIGKILL test; existing process drain/cold-resume tests; TUI unexpected child death | Tool result has reached next gated provider request; no replay, catalog reads load nothing, native cold recovery |
 | L: bounded repetition | TUI `bounded product lifecycle`; existing browser 34 detach/reopens and transport capacity reaping | Three owned stdio children and three WS lifetimes, deterministic turns, detach/delete; runtime and pending/child/workflow registries return to baseline; child exit awaited |
 
@@ -121,10 +121,9 @@ pnpm start --connect ws://127.0.0.1:PORT --token-file /PRINTED/token-file \
   --workspace /PRINTED/workspaceB --resume
 ```
 
-Keep A attached in the browser. Explicitly detach B there before choosing B in
-the TUI; v1 refuses competing writable controllers. Compare Session/Conversation
-identities and `/debug`. Remote TUI exit detaches and leaves this process alive.
-Reopen B in the browser after terminal exit.
+Keep A and B attached in the browser while the TUI resumes B concurrently. Compare
+Session/Conversation IDs and runtime incarnation; attachment IDs must differ. TUI
+exit detaches only its own claim and leaves browser execution and this process alive.
 
 Exercise browser Disconnect/Reconnect and page reload, including pending Approval
 and Questionnaire. The same pending identity must reappear. Answer once. Use the

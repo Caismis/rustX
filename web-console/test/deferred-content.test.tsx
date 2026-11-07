@@ -4,7 +4,7 @@ import { SourceContent } from '../src/app/agent/SourceContent';
 import { Server } from './fixture';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { Message } from '../src/app/agent/Message';
-import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v72';
+import type { ContentBinding, ContentChunk, ContentRef } from '../../protocol/app-server/v74';
 import { messageSource } from '../../protocol/app-server/content-identity';
 afterEach(()=>{cleanup();vi.restoreAllMocks();});
 const reference=(id:string,bytes:number):ContentRef=>({conversation_id:'conversation-A',source:{type:'live_publication_prefix',component:'payload',stream_id:'stream-A',message_id:id,attempt_id:'attempt-A',turn_id:'turn-A',publication_request_id:'request-A',block_index:0},representation:'utf8_text',version:1,content_revision:1,readable_end:bytes});
@@ -220,7 +220,7 @@ it.each(['live','child','history'] as const)('%s messages fill their existing bo
   await ui.findByText(text);expect(ui.queryByText('正文预览')).toBeNull();expect(ui.queryByText(/16384|Read content|内容延迟加载|Content deferred/)).toBeNull();expect(ui.queryByRole('button',{name:/Read content|Read original/})).toBeNull();
   const reads=server.requests.filter(row=>row.request.method=== (kind==='history'?'session/historyContentRead':'conversation/contentRead'));expect(reads).toHaveLength(2);
   fireEvent.click(ui.getByRole('button',{name:'Copy'}));await waitFor(()=>expect(copied).toHaveBeenCalledWith(text));
-  if(kind==='history')expect(server.requests.some(row=>row.request.method==='session/attach')).toBe(false);
+  if(kind==='history')expect(server.requests.some(row=>row.request.method==='thread/resume')).toBe(false);
  }finally{cleanup();server.client.disconnect();}
 });
 

@@ -37,12 +37,12 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       // proof instead of adding competing checkpoint reads to the socket.
       await expect(page.getByRole('button', { name: zh ? '重新生成' : 'Regenerate', exact: true })).toBeEnabled();
       const surface = await page.locator('.chat-reading-surface').elementHandle();
-      wire.holdNext('session/fork'); await fork.click(); await expect.poll(wire.held).toBe(1);
+      wire.holdNext('thread/fork'); await fork.click(); await expect.poll(wire.held).toBe(1);
       await expect(fork).toBeDisabled(); await expect(fork).toHaveAttribute('aria-busy', 'true');
       await expect(fork.locator('[data-state=ongoing]')).toBeVisible();
       await expect(status).toContainText(zh ? '正在分叉会话…' : 'Forking conversation…');
       await page.screenshot({ path: `/tmp/rustx-message-fork-pending-${width}.png` });
-      for (const next of ['session/attach', 'session/subscribe']) {
+      for (const next of ['thread/resume', 'session/subscribe']) {
         wire.holdNext(next); wire.releaseHeld(); await expect.poll(wire.held).toBe(1);
         await expect(fork).toHaveAttribute('aria-busy', 'true');
         await expect(page.getByText('Completed fork answer.', { exact: true })).toBeVisible();
@@ -51,7 +51,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       // This settings read follows the native checkpoint/subscription. The
       // child must already be open while its real acknowledgement is held.
       wire.holdNext('session/settings'); wire.releaseHeld(); await expect.poll(wire.held).toBe(1);
-      const child = wire.responses.find(row => row.method === 'session/fork')!.result.session.id;
+      const child = wire.responses.find(row => row.method === 'thread/fork')!.result.session.id;
       await expect(fork).not.toHaveAttribute('aria-busy', 'true');
       await expect(status).toHaveCount(0);
       if (width === 390) await page.getByRole('button', { name: '主页', exact: true }).click();
@@ -74,9 +74,9 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await expect(page.getByLabel(zh ? '会话标题' : 'Session title', { exact: true })).toHaveText('New session (3)');
       await expect(message).toHaveValue('Fork source');
       await expect(picker).toHaveCount(0);
-      expect(wire.requests.filter(row => row.method === 'session/fork')).toHaveLength(3);
+      expect(wire.requests.filter(row => row.method === 'thread/fork')).toHaveLength(3);
       expect(wire.requests.filter(row => row.method === 'session/name').map(row => row.params.name)).toEqual(['New session (1)', 'New session (2)', 'New session (3)']);
-      expect(wire.requests.filter(row => row.method === 'turn/start')).toHaveLength(1);
+      expect(wire.requests.filter(row => row.method === 'inbound/queue')).toHaveLength(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
       passed = true;

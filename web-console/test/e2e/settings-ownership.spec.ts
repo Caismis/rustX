@@ -59,7 +59,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).toContain('write');
    expect((await sessions()).sessions).toEqual([]);
-   expect(wire.requests.some(row => ['session/create', 'session/attach', 'turn/start'].includes(row.method))).toBe(false);
+   expect(wire.requests.some(row => ['thread/start', 'thread/resume', 'inbound/queue'].includes(row.method))).toBe(false);
    await expect(f.workspaceHost.host.configureWorkspace('unregistered', f.endpoint, { kind: 'read' })).rejects.toThrow('Unknown');
    await f.workspaceHost.host.removeWorkspace(await f.workspaceHost.host.listWorkspaces(), a.id);
    // A revoked target fences the next authored change and retains the draft.

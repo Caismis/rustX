@@ -2060,12 +2060,8 @@ async fn attachment_lifecycle_and_request_id_scope() {
     let second = fixture
         .host
         .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION);
-    assert!(matches!(
-        second,
-        Err(RuntimeClientError::AttachmentInUse {
-            existing_attachment_id,
-        }) if existing_attachment_id == first_id
-    ));
+    let (second, _) = second.expect("shared attachment");
+    assert_ne!(second.attachment_id(), &first_id);
 
     // The rejection never evicts the first attachment: its requests
     // still work.

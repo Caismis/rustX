@@ -109,6 +109,7 @@ async fn run_with_control(
         stdout_capture: None,
         workspace_changes: None,
         model_invocation: None,
+        attempt_id: None,
         goal: None,
         schedule: None,
         conversation_id: &ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),

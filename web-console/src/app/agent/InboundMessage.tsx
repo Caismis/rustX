@@ -1,5 +1,6 @@
+import {isPlainMessageKind} from '../../../../protocol/app-server/message-kind';
 import { useState } from 'react';
-import type { MessageBlock } from '../../../../protocol/app-server/v72';
+import type { MessageBlock } from '../../../../protocol/app-server/v74';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconAgentPresetOutline16, IconApiOutline14 } from '../../presentation/primitives/icons';
@@ -13,7 +14,7 @@ import { jobStateLabel } from '../../bindings/status-labels';
 
 /** Chat styling only: a child's direct parent speaks through the ordinary user
  * seat. Canonical source and provider role remain unchanged. */
-export const isUserBubble = (message: MessageBlock, parentAgentId?: string): message is Extract<MessageBlock, { role: 'user' }> => message.role === 'user' && (!message.kind || message.kind === 'message')
+export const isUserBubble = (message: MessageBlock, parentAgentId?: string): message is Extract<MessageBlock, { role: 'user' }> => message.role === 'user' && isPlainMessageKind(message.kind)
   && (message.source === 'human' || parentAgentId !== undefined && typeof message.source === 'object' && 'agent' in message.source && message.source.agent.agent_id === parentAgentId);
 /** Provider role describes model input; canonical source describes who spoke. */
 export function InboundMessage({ message }: { message: Extract<MessageBlock, { role: 'user' }> }) {

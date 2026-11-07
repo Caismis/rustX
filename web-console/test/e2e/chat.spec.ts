@@ -52,13 +52,13 @@ test('native history, rich settlement, real image previews, reconnect and native
   try {
     // Build durable history via typed native admission before the browser attaches.
     const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
+    const created = await remote.client.call('thread/start', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
     id = created.session.id;
     await remote.renameSession(id, 'New session');
-    const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
+    const attached = await remote.client.call('thread/resume', {threadId:(await remote.readSession(id)).active_conversation_id}, 'attached');
     await expect(remote.client.call('artifact/read', { target: attached.target, artifact_id: 'artifact_999' }, 'artifact_bytes')).rejects.toThrow();
     for (let i = 0; i < 34; i++) {
-      await remote.client.call('turn/start', { target: attached.target, content: [{ type: 'text', text: `History ${i}` }] }, 'inbound_accepted');
+      await remote.client.call('inbound/queue', { inputId:crypto.randomUUID(), target: attached.target, content: [{ type: 'text', text: `History ${i}` }] }, 'inbound_accepted');
       await expect.poll(async () => {
         const current = await remote.client.call('session/checkpoint', { target: attached.target }, 'checkpoint');
         const history=await remote.client.call('session/transcript',{target:attached.target,at:{type:'latest'},limit:32},'transcript_window');
@@ -211,7 +211,7 @@ test('native history, rich settlement, real image previews, reconnect and native
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Uploaded workspace file received.', { exact: true })).toBeVisible();
     await expectSettled(page, wire);
-    expect(wire.requests.filter(row => row.method === 'turn/start').at(-1)!.params.content.filter((block: any) => block.type === 'upload')).toEqual([{ type: 'upload', ...receipt }]);
+    expect(wire.requests.filter(row => row.method === 'inbound/queue').at(-1)!.params.content.filter((block: any) => block.type === 'upload')).toEqual([{ type: 'upload', ...receipt }]);
     await expect(page.getByLabel('Message', { exact: true })).toHaveValue('');
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await connectionAction(page, 'Reconnect');

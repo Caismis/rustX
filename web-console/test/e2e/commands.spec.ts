@@ -77,7 +77,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     // A completed response names its exact boundary: Regenerate runs on the click.
     await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    phase = 'awaiting validated retry provider request (branch → switchNode → attach → turn/start)';
+    phase = 'awaiting validated retry provider request (branch → switchNode → attach → inbound/queue)';
     await test.step('native retry reaches the provider with validated editor content', async () => {
       // The gate is reached only after the real provider validates model, native
       // upload-bearing input and absence of old output. Its existing deadline is
@@ -122,7 +122,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     })).toBe(true);
     await fork.click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await expect.poll(() => wire.requests.filter(request => request.method === 'session/fork').length).toBe(1);
+    await expect.poll(() => wire.requests.filter(request => request.method === 'thread/fork').length).toBe(1);
     // The Fork runs on the click; the attached Fork replaces the selected Session.
     await expect.poll(() => selectedSessionId(page)).not.toBe(originalId);
     await expect(message).toHaveValue('');
@@ -160,13 +160,13 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await settled();
     await expect(transcript.getByText('Regenerate my uploaded note', { exact: true })).toHaveCount(1);
     await expect(transcript.getByText('Original native answer', { exact: true })).toHaveCount(0);
-    wire.holdNext('session/history', 'session/attach');
+    wire.holdNext('session/history', 'thread/resume');
     await sessionTree(page);
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: forkConversation }).click();
     await expect.poll(() => wire.held()).toBe(2);
     // Cold history is best-effort and may return stale_runtime as attach wins.
     // Establish live controls first, then deliver the actual late history reply.
-    wire.releaseHeld('session/attach');
+    wire.releaseHeld('thread/resume');
     await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toBeEnabled();
     expect((await snapshot()).conversation_id).toBe(forkConversation);
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();

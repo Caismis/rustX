@@ -1,6 +1,42 @@
 [
   {
     "jsonrpc": "2.0",
+    "id": "server-incarnation:host-1",
+    "method": "item/tool/call",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "turnId": "native-attempt",
+      "callId": "native-call",
+      "namespace": "business",
+      "tool": "lookup",
+      "arguments": {
+        "key": "invoice"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "server-incarnation:host-1",
+    "result": {
+      "success": true,
+      "contentItems": [
+        {
+          "type": "inputText",
+          "text": "invoice found"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "serverRequest/resolved",
+    "params": {
+      "requestId": "server-incarnation:host-1",
+      "threadId": "conv_00000000-0000-7000-8000-000000000001"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "exact-node",
     "method": "session/node",
     "params": {
@@ -41,8 +77,9 @@
   {
     "jsonrpc": "2.0",
     "id": "create-with-initial-model",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace",
         "model": {
@@ -67,8 +104,9 @@
   {
     "jsonrpc": "2.0",
     "id": "create-with-native-default",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace"
       }
@@ -102,8 +140,9 @@
   {
     "jsonrpc": "2.0",
     "id": "submit-workspace-draft",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace"
       },
@@ -176,7 +215,16 @@
         "generated_title": null,
         "preview": "Native first user message",
         "updated_at": "1970-01-01T00:00:00Z",
-        "active_node": "node_00000000-0000-7000-8000-000000000001"
+        "active_node": "node_00000000-0000-7000-8000-000000000001",
+        "thread_id": "conv_00000000-0000-7000-8000-000000000001",
+        "thread_status": {
+          "threadId": "conv_00000000-0000-7000-8000-000000000001",
+          "status": {
+            "type": "idle"
+          },
+          "revision": "0",
+          "runtimeIncarnation": "9007199254740993"
+        }
       }
     }
   },
@@ -238,7 +286,7 @@
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 72,
+      "protocol_version": 74,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -256,16 +304,16 @@
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 72,
+      "protocol_version": 74,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
           "max_chunk_bytes": 65536
         },
         "multi_session": true,
-        "single_writable_controller": true,
+        "shared_writable_clients": true,
         "headless_interactions": true,
-        "delivery_access": false,
+        "delivery_access": true,
         "experimental_methods": []
       }
     }
@@ -288,45 +336,32 @@
   },
   {
     "jsonrpc": "2.0",
-    "id": -3,
-    "method": "interaction/respond",
-    "params": {
-      "target": {
-        "session_id": "ses_00000000-0000-7000-8000-000000000001",
-        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-        "runtime_incarnation": "9007199254740993",
-        "attachment_id": "attachment-fixture"
-      },
-      "interaction": {
-        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-        "interaction_id": "interaction-fixture"
-      },
+    "id": "server-incarnation:3",
+    "result": {
+      "type": "questionnaire",
       "response": {
-        "type": "questionnaire",
-        "response": {
-          "type": "submitted",
-          "value": {
-            "answers": [
-              {
-                "question_index": 0,
-                "answer": {
-                  "type": "integer",
-                  "value": {
-                    "value": "9007199254740993"
-                  }
-                }
-              },
-              {
-                "question_index": 1,
-                "answer": {
-                  "type": "number",
-                  "value": {
-                    "value": "3ff4000000000000"
-                  }
+        "type": "submitted",
+        "value": {
+          "answers": [
+            {
+              "question_index": 0,
+              "answer": {
+                "type": "integer",
+                "value": {
+                  "value": "9007199254740993"
                 }
               }
-            ]
-          }
+            },
+            {
+              "question_index": 1,
+              "answer": {
+                "type": "number",
+                "value": {
+                  "value": "3ff4000000000000"
+                }
+              }
+            }
+          ]
         }
       }
     }
@@ -690,7 +725,7 @@
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
-    "method": "session/fork",
+    "method": "thread/fork",
     "params": {
       "session_id": "ses_00000000-0000-7000-8000-000000000001",
       "node_id": null,
@@ -1241,6 +1276,90 @@
         "kind": "archive_preparation_failed",
         "reason": "artifact_unavailable"
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "notLoaded"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "idle"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "systemError"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "active",
+        "activeFlags": [
+          "waitingOnApproval",
+          "waitingOnUserInput"
+        ]
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/resyncRequired",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "loaded-threads",
+    "method": "thread/loaded/list",
+    "params": {
+      "offset": 0,
+      "limit": 64
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "loaded-threads",
+    "result": {
+      "type": "loaded_threads",
+      "data": [
+        {
+          "threadId": "conv_00000000-0000-7000-8000-000000000001",
+          "status": {
+            "type": "idle"
+          },
+          "revision": "9007199254740993",
+          "runtimeIncarnation": "9007199254740993"
+        }
+      ],
+      "next_offset": null
     }
   },
   {

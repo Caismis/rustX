@@ -5,7 +5,7 @@ import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import type { CompletedResponseView, RuntimeClientEvent } from '../../../protocol/app-server/v72';
+import type { CompletedResponseView, RuntimeClientEvent } from '../../../protocol/app-server/v74';
 
 for (const [width, zh] of [[1440, false], [390, true]] as const) {
   test(`message Retry removes the old reply immediately and keeps a resident reading surface ${width}`, async ({ page }) => {
@@ -94,7 +94,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       });
       await page.screenshot({ path: `/tmp/rustx-retry-pending-${width}.png` });
       // Hold real acknowledgements at every native handoff; no semantic result is fabricated.
-      for (const next of ['session/switchNode', 'session/attach', 'turn/start']) {
+      for (const next of ['session/switchNode', 'thread/resume', 'inbound/queue']) {
         wire.holdNext(next); wire.releaseHeld(); await expect.poll(wire.held).toBe(1);
         await expect(page.getByRole('heading', { name: 'Original response' })).toHaveCount(0);
         await expect(page.getByText('Retry this question', { exact: true })).toHaveCount(1);
@@ -118,7 +118,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       expect(frames.length).toBeGreaterThan(0);
       expect(frames.every(frame => !frame.old && frame.input && frame.previous && frame.surface && frame.editor && !frame.disconnected)).toBe(true);
       expect(wire.requests.filter(request => request.method === 'session/branch')).toHaveLength(1);
-      expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(3);
+      expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(3);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
       passed = true;

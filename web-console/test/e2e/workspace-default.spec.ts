@@ -30,7 +30,7 @@ for (const width of [1440, 390]) test(`startup and Home use registered Workspace
     await expect(input).toHaveValue('Keep typing while Workspaces load');
     expect(await input.evaluate(element => [(element as HTMLTextAreaElement).selectionStart, (element as HTMLTextAreaElement).selectionEnd])).toEqual([2, 8]);
     expect(await card.boundingBox()).toEqual(before);
-    expect(wire.requests.filter(request => request.method === 'session/create')).toHaveLength(0);
+    expect(wire.requests.filter(request => request.method === 'thread/start')).toHaveLength(0);
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
     await page.screenshot({ path: info.outputPath(`workspace-default-${width}.png`) });
     await picker.click(); await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
@@ -79,7 +79,7 @@ for (const width of [1440, 390]) test(`unsent manual Workspace choice survives r
     await showNavigation(page);
     await page.getByRole('button', { name: 'Select Workspace Workspace A', exact: true }).click();
     await expectDraftA(page);
-    expect(wire.requests.filter(request => request.method === 'session/create')).toHaveLength(0);
+    expect(wire.requests.filter(request => request.method === 'thread/start')).toHaveLength(0);
     await page.reload(); await connectRemote(page, fixture.endpoint, fixture.token); await expectDraftA(page);
     // Exercise the composer's chooser too, then restore the older Workspace A
     // even though Native still reports the more recent Session in Workspace B.
@@ -100,7 +100,7 @@ for (const width of [1440, 390]) test(`unsent manual Workspace choice survives r
     await expect(fresh).toHaveTitle(/rustX/i);
     await fresh.getByRole('textbox', { name: 'Message', exact: true }).fill('Restored Workspace A before sending');
     await expect(fresh.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
-    expect(restartedWire.requests.filter(request => request.method === 'session/create')).toHaveLength(0);
+    expect(restartedWire.requests.filter(request => request.method === 'thread/start')).toHaveLength(0);
     await expect(fresh.locator('[data-phase="connecting"], [data-phase="disconnected"]')).toHaveCount(0);
     await expect(fresh.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     await fresh.screenshot({ path: info.outputPath(`remembered-workspace-${width}.png`) });

@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../../protocol/app-server/v72';
+import type { AttachmentTarget } from '../../../protocol/app-server/v74';
 import type { wireProbe } from './wire-probe';
 export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('button', { name: 'View options', exact: true }).click();
@@ -105,12 +105,11 @@ export async function confirmSettingsAction(page: Page, label: string) {
   await dialog.getByRole('button', { name: label, exact: true }).click();
   await expect(dialog).toHaveCount(0);
 }
-export async function connectRemote(page: Page, endpoint: string, token: string, deliveryToken?: string) {
+export async function connectRemote(page: Page, endpoint: string, token: string) {
   await openConnectionSettings(page);
   await page.getByLabel('Connection mode').selectOption('remote');
   await page.getByLabel('WebSocket endpoint').fill(endpoint);
   await page.getByLabel('Transport token').fill(token);
-  if (deliveryToken) await page.getByLabel('Delivery Access token (optional, enables side questions)').fill(deliveryToken);
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('.connection-status')).toHaveText('Connected');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();

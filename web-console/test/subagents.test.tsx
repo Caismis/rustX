@@ -9,7 +9,7 @@ import { RuntimeFacts } from './runtime-facts';
 import { SubagentScope, SubagentHeader, SubagentSurface } from '../src/app/agent/Subagents';
 import { cellKind } from '../src/app/trajectory/TrajectoryCell';
 import { Server, snapshot } from './fixture';
-import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v72';
+import type { RuntimeClientAgent, MessageBlock } from '../../protocol/app-server/v74';
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.disconnect(); });
 const agent: RuntimeClientAgent = { title: 'Research', agent_id: 'child', agent: 'Research', parent_agent_id: 'root', child_conversation_id: 'child-conversation', activation_id: 'activation', state: 'inactive', activation_state: 'succeeded', definition_digest: 'd', profile_digest: 'p', started_at: '2026-10-08T00:00:00Z', observation: { attempt_id: null, revision: '1', activity: { type: 'awaiting_activity' }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } }, workspace: '/workspace' };
@@ -186,7 +186,7 @@ it('Release revokes meter admission and publication before a held detach acknowl
 it('Release and batched Open cannot admit any replacement scope against T1 before native T2 attach', async () => {
   const { useSubagents } = await import('../src/app/agent/subagent-context');
   const server = new Server(); servers.push(server); server.snapshots.get('A')!.agents = Array.from({ length: 4 }, (_, i) => ({ ...agent, agent_id: `child-${i}` }));
-  await server.attached('A'); server.held.add('agent/statistics'); server.held.add('session/detach'); server.held.add('session/attach');
+  await server.attached('A'); server.held.add('agent/statistics'); server.held.add('session/detach'); server.held.add('thread/resume');
   function Reading() { return <output>{Object.keys(useSubagents()!.metrics).length}</output>; }
   const ui = render(<SubagentScope client={server.client} sessionId="A"><Reading/></SubagentScope>);
   const reads = () => server.requests.filter(row => row.request.method === 'agent/statistics');
@@ -202,7 +202,7 @@ it('Release and batched Open cannot admit any replacement scope against T1 befor
     expect(reads()).toHaveLength(2); expect(ui.getByText('0')).toBeTruthy();
   }
   await act(async () => { server.reply(await server.waitFor('session/detach', 1)); await release; });
-  const attaching = await server.waitFor('session/attach', 2);
+  const attaching = await server.waitFor('thread/resume', 2);
   expect(reads()).toHaveLength(2); expect(server.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   await act(async () => { server.reply(attaching); await reopen; });
   const newTarget = server.target('A'); expect(newTarget.attachment_id).not.toBe(oldTarget.attachment_id);

@@ -11,20 +11,20 @@ it('native cancellation forwards under stale unavailable observation and returns
     assert.equal(h.session.observationPhase, 'unavailable');
     const reads = h.transport.log.count('session/checkpoint');
     const cancelling = h.session.cancelCurrentAttempt();
-    const request = await nextRequest(h, 'turn/cancel');
-    assert.equal(request.method, 'turn/cancel');
-    if (request.method !== 'turn/cancel') assert.fail('native current-Attempt control');
+    const request = await nextRequest(h, 'turn/interrupt');
+    assert.equal(request.method, 'turn/interrupt');
+    if (request.method !== 'turn/interrupt') assert.fail('native current-Attempt control');
     assert.deepEqual(request.params.target, h.target);
     h.transport.respond(request.id, {type:'cancellation_accepted',attempt_id:'actual-B'});
     assert.equal(await cancelling, 'actual-B');
     assert.equal(h.session.state, before);
     assert.equal(h.session.observationPhase, 'unavailable');
     assert.equal(h.transport.log.count('session/checkpoint'), reads);
-    assert.equal(h.transport.log.count('turn/cancel'), 1);
+    assert.equal(h.transport.log.count('turn/interrupt'), 1);
     const detaching = h.session.detach();
     const detach = await nextRequest(h, 'session/detach');
     h.transport.respond(detach.id, {type:'detached'}); await detaching;
     await assert.rejects(h.session.cancelCurrentAttempt(), /attachment is unavailable/);
-    assert.equal(h.transport.log.count('turn/cancel'), 1);
+    assert.equal(h.transport.log.count('turn/interrupt'), 1);
   } finally { h.client.close(); }
 });

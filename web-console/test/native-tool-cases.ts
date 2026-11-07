@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution, ToolExecutionResult } from '../../protocol/app-server/v72';
+import type { ForegroundToolExecution, ToolExecutionResult } from '../../protocol/app-server/v74';
 
 const text = (value: string): ToolExecutionResult['content'] => [{ type: 'text', text: value }];
 const json = (value: unknown): ToolExecutionResult['content'] => [{ type: 'json', value: value as never }];

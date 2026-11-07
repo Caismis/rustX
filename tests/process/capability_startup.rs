@@ -995,7 +995,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             toml::to_string_pretty(&session).unwrap()
         ),
     );
-    let session_id = rustx::local_runtime::session_controller::SessionController::open(
+    let thread_id = rustx::local_runtime::session_controller::SessionController::open(
         &root.path().join("private"),
     )
     .unwrap()
@@ -1007,7 +1007,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     .await
     .unwrap()
     .session
-    .id;
+    .active_conversation_id;
     let home = root.path().join("host");
     std::fs::create_dir_all(&home).unwrap();
 
@@ -1054,10 +1054,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         &mut stdin,
         &mut stdout,
         2,
-        rustx::app_server::protocol::Method::SessionAttach {
-            session_id,
-            node_id: None,
-        },
+        rustx::app_server::protocol::Method::SessionAttach { thread_id },
     )
     .await;
     let rustx::app_server::protocol::MethodResult::Attached { target, .. } = attached else {

@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Harness task detail layout adapted to native reads; see PROVENANCE.md. */
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import type { ScheduleHeader, ScheduleSnapshot } from '../../../../protocol/app-server/v72';
+import type { ScheduleHeader, ScheduleSnapshot } from '../../../../protocol/app-server/v74';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector, sameValue } from '../../client/selectors';
 import { Button } from '../../presentation/primitives/Button';

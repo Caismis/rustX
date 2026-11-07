@@ -124,7 +124,7 @@ pub(crate) mod create_profile;
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
 /// Version 15 persists execution ownership generations at the active-node visibility commit.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 18;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 19;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -215,6 +215,9 @@ pub enum LineageSide {
 /// One node in the native Session graph.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionNode {
+    pub name: Option<String>,
+    pub archived: bool,
+    pub dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
     /// Explicit durable publication order, never inferred from UUID bytes.
     pub ordinal: u64,
     /// Node identity.
@@ -480,6 +483,7 @@ mod invalidations;
 mod lineage;
 mod metadata;
 mod projection;
+pub mod threads;
 mod title;
 pub use catalog_commit::CatalogCommitError;
 #[cfg(test)]

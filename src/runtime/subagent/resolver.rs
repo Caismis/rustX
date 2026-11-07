@@ -1478,6 +1478,13 @@ fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDef
     field(hasher, &key("id"), id.as_str());
     field(hasher, &key("name"), name);
     match origin {
+        crate::tools::types::ToolOrigin::Host { namespace, name } => {
+            field(
+                hasher,
+                &key("origin"),
+                &format!("host:{namespace:?}:{name}"),
+            );
+        }
         crate::tools::types::ToolOrigin::ManagedPython { package } => {
             field(hasher, &key("origin"), &format!("python:{package}"));
         }

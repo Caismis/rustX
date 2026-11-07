@@ -48,12 +48,22 @@ async fn reattach(
     AttachmentTarget,
     Box<crate::runtime_client::RuntimeClientSnapshot>,
 ) {
+    let MethodResult::Session { session } = call(
+        connection,
+        468,
+        Method::SessionRead {
+            session_id: session_id.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("Session")
+    };
     let MethodResult::Attached { target, .. } = call(
         connection,
         469,
         Method::SessionAttach {
-            session_id: session_id.clone(),
-            node_id: None,
+            thread_id: session.active_conversation_id,
         },
     )
     .await
@@ -171,6 +181,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             &connection,
             102,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("request-A"),
             },
@@ -342,6 +353,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             &reloaded,
             105,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("next independent Attempt"),
             },
@@ -393,6 +405,7 @@ pub(crate) async fn live_model_child_inheritance_boundary_scenario() {
             &connection,
             110,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("request-A"),
             },
@@ -449,6 +462,7 @@ pub(crate) async fn live_model_child_inheritance_boundary_scenario() {
             &connection,
             111,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("independent request"),
             },

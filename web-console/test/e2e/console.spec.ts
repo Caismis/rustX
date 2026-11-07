@@ -73,12 +73,11 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
 
     await openSession(idB); await send('Use B while A runs');
     await expect(page.getByText('B stayed responsive.', { exact: true })).toBeVisible();
-    // The actual TUI client joins the browser's server. Handoff is explicit;
-    // neither client needs a private API or a second writable controller.
+    // The actual TUI client joins the same native Session while the browser stays writable.
     remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    await expect(remote.attach(idB)).rejects.toMatchObject({ kind: 'controller_in_use' });
-    await closeView(idB);
     const terminalB = await remote.attach(idB);
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
+    await closeView(idB);
     expect(JSON.stringify(terminalB.state.transcript)).toContain('B stayed responsive.');
     expect((await remote.readSession(idA)).id).toBe(idA);
     await terminalB.resync();
@@ -101,7 +100,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await closeView(idA);
     await expect(page.locator(`button[data-session-id="${idA}"]`)).toBeVisible();
     await expect(page.locator(`button[data-session-id="${idA}"]`)).toHaveAttribute('title', '');
-    // The only controller has been released before the provider finishes A.
+    // All clients have detached before the provider finishes A.
     await fixture.release('finish-a');
     await fixture.control('observations/await?kind=response_completed&count=2&timeoutMs=30000');
     await openSession(idA);
@@ -168,7 +167,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');
-    expect(wire.requests.some(request => request.method === 'session/attach')).toBe(true);
+    expect(wire.requests.some(request => request.method === 'thread/resume')).toBe(true);
     await page.screenshot({ path: 'test-results/console-desktop.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: 'test-results/console-mobile.png', fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

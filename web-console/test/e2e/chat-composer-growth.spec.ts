@@ -10,7 +10,7 @@ for (const width of [1440, 390]) test(`typing pushes the conversation above the 
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
   if (width < 600) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   await expect(page.getByText('Saved message 19:', { exact: false })).toBeVisible();
   await expect.poll(() => page.locator('[data-conversation-scroll]').evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThanOrEqual(1);
   if (width < 600) {

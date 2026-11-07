@@ -144,6 +144,7 @@ export class SelectorSurfaces {
       return;
     }
     const selector = new ResumeSelector({
+      status:row=>row.thread_id?this.#port.host().threadStatusLabel(row.thread_id):'Status unavailable',
       initialPage: sessions === undefined ? undefined : { sessions, nextOffset }, query, client: this.#port.host(), workflow,
       alive: () => this.#port.isCurrent(lease) && this.#port.overlay() === handle,
       feedback: (text) => this.#port.showTransient("info", text),
@@ -321,7 +322,7 @@ export class SelectorSurfaces {
     const launch = this.#opener.launch;
     const noAccess = this.#port.host().ownership === "owned_child"
       ? "the App Server did not grant delivery access to this connection"
-      : "this connection holds no delivery access; reconnect with --delivery-access-token-file";
+      : "this connection is not ready; reconnect to the App Server";
     const availability: DeliveryAvailability = {
       save: !session.deliveryAccess ? noAccess : undefined,
       open: !session.deliveryAccess ? noAccess

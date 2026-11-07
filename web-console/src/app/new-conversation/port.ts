@@ -5,7 +5,7 @@ import { sameEndpoint } from '../../workspaces/endpoint';
 import type { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
-import type { AttachmentTarget } from '../../../../protocol/app-server/v72';
+import type { AttachmentTarget } from '../../../../protocol/app-server/v74';
 import type { FirstSubmitPort } from './first-submit';
 
 export function firstSubmitPort(client: AppServerClient, host: ProductHostWorkspaces, navigationCurrent: () => boolean, preparePublication: () => ((id: string) => (() => boolean) | void), existing = false): FirstSubmitPort {
@@ -57,7 +57,7 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
       const [initialLocation] = await host.classifyLocations([cwd], endpoint, catalog.authorityId);
       if (!initialLocation?.authorized) throw new RequestNotDispatched('Session cwd is not authorized by this Product Host. No operation was sent.');
       requireCurrent();
-      const result = await client.request({ method: 'session/create', params: { submission, settings: { cwd, ...(draft.model ? { model: draft.model } : {}) } } }, 'session_transition', result => {
+      const result = await client.request({ method: 'thread/start', params: { submission, settings: { cwd, ...(draft.model ? { model: draft.model } : {}) } } }, 'session_transition', result => {
         acknowledged({ id: result.session.id, node: result.session.active_node, conversation: result.session.active_conversation_id, diagnostic: result.durability_diagnostic ?? undefined });
         const state = client.getSnapshot();
         if (draft.model && state.endpoint === endpoint && state.authorityRevision === authorityRevision) modelPreferences().select(endpoint, draft.model);
@@ -96,6 +96,6 @@ export function firstSubmitPort(client: AppServerClient, host: ProductHostWorksp
     },
     async upload(session, file, acknowledged, operation) { try { bindSession(session); } catch (error) { throw new UploadFailure('failed', error); } const [uploaded] = await client.upload(session.id, [file], { current, acknowledged: files => { if (files[0]) acknowledged(files[0].receipt); } }, operation); if (!uploaded) throw new Error('Upload receipt missing; inspect native state.'); return uploaded.receipt; },
     status: async (session, operation) => { bindSession(session); const result = await client.uploadStatus(session.id, operation); requireCurrent(); return result; },
-    async send(session, draft, receipts, acknowledged) { bindSession(session); draft.submission?.bind(target!, JSON.stringify([generation, target]), receipts); await client.send(session.id, draft.text, receipts, 'send', acceptance => { const view = client.getSnapshot().views[session.id]; const conversation = view?.nodeConversationId ?? view?.target?.conversation_id ?? view?.snapshot?.conversation_id; draft.submission?.accepted(acceptance, conversation ? { session_id: session.id, conversation_id: conversation } : undefined); acknowledged(acceptance); }, current); },
+    async send(session, draft, receipts, acknowledged) { bindSession(session); const submittedTarget=target!; draft.submission?.bind(submittedTarget, JSON.stringify([generation, submittedTarget]), receipts); await client.send(session.id, draft.text, receipts, 'send', acceptance => { draft.submission?.accepted(acceptance, submittedTarget); acknowledged(acceptance); }, current); },
   };
 }

@@ -2,7 +2,7 @@ import { setPositions } from '../src/app/workflows/document/presentation';
 import { describe, expect, it } from 'vitest';
 import { createActor } from 'xstate';
 import { statusSource } from './workflow-fixtures';
-import type { WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary } from '../../protocol/app-server/v72';
+import type { WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary } from '../../protocol/app-server/v74';
 import type { WorkflowEdit, WorkflowSource } from '../../protocol/app-server/workflow-documents.ts';
 import { RpcFailure } from '../src/client/errors';
 import { WorkspaceHostError, type WorkflowCommit } from '../src/workspaces/host';

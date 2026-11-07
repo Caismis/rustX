@@ -1,6 +1,6 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import type { AppServerClient } from './app-server';
-import type { ClientView, SessionView } from './contracts';
+import type { ClientView, SessionView, SessionSummary } from './contracts';
 
 /** Selected snapshots are cached across publications, not debounced. */
 export function useClientSelector<T>(client: AppServerClient, select: (state: ClientView) => T, equal: (a: T, b: T) => boolean = Object.is): T {
@@ -27,12 +27,16 @@ export type ShellView = Pick<ClientView, 'connection' | 'endpoint' | 'generation
   views: Readonly<Record<string, Pick<SessionView, 'id' | 'target' | 'summary' | 'settings' | 'attachment' | 'attachmentIntent' | 'deleting' | 'deletionRecovery' | 'recoveringDeletion'>>>;
 };
 
+function catalogMetadata(summary: SessionSummary): SessionSummary {
+  const {thread_status: _status, ...metadata} = summary;
+  return metadata;
+}
 /** Shell data contains no execution snapshot. Execution consumers subscribe locally. */
 export const selectShell = (state: ClientView): ShellView => ({
-  ...transportSelection(state), sessions: state.sessions, nextOffset: state.nextOffset,
+  ...transportSelection(state), sessions: state.sessions.map(catalogMetadata), nextOffset: state.nextOffset,
   uncertain: state.uncertain.filter(item => !item.sessionId),
   views: Object.fromEntries(Object.values(state.views).map(view => [view.id, {
-    id: view.id, target: view.target, summary: view.summary, settings: view.settings,
+    id: view.id, target: view.target, summary: view.summary && catalogMetadata(view.summary), settings: view.settings,
     attachment: view.attachment, attachmentIntent: view.attachmentIntent,
     deleting: view.deleting, deletionRecovery: view.deletionRecovery, recoveringDeletion: view.recoveringDeletion,
   }])),

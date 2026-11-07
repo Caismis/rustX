@@ -165,7 +165,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await expect(primary).toHaveAccessibleName('Send'); await expect(primary).toBeEnabled();
     await shot('idle-draft');
     await primary.click(); await expect(input).toHaveValue('');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue']);
     await page.evaluate(() => window.composerFixture.running(true));
     await expect(primary).toHaveAccessibleName('Stop'); await shot('running-empty');
     await expect(stack).not.toContainText('updating');
@@ -174,7 +174,7 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await shot('running-draft');
     await input.press('Enter'); await expect(input).toHaveValue('');
     await input.fill('Steer through the existing native operation.'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/start', 'turn/steer']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue', 'inbound/queue', 'turn/steer']);
     // A real picker gesture and receipt path; the toolbar accessory stays quiet.
     await page.getByRole('button', { name: 'Add', exact: true }).click();
     const chooser = page.waitForEvent('filechooser'); await page.locator('#command-file').click();
@@ -350,7 +350,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     await input.press('Enter'); await expect(input).toHaveValue('');
     await input.fill('Complementary steer'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
     await input.fill('Queue from primary'); await primary.click(); await expect(input).toHaveValue('');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/steer', 'turn/start']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue', 'turn/steer', 'inbound/queue']);
     await page.getByRole('button', { name: locale === 'en' ? 'Settings' : '设置', exact: true }).click();
     const settings = page.getByRole('region', { name: locale === 'en' ? 'Settings' : '设置', exact: true });
     await settings.getByRole('button', { name: locale === 'en' ? /Send behavior while busy/ : /繁忙时的发送行为/ }).click();
@@ -361,7 +361,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     await input.press('Enter'); await expect(input).toHaveValue('');
     await input.fill('Complementary queue'); await input.press('Meta+Enter'); await expect(input).toHaveValue('');
     await input.fill('Steer from primary'); await primary.click(); await expect(input).toHaveValue('');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/steer', 'turn/start', 'turn/steer', 'turn/start', 'turn/steer']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue', 'turn/steer', 'inbound/queue', 'turn/steer', 'inbound/queue', 'turn/steer']);
     await input.fill('Line one'); await input.press('Shift+Enter'); await page.keyboard.type('Line two');
     await expect(input).toHaveValue('Line one\nLine two'); await expect(primary).toHaveAccessibleName(names.steer);
     await input.focus(); await expect(input).toBeFocused();

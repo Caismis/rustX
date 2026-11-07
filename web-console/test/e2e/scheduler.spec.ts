@@ -30,7 +30,7 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
     await page.getByRole('tab', { name: zh ? '任务运行记录' : 'Task runs' }).click();
     await expect(page.getByText(zh ? '正在执行' : 'In progress', { exact: true })).toBeVisible();
     await expectStableScreenshot(page, prefix + '-workflow.png');
-    expect(await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string }[] } }).schedulerFixture.requests().some(row => row.method === 'session/attach'))).toBe(false);
+    expect(await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string }[] } }).schedulerFixture.requests().some(row => row.method === 'thread/resume'))).toBe(false);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth); expect(overflow).toBe(false);
   });
 }

@@ -5,7 +5,7 @@ import { translator } from '../src/locale/translation';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v72';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../protocol/app-server/v74';
 import { RpcFailure } from '../src/client/errors';
 import { RuntimeFacts as OtherActivity } from './runtime-facts';
 import { AgentCard } from '../src/app/components/ActivityCards';
@@ -346,7 +346,7 @@ it('child transcript cannot publish from a retained cleanup claim and fresh proo
   await act(async () => { server.socket.success(fresh, childConversation(page('current child result'))); });
   expect(ui.getByText('current child result')).toBeTruthy(); expect(ui.queryByText('obsolete child result')).toBeNull();
   expect(server.requests.filter(row => row.request.method === 'agent/observe')).toHaveLength(2);
-  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
 });
 
@@ -374,7 +374,7 @@ it('older child transcript retains its original observation proof through native
   await act(async () => { server.socket.success(fresh, childConversation(page('fresh child page', '20'))); });
   expect(ui.getByText('fresh child page')).toBeTruthy(); expect(ui.queryByText('current child page')).toBeNull();
   expect(server.requests.filter(row => row.request.method === 'agent/transcript' && row.request.params.target.attachment_id === originalTarget.attachment_id)).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(2);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(2);
   expect(server.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(1); expect(server.claims()).toHaveLength(1);
 });
 
@@ -524,7 +524,7 @@ it('a failed child read retains content and draft, exposes explicit recovery, an
   expect(ui.getByText('Recovered canonical child answer')).toBeTruthy();
   expect(ui.container.querySelector('[data-child-observation-status]')).toBeNull(); expect(input.value).toBe('Retained child draft');
   expect(server.requests.filter(row => row.request.method === 'agent/observe')).toHaveLength(3);
-  expect(server.requests.some(row => ['agent/sendMessage', 'agent/interrupt', 'turn/start'].includes(row.request.method))).toBe(false);
+  expect(server.requests.some(row => ['agent/sendMessage', 'agent/interrupt', 'inbound/queue'].includes(row.request.method))).toBe(false);
 });
 
 it('a running child keeps independent Send and Stop, and double Escape targets its own activation', async () => {

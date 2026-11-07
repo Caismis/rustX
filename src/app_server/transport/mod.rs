@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{connection::AppServerConnection, connection::Reply, delivery_access::Publication};
 
+mod auth;
 pub mod resources;
 pub mod stdio;
 pub mod websocket;
@@ -81,9 +82,20 @@ pub(crate) struct Outbound {
     registration: Option<super::registration::Publication>,
     association: Option<super::admission::Association>,
     retirement: Option<Arc<Mutex<bool>>>,
+    callback: Option<super::callbacks::Publication>,
 }
 
 impl Outbound {
+    fn server_message(message: super::callbacks::Queued) -> io::Result<Self> {
+        Ok(Self {
+            record: serialize_record(&message.message)?,
+            publication: None,
+            registration: None,
+            association: None,
+            retirement: None,
+            callback: message.publication,
+        })
+    }
     pub(crate) fn notification(
         (notification, registration): (
             super::protocol::Notification,
@@ -115,6 +127,7 @@ impl Outbound {
                 registration,
                 association: None,
                 retirement: None,
+                callback: None,
             }),
             Err(error) if error.kind() == io::ErrorKind::FileTooLarge => {
                 let (
@@ -148,6 +161,7 @@ impl Outbound {
                     registration: Some(registration),
                     association: None,
                     retirement: None,
+                    callback: None,
                 })
             }
             Err(error) => Err(error),
@@ -208,13 +222,18 @@ impl Outbound {
             association: reply.association,
             registration: reply.registration,
             retirement: None,
+            callback: None,
         })
     }
 
     pub(super) fn discarded(&self, cx: &std::task::Context<'_>) -> bool {
-        self.retirement
+        self.callback
             .as_ref()
-            .is_some_and(|retired| *retired.lock().expect("carrier retirement"))
+            .is_some_and(|callback| callback.discarded(cx))
+            || self
+                .retirement
+                .as_ref()
+                .is_some_and(|retired| *retired.lock().expect("carrier retirement"))
             || self
                 .registration
                 .as_ref()
@@ -250,9 +269,21 @@ impl Outbound {
             publication,
             registration,
             association,
+            callback,
             ..
         } = self;
-        let outcome = if let Some(registration) = registration {
+        let outcome = if let Some(callback) = callback {
+            match callback.hand_off(record, accept) {
+                super::registration::Acceptance::Accepted(record, value) => {
+                    Poll::Ready(Ok((record, Some(value))))
+                }
+                super::registration::Acceptance::Pending => Poll::Pending,
+                super::registration::Acceptance::Discarded => {
+                    Poll::Ready(Ok((String::new(), None)))
+                }
+                super::registration::Acceptance::Failed(error) => Poll::Ready(Err(error)),
+            }
+        } else if let Some(registration) = registration {
             match registration.hand_off(record, accept) {
                 super::registration::Acceptance::Accepted(record, value) => {
                     Poll::Ready(Ok((record, Some(value))))
@@ -319,6 +350,7 @@ fn enqueue(sender: &mpsc::Sender<Outbound>, value: &impl Serialize) -> io::Resul
             association: None,
             registration: None,
             retirement: None,
+            callback: None,
         },
     )
 }
@@ -374,6 +406,27 @@ async fn enqueue_notification(sender: &Outbox, connection: &AppServerConnection)
         .map_err(|_| failure("outbound writer closed"))?;
     let candidate = connection.next_notification_candidate().await;
     sender.send(permit, Outbound::notification(candidate)?);
+    Ok(())
+}
+
+async fn enqueue_server_message(
+    sender: &Outbox,
+    connection: &AppServerConnection,
+) -> io::Result<()> {
+    // An empty callback stream reserves no ordinary output capacity. Readiness
+    // is non-consuming, so cancellation before a permit cannot lose a request.
+    connection.callback_ready().await;
+    let permit = sender
+        .sender
+        .reserve()
+        .await
+        .map_err(|_| failure("outbound writer closed"))?;
+    let Some(message) = connection.next_callback().await else {
+        // Semantic connection retirement fences callback eligibility, while
+        // already-admitted ordinary replies retain their physical writer.
+        return std::future::pending().await;
+    };
+    sender.send(permit, Outbound::server_message(message)?);
     Ok(())
 }
 
@@ -555,6 +608,7 @@ impl Drop for Detach {
 /// Termination retires unaccepted delivery and finishes any physically accepted
 /// record before releasing the writer. No transport task outlives this future.
 /// Dropped response waiters do not cancel operations admitted by the runtime.
+#[allow(clippy::too_many_lines)] // One fair bidirectional carrier loop and retirement boundary.
 async fn serve<S, W, F>(
     connection: Arc<AppServerConnection>,
     incoming: S,
@@ -604,6 +658,7 @@ where
                 drop(outgoing);
                 return write.await;
             },
+            () = connection.callback_overloaded() => { break failure("slow callback consumer"); },
             result = &mut write => return result,
             // Ready protocol replies formerly enqueued in the input arm.
             // Preserve that ordering before considering the next observation.
@@ -612,6 +667,10 @@ where
                 if let Err(error) = result { break error; }
                 observation_turn = true;
             }
+            result = enqueue_server_message(&outgoing, &connection), if observation_turn => {
+                observation_turn = false;
+                if let Err(error) = result { break error; }
+            },
             result = enqueue_notification(&outgoing, &connection), if observation_turn => {
                 if let Err(error) = result { break error; }
                 observation_turn = false;
@@ -655,6 +714,9 @@ where
                 }
                 observation_turn = true;
             }
+            result = enqueue_server_message(&outgoing, &connection) => {
+                if let Err(error) = result { break error; }
+            },
             result = enqueue_notification(&outgoing, &connection), if !observation_turn => {
                 if let Err(error) = result { break error; }
                 observation_turn = false;

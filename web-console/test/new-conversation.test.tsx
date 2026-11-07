@@ -1,3 +1,4 @@
+import { threadFor } from '../../protocol/app-server/testing.ts';
 import {applicationReceipt} from './fixture';
 import { useMemo, useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -9,7 +10,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/errors';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v72';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v74';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -57,14 +58,14 @@ const methods = () => server.requests.map(r => r.request.method);
 
 it('first Send carries native submission intent in create, before any attachment wait', async () => {
   await mount();
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
-  server.held.add('session/attach');
-  expect(methods()).not.toContain('session/create');
+  server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('thread/resume');
+  expect(methods()).not.toContain('thread/start');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  const create = await server.waitFor('session/create', 1);
+  const create = await server.waitFor('thread/start', 1);
   expect(create.params).toMatchObject({ settings: { cwd: '/workspace' }, submission: { host_authority: 'fixture-host', generation: 1 } });
-  await server.waitFor('session/attach', 1);
-  expect(methods().filter(method => ['session/create', 'session/submissionIntent', 'session/attach', 'turn/start'].includes(method))).toEqual(['session/create', 'session/attach']);
+  await server.waitFor('thread/resume', 1);
+  expect(methods().filter(method => ['thread/start', 'session/submissionIntent', 'thread/resume', 'inbound/queue'].includes(method))).toEqual(['thread/start', 'thread/resume']);
 });
 const modelChoices = () => screen.queryAllByRole('menuitemradio').filter(item => !(item as HTMLButtonElement).disabled).map(item => item.getAttribute('aria-label') ?? '').filter(label => label.startsWith('fixture/'));
 async function openModelMenu() {
@@ -128,14 +129,14 @@ it.each(['current', 'replacement'] as const)('Composer Add Workspace dispatches 
 it.each(['resolve', 'create'] as const)('known %s rejection keeps the actual composer editable and retries only on a new gesture', async phase => {
   const { host, opened } = await mount();
   if (phase === 'resolve') host.resolveWorkspace.mockRejectedValueOnce(new WorkspaceHostError('Workspace revoked'));
-  else server.handlers.set('session/create', () => { throw new RpcFailure({ code: -32000, message: 'Create rejected' }); });
+  else server.handlers.set('thread/start', () => { throw new RpcFailure({ code: -32000, message: 'Create rejected' }); });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect(screen.getByRole('alert').textContent).toContain('No Session was created');
   const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
   expect(input.disabled).toBe(false); expect(input.value).toBe('Preserved draft'); expect(opened).not.toHaveBeenCalled();
-  const calls = () => server.requests.filter(r => r.request.method === 'session/create');
+  const calls = () => server.requests.filter(r => r.request.method === 'thread/start');
   expect(calls()).toHaveLength(phase === 'resolve' ? 0 : 1);
-  server.held.add('session/create');
+  server.held.add('thread/start');
   fireEvent.change(input, { target: { value: 'Corrected draft' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect(calls()).toHaveLength(phase === 'resolve' ? 1 : 2);
@@ -155,32 +156,32 @@ it('uncertain creation preserves the draft, refuses another Send and requires na
 
 it('confirmed create survives transport replacement without publishing an unadmitted executable route', async () => {
   const { opened } = await mount();
-  server.held.add('session/create');
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('thread/start');
+  server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  const request = await server.waitFor('session/create', 1);
+  const request = await server.waitFor('thread/start', 1);
   // Deliver the acknowledgement first; the transport replacement then occurs
   // before the client owner starts its next, separately fenced continuation.
   await act(async () => { server.reply(request); await Promise.resolve(); server.socket.close(); });
   await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('native-committed'));
   expect(opened).not.toHaveBeenCalled();
-  expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'session/uploadPrepare', 'turn/start'].includes(r.request.method))).toHaveLength(0);
-  expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
+  expect(server.requests.filter(r => ['thread/resume', 'session/setModel', 'session/uploadPrepare', 'inbound/queue'].includes(r.request.method))).toHaveLength(0);
+  expect(server.requests.filter(r => r.request.method === 'thread/start')).toHaveLength(1);
   server.snapshots.set('native-committed', snapshot('native-committed'));
   await act(async () => server.connect());
-  expect(server.requests.filter(r => r.request.method === 'session/create')).toHaveLength(1);
+  expect(server.requests.filter(r => r.request.method === 'thread/start')).toHaveLength(1);
   expect(opened).not.toHaveBeenCalled();
 });
 
 it('a replaced New Conversation navigation cannot open a Session committed by its older route', async () => {
   const navigation = routeFixture(server.client); const { opened } = await mount({ current: navigation.capture() });
-  server.held.add('session/create');
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('thread/start');
+  server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'native-committed', active_node: 'node-native', active_conversation_id: 'conversation-native', node_count: 1, created_at: '0', updated_at: '0' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  const request = await server.waitFor('session/create', 1);
+  const request = await server.waitFor('thread/start', 1);
   await act(async () => { navigation.invalidate(); server.reply(request); });
   expect(screen.getByRole('alert').textContent).toContain('Session native-committed was created');
-  expect(server.requests.filter(r => ['session/attach', 'session/setModel', 'turn/start'].includes(r.request.method))).toHaveLength(0);
+  expect(server.requests.filter(r => ['thread/resume', 'session/setModel', 'inbound/queue'].includes(r.request.method))).toHaveLength(0);
   expect(opened).not.toHaveBeenCalled(); // obsolete navigation cannot take over a newer route
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
 });
@@ -206,15 +207,15 @@ it('a model choice is draft Session intent: nothing is written, created or start
   fireEvent.click(screen.getByRole('menuitem', { name: 'Thinking effort' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'low' })));
   expect(host.configureWorkspace.mock.calls.every(([, , operation]) => operation.kind === 'read')).toBe(true);
-  expect(methods().filter(method => ['session/create', 'session/setModel', 'configuration/sourceWrite', 'turn/start'].includes(method))).toEqual([]);
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
-  server.held.add('session/attach');
+  expect(methods().filter(method => ['thread/start', 'session/setModel', 'configuration/sourceWrite', 'inbound/queue'].includes(method))).toEqual([]);
+  server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('thread/resume');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  const request = await server.waitFor('session/create', 1);
+  const request = await server.waitFor('thread/start', 1);
   expect(request.params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace', model: { model: 'fixture/native', profile: 'low' } } });
-  await server.waitFor('session/attach', 1);
+  await server.waitFor('thread/resume', 1);
   expect(methods()).not.toContain('session/setModel');
-  expect(methods()).not.toContain('turn/start');
+  expect(methods()).not.toContain('inbound/queue');
   expect(host.configureWorkspace.mock.calls.every(([, , operation]) => operation.kind === 'read')).toBe(true);
 });
 it.each([
@@ -226,7 +227,7 @@ it.each([
   expect((screen.getByRole('button', { name: 'Model and thinking effort' }) as HTMLButtonElement).disabled).toBe(true);
   expect(modelChoices()).toEqual([]);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect(methods()).not.toContain('session/create');
+  expect(methods()).not.toContain('thread/start');
 });
 it('an obsolete Workspace catalog read cannot replace the current Workspace catalog', async () => {
   const obsolete = gate<{ kind: 'read'; projection: SourceSettings }>();
@@ -256,7 +257,7 @@ it('a draft model the native catalog stops publishing blocks Send instead of rea
   await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true));
   expect(screen.getByText(/not in this Workspace's native model catalog/)).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect(methods()).not.toContain('session/create');
+  expect(methods()).not.toContain('thread/start');
 });
 it('a transport drop keeps the draft mounted with no Product Host traffic, and the next Send binds the reconnected generation', async () => {
   const { host } = await mount();
@@ -269,20 +270,20 @@ it('a transport drop keeps the draft mounted with no Product Host traffic, and t
   await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
   expect(host.listWorkspaces).toHaveBeenCalledTimes(lists);
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('Preserved draft');
-  server.held.add('session/create');
+  server.held.add('thread/start');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect((await server.waitFor('session/create', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace' } });
+  expect((await server.waitFor('thread/start', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace' } });
 });
 
 it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('existing conversation accepts a prompt during connection: %s', async outcome => {
   server = new Server(); await server.connect();
   const host = server.workspaceHost, authority = new WorkspaceAuthority(host), associations = new WorkspaceAssociations(server.client, authority);
   const navigation = routeFixture(server.client), current = navigation.capture(), opened = vi.fn();
-  server.held.add('session/attach');
-  if (outcome === 'rejection') server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'Connection failed' }); });
+  server.held.add('thread/resume');
+  if (outcome === 'rejection') server.handlers.set('thread/resume', () => { throw new RpcFailure({ code: -32000, message: 'Connection failed' }); });
   if (outcome === 'branch') server.nodeSnapshots.set('chosen-node', { ...snapshot('A'), conversation_id: 'chosen-conversation' });
   const attaching = server.client.attach('A', outcome === 'branch' ? 'chosen-node' : undefined).catch(() => {});
-  const request = await server.waitFor('session/attach', 1);
+  const request = await server.waitFor('thread/resume', 1);
   function Seat() {
     const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
     return <ConversationComposer client={server.client} host={host} authority={authority} associations={associations} binding="existing-A" current={current} preparePublication={() => opened} activeView={state.views.A}
@@ -295,24 +296,24 @@ it.each(['ready', 'navigation', 'disconnect', 'rejection', 'branch'] as const)('
   await act(async () => fireEvent.change(document.querySelector('input[type=file]')!, { target: { files: [new File(['queued'], 'queued.txt', { type: 'text/plain' })] } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
-  expect(methods().filter(method => method === 'turn/start')).toHaveLength(0);
+  expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(0);
   if (outcome === 'navigation') navigation.invalidate();
   await act(async () => {
     if (outcome === 'disconnect') server.socket.close(); else server.reply(request);
     await attaching;
   });
   await waitFor(() => expect(firstSubmissions(server.client).draft('existing-A')?.phase).toBe(['ready', 'branch'].includes(outcome) ? 'admitted' : 'failed'));
-  expect(methods().filter(method => method === 'turn/start')).toHaveLength(['ready', 'branch'].includes(outcome) ? 1 : 0);
-  expect(methods().filter(method => method === 'session/attach')).toHaveLength(1);
-  expect(methods()).not.toContain('session/create');
+  expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(['ready', 'branch'].includes(outcome) ? 1 : 0);
+  expect(methods().filter(method => method === 'thread/resume')).toHaveLength(1);
+  expect(methods()).not.toContain('thread/start');
   expect(opened).not.toHaveBeenCalled();
   if (!['ready', 'branch'].includes(outcome)) {
     expect(input.value).toBe('Send after connecting');
     expect(screen.getByText('queued.txt')).toBeTruthy();
   }
   if (outcome === 'branch') {
-    const sent = server.requests.find(row => row.request.method === 'turn/start')!.request;
-    if (sent.method === 'turn/start') expect(sent.params.target.conversation_id).toBe('chosen-conversation');
+    const sent = server.requests.find(row => row.request.method === 'inbound/queue')!.request;
+    if (sent.method === 'inbound/queue') expect(sent.params.target.conversation_id).toBe('chosen-conversation');
   }
 });
 it('a draft Session pins or follows the native default Profile exactly as chosen, keeping the draft\'s other model settings', async () => {
@@ -331,10 +332,10 @@ it('a draft Session pins or follows the native default Profile exactly as chosen
   await profileRow('low', 'high');
   await profileRow('high', 'low');
   expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toBe('fixture/nativehigh');
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
-  server.held.add('session/attach');
+  server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('thread/resume');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect((await server.waitFor('session/create', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace', model: { model: 'fixture/native', requestParams: { top_k: 1 } } } });
+  expect((await server.waitFor('thread/start', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace', model: { model: 'fixture/native', requestParams: { top_k: 1 } } } });
   expect(methods()).not.toContain('session/setModel');
 });
 it('choosing the named default effort follows native defaults at Session creation', async () => {
@@ -342,10 +343,10 @@ it('choosing the named default effort follows native defaults at Session creatio
   fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Thinking effort' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'high' })));
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
-  server.held.add('session/attach');
+  server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('thread/resume');
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-  expect((await server.waitFor('session/create', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace' } });
+  expect((await server.waitFor('thread/start', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace' } });
 });
 it('the persisted new-Session preference keeps a pinned Profile and an absent one distinct across reloads', () => {
   const stored = new Map<string, string>();
@@ -392,11 +393,11 @@ it('a persisted Profile the catalog stops declaring blocks Send until it is clea
   await waitFor(() => expect(send().disabled).toBe(false));
   expect(trigger().textContent).toBe('example/chat');
   expect(screen.queryByText(/not in this Workspace's native model catalog/)).toBeNull();
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
-  server.held.add('session/attach');
+  server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.add('thread/resume');
   await act(async () => fireEvent.click(send()));
-  expect((await server.waitFor('session/create', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace', model: { model: 'example/chat' } } });
-  expect(methods().filter(method => method === 'session/create' || method === 'session/setModel')).toEqual(['session/create']);
+  expect((await server.waitFor('thread/start', 1)).params).toMatchObject({ submission: { host_authority: 'fixture-host' }, settings: { cwd: '/workspace', model: { model: 'example/chat' } } });
+  expect(methods().filter(method => method === 'thread/start' || method === 'session/setModel')).toEqual(['thread/start']);
   // The committed creation persists the recovered intent: no Profile at all.
   expect(JSON.parse(stored.get('rustx-new-session-model-v1')!)).toEqual({ [endpoint]: { model: 'example/chat' } });
   expect(new NewSessionModelPreference({ getItem: key => stored.get(key) ?? null, setItem: () => {} }).read(endpoint)).toEqual({ model: 'example/chat' });

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
-import type { UploadedFile } from '../../protocol/app-server/v72';
+import type { UploadedFile } from '../../protocol/app-server/v74';
 import { Server, capabilities, TOKEN } from './fixture';
 let server: Server;
 let sequence = 0;
@@ -82,7 +82,7 @@ it('single-file transfers preserve selection order and Send references receipts 
     receipts.push(...(await work).map(item => item.receipt));
   }
   await server.client.send('A', 'text', receipts);
-  const turns = server.requests.filter(item => item.request.method === 'turn/start');
+  const turns = server.requests.filter(item => item.request.method === 'inbound/queue');
   expect(turns).toHaveLength(1);
   expect(turns[0].request.params).toMatchObject({ content: [{ type: 'upload', ...receipts[0] }, { type: 'upload', ...receipts[1] }, { type: 'text', text: 'text' }] });
   expect(server.client.getSnapshot().views.A.snapshot?.messages).toEqual([]);

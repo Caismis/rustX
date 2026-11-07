@@ -57,10 +57,10 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     await expect(editor).toBeEnabled(); await expect(editor).toHaveValue('');
     await expect(page.getByText('A-owned.txt', { exact: true })).toHaveCount(0);
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(0);
-    expect(wire.requests.filter(row => row.method === 'turn/start')).toHaveLength(0);
+    expect(wire.requests.filter(row => row.method === 'inbound/queue')).toHaveLength(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect((await wire.read('session/checkpoint', sourceTarget)).checkpoint.snapshot.attempt).toEqual(sourceAttempt);
-    expect(wire.requests.filter(row => ['session/detach', 'turn/cancel', 'session/switchNode'].includes(row.method))).toEqual([]);
+    expect(wire.requests.filter(row => ['session/detach', 'turn/interrupt', 'session/switchNode'].includes(row.method))).toEqual([]);
 
     await editor.fill('mcp startup input belongs only to B');
     await page.getByLabel('Attach files').setInputFiles({ name: 'B-owned.txt', mimeType: 'text/plain', buffer: Buffer.from('B ownership') });
@@ -68,8 +68,8 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.responses.filter(row => row.method === 'session/submissionIntent').length).toBe(1);
     expect(wire.requests.find(row => row.method === 'session/submissionIntent')!.params).toEqual({ session_id: target.id, node_id: target.active_node });
-    expect(wire.responses.filter(row => row.method === 'session/attach')).toHaveLength(1); // A only.
-    expect(wire.requests.filter(row => row.method === 'turn/start')).toHaveLength(0);
+    expect(wire.responses.filter(row => row.method === 'thread/resume')).toHaveLength(1); // A only.
+    expect(wire.requests.filter(row => row.method === 'inbound/queue')).toHaveLength(0);
     expect(wire.requests.filter(row => row.method === 'session/uploadPrepare')).toHaveLength(1);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     gate.release();
@@ -80,7 +80,7 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     expect(requests[0].body.tools[0].function.parameters).toEqual(startupToolSchema);
     expect(JSON.stringify(requests[0].body)).not.toContain('This unsent draft belongs to A');
     expect(JSON.stringify(requests[0].body)).not.toContain('A-owned.txt');
-    const sent = wire.requests.filter(row => row.method === 'turn/start');
+    const sent = wire.requests.filter(row => row.method === 'inbound/queue');
     expect(sent).toHaveLength(1); expect(sent[0].params.target.session_id).toBe(target.id);
     const uploads = wire.requests.filter(row => row.method === 'session/uploadPrepare');
     expect(uploads).toHaveLength(2);
@@ -141,7 +141,7 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
     await page.locator(`button[data-session-id="${target.id}"]`).click();
     await expect.poll(() => wire.held()).toBe(1);
     expect(wire.requests.filter(row => row.method === 'session/read').at(-1)!.params.session_id).toBe(target.id);
-    expect(wire.requests.filter(row => row.method === 'session/attach')).toHaveLength(1);
+    expect(wire.requests.filter(row => row.method === 'thread/resume')).toHaveLength(1);
     expect(gate.calls).toBe(0);
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
     await expect(editor).toBeEnabled();
@@ -164,7 +164,7 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
       await page.getByRole('button', { name: 'Send', exact: true }).click();
       await expect.poll(() => wire.responses.filter(row => row.method === 'session/submissionIntent').length).toBe(1);
       expect(wire.requests.find(row => row.method === 'session/submissionIntent')!.params).toEqual({ session_id: target.id, node_id: target.active_node });
-      expect(wire.requests.filter(row => row.method === 'turn/start' || row.method === 'session/uploadPrepare')).toEqual([]);
+      expect(wire.requests.filter(row => row.method === 'inbound/queue' || row.method === 'session/uploadPrepare')).toEqual([]);
       expect((await fixture.control('requests')).requests).toEqual([]);
     }
     gate.release();
@@ -180,7 +180,7 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
       expect(JSON.stringify(provider[0].body)).toContain(text);
       expect(provider[0].body.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(['startup_echo']);
       expect(provider[0].body.tools[0].function.parameters).toEqual(startupToolSchema);
-      const inputs = wire.requests.filter(row => row.method === 'turn/start');
+      const inputs = wire.requests.filter(row => row.method === 'inbound/queue');
       expect(inputs).toHaveLength(1); expect(inputs[0].params.target).toEqual(targetClaim);
       const uploads = wire.requests.filter(row => row.method === 'session/uploadPrepare');
       expect(uploads).toHaveLength(1); expect(uploads[0].params).toMatchObject({ target: targetClaim, files: [{ name: 'B-local.txt' }] });
@@ -195,8 +195,8 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
     expect(wire.held()).toBe(0);
     await expect(editor).toBeEditable();
     await expect(editor).toHaveValue(sendDuringRecovery ? '' : text);
-    expect(wire.requests.filter(row => ['turn/steer', 'turn/cancel', 'session/detach'].includes(row.method))).toEqual([]);
-    for (const method of ['session/submissionIntent', 'turn/start']) expect(wire.requests.filter(row => row.method === method)).toHaveLength(sendDuringRecovery ? 1 : 0);
+    expect(wire.requests.filter(row => ['turn/steer', 'turn/interrupt', 'session/detach'].includes(row.method))).toEqual([]);
+    for (const method of ['session/submissionIntent', 'inbound/queue']) expect(wire.requests.filter(row => row.method === method)).toHaveLength(sendDuringRecovery ? 1 : 0);
     expect((await fixture.control('requests')).requests).toHaveLength(sendDuringRecovery ? 1 : 0);
     expect(gate.calls).toBe(1);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);

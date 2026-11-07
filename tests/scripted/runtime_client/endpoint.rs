@@ -593,11 +593,11 @@ async fn a_second_initialize_is_rejected_without_eviction() {
         .expect("attachment identity")
         .to_owned();
 
-    // A second connection: rejected with the active identity, not admitted.
+    // A second connection receives an independent writable identity.
     let response = second.initialize(1);
-    assert_eq!(response["error"]["type"], "attachment_in_use");
-    assert_eq!(response["error"]["existing_attachment_id"], first_id);
-    assert_eq!(second.endpoint.attachment_id(), None);
+    assert!(response.get("error").is_none());
+    assert_ne!(response["result"]["attachment_id"], first_id);
+    assert!(second.endpoint.attachment_id().is_some());
 
     // Re-initializing the same connection is invalid, and equally
     // non-destructive.
@@ -617,16 +617,14 @@ async fn a_second_initialize_is_rejected_without_eviction() {
         first_id
     );
 
-    // Only an explicit detach releases it; the second connection can then
-    // initialize into a *fresh* identity.
+    // Detach releases only the first identity. The independently initialized
+    // second connection remains writable and cannot initialize twice.
     let response = first.exchange(r#"{"method":"detach","id":4}"#);
     assert_eq!(response["result"]["type"], "detached");
     assert_eq!(first.endpoint.attachment_id(), None);
     let response = second.initialize(2);
-    let second_id = response["result"]["attachment_id"]
-        .as_str()
-        .expect("attachment identity");
-    assert_ne!(second_id, first_id, "reconnecting receives a new identity");
+    assert_eq!(response["error"]["type"], "invalid_request");
+    assert!(second.endpoint.attachment_id().is_some());
 }
 
 /// A complete client session driven exclusively by frames: nothing in this

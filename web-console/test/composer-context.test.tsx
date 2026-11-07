@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v72';
+import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v74';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -65,7 +65,7 @@ const methods = () => server.requests.map(item => item.request.method);
 const goalControls = () => server.requests.flatMap(item => item.request.method === 'goal/control' ? [item.request.params.control] : []);
 const snapshotReads = () => methods().filter(method => method === 'session/checkpoint').length;
 const goalButton = (name: string) => within(dock('Goal')).getByRole('button', { name });
-const CONFIGURATION_WRITES = ['settings/replace', 'configuration/sourceWrite', 'configuration/reconcile', 'session/setModel', 'session/create'];
+const CONFIGURATION_WRITES = ['settings/replace', 'configuration/sourceWrite', 'configuration/reconcile', 'session/setModel', 'thread/start'];
 const update = (next: RuntimeClientSnapshot) => act(() => server.update('A', next));
 /** Answer a held authoritative read with a transport-level failure. */
 const failRead = (request: { id: string | number }) => act(async () => {
@@ -533,7 +533,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(screen.queryByLabelText('Delivery')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Send' })).toBeNull();
     await sendQueued('While running');
-    await server.waitFor('turn/start', 1);
+    await server.waitFor('inbound/queue', 1);
     expect(methods()).not.toContain('turn/steer');
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Steer running attempt' } });
     expect(screen.getByRole('button', { name: 'Queue' })).toBeTruthy();
@@ -546,13 +546,13 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(screen.queryByLabelText('Delivery')).toBeNull();
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Idle again' } });
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-    expect((await server.waitFor('turn/start', 2)).params).toMatchObject({ content: [{ type: 'text', text: 'Idle again' }] });
+    expect((await server.waitFor('inbound/queue', 2)).params).toMatchObject({ content: [{ type: 'text', text: 'Idle again' }] });
   });
   it('an unacknowledged request is composer transport state, never a queue row', async () => {
     await mount(running(withQueue([inbound('1', 'Native row')])));
-    server.held.add('turn/start');
+    server.held.add('inbound/queue');
     await sendQueued('Queued draft');
-    const turn = await server.waitFor('turn/start', 1);
+    const turn = await server.waitFor('inbound/queue', 1);
     expect(screen.getByRole('button', { name: 'Sending…' })).toHaveProperty('disabled', true);
     expect(screen.queryByText('Awaiting acknowledgement…')).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message' }).closest('[data-composer-card]')?.getAttribute('aria-busy')).toBe('true');
@@ -587,21 +587,21 @@ describe('Queue dock binds the native inbound mailbox', () => {
   });
   it('a lost acknowledgement leaves only the uncertain diagnostic; reconnect repairs from authority without replay', async () => {
     await mount(running());
-    server.held.add('turn/start');
+    server.held.add('inbound/queue');
     await sendQueued('Lost acknowledgement');
-    await server.waitFor('turn/start', 1);
+    await server.waitFor('inbound/queue', 1);
     act(() => server.socket.close());
     expect(screen.getByLabelText('Message')).toHaveProperty('value', 'Lost acknowledgement');
     expect(region('Queue')).toBeNull();
-    expect(server.client.getSnapshot().uncertain.map(item => item.method)).toEqual(['turn/start']);
+    expect(server.client.getSnapshot().uncertain.map(item => item.method)).toEqual(['inbound/queue']);
     expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
-    server.held.delete('turn/start');
+    server.held.delete('inbound/queue');
     // The runtime did commit it; only an authoritative read may say so.
     server.snapshots.set('A', running(withQueue([inbound('5', 'Lost acknowledgement', { id: 'accepted-user' })])));
     await act(() => server.connect());
     await waitFor(() => expect(dock('Queue').querySelector('[data-message-id="accepted-user"]')).toBeTruthy());
     expect(dock('Queue').querySelector('[data-submission-echo]')).toBeNull();
-    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+    expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
     expect(screen.getByLabelText('Message')).toHaveProperty('value', 'Lost acknowledgement');
   });
 });
@@ -691,7 +691,7 @@ describe('Composer context stack lifecycle', () => {
     expect(server.client.getSnapshot().views.A.snapshot?.goal?.current?.reference.revision).toBe('9');
     expect(dock('To-dos').textContent).toContain('1 completed');
     expect(region('Queue')).toBeNull();
-    expect(methods().filter(method => ['goal/control', 'turn/cancel', 'turn/steer'].includes(method))).toEqual([]);
+    expect(methods().filter(method => ['goal/control', 'turn/interrupt', 'turn/steer'].includes(method))).toEqual([]);
   });
   it('every dock shares the composer card column without viewport positioning', () => {
     const composer = (name: string) => readFileSync(resolve(process.cwd(), 'src/app/composer', name), 'utf8');
@@ -715,7 +715,7 @@ describe('exact pending QueueDock mutations', () => {
     expect(remove).toHaveBeenCalledWith({sequence:'7',revision:'0'});
   });
 
-  const row = () => inbound('7', 'before');
+  const row = () => {const value=inbound('7','before');return {...value,message:{...value.message,kind:'queued_message' as const}};};
   it('edits an authoritative occurrence with its original revision and waits for readback', async () => {
     let finish!: (value: import('../src/client/contracts').InboundControlOutcome) => void;
     const edit = vi.fn(() => new Promise<import('../src/client/contracts').InboundControlOutcome>(resolve => { finish = resolve; }));

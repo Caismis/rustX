@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v72';
+import type { RuntimeClientCheckpoint } from '../../protocol/app-server/v74';
 import { checkpoint, Server, snapshot } from './fixture';
 
 const servers: Server[] = [];
@@ -57,10 +57,10 @@ it('T13 Root initial attach rejects a foreign cut before Subscribe', async () =>
   expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(0);
 });
 
-function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v72').RuntimeClientEvent {
+function scopedEvent(value: RuntimeClientCheckpoint): import('../../protocol/app-server/v74').RuntimeClientEvent {
   return { type: 'projection_transition', events: [], metadata: { read_cut: value.read_cut, content: [], collections: [] } };
 }
-const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v72').RuntimeClientEvent][] = [
+const eventCorruptions: [string, (value: RuntimeClientCheckpoint) => import('../../protocol/app-server/v74').RuntimeClientEvent][] = [
   ['foreign snapshot', value => { value.snapshot.conversation_id = 'foreign'; return { type: 'checkpoint_advanced', transition: 'scope', checkpoint: value }; }],
   ['foreign metadata', value => { value.read_cut.conversation_id = 'foreign'; return scopedEvent(value); }],
   ['Child metadata', value => { value.read_cut.activation_id = 'child-activation'; return scopedEvent(value); }],
@@ -110,7 +110,7 @@ it('Source failure keeps the native snapshot and Applied without an automatic re
   s.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target,registration_id:registration,cursor:'1',event:{type:'message_committed',attempt_id:'old',transcript_cursor:'1',message:{id:'old',role:'assistant',content:[]}}}});
   await Promise.resolve();
   expect(s.client.getSnapshot().views.A.snapshot).toBe(before.snapshot);expect(s.client.getSnapshot().views.A.cursor).toBe(before.cursor);
-  expect(count('session/checkpoint')).toBe(1);expect(count('session/subscribe')).toBe(1);expect(count('turn/start')).toBe(0);expect(count('turn/cancel')).toBe(0);
+  expect(count('session/checkpoint')).toBe(1);expect(count('session/subscribe')).toBe(1);expect(count('inbound/queue')).toBe(0);expect(count('turn/interrupt')).toBe(0);
   s.handlers.set('session/checkpoint',()=>({type:'checkpoint',checkpoint:checkpoint(snapshot(),'2')}));
   await s.client.refresh('A');expect(s.client.getSnapshot().views.A.cursor).toBe('2');
   expect(s.client.isAttachmentControlCurrent('A',before.attachmentObservation)).toBe(true);
@@ -131,5 +131,5 @@ it('unavailable queued before the Subscribe receipt continuation remains a sourc
  const failed=s.client.getSnapshot().views.A;
  expect(failed.observationState).toBe('unavailable');expect(failed.snapshot).toBe(before.snapshot);expect(failed.checkpoint).toBe(before.checkpoint);expect(failed.cursor).toBe('2');
  expect(s.client.isAttachmentControlCurrent('A',before.attachmentObservation)).toBe(false);
- await Promise.resolve();expect(s.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(2);expect(s.requests.filter(row=>row.request.method==='session/subscribe')).toHaveLength(2);expect(s.requests.filter(row=>row.request.method==='turn/start')).toHaveLength(0);
+ await Promise.resolve();expect(s.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(2);expect(s.requests.filter(row=>row.request.method==='session/subscribe')).toHaveLength(2);expect(s.requests.filter(row=>row.request.method==='inbound/queue')).toHaveLength(0);
 });

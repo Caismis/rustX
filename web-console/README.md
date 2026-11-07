@@ -72,8 +72,9 @@ Direct `pnpm dev`/`preview` remain component-only commands for focused UI work o
 an independently managed runtime/Host. The [Host contract](WORKSPACES.md) describes
 that operator-owned integration. Use the launcher for complete local composition.
 
-Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v72` and `rustx-token.<token>` in its
+Native authentication admits trusted clients of one user's App Server. WebUI,
+TUI and external clients may share writable attachments to one Conversation.
+The browser sends subprotocols `rustx.app-server.v74` and `rustx-token.<base64url-no-pad(token bytes)>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -134,7 +135,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v72.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v74.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -344,7 +345,7 @@ preview callbacks are not inherited by that route.
 Request IDs provide correlation only. Separate bounded lanes permit four waits,
 two Agent message admissions, two lifecycle controls and eight transmitted ordinary
 RPCs, within the transport's sixteen-request work bound; the overall 64-request
-pending/queue bound remains. `turn/cancel` shares the control lane with
+pending/queue bound remains. `turn/interrupt` shares the control lane with
 `agent/interrupt` and `job/cancel`, independently of ordinary RPC capacity. Full
 domain lanes refuse local admission before transmission. Only ordinary RPCs use
 the 30-second response deadline, which closes the transport rather than resending;
@@ -352,9 +353,11 @@ wait, admission and control lanes have no response deadline. A transmitted
 side-effect with no acknowledgement is **outcome uncertain**, including create,
 delete, turn/cancellation, interaction and lifecycle operations. Unsent calls are
 discarded. Reconnect reads authority first; no mutation is automatically replayed.
-Non-interaction uncertainty remains a diagnostic even when a snapshot is suggestive:
-the protocol cannot prove request identity. The product warning and Connection Settings
-retain that unresolved evidence. Up to 64 unresolved mutations can be retained; new mutations are
+Only authoritative correlation proof repairs an uncertain receipt. Input admission
+uses its exact `inputId` and `inbound/submissionLookup`; acceptance is not execution
+or success. A suggestive snapshot alone proves no operation identity. Unresolved
+evidence remains in the product warning and Connection Settings.
+Up to 64 unresolved mutations can be retained; new mutations are
 refused before diagnostics would be silently dropped. After inspecting evidence and
 verifying affected work, Connection → Review uncertain operations permits explicit
 browser-local acknowledgement of non-interaction notices. This sends no RPC,
@@ -689,3 +692,8 @@ checked write; a conflict keeps local changes for explicit reconciliation.
 
 See [the authoring contract](../docs/workflow-authoring.md) and [design, evidence
 and test traceability](../docs/workflow-visual-editor.md).
+
+Existing Workspace row status uses Native v74 Thread status independently of full
+transcript attachments. Exact Thread identity and process-local revision order
+snapshots and notifications; reconnect/overflow repairs use pure reads. Runtime
+status, connection availability and native Turn outcomes remain separate.
