@@ -426,3 +426,27 @@ Independent reviewers who did not author each fix found no remaining blockers.
 Rust sources are unchanged by this follow-up; the complete local Rust and native
 CI evidence for the preceding revision is identified above. Updated exact-head
 FULL verification is recorded on the PR before merge.
+
+The [subsequent FULL run on `d9b22ed5c`](https://github.com/Caismis/rustX/actions/runs/42319828897)
+passed native Linux/macOS, Web/Host, protocol, formatting and TUI checks. One
+preview-workspace browser readiness check exposed a polling miss: its successful
+DOCX conversion took 4.383 seconds, and the correct page was visibly rendered
+423 milliseconds before the existing five-second deadline, but the matcher's
+backoff skipped that final window. The same exact page/text/visibility condition
+now uses explicit 50-millisecond polling within the same five-second deadline,
+with no additional wait phase or product change. All subsequent occurrence,
+worker, keyboard, download and authority assertions remain intact. The unchanged
+local case and the corrected case both passed under the pinned browser;
+TypeScript and independent review passed. This adds one distinct preview-workspace
+case to the 76-case local selection above.
+
+The same CI run's other browser failure was an incorrectly ordered CAS fixture.
+Its external file edit invalidated an outstanding authoritative Settings read;
+the trace contains no second Workspace write for the edited draft. The existing
+Host write gate now performs the one-shot external edit after the browser submits
+that write and before forwarding it to the real Host. The unchanged conflict,
+draft-preservation, reviewed-revision and retry assertions therefore exercise
+native stale-write CAS deterministically. Independent review found no blockers;
+the complete corrected configuration and preview-workspace browser cases passed
+together. The local selection now covers 78 distinct cases across ten files.
+No production code or configured timeout changed in these two fixture corrections.

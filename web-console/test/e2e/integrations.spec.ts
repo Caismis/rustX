@@ -13,9 +13,17 @@ import { routeWorkspaceHost } from './workspace-host';
 
 test('CFG3 structured source authoring, inert definitions, CAS and automatic no-op application', async ({ page }) => {
   const fixture = await startDogfood(); const errors: string[] = [];
+  let invalidateNextWrite = false;
   page.on('pageerror', error => errors.push(error.message));
   try {
-    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await routeWorkspaceHost(page, fixture, {
+      before: async () => {
+        if (!invalidateNextWrite) return;
+        invalidateNextWrite = false;
+        appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
+      },
+      observed: async () => {},
+    }); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByLabel('Transport token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
@@ -62,9 +70,13 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     await settings.getByRole('button', { name: 'MCP local-fixture', exact: true }).click();
     await settings.getByLabel('Command', { exact: true }).fill('preserved-draft');
-    appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
+    // The reviewed draft must be submitted before the external edit. An edit
+    // before clicking can instead invalidate a publication-owned read and
+    // correctly prevent submission, which never exercises the native write CAS.
+    invalidateNextWrite = true;
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('alert')).toContainText('was not saved: the source changed');
+    expect(invalidateNextWrite).toBe(false);
     await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('preserved-draft');
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
     await settings.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
