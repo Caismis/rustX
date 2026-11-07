@@ -2,7 +2,7 @@ import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity.t
 import { messageDescriptors } from './message-descriptors.ts';
 import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
 import { displayInteraction } from './interaction-display.ts';
-import type { ContentBinding } from '../../../protocol/app-server/v72.ts';
+import type { ContentBinding } from '../../../protocol/app-server/v74.ts';
 import { foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, refineToolSlots, statusIdentity, transitionFacts } from '../../../protocol/app-server/projection.ts';
 /**
  * The presentation reducer.
@@ -368,7 +368,7 @@ function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, adapta
     }
     case 'inbound_drained':
       // Drained messages are ordinary history now; their rows stay as shown.
-      for (const [id, sequence] of displayedInbound) if (BigInt(sequence) <= BigInt(event.watermark)) displayedInbound.delete(id);
+      for (const id of event.message_ids) displayedInbound.delete(id);
       return view;
     case 'trace_changed': // Trace is a read capability; this client has no Trajectory UI.
     case 'goal_changed':
@@ -543,8 +543,8 @@ function mergeNativeTranscript(state: TranscriptView, fresh: TranscriptView): Tr
   };
 }
 
-function boundedDeferred(rows: import('../../../protocol/app-server/v72.ts').CheckpointPageItem[]) {
- const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v72.ts').CheckpointPageItem[]=[];let bytes=0;
+function boundedDeferred(rows: import('../../../protocol/app-server/v74.ts').CheckpointPageItem[]) {
+ const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v74.ts').CheckpointPageItem[]=[];let bytes=0;
  for(const row of [...unique.values()].reverse()){const size=new TextEncoder().encode(JSON.stringify(row)).length;if(kept.length===512||bytes+size>4*1024*1024)break;bytes+=size;kept.push(row);}
  return kept.reverse();
 }

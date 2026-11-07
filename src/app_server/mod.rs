@@ -1,6 +1,7 @@
 //! Transport-neutral App Server connection and versioned JSON-RPC contract.
 
 mod admission;
+mod callbacks;
 pub(crate) use admission::RequestLane;
 pub mod connection;
 pub mod editor_read;
@@ -24,3 +25,5 @@ pub(crate) mod product_host;
 pub mod upload_transfer;
 
 pub(crate) mod workflow_documents;
+
+pub mod thread_status;

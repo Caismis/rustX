@@ -6,7 +6,7 @@ async function open(page: Page, query: string, width: number) {
   await expect(page).toHaveTitle('rustX');
   await page.evaluate(() => { const fixture = (window as any).startupFixture; fixture.allow('session/summary'); fixture.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   if (width < 600) {
     const collapse = page.getByRole('button', { name: 'Collapse Sidebar', exact: true });
     if (await collapse.isVisible()) await collapse.click();

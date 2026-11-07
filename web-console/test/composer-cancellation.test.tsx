@@ -1,16 +1,16 @@
 import { compactReceipt } from './fixture';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v72';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v74';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/errors';
 import { Server, snapshot, endpoint, interaction } from './fixture';
 let server: Server;
-beforeEach(() => { localStorage.clear(); server = new Server(); server.handlers.set('turn/cancel', request => ({type:'cancellation_accepted',attempt_id:request.method==='turn/cancel' ? server.snapshots.get(request.params.target.session_id)?.attempt?.attempt_id ?? 'attempt-A' : 'attempt-A'})); });
+beforeEach(() => { localStorage.clear(); server = new Server(); server.handlers.set('turn/interrupt', request => ({type:'cancellation_accepted',attempt_id:request.method==='turn/interrupt' ? server.snapshots.get(request.params.target.session_id)?.attempt?.attempt_id ?? 'attempt-A' : 'attempt-A'})); });
 afterEach(() => { cleanup(); server.client.disconnect(); vi.useRealTimers(); });
 const running = (id = 'attempt-A'): RuntimeClientSnapshot => ({ ...snapshot(), attempt: { attempt_id: id, phase: { type: 'running' as const }, turn: 1 } });
-const cancels = () => server.requests.filter(row => row.request.method === 'turn/cancel').map(row => row.request);
+const cancels = () => server.requests.filter(row => row.request.method === 'turn/interrupt').map(row => row.request);
 const input = () => screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
 const escape = () => fireEvent.keyDown(input(), { key: 'Escape' });
 async function mount(initial = running()) {
@@ -26,11 +26,12 @@ it('eligible double Escape sends exactly one native target; a gated reply and se
   server.handlers.set('session/uploadStatus', () => ({ type: 'upload_status', outcome: { state: 'ready', files: [{ receipt, file: { batch_id: 'batch', name: 'kept.txt' }, path: '/kept.txt' }] } }));
   await act(async () => fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [new File(['kept'], 'kept.txt')] } }));
   fireEvent.change(input(), { target: { value: 'keep draft' } }); act(() => input().focus()); input().setSelectionRange(2, 5);
-  server.held.add('turn/cancel'); escape(); expect(cancels()).toHaveLength(0);
-  await act(async () => escape()); const request = await server.waitFor('turn/cancel', 1);
-  expect(request).toMatchObject({ method: 'turn/cancel', params: { target: server.target('A') } }); expect(cancels()).toHaveLength(1);
+  server.held.add('turn/interrupt'); escape(); expect(cancels()).toHaveLength(0);
+  await act(async () => escape()); const request = await server.waitFor('turn/interrupt', 1);
+  expect(request).toMatchObject({ method: 'turn/interrupt', params: { turnId:'attempt-A', target: server.target('A') } }); expect(cancels()).toHaveLength(1);
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'in-flight' });
-  expect(screen.getByLabelText('Session status').textContent).toContain('Stopping');
+  expect(server.client.getSnapshot().views.A.threadStatus?.status.type).toBe('active');
+  expect(screen.queryByLabelText('Session status')).toBeNull();
   for (let i = 0; i < 4; i++) escape(); expect(cancels()).toHaveLength(1);
   expect(input().value).toBe('keep draft'); expect([input().selectionStart, input().selectionEnd]).toEqual([2, 5]);
   expect(screen.getByRole('button', { name: 'Remove kept.txt' })).toBeTruthy();
@@ -44,7 +45,7 @@ it('eligible double Escape sends exactly one native target; a gated reply and se
   expect(screen.getByRole('button', { name: 'Remove kept.txt' })).toBeTruthy(); expect(cancels()).toHaveLength(1);
   // Cancellation never consumes the receipt. The existing Send operation still owns it.
   await act(async () => fireEvent.keyDown(input(), { key: 'Enter' }));
-  expect(server.requests.filter(row => row.request.method === 'turn/start').map(row => row.request)).toMatchObject([{ params: { content: [{ type: 'upload', ...receipt }, { type: 'text', text: 'replacement draft' }] } }]);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue').map(row => row.request)).toMatchObject([{ params: { content: [{ type: 'upload', ...receipt }, { type: 'text', text: 'replacement draft' }] } }]);
 });
 it('exact gated Attempt replacement between presses cannot cancel the successor', async () => {
   await mount(); escape(); server.held.add('session/checkpoint');
@@ -60,15 +61,15 @@ it('exact gated Attempt replacement between presses cannot cancel the successor'
   await act(async () => { server.reply(replacementRead); await replacement; });
   expect(server.client.getSnapshot().views.A.snapshot?.attempt?.attempt_id).toBe('attempt-B');
   escape(); expect(cancels()).toHaveLength(0);
-  server.held.add('turn/cancel'); await act(async () => escape());
+  server.held.add('turn/interrupt'); await act(async () => escape());
   expect(cancels()).toHaveLength(1); expect(server.client.getSnapshot().views.A.cancellation?.attemptId).toBe('attempt-B');
 });
 it('lost cancellation response stays uncertain and reconnect repairs without replay', async () => {
-  await mount(); fireEvent.change(input(), { target: { value: 'preserved' } }); server.held.add('turn/cancel');
-  await act(async () => { escape(); escape(); }); await server.waitFor('turn/cancel', 1);
+  await mount(); fireEvent.change(input(), { target: { value: 'preserved' } }); server.held.add('turn/interrupt');
+  await act(async () => { escape(); escape(); }); await server.waitFor('turn/interrupt', 1);
   await act(async () => server.socket.close());
   expect(server.client.getSnapshot().views.A.cancellation?.status).toBe('uncertain');
-  expect(server.client.getSnapshot().uncertain.filter(item => item.method === 'turn/cancel')).toHaveLength(1);
+  expect(server.client.getSnapshot().uncertain.filter(item => item.method === 'turn/interrupt')).toHaveLength(1);
   escape(); escape(); expect(cancels()).toHaveLength(1); expect(input().value).toBe('preserved');
   server.snapshots.set('A', { ...snapshot(), attempt: { attempt_id: 'attempt-A', turn: 1, phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } } });
   vi.useRealTimers(); await act(async () => server.connect());
@@ -90,8 +91,8 @@ it('unavailable stale A forwards cancellation and retains native B receipt witho
   server.socket.deliver({jsonrpc:'2.0',method:'session/observationUnavailable',params:{target,registration_id:registration,message:'held source'}});
   const before = server.client.getSnapshot().views.A;
   const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
-  server.handlers.set('turn/cancel', () => ({type:'cancellation_accepted',attempt_id:'native-B'}));
-  server.held.add('turn/cancel');
+  server.handlers.set('turn/interrupt', () => ({type:'cancellation_accepted',attempt_id:'native-B'}));
+  server.held.add('turn/interrupt');
   const cancelling = server.client.cancelTurn(expected);
   expect(cancels()).toHaveLength(1);
   server.reply(cancels()[0]); await cancelling;
@@ -116,18 +117,18 @@ it.each(['button', 'Escape'] as const)('%s captures cancellation authority after
   fireEvent.change(input(), { target: { value: 'must not replace draft' } });
   fireEvent.keyDown(input(), { key: 'Enter' });
   expect(input().value).toBe('retained draft');
-  expect(server.requests.filter(row => ['turn/start', 'turn/steer'].includes(row.request.method))).toHaveLength(0);
+  expect(server.requests.filter(row => ['inbound/queue', 'turn/steer'].includes(row.request.method))).toHaveLength(0);
   const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
-  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'native-current-B' }));
-  server.held.add('turn/cancel');
+  server.handlers.set('turn/interrupt', () => ({ type: 'cancellation_accepted', attempt_id: 'attempt-A' }));
+  server.held.add('turn/interrupt');
   if (gesture === 'button') {
     const button = screen.getByRole('button', { name: 'Stop' }) as HTMLButtonElement;
     expect(button.disabled).toBe(false); await act(async () => fireEvent.click(button));
   } else await act(async () => { escape(); escape(); });
-  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target });
+  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target,turnId:before.snapshot?.attempt?.attempt_id });
   await act(async () => server.reply(cancels()[0]));
   const after = server.client.getSnapshot().views.A;
-  expect(after.cancellation).toEqual({ attemptId: 'native-current-B', status: 'acknowledged' });
+  expect(after.cancellation).toEqual({ attemptId: 'attempt-A', status: 'acknowledged' });
   expect(after.snapshot).toBe(before.snapshot); expect(after.cursor).toBe(before.cursor);
   expect(after.observationState).toBe('unavailable'); expect(input().value).toBe('retained draft');
   expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(reads);
@@ -145,17 +146,23 @@ it.each(unavailableSnapshots.flatMap(([name, initial]) => (['button', 'Escape'] 
   await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id, message: 'held source' } }));
   const before = server.client.getSnapshot().views.A;
   const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+  if(!initial.attempt?.attempt_id) {
+    expect(server.client.cancellationTarget('A')).toBeUndefined();
+    expect(screen.queryByRole('button',{name:'Stop'})).toBeNull();
+    act(()=>input().focus());await act(async()=>{escape();escape();});
+    expect(cancels()).toHaveLength(0);return;
+  }
   expect(server.client.cancellationTarget('A')).toBeDefined();
   expect(input().readOnly).toBe(true); act(() => input().focus());
-  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'native-current-B' }));
-  server.held.add('turn/cancel');
+  server.handlers.set('turn/interrupt', () => ({ type: 'cancellation_accepted', attempt_id: 'attempt-A' }));
+  server.held.add('turn/interrupt');
   if (gesture === 'button') await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Stop' })));
   else await act(async () => { escape(); escape(); });
-  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target });
+  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target,turnId:before.snapshot?.attempt?.attempt_id });
   expect(server.client.getSnapshot().views.A.cancellation?.attemptId).toBe(initial.attempt?.attempt_id ?? undefined);
   await act(async () => server.reply(cancels()[0]));
   const after = server.client.getSnapshot().views.A;
-  expect(after.cancellation).toEqual({ attemptId: 'native-current-B', status: 'acknowledged' });
+  expect(after.cancellation).toEqual({ attemptId: 'attempt-A', status: 'acknowledged' });
   expect(after.snapshot).toBe(before.snapshot); expect(after.cursor).toBe(before.cursor);
   expect(after.observationState).toBe('unavailable');
   expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(reads);
@@ -169,7 +176,7 @@ it('an acknowledged native A under unavailable A permits an explicit successor c
   expect(cancels()).toHaveLength(1);
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'acknowledged' });
   expect(server.client.cancellationTarget('A')).toBeDefined(); expect(cancels()).toHaveLength(1);
-  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'native-successor-B' }));
+  server.handlers.set('turn/interrupt', () => ({ type: 'cancellation_accepted', attempt_id: 'native-successor-B' }));
   await act(async () => { escape(); escape(); });
   expect(cancels()).toHaveLength(2);
   const after = server.client.getSnapshot().views.A;
@@ -177,7 +184,7 @@ it('an acknowledged native A under unavailable A permits an explicit successor c
   expect(after.snapshot).toBe(before.snapshot); expect(after.cursor).toBe(before.cursor);
 });
 it('Escape cancels through the exact attachment while explicit observation recovery is held', async () => {
-  await mount(snapshot());
+  await mount(running());
   const target = server.target('A');
   server.held.add('session/checkpoint');
   const repairing = server.client.refresh('A');
@@ -185,18 +192,18 @@ it('Escape cancels through the exact attachment while explicit observation recov
   await act(async () => {});
   expect(server.client.getSnapshot().views.A.observationState).toBe('checkpointLoading');
   expect(server.client.cancellationTarget('A')).toBeDefined();
-  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'native-current-B' }));
+  server.handlers.set('turn/interrupt', () => ({ type: 'cancellation_accepted', attempt_id: 'attempt-A' }));
   act(() => input().focus()); await act(async () => { escape(); escape(); });
-  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target });
-  expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'native-current-B', status: 'acknowledged' });
+  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target,turnId:'attempt-A' });
+  expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'acknowledged' });
   await act(async () => { server.reply(read); await repairing; });
   expect(cancels()).toHaveLength(1);
 });
 it('unavailable cancellation rejection clears only its operation and never replays', async () => {
-  await mount(snapshot());
+  await mount(running());
   const target = server.target('A'), registration_id = server.registrations.get(JSON.stringify(target))!;
   await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/observationUnavailable', params: { target, registration_id, message: 'held source' } }));
-  server.held.add('turn/cancel');
+  server.held.add('turn/interrupt');
   await act(async () => { escape(); escape(); });
   const request = cancels()[0]; expect(request).toBeDefined();
   await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'No active Attempt' } }));
@@ -223,12 +230,12 @@ it.each(['attachment', 'connection'] as const)('an unavailable Escape arm cannot
   expect(next).toBeDefined(); expect(next.target).not.toEqual(target);
   act(() => input().focus()); await act(async () => escape()); expect(cancels()).toHaveLength(0);
   await act(async () => escape()); expect(cancels()).toHaveLength(1);
-  expect(cancels()[0].params).toEqual({ target: next.target });
+  expect(cancels()[0].params).toEqual({ target: next.target,turnId:next.attemptId });
 });
 it('native B acknowledgement survives stale A folds and permits a genuine observed successor', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
   const expected = server.client.cancellationTarget('A')!;
-  server.handlers.set('turn/cancel', () => ({type:'cancellation_accepted',attempt_id:'native-B'}));
+  server.handlers.set('turn/interrupt', () => ({type:'cancellation_accepted',attempt_id:'native-B'}));
   await server.client.cancelTurn(expected);
   await server.update('A', running());
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({attemptId:'native-B',status:'acknowledged'});
@@ -240,7 +247,7 @@ it('native B acknowledgement survives stale A folds and permits a genuine observ
   await server.update('A', running('native-C'));
   const successor = server.client.cancellationTarget('A')!;
   expect(successor).toBeDefined();
-  server.handlers.set('turn/cancel', () => ({type:'cancellation_accepted',attempt_id:'native-C'}));
+  server.handlers.set('turn/interrupt', () => ({type:'cancellation_accepted',attempt_id:'native-C'}));
   await server.client.cancelTurn(successor);
   expect(cancels()).toHaveLength(2);
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({attemptId:'native-C',status:'acknowledged'});
@@ -253,21 +260,21 @@ const unrelatedCancellationSnapshots = [
 it.each(unrelatedCancellationSnapshots)('an in-flight cancellation survives a checkpoint with %s', async (_name, next) => {
   server.snapshots.set('A', running()); await server.attached('A');
   const expected = server.client.cancellationTarget('A')!;
-  server.held.add('turn/cancel');
+  server.held.add('turn/interrupt');
   const cancelling = server.client.cancelTurn(expected), request = cancels()[0];
   const operation = server.client.getSnapshot().views.A.cancellation;
   server.snapshots.set('A', next); await server.client.refresh('A');
   expect(server.client.getSnapshot().views.A.cancellation).toBe(operation);
   expect(server.client.cancellationTarget('A')).toBeUndefined();
   await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(1);
-  server.handlers.set('turn/cancel', () => ({ type: 'cancellation_accepted', attempt_id: 'actual-native-B' }));
+  server.handlers.set('turn/interrupt', () => ({ type: 'cancellation_accepted', attempt_id: 'actual-native-B' }));
   server.reply(request); await cancelling;
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'actual-native-B', status: 'acknowledged' });
 });
 it.each(unrelatedCancellationSnapshots)('uncertain cancellation survives same-attachment repair with %s without replay', async (_name, next) => {
   server.snapshots.set('A', running()); await server.attached('A');
   const expected = server.client.cancellationTarget('A')!;
-  server.held.add('turn/cancel');
+  server.held.add('turn/interrupt');
   const cancelling = server.client.cancelTurn(expected).catch(error => error), request = cancels()[0];
   server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'Native outcome unknown', data: { kind: 'outcome_unknown' } } });
   expect(isOutcomeUncertain(await cancelling)).toBe(true);
@@ -285,13 +292,13 @@ it.each(unrelatedCancellationSnapshots)('uncertain cancellation survives same-at
 it('ordinary RPC saturation cannot block exact lifecycle cancellation or its acknowledgement', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
   const expected = server.client.cancellationTarget('A')!;
-  server.held.add('server/info'); server.held.add('turn/cancel');
+  server.held.add('server/info'); server.held.add('turn/interrupt');
   const occupied = Array.from({ length: 6 }, () => server.client.request({ method: 'server/info', params: {} }, 'server_info'));
   await server.waitFor('server/info', 6);
   const cancellation = server.client.cancelTurn(expected);
   // No reply or capacity release occurs before this synchronous wire assertion.
   expect(cancels()).toHaveLength(1);
-  expect(cancels()[0]).toMatchObject({ method: 'turn/cancel', params: { target: expected.target } });
+  expect(cancels()[0]).toMatchObject({ method: 'turn/interrupt', params: { turnId:'attempt-A', target: expected.target } });
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: expected.attemptId, status: 'in-flight' });
   await server.client.cancelTurn(expected); expect(cancels()).toHaveLength(1);
   const reads = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
@@ -338,8 +345,8 @@ it('full bounded control capacity refuses cancellation locally and releases only
   const available = server.client.cancellationTarget('A')!; expect(available).toEqual(expected);
   expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
   expect(cancels()).toHaveLength(0); // Capacity release never replays a refused gesture.
-  server.held.add('turn/cancel'); const accepted = server.client.cancelTurn(available);
-  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target: available.target });
+  server.held.add('turn/interrupt'); const accepted = server.client.cancelTurn(available);
+  expect(cancels()).toHaveLength(1); expect(cancels()[0].params).toEqual({ target: available.target,turnId:available.attemptId });
   await server.client.cancelTurn(available); expect(cancels()).toHaveLength(1);
   server.reply(cancels()[0]); await accepted;
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'acknowledged' });
@@ -347,7 +354,7 @@ it('full bounded control capacity refuses cancellation locally and releases only
 
 it('a retired attachment response cannot clear a successor cancellation operation', async () => {
   server.snapshots.set('A', running()); await server.attached('A');
-  server.held.add('turn/cancel');
+  server.held.add('turn/interrupt');
   const expectedA = server.client.cancellationTarget('A')!;
   const older = server.client.cancelTurn(expectedA);
   const requestA = cancels()[0];
@@ -364,7 +371,7 @@ it('a retired attachment response cannot clear a successor cancellation operatio
   server.reply(requestA); await older;
   expect(server.client.getSnapshot().views.A.cancellation).toBe(operationB);
   expect(server.client.getSnapshot().uncertain).toEqual([]);
-  expect(cancels()).toHaveLength(2); expect(requestB.params).toEqual({ target: expectedB.target });
+  expect(cancels()).toHaveLength(2); expect(requestB.params).toEqual({ target: expectedB.target,turnId:expectedB.attemptId });
   server.reply(requestB); await successor;
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-B', status: 'acknowledged' });
 });
@@ -376,10 +383,10 @@ it.each(['queue', 'steer'] as const)('resident ContextSeat preserves %s submissi
   const expected = server.client.cancellationTarget('A')!;
   fireEvent.change(input(), { target: { value: 'ordinary draft' } });
   await act(async () => fireEvent.keyDown(input(), { key: 'Enter' }));
-  const method = preference === 'queue' ? 'turn/start' : 'turn/steer';
+  const method = preference === 'queue' ? 'inbound/queue' : 'turn/steer';
   expect(server.requests.filter(row => row.request.method === method)).toHaveLength(1);
   expect(server.client.cancellationTarget('A')).toEqual(expected);
-  server.held.add('turn/cancel'); act(() => input().focus());
+  server.held.add('turn/interrupt'); act(() => input().focus());
   await act(async () => { escape(); escape(); });
   expect(cancels()).toHaveLength(1);
   expect(cancels()[0]).toMatchObject({ params: { target: expected.target } });
@@ -396,7 +403,7 @@ it.each(['queue', 'steer'] as const)('resident ContextSeat preserves %s submissi
   await act(async () => server.update('A', { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, manual_compaction: { request_id: requestId, released: true, error: null } } }));
   expect(screen.getByText('Context compacted')).toBeTruthy();
   expect(input().value).toBe('later draft');
-  expect(server.requests.filter(row => ['turn/start', 'turn/steer'].includes(row.request.method))).toHaveLength(1);
+  expect(server.requests.filter(row => ['inbound/queue', 'turn/steer'].includes(row.request.method))).toHaveLength(1);
   server.handlers.set('context/compact', () => (compactReceipt(server.snapshots.get('A')!.context!)));
   await act(async () => server.reply(compact));
   composerPreferences().setBusyEnter('queue');

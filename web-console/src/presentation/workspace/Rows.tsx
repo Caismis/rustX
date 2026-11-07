@@ -269,11 +269,6 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
   )
 }
 
-/* v8 ignore next 3 -- closed-union backstop; only reached if the status is forged */
-function assertNever(value: never): never {
-  throw new Error(`unknown pending interaction: ${String(value)}`)
-}
-
 interface SessionStatus {
   state: StateDotState
   label: string
@@ -284,43 +279,12 @@ interface SessionStatus {
  * outranks completion reminders.
  */
 function sessionStatuses(
-  node: Pick<SessionNode, 'pendingInteraction' | 'running' | 'runningSubagentCount' | 'forking'>,
+  node: Pick<SessionNode, 'pendingInteraction' | 'running' | 'runningSubagentCount' | 'forking' | 'runtimeStatus' | 'statusUnavailable'>,
   t: RowTranslate,
 ): readonly [SessionStatus, ...SessionStatus[]] {
-  const subagents: SessionStatus | undefined = node.runningSubagentCount === 0
-    ? undefined
-    : {
-      state: 'ongoing',
-      label: t(
-        node.runningSubagentCount === 1
-          ? 'workspace:status.subagentsRunning.one'
-          : 'workspace:status.subagentsRunning.other',
-        { n: node.runningSubagentCount },
-      ),
-    }
-  let pending: SessionStatus | undefined
-  switch (node.pendingInteraction) {
-    case 'approval':
-      pending = { state: 'warning', label: t('workspace:status.waitingApproval') }
-      break
-    case 'plan-review':
-      pending = { state: 'warning', label: t('workspace:status.planReview') }
-      break
-    case 'question':
-      pending = { state: 'warning', label: t('workspace:status.waitingAnswer') }
-      break
-    case undefined: break
-    /* v8 ignore next -- closed PendingInteractionStatus union */
-    default: return assertNever(node.pendingInteraction)
-  }
-  if (pending !== undefined) return subagents === undefined ? [pending] : [pending, subagents]
-  if (node.forking) return [{ state: 'ongoing', label: t('common:session-product.forking') }, ...(subagents ? [subagents] : [])]
-  if (node.running) {
-    const primary: SessionStatus = { state: 'ongoing', label: t('workspace:status.running') }
-    return subagents === undefined ? [primary] : [primary, subagents]
-  }
-  if (subagents !== undefined) return [subagents]
-  return [{ state: 'done', label: t('workspace:status.idle') }]
+  if(node.statusUnavailable)return [{state:'warning',label:t('common:session-product.observation-unavailable')}];
+  if(node.runtimeStatus?.labels.length) return node.runtimeStatus.labels.map(label=>({state:node.runtimeStatus!.state,label})) as [SessionStatus,...SessionStatus[]];
+  return [{state:'warning',label:t('common:session-product.observation-unavailable')}];
 }
 
 /** Primary status dot plus every status's screen-reader label, shared by the search and session rows. */

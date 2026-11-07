@@ -135,6 +135,7 @@ impl AppServerConnection {
         let Method::SessionCreate {
             settings,
             submission: Some(target),
+            dynamic_tools,
         } = &request.call
         else {
             return None;
@@ -155,6 +156,7 @@ impl AppServerConnection {
         let receipt = crate::local_runtime::composition::SubmissionIntent::now();
         let manager = self.host.manager().clone();
         let settings = settings.clone();
+        let dynamic_tools = dynamic_tools.clone();
         let admitted = self.host.admit_request(RequestLane::Metadata, |owner| {
             let claim = self.mcp_draft.claim(target, receipt);
             let sessions = self.sessions.clone();
@@ -163,8 +165,11 @@ impl AppServerConnection {
             tokio::spawn(async move {
                 let _owner = owner;
                 let _association = association;
-                let result = match manager.create_session_submitted(settings, claim).await {
-                    Ok(result) => catalog::transition(result, &sessions).await,
+                let result = match manager
+                    .create_session_submitted(settings, dynamic_tools, claim)
+                    .await
+                {
+                    Ok(result) => catalog::transition(result, &sessions, &manager).await,
                     Err(error) => Err(session_error(error)),
                 };
                 let _ = send.send(result);

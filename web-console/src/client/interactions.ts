@@ -1,15 +1,17 @@
+import type { ServerCallbacks } from '../../../protocol/app-server/callbacks';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { interactionBody, readInteractionBody } from '../../../protocol/app-server/interaction';
 import { observationCheckpoint } from '../../../protocol/app-server/projection';
 import { OutcomeUncertain } from './errors';
 import { interactionKey, type ClientView, type ConnectionRequest, type SessionView } from './contracts';
-import type { AttachmentTarget, CheckpointReadCut, InteractionRef, InteractionResponse, RuntimeClientInteractionHeader } from '../../../protocol/app-server/v72';
+import type { AttachmentTarget, CheckpointReadCut, InteractionRef, InteractionResponse, RuntimeClientInteractionHeader } from '../../../protocol/app-server/v74';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { SessionReads } from './session-reads';
 
 /** What human-in-the-loop interactions read from and write to their client. */
 export interface InteractionPort {
   request: ConnectionRequest;
+  callbacks: ServerCallbacks;
   state(): Readonly<ClientView>;
   current(generation: number): boolean;
   setSession(id: string, patch: Partial<Pick<SessionView, 'interactionDetail' | 'interactionPage'>>): void;
@@ -27,8 +29,8 @@ export class Interactions {
   constructor(private readonly port: InteractionPort) {}
   pendingInteractions(id:string) {
     const view=this.port.state().views[id],loaded=view?.interactionPage;
-    if(loaded&&sameTarget(view.target,loaded.target)&&this.interactionCutCurrent(view,loaded.page.read_cut))return loaded.rows;
-    return view?.snapshot?.pending_interactions??[];
+    if(loaded&&sameTarget(view.target,loaded.target)&&this.interactionCutCurrent(view,loaded.page.read_cut))return loaded.rows.filter(item => (this.port.state().connection !== 'connected' || this.port.callbacks.canAnswer(item.interaction)));
+    return (view?.snapshot?.pending_interactions??[]).filter(item => (this.port.state().connection !== 'connected' || this.port.callbacks.canAnswer(item.interaction)));
   }
   interactionBody(id:string,header:RuntimeClientInteractionHeader) {
     const view=this.port.state().views[id],detail=view?.interactionDetail;
@@ -90,8 +92,7 @@ export class Interactions {
     this.port.publish({ interactionOperations: { ...this.port.state().interactionOperations, [key]: { sessionId: id, status: 'in-flight' } } });
     let acknowledged = false;
     try {
-      await this.port.request(response ? { method: 'interaction/respond', params: { target, interaction, response } }
-        : { method: 'interaction/cancel', params: { target, interaction } }, 'interaction_settled');
+      await this.port.callbacks.answer(interaction, response);
       if (!this.port.current(generation) || !sameTarget(this.port.state().views[id]?.target, target)) return;
       acknowledged = true;
       this.port.publish({ interactionOperations: { ...this.port.state().interactionOperations, [key]: { sessionId: id, status: 'acknowledged' } } });
@@ -109,19 +110,21 @@ export class Interactions {
   reconcile(id: string) {
     const snapshot = this.port.state().views[id].snapshot!;
     const frontier=observationCheckpoint(snapshot,this.port.state().views[id].cursor??'0')?.collections.find(value=>value.domain==='pending_interactions');
-    // A bounded head cannot establish absence from the complete native set.
-    if(frontier&&BigInt(frontier.total)>BigInt(snapshot.pending_interactions?.length??0))return;
-    const pending = new Set(snapshot.pending_interactions?.map(item => interactionKey(item.interaction)));
-    const operations = { ...this.port.state().interactionOperations };
-    // Only an authoritative fresh snapshot can establish absence. Include routed
-    // children by using the recorded Session route, not just root ConversationId.
-    const resolved = this.port.state().uncertain.filter(item => item.sessionId === id && item.interactionKey && !pending.has(item.interactionKey));
-    for (const item of resolved) delete operations[item.interactionKey!];
-    for (const key of Object.keys(operations)) {
-      if (operations[key].sessionId === id && !pending.has(key)) delete operations[key];
+    const complete=!(frontier&&BigInt(frontier.total)>BigInt(snapshot.pending_interactions?.length??0));
+    const pending = new Map(snapshot.pending_interactions?.map(item => [interactionKey(item.interaction),item.interaction]));
+    const state=this.port.state(),operations = { ...state.interactionOperations };
+    const settled=new Set<string>();
+    for (const [key,operation] of Object.entries(operations)) {
+      if(operation.sessionId!==id)continue;
+      // A fresh live replay proves the old connection did not claim the callback.
+      // Permit another explicit answer; never resend a previous human decision.
+      if(complete&&!pending.has(key)||operation.status==='uncertain'&&pending.has(key)&&this.port.callbacks.canAnswer(pending.get(key)!)) {
+        delete operations[key];settled.add(key);
+      }
     }
-    this.port.publish({ uncertain: this.port.state().uncertain.filter(item => !resolved.includes(item)), interactionOperations: operations });
+    this.port.publish({ uncertain: state.uncertain.filter(item => !item.interactionKey||!settled.has(item.interactionKey)), interactionOperations: operations });
   }
+
   /** Native settlement or removal ends local evidence of those interactions. */
   settled(keys: ReadonlySet<string>) {
     const state = this.port.state();

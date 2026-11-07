@@ -24,7 +24,9 @@ use super::protocol::{
     APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ErrorData, InitializeParams, JsonRpcVersion,
     Method, MethodResult, Request, RequestId, Response, RpcError, ServerCapabilities, Success,
 };
-use super::rpc_error::{client_error, domain, failure, host_error, manager_error, rpc_error};
+use super::rpc_error::{
+    client_error, domain, failure, host_error, manager_error, rpc_error, session_error,
+};
 use crate::local_runtime::session::SessionId;
 use crate::local_runtime::session_controller::SessionController;
 use crate::local_runtime::session_runtime_manager::ManagedRuntimeClient;
@@ -72,7 +74,7 @@ impl AttachReservation {
             return Err(domain(ErrorData::StaleAttachment));
         }
         if routes.active.contains_key(session) || routes.reserved.contains(session) {
-            return Err(domain(ErrorData::ControllerInUse));
+            return Err(domain(ErrorData::InvalidParams));
         }
         if routes.active.len() + routes.reserved.len() >= routes.attachment_limit {
             host.attachment_capacity_refused();
@@ -125,6 +127,8 @@ fn release_route(host: &AppServerHost, table: &Mutex<RouteTable>, route: &Arc<Ro
         .is_some_and(|current| Arc::ptr_eq(current, route))
     {
         routes.active.remove(&route.target.session_id);
+        host.callbacks()
+            .unsubscribe(&route.connection_id, &route.target.conversation_id);
         route.registration.retire();
         host.revocations().revoke(|| route.attachment.detach());
         host.uploads().revoke_route(route);
@@ -134,6 +138,7 @@ fn release_route(host: &AppServerHost, table: &Mutex<RouteTable>, route: &Arc<Ro
 }
 
 pub(super) struct Route {
+    connection_id: String,
     pub(super) target: AttachmentTarget,
     pub(super) client: ManagedRuntimeClient,
     pub(super) attachment: RuntimeAttachment,
@@ -146,6 +151,14 @@ pub(super) struct Route {
 /// A single notification consumer drives fan-in directly, without pump tasks.
 #[derive(Clone)]
 pub struct AppServerConnection {
+    callbacks: Arc<super::callbacks::Client>,
+    thread_status_events: Arc<
+        tokio::sync::Mutex<
+            tokio::sync::broadcast::Receiver<
+                crate::local_runtime::session_runtime_manager::status::ThreadStatusEvent,
+            >,
+        >,
+    >,
     host: AppServerHost,
     sessions: SessionController,
     initialized: Arc<Mutex<Option<InitializeParams>>>,
@@ -334,6 +347,10 @@ impl AppServerConnection {
         let delivered = summary_invalidations.frontier();
         let schedule_changes = Arc::new(Mutex::new(host.manager().schedule_catalog_changes()));
         Self {
+            callbacks: host.callbacks().connect(),
+            thread_status_events: Arc::new(tokio::sync::Mutex::new(
+                host.manager().status_notifications(),
+            )),
             summary_invalidations,
             summary_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             schedule_changes,
@@ -349,19 +366,16 @@ impl AppServerConnection {
             configuration_interest: Arc::default(),
             source_repairs: Arc::default(),
             next_route: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            delivery_access: None,
+            delivery_access: Some(tokio_util::sync::CancellationToken::new()),
             deliveries: Arc::default(),
             associations: Arc::default(),
         }
     }
 
-    /// A connection whose transport authenticated delivery access: the owner
-    /// of an explicitly delegated stdio pair, or a WebSocket client offering
-    /// the separate delivery credential. Only transport composition calls
-    /// this; the token is that transport authority, cancelled by revocation
-    /// or close.
+    /// Bind transport lifetime to the same ordinary API eligibility. Closing
+    /// this carrier fences its pending publications and connection resources.
     #[must_use]
-    pub(crate) fn with_delivery_access(
+    pub(crate) fn with_connection_lifetime(
         host: AppServerHost,
         authorization: tokio_util::sync::CancellationToken,
     ) -> Self {
@@ -447,6 +461,7 @@ impl AppServerConnection {
     /// # Panics
     /// Panics if the routing mutex is poisoned.
     pub fn close(&self) {
+        self.host.callbacks().disconnect(&self.callbacks.id);
         let mut routes = self.routes.lock().expect("routes mutex");
         routes.closed = true;
         let active = std::mem::take(&mut routes.active);
@@ -497,11 +512,56 @@ impl AppServerConnection {
     /// [`Self::handle_json`] without committing: the transport commits a
     /// delivery response at its physical write.
     pub(super) fn prepare_json(&self, json: &str) -> Prepared {
+        // Responses have no response of their own, including malformed or
+        // stale replies. A strict typed envelope must validate before claim.
+        if json.len() <= super::transport::MAX_MESSAGE_BYTES
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(json)
+            && value.is_object()
+            && value.get("method").is_none()
+            && (value.get("result").is_some() || value.get("error").is_some())
+        {
+            if self.admitted().is_ok()
+                && let Ok(reply) = serde_json::from_str::<super::protocol::ClientReply>(json)
+                && reply.id().is_valid()
+            {
+                self.host.callbacks().respond(&self.callbacks.id, reply);
+            }
+            return Prepared::Ready(None);
+        }
         match Self::decode(json) {
             Ok(Some(request)) => self.prepare_request(request),
             Ok(None) => Prepared::Ready(None),
             Err(response) => Prepared::ready(Reply::plain(response)),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn next_server_message(&self) -> Option<super::protocol::ServerMessage> {
+        self.callbacks
+            .messages
+            .lock()
+            .await
+            .recv()
+            .await
+            .map(|q| q.message)
+    }
+    pub(super) async fn callback_ready(&self) {
+        let receiver = self.callbacks.messages.lock().await;
+        std::future::poll_fn(|cx| {
+            self.callbacks.waker.register(cx.waker());
+            if receiver.is_empty() {
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(())
+            }
+        })
+        .await;
+    }
+    pub(super) async fn next_callback(&self) -> Option<super::callbacks::Queued> {
+        self.callbacks.messages.lock().await.recv().await
+    }
+    pub(crate) async fn callback_overloaded(&self) {
+        self.callbacks.overloaded.cancelled().await;
     }
 
     pub(super) async fn reply_json(&self, json: &str) -> Option<Reply> {
@@ -778,6 +838,22 @@ impl AppServerConnection {
                 registration_id,
                 ..
             }) => self.route(target).ok().map(|route| {
+                if let Ok(owner) = route.attachment.operation_authority() {
+                    if let Some(lifecycle) = owner.lifecycle() {
+                        self.host.callbacks().subscribe(
+                            &self.callbacks.id,
+                            &target.conversation_id,
+                            lifecycle,
+                        );
+                    }
+                    for header in owner.pending_interaction_headers() {
+                        self.host.callbacks().interaction(
+                            &target.conversation_id,
+                            &header.interaction,
+                            &owner,
+                        );
+                    }
+                }
                 route
                     .registration
                     .receipt_for(registration_id, &id)
@@ -1172,10 +1248,14 @@ impl AppServerConnection {
                     configuration_revision: self.configuration_revision(&session_id).await?,
                 })
             }
-            Method::SessionAttach {
-                session_id,
-                node_id,
-            } => {
+            Method::SessionAttach { thread_id } => {
+                let thread = self
+                    .sessions
+                    .thread(&thread_id)
+                    .await
+                    .map_err(session_error)?;
+                let session_id = thread.session_id;
+                let node_id = thread.node_id;
                 let capacity = self.host.admit_attachment().map_err(host_error)?;
                 let reservation = AttachReservation::new(&self.routes, &session_id, &self.host)?;
                 // Reservation is request-scoped; once claimed, Loading is
@@ -1183,7 +1263,7 @@ impl AppServerConnection {
                 let runtime = self
                     .host
                     .manager()
-                    .load(&session_id, node_id.as_ref())
+                    .load(&session_id, Some(&node_id))
                     .await
                     .map_err(manager_error)?;
                 let configuration_revision = self.configuration_revision(&session_id).await?;
@@ -1198,6 +1278,7 @@ impl AppServerConnection {
                     };
                     Ok((
                         Arc::new(Route {
+                            connection_id: self.callbacks.id.clone(),
                             target: target.clone(),
                             client,
                             attachment,
@@ -1207,7 +1288,7 @@ impl AppServerConnection {
                         }),
                         MethodResult::Attached {
                             configuration_revision,
-                            attachment_kind: super::protocol::AttachmentKind::Controller,
+                            attachment_kind: super::protocol::AttachmentKind::Writable,
                             observation_source: super::protocol::ObservationSource::Live,
                             target,
                         },

@@ -437,6 +437,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                     &creator,
                     1,
                     Method::SessionCreate {
+                        dynamic_tools: Vec::new(),
                         submission: submitted.then(|| {
                             crate::local_runtime::mcp_drafts::McpDraftTarget {
                                 draft_id: "visibility-regression".into(),
@@ -555,8 +556,13 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 &observer,
                 3,
                 Method::SessionAttach {
-                    session_id: id.clone(),
-                    node_id: None,
+                    thread_id: f
+                        .manager
+                        .sessions
+                        .read_session(&id)
+                        .await
+                        .unwrap()
+                        .active_conversation_id,
                 },
             )
             .await

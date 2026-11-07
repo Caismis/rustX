@@ -18,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); server.client.disconnect(); });
 const idle = (actor: ShellNavigationActor) => waitFor(actor, snapshot => snapshot.matches('idle'));
-const executableRequests = (at = 0) => server.requests.slice(at).filter(({ request }) => /^(turn\/|session\/(attach|detach|create|switchNode|submissionIntent|uploadPrepare)$|workflow\/(start|cancel)|schedule\/(create|cancel|update))/.test(request.method));
+const executableRequests = (at = 0) => server.requests.slice(at).filter(({ request }) => /^(turn\/|thread\/(start|resume|fork)$|inbound\/(queue|edit|remove)$|session\/(detach|switchNode|submissionIntent|uploadPrepare)$|workflow\/(start|cancel)|schedule\/(create|cancel|update))/.test(request.method));
 async function mounted(session = true) {
   await server.attached('A');
   render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
@@ -250,9 +250,9 @@ it('returning Home while a cold attachment is pending keeps its draft and waits 
   server.snapshots.set('C', snapshot('C'));
   await server.attached('A');
   const f = routeFixture(server.client, { ...server.workspaceHost, classifyLocations: async cwds => cwds.map(() => ({ authorized: true })) });
-  server.held.add('session/attach');
+  server.held.add('thread/resume');
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
-  const attach = await server.waitFor('session/attach', 2), binding = f.actor.getSnapshot().context.binding;
+  const attach = await server.waitFor('thread/resume', 2), binding = f.actor.getSnapshot().context.binding;
   const current = draftSessionCurrent(f.actor, f.actor.getSnapshot().context.draftSession!.intent);
   const retainedOwner = f.capture();
   f.actor.send({ type: 'SETTINGS' });
@@ -268,7 +268,7 @@ it('returning Home while a cold attachment is pending keeps its draft and waits 
   expect(f.actor.getSnapshot().context.binding).toBe(binding);
   expect(current()).toBe(true);
   expect(retainedOwner()).toBe(true);
-  expect(server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === 'C')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === 'C')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method.startsWith('turn/'))).toEqual([]);
   f.actor.send({ type: 'DRAFT' });
   expect(current()).toBe(false);

@@ -1,4 +1,4 @@
-import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v72';
+import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v74';
 import type { AppServerClient } from './app-server';
 import type { Observation } from './session-lifecycle/port';
 import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceFieldReader,type TraceCache } from './trace';

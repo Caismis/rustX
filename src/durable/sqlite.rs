@@ -313,7 +313,7 @@ fn count_conversation_store_open() {
 /// Version 84 requires exact Workflow run/instance indexes for bounded historical reads.
 /// Version 85 records Session configuration commits as Journal facts with
 /// their own transcript positions.
-pub const SQLITE_SCHEMA_VERSION: i64 = 85;
+pub const SQLITE_SCHEMA_VERSION: i64 = 86;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

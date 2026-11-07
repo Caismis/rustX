@@ -15,7 +15,7 @@ import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';
-import type { SourceTarget } from '../../../../protocol/app-server/v72';
+import type { SourceTarget } from '../../../../protocol/app-server/v74';
 import { useClientSelector } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Button } from '../../presentation/primitives/Button';

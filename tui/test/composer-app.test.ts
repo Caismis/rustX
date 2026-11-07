@@ -1,4 +1,4 @@
-import { registrationId } from "./support/app-server-peer.ts";
+import { registrationId, inputIdOf } from "./support/app-server-peer.ts";
 import { checkpoint } from "./support/fixtures.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
@@ -14,7 +14,7 @@ import { snapshot, sessionView, attemptView, subagent, userMessage, nativeIntera
 import { TempFixture } from "./support/temp-fixture.ts";
 import type { RuntimeClientSnapshot, UserInputBlock } from "../src/protocol/app-server.ts";
 
-function childObservation(child: ReturnType<typeof subagent>, text?: string): Extract<import('../../protocol/app-server/v72.ts').MethodResult,{type:'agent_observe'}> {
+function childObservation(child: ReturnType<typeof subagent>, text?: string): Extract<import('../../protocol/app-server/v74.ts').MethodResult,{type:'agent_observe'}> {
  const value=snapshot({conversation_id:child.child_conversation_id,transcript:{entries:text?[{cursor:'1',item:{type:'message',message:userMessage('child-message',text)}}]:[]}});
  const bounded=checkpoint(value);bounded.read_cut.activation_id=child.activation_id;
  return {type:'agent_observe',observation:{type:'checkpoint',agent_id:child.agent_id,conversation_id:child.child_conversation_id,activation_id:child.activation_id,source:'durable_only',cursor:null,checkpoint:bounded}};
@@ -23,7 +23,7 @@ const continuation = () => new Promise<void>(resolve => setImmediate(resolve));
 
 test("T11 a late bounded content read cannot replace its successor view or Applied cursor", async t => {
   const h = await appHarness(t);
-  const ref: import("../../protocol/app-server/v72.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v74.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"range-source"}, block_index: 0 },
     representation: "utf8_text", version: 1, content_revision: 1, readable_end: 5,
@@ -31,8 +31,8 @@ test("T11 a late bounded content read cannot replace its successor view or Appli
   Object.defineProperty(h.session, "deferredContent", { get: () => [{ path: ["range"], content_ref: ref, deferred: true }] });
   let entered!: () => void;
   const called = new Promise<void>(resolve => { entered = resolve; });
-  let release!: (value: import("../../protocol/app-server/v72.ts").ContentChunk) => void;
-  const pending = new Promise<import("../../protocol/app-server/v72.ts").ContentChunk>(resolve => { release = resolve; });
+  let release!: (value: import("../../protocol/app-server/v74.ts").ContentChunk) => void;
+  const pending = new Promise<import("../../protocol/app-server/v74.ts").ContentChunk>(resolve => { release = resolve; });
   t.mock.method(h.session, "readContent", () => { entered(); return pending; });
   const applied = h.session.state.cursor;
   h.editor.setText("/content 1"); h.input("\r");
@@ -55,8 +55,8 @@ async function appHarness(t: TestContext, initial: RuntimeClientSnapshot = snaps
     let prepared: AppServerSession | undefined;
     const target = { ...h.target, attachment_id: 'prepared-composer-attachment' };
     const attaching = AppServerSession.attach(h.client, target.session_id, undefined, value => { prepared = value; });
-    const attach = await nextRequest(h, 'session/attach');
-    h.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'controller', observation_source: 'live' });
+    const attach = await nextRequest(h, 'thread/resume');
+    h.transport.respond(attach.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'writable', observation_source: 'live' });
     const read = await nextRequest(h, 'session/checkpoint');
     h.transport.respond(read.id, { type: 'checkpoint', checkpoint: checkpoint(initial) });
     const subscribe = await nextRequest(h, 'session/subscribe');
@@ -101,16 +101,16 @@ for (const boundary of ['prepared subscription', 'repair checkpoint'] as const) 
     h.transport.respond(read.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot(), '2') });
     const subscribe = await nextRequest(h, 'session/subscribe');
     h.input('\r'); assert.equal(h.editor.getExpandedText(), draft);
-    assert.equal(h.transport.log.count('turn/start'), 0);
+    assert.equal(h.transport.log.count('inbound/queue'), 0);
     h.transport.respond(subscribe.id, { type: 'subscribed', target: h.target, registration_id: 'composer-repair', after_cursor: '2' });
     await repairing;
   } else await h.completeInitialReceipt();
   assert.equal(h.session.controlReady, true); assert.equal(h.editor.getExpandedText(), draft);
-  h.input('\r'); const start = await nextRequest(h, 'turn/start');
-  assert.deepEqual(start.params, { target: h.session.target, content: [{ type: 'text', text: draft }] });
+  h.input('\r'); const start = await nextRequest(h, 'inbound/queue');
+  assert.deepEqual(start.params, {inputId: inputIdOf(start), target: h.session.target, content: [{ type: 'text', text: draft }] });
   h.transport.respond(start.id, { type: 'inbound_accepted', message_id: 'original-admitted-message', inbound_sequence: '1' });
   await continuation(); assert.equal(h.editor.getExpandedText(), '');
-  assert.equal(h.transport.log.count('turn/start'), 1);
+  assert.equal(h.transport.log.count('inbound/queue'), 1);
 });
 
 const unavailableStates = [
@@ -128,35 +128,41 @@ for (const [stateName, initial] of unavailableStates) for (const gesture of (sta
   assert.equal(h.session.observationPhase, 'unavailable'); assert.equal(h.session.controlReady, false);
   if (stateName !== 'pending interaction') h.input('\r');
   assert.equal(h.editor.getExpandedText(), 'retained draft 中');
-  assert.equal(h.transport.log.count('turn/start'), 0); assert.equal(h.transport.log.count('turn/steer'), 0);
+  assert.equal(h.transport.log.count('inbound/queue'), 0); assert.equal(h.transport.log.count('turn/steer'), 0);
   if (gesture === '/cancel') { h.editor.setText('/cancel'); h.input('\r'); }
   else h.input(gesture === 'Escape' ? '\x1b' : '\x03');
-  const request = await nextRequest(h, 'turn/cancel');
-  assert.equal(request.method, 'turn/cancel'); if (request.method !== 'turn/cancel') assert.fail('native cancellation');
+  if(!initial.attempt?.attempt_id) {
+    await continuation();
+    assert.equal(h.transport.log.count('turn/interrupt'),0,'missing exact Attempt never targets future work');
+    assert.equal(h.transport.log.count('session/checkpoint'),reads);
+    return;
+  }
+  const request = await nextRequest(h, 'turn/interrupt');
+  assert.equal(request.method, 'turn/interrupt'); if (request.method !== 'turn/interrupt') assert.fail('native cancellation');
   assert.deepEqual(request.params.target, h.target);
   h.transport.respond(request.id, { type: 'cancellation_accepted', attempt_id: 'native-current-B' });
   await continuation();
   assert.equal(h.session.state, before); assert.equal(h.session.observationPhase, 'unavailable');
   assert.match(h.notices.at(-1)!, /native-current-B/);
   if (gesture !== '/cancel') assert.equal(h.editor.getExpandedText(), 'retained draft 中');
-  assert.equal(h.transport.log.count('turn/cancel'), 1); assert.equal(h.transport.log.count('session/checkpoint'), reads);
+  assert.equal(h.transport.log.count('turn/interrupt'), 1); assert.equal(h.transport.log.count('session/checkpoint'), reads);
 });
 
 test('actual Escape cancels stale idle while an explicit observation repair is held', async t => {
-  const h = await appHarness(t);
+  const h = await appHarness(t,snapshot({attempt:attemptView({attempt_id:'retained-A'})}));
   const before = h.session.state;
   const repairing = h.session.resync(), read = await nextRequest(h, 'session/checkpoint');
   assert.equal(h.session.controlReady, false); assert.equal(h.session.cancellationReady, true);
   h.input('\x1b');
-  const request = await nextRequest(h, 'turn/cancel');
-  assert.deepEqual(request.params, { target: h.target });
+  const request = await nextRequest(h, 'turn/interrupt');
+  assert.deepEqual(request.params, { target: h.target,turnId:'retained-A' });
   h.transport.respond(request.id, { type: 'cancellation_accepted', attempt_id: 'native-current-B' });
   await continuation();
   assert.equal(h.session.state, before); assert.match(h.notices.at(-1)!, /native-current-B/);
   h.transport.respond(read.id, { type: 'checkpoint', checkpoint: checkpoint(snapshot(), '2') });
   const subscribe = await nextRequest(h, 'session/subscribe');
   h.transport.respond(subscribe.id, { type: 'subscribed', target: h.target, registration_id: 'explicit-repair', after_cursor: '2' });
-  await repairing; assert.equal(h.transport.log.count('turn/cancel'), 1);
+  await repairing; assert.equal(h.transport.log.count('turn/interrupt'), 1);
 });
 
 for (const retirement of ['attachment', 'connection'] as const) test(`unavailable TUI gestures cannot dispatch through a retired ${retirement}`, async t => {
@@ -167,36 +173,36 @@ for (const retirement of ['attachment', 'connection'] as const) test(`unavailabl
     h.transport.respond(request.id, { type: 'detached' }); await detaching;
   } else h.client.close();
   h.input('\x1b'); await continuation();
-  assert.equal(h.transport.log.count('turn/cancel'), 0);
+  assert.equal(h.transport.log.count('turn/interrupt'), 0);
   assert.equal(h.session.released, true);
 });
 
 test("actual app uses Send/Steer/Queue and never clears a newly typed draft after admission", async t => {
   const h = await appHarness(t);
   h.editor.setText("idle"); h.input("\r");
-  const first = await nextRequest(h, "turn/start", 0);
+  const first = await nextRequest(h, "inbound/queue", 0);
   h.editor.setText("typed during transport");
   h.transport.respond(first.id, { type: "inbound_accepted", message_id: "m1", inbound_sequence: "1" });
   await continuation(); assert.equal(h.editor.getExpandedText(), "typed during transport");
   h.session.applyNotification({ jsonrpc: "2.0", method: "session/event", params: { registration_id: registrationId(h.target), target: h.target, cursor: "1", event: { type: "attempt_started", attempt_id: "a", model: null, execution_settings: null } } });
   h.input("\r"); const steer = await nextRequest(h, "turn/steer", 0);
-  h.transport.respond(steer.id, { type: "inbound_accepted", message_id: "m2", inbound_sequence: "2" }); await continuation();
-  h.editor.setText("queue"); h.input("\t"); const queue = await nextRequest(h, "turn/start", 1);
+  h.transport.respond(steer.id, { type: "turn_input_accepted",turnId:"a1",disposition:"steered", message_id: "m2", inbound_sequence: "2" }); await continuation();
+  h.editor.setText("queue"); h.input("\t"); const queue = await nextRequest(h, "inbound/queue", 1);
   h.transport.respond(queue.id, { type: "inbound_accepted", message_id: "m3", inbound_sequence: "3" }); await continuation();
-  assert.equal(h.transport.transportCount("turn/start"), 2); assert.equal(h.transport.transportCount("turn/steer"), 1);
+  assert.equal(h.transport.transportCount("inbound/queue"), 2); assert.equal(h.transport.transportCount("turn/steer"), 1);
 });
 
 test("actual app Ctrl+R searches local prompts, excludes commands, Esc preserves exact cursor draft", async t => {
   const h = await appHarness(t);
   h.editor.setText("searchable prompt"); h.input("\r");
-  const request = await nextRequest(h, "turn/start", 0); h.transport.respond(request.id, { type: "inbound_accepted", message_id: "m", inbound_sequence: "1" }); await continuation();
+  const request = await nextRequest(h, "inbound/queue", 0); h.transport.respond(request.id, { type: "inbound_accepted", message_id: "m", inbound_sequence: "1" }); await continuation();
   h.editor.setText("draft中👩‍💻e\u0301"); h.input("\x1b[D");
   h.input("\x12"); h.input("searchable");
   assert.ok(h.focus instanceof PopupFrame); assert.match(h.focus.render(80).join("\n"), /searchable prompt/);
   h.input("\x1b"); assert.equal(h.editor.getExpandedText(), "draft中👩‍💻e\u0301");
   h.input("\x7f"); assert.equal(h.editor.getExpandedText(), "draft中e\u0301", "cursor was preserved too");
   h.input("\x12"); h.input("\r"); assert.equal(h.editor.getExpandedText(), "searchable prompt");
-  assert.equal(h.transport.transportCount("turn/start"), 1);
+  assert.equal(h.transport.transportCount("inbound/queue"), 1);
 });
 
 test("actual app command overlay uploads selected bytes without losing text order or local draft", async t => {
@@ -208,11 +214,11 @@ test("actual app command overlay uploads selected bytes without losing text orde
   const upload = await nextRequest(h, "session/uploadPrepare", 0);
   assert.deepEqual((upload.params as { files: unknown }).files, [{ name: "selected.txt", size: 14 }]);
   h.editor.setText("after"); // typing after the upload action is a separate ordered region
-  const beforeNavigation = { lists: h.transport.log.count("session/list"), attaches: h.transport.log.count("session/attach") };
+  const beforeNavigation = { lists: h.transport.log.count("session/list"), attaches: h.transport.log.count("thread/resume") };
   h.input("\x10"); h.input("resume"); h.input("\r");
   await continuation();
   assert.equal(h.transport.log.count("session/list"), beforeNavigation.lists, "an unresolved upload owns this draft; Resume cannot detach its completion owner");
-  assert.equal(h.transport.log.count("session/attach"), beforeNavigation.attaches);
+  assert.equal(h.transport.log.count("thread/resume"), beforeNavigation.attaches);
   assert.equal(h.editor.getExpandedText(), "after");
   const receipt = { session_id: h.session.sessionId, batch_id: "batch", token: "receipt" };
   h.transport.respond(upload.id, { type: "upload_prepared", transfer: { path: "/session-upload/" + "a".repeat(43), loopback_port: 1234, expires_in_seconds: 60 } });
@@ -225,8 +231,8 @@ test("actual app command overlay uploads selected bytes without losing text orde
   h.transport.respond(read.id, {type:'checkpoint', checkpoint:checkpoint(snapshot(),"2")});
   const subscribe = await nextRequest(h, "session/subscribe", 0);
   h.transport.respond(subscribe.id, { type: "subscribed", target:h.target,registration_id:"00000000-0000-4000-8000-000000000099", after_cursor: "2" }); await repair;
-  h.input("\r"); const sent = await nextRequest(h, "turn/start", 0);
-  assert.deepEqual(sent.params, { target: h.target, content: [{ type: "text", text: "before\n" }, { type: "upload", ...receipt }, { type: "text", text: "after" }] });
+  h.input("\r"); const sent = await nextRequest(h, "inbound/queue", 0);
+  assert.deepEqual(sent.params, {inputId: inputIdOf(sent), target: h.target, content: [{ type: "text", text: "before\n" }, { type: "upload", ...receipt }, { type: "text", text: "after" }] });
   assert.ok(!JSON.stringify(sent.params).includes(path)); assert.ok(!JSON.stringify(sent.params).includes("/server/native/path"));
   h.transport.respond(sent.id, { type: "inbound_accepted", message_id: "m", inbound_sequence: "3" }); await continuation();
 });
@@ -281,7 +287,7 @@ test("committed IME text and paste are content at the app boundary, never interr
   const h = await appHarness(t, snapshot({ attempt: attemptView() }));
   h.input("中文入力👩‍💻e\u0301");
   h.input("\x1b[200~"); h.input("\r"); h.input("\t"); h.input("\x1b"); h.input("\x1b[201~");
-  assert.equal(h.transport.transportCount("turn/start"), 0); assert.equal(h.transport.transportCount("turn/steer"), 0); assert.equal(h.transport.transportCount("turn/cancel"), 0);
+  assert.equal(h.transport.transportCount("inbound/queue"), 0); assert.equal(h.transport.transportCount("turn/steer"), 0); assert.equal(h.transport.transportCount("turn/interrupt"), 0);
   assert.match(h.editor.getExpandedText(), /中文入力/);
 });
 
@@ -295,7 +301,7 @@ test("queue and capability overlays keep the draft intact and command history st
   }
   h.input("\x12"); assert.ok(h.focus instanceof PopupFrame);
   assert.match(h.focus.render(80).join("\n"), /No matching prompts/);
-  assert.equal(h.transport.transportCount("turn/start"), 0);
+  assert.equal(h.transport.transportCount("inbound/queue"), 0);
 });
 
 test("settlement keeps the actual history overlay; resyncRequired invalidates it and preserves the draft", async t => {
@@ -320,10 +326,10 @@ test("pasted leading command tokens dispatch as Agent input, including typed suf
   const h = await appHarness(t);
   for (const [pasted, typed] of [["/settings", ""], ["/attach /tmp/a", ""], ["/attach ", "foo.txt"], ["ordinary pasted content", ""]] as const) {
     h.input(`\x1b[200~${pasted}\x1b[201~`); if (typed) h.input(typed);
-    const count = h.transport.transportCount("turn/start");
+    const count = h.transport.transportCount("inbound/queue");
     h.input("\r");
-    const request = await nextRequest(h, "turn/start", count);
-    assert.deepEqual(request.params, { target: h.target, content: [{ type: "text", text: pasted + typed }] });
+    const request = await nextRequest(h, "inbound/queue", count);
+    assert.deepEqual(request.params, {inputId: inputIdOf(request), target: h.target, content: [{ type: "text", text: pasted + typed }] });
     h.transport.respond(request.id, { type: "inbound_accepted", message_id: `m-${count}`, inbound_sequence: String(count + 1) });
     await continuation();
   }
@@ -347,7 +353,7 @@ test("typed attach token with pasted path arguments executes upload, including s
   h.transport.respond(status.id, { type: "upload_status", outcome: { state: "ready", files: [{ receipt: { session_id: h.session.sessionId, batch_id: `batch-${count}`, token: "receipt" }, file: { batch_id: `batch-${count}`, name }, path: "/server/native/path" }] } });
     await continuation();
   }
-  assert.equal(h.transport.transportCount("turn/start"), 0);
+  assert.equal(h.transport.transportCount("inbound/queue"), 0);
 });
 
 test("typed settings remains a command and clearing or replacing resets paste provenance", async t => {
@@ -364,7 +370,7 @@ test("typed settings remains a command and clearing or replacing resets paste pr
     await continuation();
   }
   assert.equal(h.transport.transportCount("configuration/sourcesRead"), 3);
-  assert.equal(h.transport.transportCount("turn/start"), 0);
+  assert.equal(h.transport.transportCount("inbound/queue"), 0);
 });
 
 test("typed attach token accepts a pasted separator and path across whole and fragmented paste", async t => {
@@ -381,7 +387,7 @@ test("typed attach token accepts a pasted separator and path across whole and fr
   h.transport.respond(status.id, { type: "upload_status", outcome: { state: "ready", files: [{ receipt: { session_id: h.session.sessionId, batch_id: `batch-${count}`, token: "receipt" }, file: { batch_id: `batch-${count}`, name: "my file.txt" }, path: "/server/native/path" }] } });
     await continuation();
   }
-  assert.equal(h.transport.transportCount("turn/start"), 0);
+  assert.equal(h.transport.transportCount("inbound/queue"), 0);
 });
 
 test("pasted token extensions and a pasted leading slash remain literal Agent input", async t => {
@@ -390,9 +396,9 @@ test("pasted token extensions and a pasted leading slash remain literal Agent in
     if (typed) h.input(typed);
     h.input("\x1b[200~"); h.input(pasted); h.input("\x1b[201~");
     if (suffix) h.input(suffix);
-    const count = h.transport.transportCount("turn/start"); h.input("\r");
-    const request = await nextRequest(h, "turn/start", count);
-    assert.deepEqual(request.params, { target: h.target, content: [{ type: "text", text: typed + pasted + suffix }] });
+    const count = h.transport.transportCount("inbound/queue"); h.input("\r");
+    const request = await nextRequest(h, "inbound/queue", count);
+    assert.deepEqual(request.params, {inputId: inputIdOf(request), target: h.target, content: [{ type: "text", text: typed + pasted + suffix }] });
     h.transport.respond(request.id, { type: "inbound_accepted", message_id: `m-${count}`, inbound_sequence: String(count + 1) });
     await continuation();
   }
@@ -416,8 +422,8 @@ test("child inspection preserves exact parent draft and cursor; Esc sends no req
   assert.deepEqual(h.transport.log.requests, requests, "Esc is presentation-only");
   assert.equal(h.session.state, parent);
   h.input("\x7f"); assert.equal(h.editor.getExpandedText(), "draft中e\u0301");
-  assert.equal(h.transport.transportCount("session/attach"), 1);
-  for (const method of ["turn/start", "turn/steer", "agent/interrupt", "interaction/respond"]) assert.equal(h.transport.transportCount(method), 0);
+  assert.equal(h.transport.transportCount("thread/resume"), 1);
+  for (const method of ["inbound/queue", "turn/steer", "agent/interrupt", "interaction/respond"]) assert.equal(h.transport.transportCount(method), 0);
 });
 
 
@@ -439,7 +445,7 @@ test("actual child A to B navigation rejects late A without Session or control r
   assert.ok(h.focus instanceof PopupFrame);
   const rendered = h.focus.render(100).join("\n");
   assert.match(rendered, /ONLY-B/); assert.doesNotMatch(rendered, /STALE-A/);
-  assert.deepEqual(h.transport.log.requests.map(request => request.method), ["initialize", "session/attach", "session/checkpoint", "session/subscribe", "session/configuration", "agent/observe", "agent/observeCancel", "agent/observe"]);
+  assert.deepEqual(h.transport.log.requests.map(request => request.method), ["initialize", "session/read", "thread/resume", "session/checkpoint", "session/subscribe", "session/configuration", "thread/read", "agent/observe", "agent/observeCancel", "agent/observe"]);
 });
 
 for (const kind of ["agent_delivery_unknown", "agent_not_delivered"] as const) {
@@ -522,6 +528,7 @@ test("T15 interaction viewport advances 32 items without changing authoritative 
   const request=await nextRequest(h,'conversation/checkpointPage');
   assert.equal((request.params as {offset:number}).offset,32);
   const headers=rows.slice(32).map(nativeInteraction);
+  for(const header of headers)h.transport.publishInteraction(h.session.target.conversation_id,header);
   h.transport.respond(request.id,{type:'checkpoint_page',page:{domain:'pending_interactions',cursor:'0',read_cut:cut.read_cut,total:'40',items:headers.map((value,index)=>({offset:String(32+index),identity:value.interaction.interaction_id,value,content:[],deferred:false})),next_offset:null}});
   await continuation();
   assert.ok(h.focus instanceof PopupFrame);
@@ -529,6 +536,13 @@ test("T15 interaction viewport advances 32 items without changing authoritative 
   assert.equal(h.session.state.pendingInteractions.length,32);
   assert.equal(h.session.state.cursor,'0');
   assert.equal(h.transport.transportCount('interaction/respond'),0);
+  const selected=rows[32]!.interaction;
+  h.transport.deliver({jsonrpc:'2.0',method:'serverRequest/resolved',params:{threadId:h.session.target.conversation_id,requestId:`callback:${selected.conversation_id}:${selected.interaction_id}`}});
+  await continuation();
+  assert.ok(h.focus instanceof PopupFrame);
+  assert.doesNotMatch(h.focus.render(100).join('\n'),/page-32/);
+  assert.match(h.focus.render(100).join('\n'),/page-33/);
+  assert.equal(h.session.state.cursor,'0','callback resolution does not invent a native checkpoint');
 });
 
 test("T11 late selected interaction body cannot reopen a hidden view", async t => {

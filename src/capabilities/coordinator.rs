@@ -4666,6 +4666,7 @@ mod mcp_race_tests {
                 stdout_capture: None,
                 workspace_changes: None,
                 model_invocation: None,
+                attempt_id: None,
                 goal: None,
                 schedule: None,
                 conversation_id: runtime_bundle.conversation_id(),

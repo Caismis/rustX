@@ -65,7 +65,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await page.screenshot({ path: `/tmp/rustx-feedback-action-${width}.png` });
       await expect(toast).toHaveCount(0, { timeout: 9000 });
       await expect(editor).toHaveValue('/not-a-command');
-      expect(wire.requests.filter(row => row.method === 'turn/start')).toHaveLength(1);
+      expect(wire.requests.filter(row => row.method === 'inbound/queue')).toHaveLength(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
       passed = true;

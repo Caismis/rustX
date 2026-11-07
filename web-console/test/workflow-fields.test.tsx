@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
 import { exampleSource } from './workflow-fixtures';
-import type { WorkflowFileDocument } from '../../protocol/app-server/v72';
+import type { WorkflowFileDocument } from '../../protocol/app-server/v74';
 import type { WorkflowEdit } from '../../protocol/app-server/workflow-documents.ts';
 import type { WorkflowCommit } from '../src/workspaces/host';
 import { workflowEditorMachine } from '../src/app/workflows/machines/editor';

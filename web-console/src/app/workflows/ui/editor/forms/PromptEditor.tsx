@@ -8,7 +8,7 @@ import {
   $createLineBreakNode, $createParagraphNode, $createTextNode, $getNodeByKey, $getRoot, $getSelection, $insertNodes, $isElementNode, $isLineBreakNode,
   $isRangeSelection, COMMAND_PRIORITY_LOW, DecoratorNode, KEY_DOWN_COMMAND, type LexicalNode, type NodeKey, type SerializedLexicalNode, type Spread,
 } from 'lexical';
-import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v72';
+import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v74';
 import { encodeField, type FieldAddress } from '../../../document/fields';
 import type { Value } from '../../../document/model';
 import type { Edit } from '../panels/shared';

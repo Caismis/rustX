@@ -11,7 +11,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), zh ? 'zh' : 'en');
   await page.goto(fixture);
   await page.waitForFunction(() => (window as any).startupFixture);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('thread/resume'); f.resumeCatalog(); });
   if (zh) await page.getByRole('button', { name: '主页', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await expect(page).toHaveTitle('Session A — rustX');

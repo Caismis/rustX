@@ -10,8 +10,6 @@ use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
 use base64::Engine as _;
 use rustx::durable::{CanonicalStore, JournalStore, ObservationStore};
 
-const DELIVERY_SECRET: &str = "bounded-delivery-secret-00000000000000000000000000000";
-
 async fn granted_connection(
     fixture: &Fixture,
     ws: bool,
@@ -19,9 +17,6 @@ async fn granted_connection(
 ) -> (driver::Driver, tokio::task::JoinHandle<io::Result<()>>) {
     let host = fixture.host.clone();
     if ws {
-        host.bind_delivery_access(Some(
-            websocket::Credential::new(DELIVERY_SECRET.into()).unwrap(),
-        ));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -34,14 +29,14 @@ async fn granted_connection(
             .await
         });
         let offered = format!(
-            "rustx.app-server.v72, rustx-token.{}, rustx-delivery-access.{DELIVERY_SECRET}",
-            driver::TOKEN
+            "rustx.app-server.v74, {}",
+            driver::credential_offer(driver::TOKEN)
         );
         (driver::websocket_offering(&url, &offered).await, server)
     } else {
         let (client, server) = tokio::io::duplex(65_536);
         let (reader, writer) = tokio::io::split(server);
-        let connection = Arc::new(AppServerConnection::with_delivery_access(host, grant));
+        let connection = Arc::new(AppServerConnection::with_connection_lifetime(host, grant));
         let server = tokio::spawn(stdio::serve(
             connection,
             reader,
@@ -150,13 +145,12 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
             let MethodResult::SessionFileBytes { file: selected, data } = call(&client, 46_900, read.clone()).await else { panic!("protected original file"); };
             assert_eq!(selected, file);
             assert_eq!(base64::engine::general_purpose::STANDARD.decode(data).unwrap(), original_bytes);
-            if ws { fixture.host.bind_delivery_access(None); } else { grant.cancel(); }
+            call(&client, 46_899, Method::SessionDetach {target:target.clone()}).await;
             let Response::Failure(failure) = client.request(Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(46_901), call: read }).await else { panic!("revoked file authority"); };
             assert_eq!(failure.id, Some(RequestId::Integer(46_901)));
-            assert_eq!(failure.error.data, Some(ErrorData::SessionFileRead { reason: crate::tools::session_files::SessionFileReadFailure::Unauthorized }));
+            assert_eq!(failure.error.data, Some(ErrorData::StaleAttachment));
             assert!(matches!(call(&client, 46_902, Method::ServerInfo {}).await, MethodResult::ServerInfo { .. }));
-            let MethodResult::Checkpoint { checkpoint: after } = call(&client, 46_903, Method::SessionCheckpoint { target: target.clone(), trace_records: vec![] }).await else { panic!("same observation after revoke"); };
-            assert_eq!(after, checkpoint);
+            assert_eq!(checkpoint.snapshot.conversation_id, target.conversation_id);
             assert!(fixture.provider.request_bodies().is_empty(), "observation never starts model work");
             let access = fixture.manager.session_controller().acquire_read(&session.id, Some(&session.active_node)).await.unwrap();
             let retained = SqliteConversationStore::open_existing(session.active_conversation_id.clone(), &access.database_path).unwrap();

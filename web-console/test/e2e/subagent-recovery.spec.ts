@@ -10,7 +10,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await page.addInitScript(locale => localStorage.setItem('rustx-locale-v1', locale), zh ? 'zh' : 'en');
   await page.goto(fixture);
   await page.waitForFunction(() => (window as any).startupFixture);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('thread/resume'); f.resumeCatalog(); });
   if (zh) await page.getByRole('button', { name: '主页', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
   await page.getByRole('button', { name: zh ? '子智能体' : 'Subagents', exact: true }).click();
@@ -54,7 +54,7 @@ for (const theme of ['dark', 'light'] as const) for (const width of [1440, 390])
   await expect(input).toHaveValue('Keep my child draft'); await expect(stop).toBeEnabled();
   expect(await inputNode!.evaluate(node => node.isConnected)).toBe(true);
   await page.screenshot({ path: `/tmp/rustx-child-recovered-${theme}-${width}.png` });
-  expect(await page.evaluate(() => (window as any).startupFixture.requests().filter((r: any) => ['agent/sendMessage', 'agent/interrupt', 'turn/start'].includes(r.method)))).toEqual([]);
+  expect(await page.evaluate(() => (window as any).startupFixture.requests().filter((r: any) => ['agent/sendMessage', 'agent/interrupt', 'inbound/queue'].includes(r.method)))).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   expect(errors).toEqual([]);

@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v72';
+import type { SessionModelConfig } from '../../../protocol/app-server/v74';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -81,7 +81,7 @@ max_output_tokens = { mode = "limit", tokens = 111 }
       await expect(page).toHaveTitle(/rustX/);
       await connectRemote(page, fixture.endpoint, fixture.token);
       await openExistingSession(page, id, width);
-      const attached = wire.responses.filter(response => response.method === 'session/attach').at(-1)!.result;
+      const attached = wire.responses.filter(response => response.method === 'thread/resume').at(-1)!.result;
       expect(attached.type).toBe('attached');
       expect(attached).not.toHaveProperty('snapshot');
       expect((await wire.read('session/checkpoint', await wire.attachedTarget(id))).checkpoint.snapshot.model!.configured).toEqual(complete);
@@ -262,7 +262,7 @@ for (const width of [1440, 390]) for (const deferred of [false, true]) test(`a d
     let existing: string | undefined;
     if (deferred) {
       remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-      existing = (await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA, model: {
+      existing = (await remote.client.call('thread/start', { settings: { cwd: fixture.workspaceA, model: {
         model: 'fixture/integration-model', summaryModel: { mode: 'explicit', model: 'fixture/integration-model', request_params: { confirmation_fixture: 'x'.repeat(70_000) } },
       } } }, 'session_transition')).session.id;
     }

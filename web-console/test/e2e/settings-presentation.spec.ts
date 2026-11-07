@@ -779,7 +779,7 @@ test('Session configuration banner: preparing, waiting and failed, compact and o
   await expect(banner(page).getByRole('button')).toHaveCount(0);
   await expectAccessible(page, '[aria-label="Session configuration"]');
   await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-waiting-light.png');
-  expect((await nativeRequests(page)).filter(request => ['configuration/reconcile', 'turn/cancel'].includes(request.method))).toEqual([]);
+  expect((await nativeRequests(page)).filter(request => ['configuration/reconcile', 'turn/interrupt'].includes(request.method))).toEqual([]);
   expect(errors).toEqual([]);
 
   // Failed: the native diagnostic, one action per native owner — here User

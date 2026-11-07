@@ -8,10 +8,11 @@ import { Server, snapshot } from './fixture';
 import { RpcFailure } from '../src/client/errors';
 
 const connected = { connection: 'connected' as const, uncertain: [] };
-const base = (): SessionView => ({ id: 'A', attachment: 'attached', attachmentIntent: 'wanted',
+const activeStatus = {threadId:'conversation-A',revision:'1',runtimeIncarnation:'native-incarnation',status:{type:'active' as const,activeFlags:[]}};
+const base = (): SessionView => ({ threadStatus:{...activeStatus,status:{type:'idle'}}, id: 'A', attachment: 'attached', attachmentIntent: 'wanted',
   target: { session_id: 'A', conversation_id: 'conversation-A', runtime_incarnation: 'native-incarnation', attachment_id: 'native-attachment' }, snapshot: snapshot() });
 const running = () => ({ attempt_id: 'private-attempt', phase: { type: 'running' as const }, turn: 1 });
-const uncertain = { id: 'lost-request', method: 'turn/cancel' as const, sessionId: 'A', generation: 7 };
+const uncertain = { id: 'lost-request', method: 'turn/interrupt' as const, sessionId: 'A', generation: 7 };
 
 it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progress while retaining real failures', transition => {
   const tx = translator('en'), view: SessionView = { ...base(), target: undefined, attachment: 'detached', attachmentIntent: 'released' };
@@ -27,13 +28,13 @@ it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progres
 
 it.each([
   ['idle', {}, {}, 'idle', undefined],
-  ['working', { snapshot: { ...snapshot(), attempt: running() } }, {}, 'working', undefined],
-  ['queued accepted input', { submissions: [{ messageId: 'accepted', content: [], submittedWhileRunning: true }] }, {}, 'queued', undefined],
+  ['working', { threadStatus:activeStatus, snapshot: { ...snapshot(), attempt: running() } }, {}, 'working', undefined],
+  ['queued accepted input', { submissions: [{ messageId: 'accepted', content: [], submittedWhileRunning: true }] }, {}, 'idle', undefined],
   ['accepted idle input', { submissions: [{ messageId: 'accepted', content: [], submittedWhileRunning: false }] }, {}, 'idle', undefined],
   ['unaccepted request is not queued', { inboundRequests: 1 }, {}, 'idle', undefined],
-  ['stopping outranks working', { snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'private-attempt', status: 'acknowledged' } }, {}, 'stopping', undefined],
-  ['another native receipt does not label stale working as stopping', { snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'actual-other-attempt', status: 'acknowledged' } }, {}, 'working', undefined],
-  ['connection loss outranks stale work', { snapshot: { ...snapshot(), attempt: running() } }, { connection: 'stale' }, 'reconnect', 'connect'],
+  ['cancellation acknowledgement leaves native work active', { threadStatus:activeStatus, snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'private-attempt', status: 'acknowledged' } }, {}, 'working', undefined],
+  ['another native receipt does not label stale working as stopping', { threadStatus:activeStatus, snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'actual-other-attempt', status: 'acknowledged' } }, {}, 'working', undefined],
+  ['connection loss outranks stale work', { threadStatus:activeStatus, snapshot: { ...snapshot(), attempt: running() } }, { connection: 'stale' }, 'reconnect', 'connect'],
   ['incompatible versions require settings, not blind reconnect', {}, { connection: 'incompatible' }, 'failure', 'connection-settings'],
   ['lost attachment', { target: undefined, attachment: 'stale' }, {}, 'reconnect', 'open'],
   ['failed read with target', { attachment: 'stale' }, {}, 'unavailable', 'refresh'],
@@ -47,7 +48,7 @@ it.each([
   ['pending deletion disables ordinary activity', { deleting: true }, {}, 'stopping', undefined],
   ['lost deletion requests verification', { deleting: true }, { uncertain: [uncertain] }, 'uncertain', 'connect'],
   ['failed retirement stays disabled with honest recovery', { deleting: true, error: 'Writer retirement unproven' }, {}, 'uncertain', 'connect'],
-  ['pending native mailbox', { snapshot: { ...snapshot(), inbound: { pending: [{ sequence: '2', revision: '3', message: { id: 'native-input', source: 'human', content: [] } }] } } }, {}, 'queued', undefined],
+  ['pending native mailbox', { snapshot: { ...snapshot(), inbound: { pending: [{ sequence: '2', revision: '3', message: { id: 'native-input', source: 'human', content: [] } }] } } }, {}, 'idle', undefined],
   ['settled cancellation has no noisy status', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } } } }, {}, 'idle', undefined],
   ['terminal history belongs to transcript projection', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'timed_out' } } } } }, {}, 'idle', undefined],
 ] as const)('%s maps only authoritative evidence', (_name, patch, connection, status, action) => {
@@ -85,25 +86,25 @@ it('conversation chrome exposes product controls without developer diagnostics',
   expect(screen.queryByLabelText('Native diagnostic JSON')).toBeNull();
 });
 it('lost cancellation remains uncertain through reconnect and a settled snapshot, with no replay', async () => {
-  const server = await mount(); server.held.add('turn/cancel');
+  const server = await mount(); server.held.add('turn/interrupt');
   fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
-  await server.waitFor('turn/cancel', 1);
-  expect(screen.getByLabelText('Session status').textContent).toBe('Stopping…');
+  await server.waitFor('turn/interrupt', 1);
+  expect(screen.queryByLabelText('Session status')).toBeNull();
   await act(async () => server.socket.close());
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
   expect(screen.getByRole('button', { name: 'Review outcome' })).toBeTruthy();
   server.snapshots.get('A')!.attempt = { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } };
   await act(async () => server.connect());
   expect(screen.getByLabelText('Session status').textContent).toContain('Needs verification');
-  expect(server.client.getSnapshot().uncertain).toMatchObject([{ method: 'turn/cancel', sessionId: 'A' }]);
-  expect(server.requests.filter(row => row.request.method === 'turn/cancel')).toHaveLength(1);
+  expect(server.client.getSnapshot().uncertain).toMatchObject([{ method: 'turn/interrupt', sessionId: 'A' }]);
+  expect(server.requests.filter(row => row.request.method === 'turn/interrupt')).toHaveLength(1);
 });
 it('lost authoritative attachment exposes one Open Session action and sends one admission-fenced attach', async () => {
   const server = await mount();
   await act(async () => server.client.release('A'));
   const before = server.requests.length;
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session' })));
-  expect(server.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(server.requests.slice(before).filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
   expect(screen.queryByRole('button', { name: 'Open Session' })).toBeNull();
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(screen.getByText('Deep diving…', {selector:'[role=status]'})).toBeTruthy();
@@ -124,8 +125,8 @@ it('failed observation exposes one Refresh observation action which refreshes wi
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh observation' })));
   const operations = server.requests.slice(before).map(row => row.request.method);
   expect(operations.filter(method => method === 'session/checkpoint')).toHaveLength(1);
-  expect(operations).not.toContain('session/attach');
-  expect(operations).not.toContain('turn/start');
-  expect(operations).not.toContain('turn/cancel');
+  expect(operations).not.toContain('thread/resume');
+  expect(operations).not.toContain('inbound/queue');
+  expect(operations).not.toContain('turn/interrupt');
   expect(screen.queryByRole('button', { name: 'Refresh observation' })).toBeNull();
 });

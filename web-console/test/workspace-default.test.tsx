@@ -27,11 +27,11 @@ async function fixture({ held = false, current = false, history = true, preserve
 it('startup selects the most recently active registered Workspace and Send uses it without opening a picker', async () => {
   const f = await fixture();
   await waitFor(() => expect(f.picker().textContent).toContain('Workspace B'));
-  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  expect(server.requests.some(row => row.request.method === 'thread/start')).toBe(false);
   fireEvent.change(f.ui.getByRole('textbox', { name: 'Message' }), { target: { value: 'Use the default Workspace' } });
   await waitFor(() => expect((f.ui.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
-  server.held.add('session/create'); fireEvent.click(f.ui.getByRole('button', { name: 'Send' }));
-  const request = await server.waitFor('session/create', 1); expect(request.params).toMatchObject({ settings: { cwd: '/workspace/B' } });
+  server.held.add('thread/start'); fireEvent.click(f.ui.getByRole('button', { name: 'Send' }));
+  const request = await server.waitFor('thread/start', 1); expect(request.params).toMatchObject({ settings: { cwd: '/workspace/B' } });
 });
 it('classification arriving after a manual Workspace choice preserves that choice, text and editor', async () => {
   const f = await fixture({ held: true });
@@ -48,13 +48,13 @@ it('typing before automatic Workspace selection survives a Settings round trip a
   fireEvent.change(editor, { target: { value: 'Typed before Workspace classification' } });
   fireEvent.click(within(f.ui.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Settings' }));
   await act(async () => f.classify.resolve());
-  expect(server.requests.filter(row => ['session/create', 'mcp/draftPrepare'].includes(row.request.method))).toHaveLength(0);
+  expect(server.requests.filter(row => ['thread/start', 'mcp/draftPrepare'].includes(row.request.method))).toHaveLength(0);
   fireEvent.click(within(f.ui.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Home' }));
   await waitFor(() => expect(f.picker().textContent).toContain('Workspace B'));
   expect(f.ui.getByRole('textbox', { name: 'Message' })).toBe(editor);
   expect((editor as HTMLTextAreaElement).value).toBe('Typed before Workspace classification');
   expect(f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
-  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  expect(server.requests.some(row => row.request.method === 'thread/start')).toBe(false);
   const preparation = await server.waitFor('mcp/draftPrepare', 1);
   expect(preparation.params).toMatchObject({ cwd: '/workspace/B' });
 });
@@ -72,12 +72,12 @@ it('New from Scheduled Tasks inherits the retained Home Session while Workspace 
   fireEvent.click(await f.ui.findByRole('button', { name: 'New' }));
   const editor = f.ui.getByRole('textbox', { name: 'Message' });
   fireEvent.change(editor, { target: { value: 'Keep the Home Workspace origin' } });
-  expect(server.requests.filter(row => ['session/create', 'mcp/draftPrepare'].includes(row.request.method))).toHaveLength(0);
+  expect(server.requests.filter(row => ['thread/start', 'mcp/draftPrepare'].includes(row.request.method))).toHaveLength(0);
   await act(async () => f.classify.resolve());
   await waitFor(() => expect(f.picker().textContent).toContain('Workspace A'));
   expect(f.ui.getByRole('textbox', { name: 'Message' })).toBe(editor);
   expect((editor as HTMLTextAreaElement).value).toBe('Keep the Home Workspace origin');
-  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  expect(server.requests.some(row => row.request.method === 'thread/start')).toBe(false);
   const preparation = await server.waitFor('mcp/draftPrepare', 1);
   expect(preparation.params).toMatchObject({ cwd: '/workspace/A' });
 });
@@ -88,17 +88,17 @@ it('restored Session selection takes precedence over the recent-Workspace defaul
   const f = await fixture({ current: true });
   await waitFor(() => expect(f.ui.container.querySelector('#session-view')?.getAttribute('data-shell-route')).toBe('session'));
   expect(f.ui.container.querySelector('[data-draft-conversation]')).toBeNull();
-  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  expect(server.requests.some(row => row.request.method === 'thread/start')).toBe(false);
 });
 it('remembers an unsent picker choice across a fresh client and Product Host lifetime', async () => {
   const first = await fixture();
   await waitFor(() => expect(first.picker().textContent).toContain('Workspace B'));
   fireEvent.click(first.picker()); fireEvent.click(await first.ui.findByRole('menuitem', { name: 'Workspace A' }));
-  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  expect(server.requests.some(row => row.request.method === 'thread/start')).toBe(false);
   first.ui.unmount(); server.client.disconnect();
   const restarted = await fixture({ preservePreferences: true, hostAuthority: 'restarted-host' });
   await waitFor(() => expect(restarted.picker().textContent).toContain('Workspace A'));
-  expect(server.requests.some(row => row.request.method === 'session/create')).toBe(false);
+  expect(server.requests.some(row => row.request.method === 'thread/start')).toBe(false);
 });
 it('a manual sidebar choice restores the unsent route instead of reopening an older Session', async () => {
   const first = await fixture({ current: true });

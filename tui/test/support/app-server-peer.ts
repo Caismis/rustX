@@ -1,3 +1,5 @@
+import {threadFor} from '../../../protocol/app-server/testing.ts';
+import {sessionView} from './fixtures.ts';
 /**
  * Scripted App Server peers for the deterministic client suites.
  *
@@ -22,7 +24,7 @@
 
 import { PassThrough } from "node:stream";
 
-import { decodeProtocolMessage } from "../../src/protocol/decoder.ts";
+import { decodeServerOutput } from "../../src/protocol/decoder.ts";
 import { encodeRecord } from "../../src/protocol/jsonl.ts";
 import {
   BaseTransport,
@@ -117,10 +119,21 @@ class RequestLog {
 export class FakeTransport extends BaseTransport {
   readonly log = new RequestLog();
   readonly answered = new Set<AppServerRequestId>();
+  readonly results = new Map<AppServerRequestId, MethodResult>();
+  readonly replies: import("../../../protocol/app-server/v74.ts").ClientReply[] = [];
   async nextPending(method:MethodName):Promise<ObservedRequest>{
     for(;;){const pending=this.log.matching(method).find(row=>!this.answered.has(row.id));if(pending)return pending;await this.log.awaitMethod(method,this.log.count(method)+1);}
   }
   #disposed = false;
+  #pendingInteractions:import('../../../protocol/app-server/v74.ts').RuntimeClientInteractionHeader[]=[];
+  publishInteraction(thread:string,interaction:import('../../../protocol/app-server/v74.ts').RuntimeClientInteractionHeader) {
+    this.deliver({jsonrpc:'2.0',id:`callback:${interaction.interaction.conversation_id}:${interaction.interaction.interaction_id}`,method:'item/interaction/request',params:{threadId:thread,interaction}});
+  }
+  scriptedReply?: (request:ObservedRequest)=>MethodResult|undefined;
+  readonly #threadSnapshots = new Map<string, import('../../../protocol/app-server/v74.ts').Thread>();
+  /** Explicit server snapshot for lifecycle-only fixtures; status tests leave
+   * this unstaged so they can control every response and notification. */
+  stageThread(thread: import('../../../protocol/app-server/v74.ts').Thread): void { this.#threadSnapshots.set(thread.id, thread); }
   #editors=new Map<string,import('../../src/protocol/app-server.ts').UserInputBlock[]>();
   editor(session:{id:string,active_node:string},content:import('../../src/protocol/app-server.ts').UserInputBlock[]|null|undefined) {
     if(content==null)return null;
@@ -143,8 +156,17 @@ export class FakeTransport extends BaseTransport {
   }
 
   protected override writeMessage(message: unknown): Promise<void> {
+    if (message && typeof message === 'object' && !('method' in message) && ('result' in message || 'error' in message)) {
+      this.replies.push(message as import('../../../protocol/app-server/v74.ts').ClientReply); return Promise.resolve();
+    }
     const request=message as ObservedRequest;
     this.log.record(request);
+    const reply=this.scriptedReply?.(request);
+    if(reply)queueMicrotask(()=>this.respond(request.id,reply));
+    if(request.method==='thread/read') {
+      const thread=this.#threadSnapshots.get(request.params.threadId);
+      if(thread)queueMicrotask(()=>this.respond(request.id,{type:'thread',thread}));
+    }
     if(request.method==='session/editorRead')queueMicrotask(()=>{
       const {locator,block_index,max_bytes}=request.params;const offset=Number(request.params.offset);
       const content=this.#editors.get(JSON.stringify(locator))??[],block=content[block_index];
@@ -170,8 +192,11 @@ export class FakeTransport extends BaseTransport {
   respond(id: AppServerRequestId, result: MethodResult|SubscribedSeed): void {
     this.answered.add(id);
     const record={jsonrpc:"2.0",id,result:receipt(id,result,this.log)};
-    if(!decodeProtocolMessage(record))throw new Error(`Invalid scripted result ${JSON.stringify(record).slice(0,4096)}`);
+    this.results.set(id, record.result);
+    if(!decodeServerOutput(record))throw new Error(`Invalid scripted result ${JSON.stringify(record).slice(0,4096)}`);
     this.deliver(record);
+    if(record.result.type==='checkpoint')this.#pendingInteractions=record.result.checkpoint.snapshot.pending_interactions??[];
+    if(record.result.type==='subscribed')for(const header of this.#pendingInteractions)this.publishInteraction(record.result.target.conversation_id,header);
   }
 
   /** Answers one request with a typed protocol failure. */
@@ -187,6 +212,10 @@ export class FakeTransport extends BaseTransport {
     event: RuntimeClientEvent,
   ): void {
     this.deliver(notification("session/event", { target, cursor, event }));
+    for(const fact of event.type==='projection_transition'?event.events:[event]) {
+      if(fact.type==='interaction_pending')this.publishInteraction(target.conversation_id,fact.interaction);
+      if(fact.type==='checkpoint_advanced')for(const header of fact.checkpoint.snapshot.pending_interactions??[])this.publishInteraction(target.conversation_id,header);
+    }
   }
 
   /** Publishes one routed notification of any method. */
@@ -346,5 +375,18 @@ export async function followAttachment(transport:FakeTransport, target:Attachmen
  const configurations=transport.log.count('session/configuration')+1;
  transport.respond(subscription.id,{type:'subscribed',target,after_cursor:cursor});
  const configuration=(await transport.log.awaitMethod('session/configuration',configurations)).at(-1)!;
+ transport.stageThread({...threadFor(sessionView({id:target.session_id,active_conversation_id:target.conversation_id})),status:{type:'idle'},statusRevision:'1',runtimeIncarnation:target.runtime_incarnation});
  transport.respond(configuration.id,{type:'session_configuration',projection:(null)});
+}
+
+/** One explicit native metadata reply before an exact Thread resume. */
+export async function resolveThreadMetadata(transport: FakeTransport, view: import('../../src/protocol/app-server.ts').SessionView) {
+  const request = await Promise.race([transport.nextPending('session/read'),transport.nextPending('session/node')]);
+  if (request.method === 'session/read') transport.respond(request.id,{type:'session',session:view});
+  else if (request.method === 'session/node') transport.respond(request.id,{type:'node',node:{id:request.params.node_id,conversation_id:view.active_conversation_id,ordinal:'1',parent:null,origin:{type:'new'}}});
+}
+
+export function inputIdOf(request:ObservedRequest):string {
+  if(!('inputId' in request.params)||typeof request.params.inputId!=='string'||!/^[a-f0-9-]{36}$/.test(request.params.inputId)) throw Error('Missing bounded input correlation');
+  return request.params.inputId;
 }

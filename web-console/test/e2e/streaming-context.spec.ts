@@ -10,7 +10,7 @@ for (const width of [1440, 390]) test(`context reading survives streaming at ${w
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   await page.setViewportSize({ width, height: 900 });
   if (width < 600) {
     await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeVisible();

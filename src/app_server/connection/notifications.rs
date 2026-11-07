@@ -117,12 +117,17 @@ impl AppServerConnection {
                 .ok()
                 .and_then(|()| target.workspace().map(std::path::Path::to_path_buf)),
             Method::SessionCreate { settings, .. } => std::fs::canonicalize(&settings.cwd).ok(),
-            Method::SessionAttach { session_id, .. } => self
-                .sessions
-                .read_settings(session_id)
-                .await
-                .ok()
-                .and_then(|(_, settings)| std::fs::canonicalize(&settings.cwd).ok()),
+            Method::SessionAttach { thread_id } => {
+                if let Ok(thread) = self.sessions.thread(thread_id).await {
+                    self.sessions
+                        .read_settings(&thread.session_id)
+                        .await
+                        .ok()
+                        .and_then(|(_, settings)| std::fs::canonicalize(&settings.cwd).ok())
+                } else {
+                    None
+                }
+            }
             _ => None,
         };
         if let Some(directory) = directory.filter(|directory| directory.is_dir()) {
@@ -159,7 +164,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v72 notice reaches only a connection that negotiated v72.
+        // A v74 notice reaches only a connection that negotiated v74.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -334,6 +339,23 @@ impl AppServerConnection {
         }
     }
 
+    async fn next_thread_status(&self) -> NotificationMethod {
+        if self.initialized.lock().expect("initialize mutex").is_none() {
+            return std::future::pending().await;
+        }
+        let mut events = self.thread_status_events.lock().await;
+        match events.recv().await {
+            Ok(crate::local_runtime::session_runtime_manager::status::ThreadStatusEvent::Changed(event)) => NotificationMethod::ThreadStatusChanged(event.into()),
+            Ok(crate::local_runtime::session_runtime_manager::status::ThreadStatusEvent::ResyncRequired) => NotificationMethod::ThreadStatusResyncRequired {},
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                *events = events.resubscribe();
+                NotificationMethod::ThreadStatusResyncRequired {}
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => std::future::pending().await,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // One fair selection across instance and attachment notifications.
     pub(crate) async fn next_notification_candidate(
         &self,
     ) -> (
@@ -383,6 +405,7 @@ impl AppServerConnection {
                 .collect();
             if routes.is_empty() {
                 tokio::select! {
+                    status=self.next_thread_status()=>return level_notification(status),
                     notification = &mut levels, if levels_pending => {
                         if let Some(notification) = notification {
                             return level_notification(notification);
@@ -424,6 +447,7 @@ impl AppServerConnection {
                 })
                 .collect();
             let (route, delivery, observed, registration) = tokio::select! {
+                status=self.next_thread_status()=>return level_notification(status),
                 notification = &mut levels, if levels_pending => {
                     if let Some(notification) = notification {
                         return level_notification(notification);
@@ -444,6 +468,7 @@ impl AppServerConnection {
             }
         }
     }
+    #[allow(clippy::too_many_lines)] // One registration-scoped native projection.
     fn routed_notification(
         &self,
         route: &Arc<Route>,
@@ -475,6 +500,31 @@ impl AppServerConnection {
                 }
             }
             RoutedDelivery::Projection(EventDelivery::Event(event)) => {
+                for fact in event.event.facts() {
+                    match fact {
+                        crate::runtime_client::RuntimeClientEvent::InteractionPending {
+                            interaction,
+                        } => {
+                            if let Ok(owner) = route.attachment.operation_authority() {
+                                self.host.callbacks().interaction(
+                                    &target.conversation_id,
+                                    &interaction.interaction,
+                                    &owner,
+                                );
+                            }
+                        }
+                        crate::runtime_client::RuntimeClientEvent::InteractionSettled {
+                            interaction,
+                            ..
+                        }
+                        | crate::runtime_client::RuntimeClientEvent::InteractionRemoved {
+                            interaction,
+                        } => {
+                            self.host.callbacks().interaction_settled(interaction);
+                        }
+                        _ => {}
+                    }
+                }
                 let registration_id = registration.id.clone();
                 publication = Some(registration.event(event.cursor));
                 NotificationMethod::Event {

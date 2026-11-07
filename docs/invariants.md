@@ -123,13 +123,12 @@ unchanged. See [preview workspace invariants](preview-workspace.md).
 A `present` delivery exists only in the typed `deliveries` of a successfully
 committed canonical Tool-result message (#431/#454). Arguments, Tool output text,
 generic JSON, prose and foreground settlements never become deliveries in any
-client. Delivery metadata is not file authority: Session-file bytes or a native
-location cross the App Server only for a transport-authenticated authority, either
-the Product Host secret lane or a connection's delivery access granted by stdio-owner
-delegation or the separate WebSocket delivery credential. No request field, client
+client. Delivery metadata is not file authority: bytes and native locations cross ordinary App
+Server APIs only after connection authentication and native operation checks.
+The private Product Host lane separately owns its registered-root proof. No request field, client
 name, coordinate, path or root list creates or widens it. A connection reaches only
-its own attachments. Close, native credential removal, attachment detach or mapping
-change revoke it at the next fence, and an admitted read releases its native permit
+its own attachments. Close, attachment detach, native retirement or mapping
+change fence it at the next fence, and an admitted read releases its native permit
 only on physical settlement. A client interprets a native location locally only on
 a demonstrably shared filesystem; a remote server path is never a client path. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients).
@@ -147,7 +146,7 @@ revocation order. `delivery/cancel` (only for that connection's own id) takes th
 state lock. Every revocation of delivery authority (credential replacement or
 removal, connection revocation and drain, close, attachment detach, Product Host
 disconnect or replacement) runs in the order's exclusive side. Replacing or removing
-the delivery or Product Host credential is one transition: under that exclusive side
+the private Product Host credential is one transition: under that exclusive side
 and the credential slot's mutex, the previous grant is dropped, cancelling every token
 it minted, and the next is installed. Authentication, which takes only the slot's
 mutex, sees one side of it, and concurrent rotations take one total order. So a cancellation or
@@ -1327,25 +1326,15 @@ traffic uses the reliable bidirectional child control lane. The disposable
 activity lane is diagnostics-only and can coalesce or lose observations
 without affecting interaction correctness.
 
-Publication eligibility has one explicit root-side linearization point. The
-root host's `ClientState.control_attachment` slot is guarded by the same mutex
-for attach, detach, and the admission check. A child first asks the parent
-driver for admission with its full `InteractionRef`; the driver asks the
-`SubagentRegistry`, which verifies the live child incarnation and delegates
-the check to that root host authority. Only an exact, ephemeral permit allows
-the child coordinator to commit `InteractionRequested`. Thus, if detach wins
-that synchronized frontier, publication fails closed before any requested
-audit; if admission wins, the originating coordinator may remain pending even
-when the later detach notification is still in flight. The propagated
-`provider_available` watch is only an early fail-closed hint and is never the
-authority proving publication eligibility. A permit carries no waiter or
-settlement authority and cannot authorize another `InteractionRef`.
-
-A capable root control attachment makes the human provider available to live
-children; it does not grant `ask_user`, which remains available only when the
-frozen child capability definition explicitly selects it. Detaching after
-publication leaves the originating waiter pending, and reconnect reconstructs
-its presentation from live runtime state.
+Native Interaction publication and response validity retain their coordinator
+and live child-registry fences. Writable attachments are independent entries in
+`ClientState.attachments`, never an exclusive controller slot. The App Server's
+headless interaction sink admits publication without requiring a connected human
+client, then broadcasts one bounded request identity to live Thread subscribers.
+Detach never settles the native waiter. Live pending requests may replay on a
+fresh subscription; resolution, cancellation, child retirement and server restart
+cannot revive an old response claim. Human input availability does not grant
+`ask_user` or Host Tools to children: frozen native capabilities still decide.
 
 The permit is also the boundary between two failure contracts. Before a permit
 exists, an exact root refusal is `Unavailable`: no `InteractionRequested` fact
@@ -7911,7 +7900,7 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   retirement releases its reservation exactly once. Cancellation never waits for a
   Host read or its deadline.
 - Session metadata has a separate two-position lane for session/read,
-  session/settings and session/create. Reads are inert catalog operations;
+  session/settings and thread/start. Reads are inert catalog operations;
   creation authors durable identity without initializing MCP. Attachment lifecycle
   waits have their own 32-position lane, using the existing external attachment
   bound; a thirty-third local request is refused before ID allocation or send.
@@ -7919,7 +7908,7 @@ Conversation-owned immutable PNG snapshots. See [image reading](image-reading.md
   Session creation, ordinary RPCs or control submission intent. Web metadata
   shares the existing bounded 64-request queue and starts its 30-second response
   clock at actual send. TUI retains its existing response-clock policy.
-  session/attach has no generic Web response clock: pre-submission preparation
+  thread/resume has no generic Web response clock: pre-submission preparation
   remains unarmed, and the native absolute submission-readiness deadline governs
   its MCP wait. Actual response loss preserves correlation and mutation uncertainty.
   No cwd authorization cache is added: Host scope and exact-root classification
@@ -8197,7 +8186,7 @@ Original admission scope, current controller and result reservation precede nati
   starts. Global source reservations include live ready and retiring generations;
   unknown settlement retains capacity and truthful failure evidence.
 - Preparation has no owner elapsed-time deadline while the draft remains owned.
-  Synchronous native receipt of actual `session/create.submission` captures the
+  Synchronous native receipt of actual `thread/start.submission` captures the
   original monotonic Send timestamp, before any configuration, capacity or
   MCP-dependent wait. One effective positive `mcp_startup_policy.wait_timeout_ms`
   (default 15000, CFG3 whole-object precedence) covers the complete initial batch.
@@ -8378,3 +8367,30 @@ See [the storage and lifecycle contract](issue-520/README.md).
 - File-byte admission is independent of model projection, preview, complete-read,
   archive expansion and transport budgets. The retained policies are enumerated
   in [the resource-limit inventory](resource-limits.md).
+
+## Shared App Server control and Host callbacks
+
+One native Conversation coordinator remains the writer for all ordinary clients.
+Thread IDs name exact native Conversation lineages; Turn IDs name native Attempts.
+Input admission, native configuration CAS and capability freeze retain their
+existing linearization points. Steer and interrupt name an exact active Turn;
+explicit queue entries remain in the native mailbox for the next Attempt.
+Disconnect fences only connection-owned resources and never cancels accepted work.
+
+The bounded callback broker owns ephemeral correlation, not execution or history.
+One first valid eligible response/error claims a pending request under its native
+liveness/cancellation fence. Domain-invalid answers cannot reopen arbitration.
+Multiple Host handlers may perform external effects; only one canonical result and
+continuation are authoritative. Remote cancellation does not prove external work
+stopped. Native recovery preserves OutcomeUnknown and never replays a Host effect.
+See the [identity/method/owner/test matrix](app-server/shared-control.md).
+
+Thread runtime status never grants execution, settlement or residency authority.
+Native activity includes physical task tails and unresolved execution owners;
+callback claim/cancellation acknowledgement cannot clear them. Human flags fold
+logical native Interactions, independently of subscriber count. Native fault
+visibility cannot prove owner release. Revision/incarnation fences prevent old
+reads or delayed notifications from replacing newer status, and transport loss or
+observation gaps display unavailability rather than fabricated idle. Bounded
+read repair never loads a cold runtime or repeats semantic work. See the
+[status ownership matrix](app-server/shared-control.md#thread-runtime-status-v74-amendment).

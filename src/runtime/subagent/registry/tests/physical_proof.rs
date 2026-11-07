@@ -94,6 +94,13 @@ async fn unproven_control_or_cleanup_terminal_blocks_live_and_recovered_agent() 
             .unwrap();
         assert_eq!(terminal.state, SubagentState::Failed);
         assert!(
+            plane
+                .registry
+                .with_activity(|_, fault, _, _| fault)
+                .unwrap(),
+            "unproven physical settlement is a native system fault rather than eternal running"
+        );
+        assert!(
             !terminal.is_settled(),
             "logical failure is not physical settlement proof"
         );

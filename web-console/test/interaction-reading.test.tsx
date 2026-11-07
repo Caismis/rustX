@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointReadCut, InteractionKind, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v72';
+import type { CheckpointReadCut, InteractionKind, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v74';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Server, checkpoint, interaction } from './fixture';
 
@@ -19,9 +19,9 @@ it.each([false, true])('approval exposes Deny and Allow once without an extra ca
   expect(screen.queryByRole('button', { name: 'Cancel interaction' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Deny' })));
-  const request = await current.waitFor('interaction/respond', 1);
-  expect(request.params).toMatchObject({ interaction: header.interaction, response: { type: 'approval', decision: { type: 'deny' } } });
-  expect(current.requests.some(row => row.request.method === 'interaction/cancel')).toBe(false);
+  const request = await current.waitForReply();
+  expect('result' in request ? request.result : undefined).toMatchObject( { type: 'approval', decision: { type: 'deny' } });
+  expect(current.replies.some(reply=>'error' in reply)).toBe(false);
 });
 
 const approvalTools: Pick<Extract<InteractionKind, { type: 'approval' }>, 'tool_id' | 'tool_name' | 'origin'>[] = [
@@ -56,11 +56,11 @@ for (const bounded of [false, true]) it.each(approvalTools)('approval renders th
   const text = details.querySelector('pre')!.textContent;
   if (tool.tool_id === 'tool-bash') expect(text).toBe(args.command);
   else expect(JSON.parse(text!)).toEqual(args);
-  expect(current.requests.some(row => row.request.method === 'interaction/respond')).toBe(false);
+  expect(current.replies.length > 0).toBe(false);
   if (bounded) expect(current.requests.filter(row => row.request.method === 'conversation/checkpointValueRead')).toHaveLength(2);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Allow once' })));
-  const request = await current.waitFor('interaction/respond', 1);
-  expect(request.params).toMatchObject({ interaction: header.interaction, response: { type: 'approval', decision: { type: 'allow' } } });
+  const request = await current.waitForReply();
+  expect('result' in request ? request.result : undefined).toMatchObject( { type: 'approval', decision: { type: 'allow' } });
 });
 
 it('a deferred approval with no canonical tool identity preserves all arguments', async () => {
@@ -142,6 +142,7 @@ async function pendingFixture(){
     revision=String(BigInt(revision)+1n);current.cursor=BigInt(revision);
     current.snapshots.get('A')!.pending_interactions=[header];
     await act(async()=>current.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target:current.target('A'),cursor:revision,event:{type:'checkpoint_advanced',transition:'pending-source-owner',checkpoint:{...checkpoint(current.snapshots.get('A')!,revision),read_cut:cut()}}}}));
+    for(const header of current.snapshots.get('A')!.pending_interactions??[]) current.socket.deliver({jsonrpc:'2.0',id:`callback:${header.interaction.interaction_id}`,method:'item/interaction/request',params:{threadId:current.target('A').conversation_id,interaction:header}});
   };
   return {current,publish};
 }
@@ -160,7 +161,7 @@ it('pending details have no generic cancel/kind controls and recover through a s
   const value = await current.waitFor('conversation/checkpointValueRead', 1);
   await act(async () => current.reply(value));
   expect(await screen.findByRole('region', { name: 'Questionnaire' })).toBeTruthy();
-  expect(current.requests.some(row => row.request.method === 'interaction/cancel')).toBe(false);
+  expect(current.replies.length > 0).toBe(false);
 });
 
 it('an unrelated checkpoint preserves the selected pending read and its original Page/Value cut',async()=>{
@@ -178,7 +179,7 @@ it('an unrelated checkpoint preserves the selected pending read and its original
   await act(async()=>current.reply(value));
   await waitFor(()=>expect(screen.getByRole('region',{name:'Questionnaire'})).toBeTruthy());
   expect(screen.getByText('Which direction?')).toBeTruthy();
-  expect(current.requests.filter(row=>row.request.method==='interaction/respond')).toHaveLength(0);
+  expect(current.replies).toHaveLength(0);
 });
 
 it.each(['page','value'] as const)('a replaced pending owner resets loading while its held %s cannot apply late',async(held)=>{
@@ -205,5 +206,19 @@ it.each(['page','value'] as const)('a replaced pending owner resets loading whil
   await act(async()=>current.reply(value));
   await waitFor(()=>expect(screen.getByText('Original replacement question')).toBeTruthy());
   expect(screen.queryByText('Which direction?')).toBeNull();
-  expect(current.requests.filter(row=>row.request.method==='interaction/respond')).toHaveLength(0);
+  expect(current.replies).toHaveLength(0);
+});
+
+it('detach releases delivered interactions across more than 128 sequential subscriptions',async()=>{
+ const current=server=new Server();await current.attached('A');
+ for(let index=0;index<130;index++) {
+   const header=interaction('approval');header.interaction={...header.interaction,interaction_id:`sequential-${index}`};
+   current.update('A',{...current.snapshots.get('A')!,pending_interactions:[header]});
+   expect(current.client.callbacks.canAnswer(header.interaction)).toBe(true);
+   await current.client.release('A');
+   expect(current.client.callbacks.canAnswer(header.interaction)).toBe(false);
+   current.snapshots.get('A')!.pending_interactions=[];
+   await current.client.attach('A');
+   expect(current.client.getSnapshot().connection).toBe('connected');
+ }
 });

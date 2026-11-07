@@ -1,3 +1,4 @@
+import { threadFor } from '../../../protocol/app-server/testing.ts';
 import{traceReceipt}from'../fixture';
 import { domainReceipt } from '../fixture';
 import { createActor } from 'xstate';
@@ -23,7 +24,7 @@ import { Server, snapshot, checkpoint, childConversation, readingWindow } from '
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/errors';
-import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v72';
+import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v74';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -198,15 +199,15 @@ if (new URL(location.href).searchParams.has('trace-following')) traceFollowing(s
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 if (new URL(location.href).searchParams.has('child-message-continuation')) childMessageContinuation(server);
 let nativeDefault = 'fixture/native';
-server.handlers.set('session/create', request => {
-  if (request.method !== 'session/create') throw Error('Wrong method');
+server.handlers.set('thread/start', request => {
+  if (request.method !== 'thread/start') throw Error('Wrong method');
   const model = request.params.settings.model ?? { model: nativeDefault };
   server.snapshots.set('created', { ...snapshot('created'), model: { ...cfg3Effective().effective_model!, configured: model, effective: { ...cfg3Effective().effective_model!.effective, model: model.model } } as NonNullable<ReturnType<typeof snapshot>['model']> });
   server.invalidateSummary('created', server.socket, true);
-  return { type: 'session_transition', session: { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
+  return {  thread: threadFor({ id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
 });
 await server.connect();
-for (const method of ['session/create', 'session/attach', 'session/list', 'session/summary', 'turn/start'] as const) server.held.add(method);
+for (const method of ['thread/start', 'thread/resume', 'session/list', 'session/summary', 'inbound/queue'] as const) server.held.add(method);
 const workspaceAuthority = new WorkspaceAuthority(server.workspaceHost);
 server.client.setSessionAdmission(new WorkspaceSessionAdmission(workspaceAuthority, server.client).admit);
 const repairAcknowledgements = new RepairAcknowledgements();
@@ -272,5 +273,5 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
   allow(method: Request['method']) { server.held.delete(method); },
   remount() { root.unmount(); root = createRoot(document.getElementById('root')!); render(); },
   disconnect() { server.socket.close(); },
-  async reconnect() { server.held.delete('session/list'); server.held.delete('session/attach'); server.held.delete('session/summary'); await server.connect(); },
+  async reconnect() { server.held.delete('session/list'); server.held.delete('thread/resume'); server.held.delete('session/summary'); await server.connect(); },
 };

@@ -60,7 +60,9 @@ impl MessageBlock {
         match self {
             Self::User(user) => match &user.kind {
                 InboundKind::Context(kind) => kind.agent_status_metadata(),
-                InboundKind::Message | InboundKind::GoalContinuation(_) => None,
+                InboundKind::Message
+                | InboundKind::QueuedMessage
+                | InboundKind::GoalContinuation(_) => None,
             },
             Self::Assistant(_) | Self::Tool(_) => None,
         }
@@ -395,6 +397,9 @@ fn validate_ordered_unique(paths: &[String]) -> Result<(), CompactionSummaryMeta
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum InboundKind {
+    /// Pending explicit queue content, adopted only by a subsequent Attempt.
+    /// Canonical adoption normalizes this producer intent to `Message`.
+    QueuedMessage,
     /// Ordinary autonomous inbound, tied to the pre-admission Goal revision.
     GoalContinuation(crate::goal::GoalRef),
     /// An ordinary inbound message.

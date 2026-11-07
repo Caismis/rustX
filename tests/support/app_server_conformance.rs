@@ -31,6 +31,29 @@ impl AppServerConformanceDriver for DirectDriver<'_> {
     }
 }
 
+/// Resolve a Session choice before constructing an exact Thread request.
+pub async fn thread_id(
+    driver: &impl AppServerConformanceDriver,
+    session: SessionId,
+) -> rustx::runtime::identity::ConversationId {
+    let Response::Success(response) = driver
+        .request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String(format!("resolve-thread-{}", uuid::Uuid::new_v4())),
+            call: Method::SessionRead {
+                session_id: session,
+            },
+        })
+        .await
+    else {
+        panic!("resolve Session")
+    };
+    let MethodResult::Session { session } = response.result else {
+        panic!("Session projection")
+    };
+    session.active_conversation_id
+}
+
 fn initialize(version: u16) -> Method {
     Method::Initialize(InitializeParams {
         protocol_version: version,
@@ -139,16 +162,14 @@ pub async fn representative_scenario(
             driver,
             1,
             Method::SessionAttach {
-                session_id: sessions[0].clone(),
-                node_id: None
+                thread_id: thread_id(driver, sessions[0].clone()).await
             }
         ),
         call(
             driver,
             2,
             Method::SessionAttach {
-                session_id: sessions[1].clone(),
-                node_id: None
+                thread_id: thread_id(driver, sessions[1].clone()).await
             }
         ),
     );
@@ -286,8 +307,7 @@ pub async fn representative_scenario(
         driver,
         8,
         Method::SessionAttach {
-            session_id: a.session_id.clone(),
-            node_id: None,
+            thread_id: a.conversation_id.clone(),
         },
     )
     .await
@@ -298,7 +318,10 @@ pub async fn representative_scenario(
         .request(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(80),
-            call: Method::TurnCancel { target: a.clone() },
+            call: Method::TurnCancel {
+                turn_id: rustx::runtime::identity::AttemptId::new("obsolete-turn"),
+                target: a.clone(),
+            },
         })
         .await
     else {

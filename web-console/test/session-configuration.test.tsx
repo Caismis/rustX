@@ -3,7 +3,7 @@ import { applicationReceipt, contentAdvance } from './fixture';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
-import type { ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v72';
+import type { ConfigurationApplication, RuntimeClientEvent } from '../../protocol/app-server/v74';
 import { cfg3Application } from './cfg3-data';
 import { cfg3Client, cfg3Session } from './cfg3-fixture';
 import { Server, snapshot } from './fixture';

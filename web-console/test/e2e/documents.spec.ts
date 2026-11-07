@@ -214,8 +214,8 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
     await page.screenshot({ animations: 'disabled', path: info.outputPath('workbook-chinese.png') });
     await info.attach('workbook-chinese', { path: info.outputPath('workbook-chinese.png'), contentType: 'image/png' });
     expect((await fixture.control('requests')).requests.length).toBe(modelRequests);
-    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(2);
-    expect(wire.requests.filter(request => request.method === 'turn/cancel')).toHaveLength(0);
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(2);
+    expect(wire.requests.filter(request => request.method === 'turn/interrupt')).toHaveLength(0);
     expect(external).toEqual([]); expect(errors).toEqual([]); passed = true;
   } finally { await page.close(); await fixture.stop(passed); }
 });

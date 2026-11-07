@@ -31,6 +31,7 @@ async fn submit(
                 cwd: fixture.workspaces[workspace].clone(),
                 model: None,
             },
+            Vec::new(),
             claim,
         )
         .await
@@ -164,6 +165,7 @@ async fn create_ack_precedes_validated_transfer_without_releasing_the_reserved_g
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },
+                Vec::new(),
                 scope.claim(&target(1), SubmissionIntent::now()),
             )
             .await
@@ -231,6 +233,7 @@ async fn sixty_seconds_preparation_then_submission_has_the_full_budget_on_the_sa
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
+            Vec::new(),
             claim,
         )
         .await
@@ -273,6 +276,7 @@ async fn submission_timeout_survives_handoff_and_cannot_resurrect_late_ready() {
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
+            Vec::new(),
             claim,
         )
         .await
@@ -455,6 +459,7 @@ async fn failed_session_creation_settles_reserved_preparation_without_a_durable_
                         crate::model::catalog::ModelRef::parse("missing/model").unwrap(),
                     )),
                 },
+                Vec::new(),
                 claim,
             )
             .await;
@@ -500,6 +505,7 @@ async fn cancellation_before_validated_transfer_uses_normal_startup_under_the_or
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },
+                Vec::new(),
                 claim,
             )
             .await
@@ -551,6 +557,7 @@ async fn capacity_queueing_uses_the_same_submission_deadline_without_starting_a_
                 cwd: fixture.workspaces[0].clone(),
                 model: None,
             },
+            Vec::new(),
             claim,
         )
         .await
@@ -803,8 +810,7 @@ async fn terminal_submission_failure_preserves_cold_history_and_trace_detail_wit
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(14),
             call: Method::SessionAttach {
-                session_id: session.id.clone(),
-                node_id: None,
+                thread_id: session.active_conversation_id.clone(),
             },
         };
         let original_error = connection.handle_request(attach()).await;
@@ -933,8 +939,7 @@ async fn cold_branch_after_terminal_submission_failure_loads_the_selected_node_w
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(12),
                 call: Method::SessionAttach {
-                    session_id: a.id.clone(),
-                    node_id: Some(a.active_node.clone()),
+                    thread_id: a.active_conversation_id.clone(),
                 },
             };
             let original = connection.handle_request(attach_a()).await;
@@ -1026,17 +1031,9 @@ async fn cold_branch_after_terminal_submission_failure_loads_the_selected_node_w
                 .await;
             }
             let client = connection.clone();
-            let session = b.id.clone();
+            let thread_id = b.active_conversation_id.clone();
             let attaching = tokio::spawn(async move {
-                call(
-                    &client,
-                    16,
-                    Method::SessionAttach {
-                        session_id: session,
-                        node_id: None,
-                    },
-                )
-                .await
+                call(&client, 16, Method::SessionAttach { thread_id }).await
             });
             probe.before_compose.entered().await;
             assert_eq!(
@@ -1345,7 +1342,7 @@ async fn credential_rotation_retires_preparation_while_model_only_changes_reuse_
                 fixture.manager.credentials = credentials("draft-secret-after");
             }
             let created = fixture.manager.create_session_submitted(
-                SessionPersistentState { cwd: fixture.workspaces[0].clone(), model: Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap())) },
+                SessionPersistentState { cwd: fixture.workspaces[0].clone(), model: Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap())) }, Vec::new(),
                 scope.claim(&target(1), SubmissionIntent::now()),
             ).await.unwrap();
             let session = fixture.manager.sessions.rename_session(&created.session.id, "Model and credential boundaries").await.unwrap();
@@ -1389,6 +1386,7 @@ async fn committed_creation_durability_warning_keeps_the_same_preparation_and_se
                     cwd: fixture.workspaces[0].clone(),
                     model: None,
                 },
+                Vec::new(),
                 claim,
             )
             .await

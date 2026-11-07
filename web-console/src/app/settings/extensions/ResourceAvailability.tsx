@@ -1,4 +1,4 @@
-import type { SourceMutation, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v72';
+import type { SourceMutation, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v74';
 import { useTranslation } from '../../../locale/react';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { UnitOutcomeNotice, useUnitEditing } from '../forms/bridge';

@@ -259,7 +259,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await expectSettled(page, wire);
     await expect.poll(() => anchor.evaluate(element => element.getBoundingClientRect().top)).toBeCloseTo(top, 0);
     await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
-    expect(wire.requests.filter(request => request.method === 'turn/cancel')).toHaveLength(0);
+    expect(wire.requests.filter(request => request.method === 'turn/interrupt')).toHaveLength(0);
     const beforeSession = await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')));
     const readsBeforeSession = reads.length;
     const contentBeforeSession = contentReadCount(), conversionsBeforeSession = derivations.length;
@@ -316,7 +316,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     const counts = await page.evaluate(() => { const state = (window as any).previewObservation; return { workers: state.maximumWorkers, urls: state.maximumUrls, duplicate: state.duplicateRevocations }; });
     expect(counts).toEqual({ workers: 2, urls: 1, duplicate: 0 });
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
-    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(2);
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(2);
     expect(errors).toEqual([]); passed = true;
   } finally { await page.close(); await fixture.stop(passed); }
 });

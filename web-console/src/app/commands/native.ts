@@ -2,7 +2,7 @@ import { parseObservedValue } from '../../../../protocol/app-server/domain-obser
 import { readTraceCollection, readTraceValue } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
 import { readEditor } from '../../../../protocol/app-server/editor';
-import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v72';
+import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v74';
 import { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { selectSessionModel } from '../model-preference';
@@ -79,7 +79,7 @@ export class CommandSession {
     const source = state.views[this.sessionId]?.summary ?? state.sessions.find(session => session.id === this.sessionId);
     const sourceTitle = source?.name ?? source?.generated_title?.text ?? source?.preview;
     // Never substitute a newer revision, retry on refusal, or copy browser history.
-    const result = await this.client.request(action === 'fork' ? { method: 'session/fork', params } : { method: 'session/branch', params }, 'session_transition', undefined, admitted);
+    const result = await this.client.request(action === 'fork' ? { method: 'thread/fork', params } : { method: 'session/branch', params }, 'session_transition', undefined, admitted);
     // Native acknowledgement remains observable after presentation supersession.
     const warning = action === 'fork' ? await finishForkSession(this.client, result, sourceTitle, this.generation) : undefined;
     if (action !== 'fork' && this.client.getSnapshot().generation === this.generation) void this.client.listSessions().catch(() => {});
