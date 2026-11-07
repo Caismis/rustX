@@ -49,7 +49,7 @@ above and the completed implementation, including the independent review fixes.
 | TUI typecheck and required-emulator full suite | Pass; 1326 passed, 1 skipped |
 | Web typecheck and full deterministic suite | Pass; 4181 passed, 4 skipped |
 | Web production build, i18n, provenance and notices | Pass; 347 source records, 349 production package notices |
-| Full pinned-container browser acceptance | Pending final run |
+| Pinned-container browser acceptance | Full local traversal exposed an obsolete delivery-permission assertion; the corrected delivery spec passed 2/2. The complete final-head browser-shard and coverage verdict is recorded on [the primary PR](https://github.com/Caismis/rustX/pull/540) |
 | Five-mode real-process performance measurement | Pass; 100 native Turns, exact 20/40 model requests per mode; [raw data and method](../../benchmarks/app-server/README.md) |
 | `git diff --check` | Pass |
 
@@ -60,8 +60,10 @@ Fixture child entry points in Cargo's totals are not separate boundary proofs;
 their parent tests own those claims.
 Earlier partial or failed runs are not counted as
 successful full-suite evidence. Final-head Linux, macOS and full browser CI must
-all pass under `full-verification`; the primary PR records the exact head and CI
-URLs. Local Linux checks do not substitute for macOS execution.
+all pass under `full-verification`; the [primary PR](https://github.com/Caismis/rustX/pull/540)
+records the exact final head, run URL and full-suite verdict. This committed local
+snapshot makes no claim about a later CI result. Local Linux checks do not
+substitute for macOS execution.
 
 ## Independent review
 
@@ -71,6 +73,11 @@ all fixed and re-reviewed: private credential bounds/truncation; encoded browser
 bearer carriers; full-bound callback replay; resolved TUI pagination entries;
 physical close after a wrong Thread receipt; retired native-incarnation fencing;
 and ordinary display/edit/remove treatment for `queued_message`.
+
+Follow-up source review also checked the browser wire probe's native Thread-to-
+Session mapping and physical receipt barriers, the corrected ordinary-delivery
+assertions, and the canonical integration documentation. The browser's real
+history/reconnect test and the 21-test probe suite pass after the probe repair.
 
 The final independent source review found no remaining blocking issues. It also
 checked native lifecycle/cancellation/broker lock order and the main branch's
