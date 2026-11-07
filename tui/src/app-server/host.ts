@@ -163,14 +163,24 @@ export class AppServerHost {
     if(!current)return;
     if(current===previous)return;
     this.#threadStatuses.delete(entry.threadId);this.#threadStatuses.set(entry.threadId,current);
-    if(this.#threadStatuses.size>128)this.#threadStatuses.delete(this.#threadStatuses.keys().next().value!);
+    this.#trimThreadStatusCatalog();
     for(const listener of this.#threadStatusListeners)listener();
   }
   #rememberStatusInterest(threadId:string):void {
     this.#statusInterests.delete(threadId);this.#statusInterests.add(threadId);
-    if(this.#statusInterests.size>128){
-      const forgotten=this.#statusInterests.values().next().value!;
-      this.#statusInterests.delete(forgotten);this.#pendingStatusReads.delete(forgotten);
+    this.#trimThreadStatusCatalog();
+  }
+  /** Attached identities follow the existing bounded attachment lifetime.
+   * Only the other 128 catalog identities are eligible for LRU eviction. */
+  #trimThreadStatusCatalog():void {
+    const attached=new Set([...this.#sessions.values()]
+      .filter(session=>!session.released&&!session.serverClosed)
+      .map(session=>session.target.conversation_id));
+    const proofs=[...this.#threadStatuses.keys()].filter(id=>!attached.has(id));
+    for(const id of proofs.slice(0,Math.max(0,proofs.length-128)))this.#threadStatuses.delete(id);
+    const interests=[...this.#statusInterests].filter(id=>!attached.has(id));
+    for(const id of interests.slice(0,Math.max(0,interests.length-128))){
+      this.#statusInterests.delete(id);this.#pendingStatusReads.delete(id);
     }
   }
   async #readThreadStatus(threadId:string):Promise<void> {
@@ -537,13 +547,14 @@ export class AppServerHost {
     }
     let session: AppServerSession;
     try {
-      session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections, knownThreadId);
+      session = await AppServerSession.attach(this.client, sessionId, nodeId, session => { this.#sessions.set(sessionId, session); this.#trimThreadStatusCatalog(); }, previous, this.#unknownModelSelections, knownThreadId);
     } catch (error) {
       if (error instanceof AppServerRequestError && error.kind !== 'outcome_unknown' && !this.#sessions.has(sessionId)) this.#failedInitializations.add(sessionId);
       throw error;
     }
     this.#failedInitializations.delete(sessionId);
     this.#sessions.set(sessionId, session);
+    this.#trimThreadStatusCatalog();
     await this.repairInputReceipts(session);
     void this.#queueThreadStatuses([session.target.conversation_id]);
     session.onClosed(() => {
@@ -551,6 +562,7 @@ export class AppServerHost {
       // installs a fresh one rather than reusing a target the server retired.
       if (this.#sessions.get(sessionId) === session) {
         this.#sessions.delete(sessionId);
+        this.#trimThreadStatusCatalog();
       }
     });
     return session;
@@ -588,6 +600,7 @@ export class AppServerHost {
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
       threadId = (await existing.switchNode(nodeId)).active_conversation_id;
       this.#sessions.delete(sessionId);
+      this.#trimThreadStatusCatalog();
     }
     // The confirmed target can accept submission intent while its successor
     // attachment waits for native preparation. Unknown switches never get here.
@@ -613,6 +626,7 @@ export class AppServerHost {
       return;
     }
     this.#sessions.delete(sessionId);
+    this.#trimThreadStatusCatalog();
     await session.detach();
   }
 
@@ -840,6 +854,7 @@ export class AppServerHost {
   async #settle(): Promise<ChildExit | undefined> {
     for (const abort of this.#exports) abort.abort(new Error("TUI disconnected during export"));
     this.#sessions.clear();
+    this.#trimThreadStatusCatalog();
     if (this.ownership === "external" || this.#child === undefined) {
       await this.client.close();
       return undefined;

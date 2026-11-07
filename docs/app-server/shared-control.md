@@ -107,6 +107,12 @@ at their existing boundaries. No global lock spans a model call or tool executio
 Accepted execution survives ordinary client disconnect. A closed connection fences
 queued admission, late callback claims and connection-owned reads/publications.
 
+Archive refusal is a metadata-dependent execution admission result, checked after
+Loading registration against fresh node metadata. It does not retain a failed
+initialization flight. Unarchive therefore permits an immediate ordinary resume;
+accepted scheduled receipts remain durable and their existing Native owner adopts
+them exactly once. Actual initialization failures retain their explicit retry path.
+
 Every input mutation carries a new `inputId` (1–64 ASCII letters, digits, `_`, `-`).
 The acceptance transaction records correlation in the existing native inbox store.
 Duplicate IDs refuse; equal text with different IDs remains separate input. A lost
@@ -321,8 +327,15 @@ without advancing it; exact revocation invalidates inherited receipts, and a
 connection/repair reset discards them. These weak references retain no Thread
 or transcript and cannot turn an old receipt into a new Native observation.
 
-TUI keeps pending exact reads under one owner, bounded by its 128 retained
-Thread interests. Catalog rows crossing a status gap and attachment reads enter
+TUI retains proofs and pending read interests for live attachments throughout
+their existing bounded lifetime (at most 32 per connection). Its proof cache and
+read-interest set each retain at most another 128 catalog identities; LRU eviction
+applies only to identities without a live attachment. Detach, native retirement and node switching restore the ordinary
+catalog bound. Browsing other Sessions cannot discard an attached Thread's proof
+or recovery ownership.
+
+TUI keeps pending exact reads under one owner, bounded by those attached and
+catalog interests. Catalog rows crossing a status gap and attachment reads enter
 the same sequential drain. The existing two-request metadata lane remains
 unchanged; the owner waits on a shared capacity wake and rechecks before
 dispatch. Other metadata operations can delay repair without discarding it.

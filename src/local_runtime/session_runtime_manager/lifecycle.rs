@@ -487,7 +487,7 @@ impl SessionRuntimeManager {
         // fresh node. Archive cannot commit across that reservation; an earlier
         // identity-only read does not grant execution after archive commits.
         if access.node.archived {
-            return Err(error("Thread is archived; unarchive before execution"));
+            return Err(RuntimeManagerError::ThreadArchived);
         }
         #[cfg(test)]
         {
@@ -1214,9 +1214,13 @@ impl TerminalGuard {
                     && !registry.fenced(&self.id)
                     && !matches!(
                         result,
-                        Err(RuntimeManagerError::LoadingCancelled | RuntimeManagerError::Draining)
+                        Err(RuntimeManagerError::LoadingCancelled
+                            | RuntimeManagerError::Draining
+                            | RuntimeManagerError::ThreadArchived)
                     )
                 {
+                    // Retain accepted preparation failures for explicit retry.
+                    // Metadata-dependent archive refusals began no initialization.
                     registry.remove(&self.id);
                     registry
                         .failed_submissions

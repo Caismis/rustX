@@ -274,3 +274,27 @@ cause is not claimed to be established.
 Run `42371118714` is failed checkpoint evidence, not final-head verification.
 The primary PR must record a new complete FULL run for the final follow-up head
 before checking off the amendment or declaring it ready.
+
+
+## Admission refusal and attached-status retention follow-up
+
+The review of `ea545822ac168264a393477e6ca57b08edfeed9d` confirmed the preceding
+three corrections and identified two additional lifecycle boundaries.
+
+| Finding | Correction and deterministic evidence |
+| --- | --- |
+| Archive admission refusal was retained as initialization failure | Native `ThreadArchived` classifies this refusal before composition while preserving fresh metadata under Loading ownership and the existing RPC diagnostic. Only this admission result is excluded from initialization failure retention; genuine MCP/preparation failures retain their retry path. The cold-trigger regression failed on the old code at immediate ordinary load after unarchive, then passed with one exact durable receipt, one `InboundTurnAdopted` message identity, one composition and one model request. No retry or manager storage operation intervenes. |
+| Catalog eviction dropped an attached Thread's proof or pending read | TUI excludes live attached identities from the 128-entry catalog proof/interest eviction rules. Existing attachment lifetime bounds the protected identities; detach, Native retirement and node switching restore ordinary cache eligibility. Real Host/Session tests browse 160 distinct cold catalog identities while the original attachment stays live, then check detach/retirement and the exact catalog bound. Another regression holds both metadata slots while browsing and proves the attached pending read dispatches exactly once when capacity returns. |
+
+Native manager verification passes **469 tests, 2 ignored**, including the genuine
+failed-initialization receipt regression. The focused TUI status/reconnect/callback
+suites pass **30 tests**. The complete required-emulator TUI suite passes
+**1349 tests, 1 platform skip**. Pinned-pnpm TypeScript, formatting, all-target/all-feature
+Clippy with warnings denied, actual Native bins and whitespace checks pass.
+An independent read-only agent found no remaining actionable issues, independently
+ran **51 TUI tests** spanning status, Session focus and branch switching, and
+reviewed the Native failure-retention control flow without claiming a Rust run.
+This follow-up changes no Web/TUI UI elements or public protocol DTOs.
+
+Complete final-head FULL CI remains required on the primary PR before marking the
+amendment complete or ready. Earlier-head runs do not verify these corrections.

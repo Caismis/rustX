@@ -62,7 +62,7 @@ pub(super) fn manager_error(error: RuntimeManagerError) -> RpcError {
         RuntimeManagerError::StaleIncarnation => domain(ErrorData::StaleRuntime),
         RuntimeManagerError::Draining => domain(ErrorData::ServerDraining),
         RuntimeManagerError::Client(error) => client_error(error),
-        RuntimeManagerError::ScheduleStore(error) => {
+        error @ (RuntimeManagerError::ScheduleStore(_) | RuntimeManagerError::ThreadArchived) => {
             rpc_error(-32000, &error.to_string(), Some(ErrorData::OperationFailed))
         }
         RuntimeManagerError::TransitionFailed(detail) => {

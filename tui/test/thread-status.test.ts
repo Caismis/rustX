@@ -5,7 +5,7 @@ import {AppServerClient} from '../src/app-server/client.ts';
 import {AppServerHost} from '../src/app-server/host.ts';
 import type {ThreadStatusEntry} from '../../protocol/app-server/v74.ts';
 import {FakeTransport} from './support/app-server-peer.ts';
-import {SERVER_CAPABILITIES} from './support/app-server-harness.ts';
+import {harness,SERVER_CAPABILITIES} from './support/app-server-harness.ts';
 import {sessionView} from './support/fixtures.ts';
 async function connected(){const transport=new FakeTransport();const work=AppServerClient.initialize({transport});const init=(await transport.log.awaitMethod('initialize'))[0]!;transport.respond(init.id,{type:'initialized',authority_id:'status-authority',protocol_version:74,capabilities:SERVER_CAPABILITIES});const client=await work;return {transport,client,host:new AppServerHost({client,ownership:'external'})};}
 const id=sessionView().active_conversation_id;
@@ -190,4 +190,59 @@ test('a revoked UI proof keeps its revision fence after notification-cache evict
  const read=(await h.transport.log.awaitMethod('thread/read'))[0]!;h.transport.respondError(read.id,{code:-32000,message:'source unavailable'});
  changed(h,entry('10',{type:'active',activeFlags:[]}));assert.equal(h.host.threadStatusLabel(id),'Status unavailable');
  changed(h,entry('500',{type:'idle'}));assert.equal(h.host.threadStatusLabel(id),'Idle');
+});
+
+async function awaitStatus(h: Awaited<ReturnType<typeof harness>>, threadId: string): Promise<void> {
+ if(h.host.threadStatus(threadId))return;
+ await new Promise<void>(resolve=>{const stop=h.host.onThreadStatus(()=>{if(h.host.threadStatus(threadId)){stop();resolve();}});});
+}
+async function browseColdPages(h: Awaited<ReturnType<typeof connected>>, pages: number): Promise<void> {
+ for(let page=0;page<pages;page++){
+  const seen=h.transport.log.count('session/list');
+  const listing=h.host.listSessions(undefined,page*32);
+  const request=(await h.transport.log.awaitMethod('session/list',seen+1))[seen]!;
+  const rows=Array.from({length:32},(_,i)=>{
+   const suffix=String(page*32+i).padStart(12,'0'),threadId=`conv_113cba28-d6b2-70f4-8f62-${suffix}`;
+   return {...row(),id:`ses_113cba28-d6b2-70f4-8f62-${suffix}`,thread_id:threadId,thread_status:{...entry(String(100+page*32+i),{type:'notLoaded'},null),threadId}};
+  });
+  h.transport.respond(request.id,{type:'sessions',sessions:rows,next_offset:null});await listing;
+ }
+}
+test('catalog eviction preserves an attached Thread proof until detach or native retirement',{timeout:10000},async t=>{
+ for(const ending of ['detach','retire'] as const){
+  const h=await harness();t.after(()=>h.client.close());const threadId=h.target.conversation_id;
+  await awaitStatus(h,threadId);assert.equal(h.host.threadStatusLabel(threadId),'Idle');
+  await browseColdPages(h,5);
+  assert.equal(h.host.attachment(h.target.session_id),h.session);assert.equal(h.session.released,false);
+  assert.equal(h.host.threadStatusLabel(threadId),'Idle');assert.equal(h.transport.log.count('thread/read'),1);
+  // Once the attachment ends, only the ordinary 128-entry catalog bound remains.
+  if(ending==='detach'){
+   const detaching=h.host.detach(h.target.session_id);
+   const request=(await h.transport.log.awaitMethod('session/detach'))[0]!;
+   h.transport.respond(request.id,{type:'detached'});await detaching;
+  }else h.transport.deliver({jsonrpc:'2.0',method:'session/closed',params:{target:h.target}});
+  assert.equal(h.host.attachment(h.target.session_id),undefined);
+  assert.equal(h.host.threadStatus(threadId),undefined);
+  assert.equal(h.host.threadStatusLabel('conv_113cba28-d6b2-70f4-8f62-000000000032'),'Not loaded');
+  assert.equal(h.host.threadStatus('conv_113cba28-d6b2-70f4-8f62-000000000031'),undefined);
+ }
+});
+test('catalog browsing preserves an attached Thread pending repair while metadata capacity is full',{timeout:10000},async t=>{
+ const h=await harness();t.after(()=>h.client.close());const threadId=h.target.conversation_id;
+ await awaitStatus(h,threadId);
+ const busy=[h.client.call('thread/read',{threadId},'thread'),h.client.call('thread/read',{threadId},'thread')];
+ const outcomes=Promise.allSettled(busy);const reads=await h.transport.log.awaitMethod('thread/read',3);
+ const listing=h.host.listSessions();const request=(await h.transport.log.awaitMethod('session/list'))[0]!;
+ h.transport.respond(request.id,{type:'sessions',sessions:[{...row(),id:h.target.session_id,thread_id:threadId,thread_status:null}],next_offset:null});await listing;
+ await browseColdPages(h,5);assert.equal(h.transport.log.count('thread/read'),3);
+ h.transport.respond(reads[1]!.id,readResult(entry('1',{type:'idle'})));await busy[0];
+ const repair=(await h.transport.log.awaitMethod('thread/read',4))[3]!;
+ assert.equal(repair.method,'thread/read');if(repair.method!=='thread/read')throw Error('Thread read');
+ assert.equal(repair.params.threadId,threadId);
+ const result=readResult({...entry('1000',{type:'idle'}),threadId});result.thread.id=threadId;
+ h.transport.respond(repair.id,result);await awaitStatus(h,threadId);
+ h.transport.respond(reads[2]!.id,readResult(entry('1',{type:'idle'})));await outcomes;
+ assert.equal(h.host.attachment(h.target.session_id),h.session);assert.equal(h.session.released,false);
+ assert.equal(h.host.threadStatusLabel(threadId),'Idle');assert.equal(h.host.threadStatus(threadId)?.revision,'1000');
+ assert.equal(h.transport.log.count('thread/read'),4);
 });

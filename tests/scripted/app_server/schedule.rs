@@ -1,7 +1,7 @@
 //! Scheduler commands exercise the real native manager, writer and retirement gates.
 #![allow(clippy::too_many_lines, clippy::large_futures)]
 use super::*;
-use crate::durable::{InboxStore, ScheduleStore};
+use crate::durable::{InboxStore, JournalStore, ScheduleStore};
 use crate::runtime::types::RuntimeClock;
 use crate::scheduler::*;
 use chrono::{DateTime, Duration, Utc};
@@ -1311,6 +1311,11 @@ async fn archived_cold_trigger_keeps_its_receipt_without_admitting_execution() {
         )
         .unwrap();
         let trigger = store.schedule_summary().unwrap().ready[0].clone();
+        let accepted = store
+            .lookup_inbound(&trigger.correlation())
+            .unwrap()
+            .unwrap();
+        let database_path = access.database_path.clone();
         drop(store);
         drop(access);
         f.manager.archive_thread(id.clone(), true).await.unwrap();
@@ -1327,11 +1332,46 @@ async fn archived_cold_trigger_keeps_its_receipt_without_admitting_execution() {
                 .to_string()
                 .contains("archived")
         );
-        assert_eq!(pending(&f, session).await, 1);
         assert_eq!(f.manager.probe(&id).compositions.load(Ordering::SeqCst), 0);
         assert!(f.provider.request_bodies().is_empty());
         assert!(f.manager.is_empty());
+        // No retry, new submission or manager storage operation may clear a
+        // failed flight between unarchive and this ordinary public load path.
+        f.manager.archive_thread(id.clone(), false).await.unwrap();
+        let loaded = f.manager.load(&session.id, None).await.unwrap();
+        assert!(loaded.client().validate().is_ok());
+        f.gates[0].wait_entered().await;
+        let store =
+            crate::durable::SqliteConversationStore::open_existing(id.clone(), &database_path)
+                .unwrap();
+        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            store.lookup_inbound(&trigger.correlation()).unwrap(),
+            Some(accepted)
+        );
+        // Re-observing the same accepted trigger cannot execute it again.
+        f.manager
+            .activate_scheduled_target(&binding, &trigger)
+            .await
+            .unwrap();
+        let live = loaded.inspect_runtime().unwrap();
+        let settled = live.settlement_signal().notified();
+        f.gates[0].release();
+        settled.await;
         f.close().await;
+        let adoptions = store
+            .read_events(None, 100)
+            .unwrap()
+            .events
+            .into_iter()
+            .filter_map(|event| match event.event {
+                RuntimeEvent::InboundTurnAdopted { message_ids } => Some(message_ids),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(adoptions, vec![vec![trigger.message_id()]]);
+        assert_eq!(f.manager.probe(&id).compositions.load(Ordering::SeqCst), 1);
+        assert_eq!(f.provider.request_bodies().len(), 1);
     })
     .await;
 }
