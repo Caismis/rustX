@@ -221,6 +221,64 @@ it('cancels a queued page immediately without starting it or disturbing the acti
   held.resolve(); await first; await vi.advanceTimersByTimeAsync(0);
   expect(page.render).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
 });
+it('keeps the active deadline after cancelling a held page read while later pages remain queued', async () => {
+  vi.useFakeTimers();
+  const held = deferred<any>(), failed = vi.fn();
+  document.getPage.mockImplementation(async (number: number) => number === 2 ? held.promise : page);
+  const pdf = new PdfDocumentOwner(new Uint8Array([1]), failed); owners.push(pdf);
+  const first = view(), second = view(), third = view();
+  await pdf.firstPageSize;
+  await pdf.render(1, 1, first.canvas, first.layer, first.signal.signal);
+  expect(vi.getTimerCount()).toBe(0);
+  const reading = pdf.render(2, 1, second.canvas, second.layer, second.signal.signal);
+  const cancelled = expect(reading).rejects.toThrow();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.getPage).toHaveBeenLastCalledWith(2);
+  second.signal.abort(); await cancelled;
+  const queued = pdf.render(3, 1, third.canvas, third.layer, third.signal.signal);
+  const retired = queued.catch(error => error);
+  await vi.advanceTimersByTimeAsync(14999);
+  expect(document.getPage.mock.calls.some(([number]: [number]) => number === 3)).toBe(false);
+  expect(failed).not.toHaveBeenCalled(); expect(workers[0].terminate).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(failed).toHaveBeenCalledExactlyOnceWith('parser_timeout');
+  expect(workers[0].terminate).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
+  held.resolve(page); await vi.advanceTimersByTimeAsync(0);
+  expect(await retired).toHaveProperty('message', 'obsolete');
+  expect(page.render).toHaveBeenCalledOnce();
+  expect(document.getPage.mock.calls.some(([number]: [number]) => number === 3)).toBe(false);
+});
+
+it('shows a retryable preview error when a cancelled page read blocks the next visible page', async () => {
+  vi.useFakeTimers();
+  const observed = new Map<Element, (visible: boolean) => void>();
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private readonly callback: IntersectionObserverCallback) {}
+    observe(node: Element) { observed.set(node, visible => this.callback([{ target: node, isIntersecting: visible } as IntersectionObserverEntry], this as unknown as IntersectionObserver)); }
+    disconnect() {}
+  });
+  const held = deferred<any>();
+  document.getPage.mockImplementation(async (number: number) => number === 2 ? held.promise : page);
+  const retry = vi.fn();
+  const ui = render(createElement(PdfPreview, { bytes: new Uint8Array([1]), signal: new AbortController().signal, viewState: { pdfZoom: { kind: 'fixed', scale: 1 } }, onViewStateChange() {}, retry }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  expect(page.render).toHaveBeenCalledOnce();
+  const controls = ui.getByRole('toolbar', { name: 'Zoom' }); fireEvent.pointerEnter(controls);
+  const first = ui.container.querySelector('[data-pdf-page="1"]')!, second = ui.container.querySelector('[data-pdf-page="2"]')!, third = ui.container.querySelector('[data-pdf-page="3"]')!;
+  await act(async () => { observed.get(first)!(false); observed.get(second)!(true); await vi.advanceTimersByTimeAsync(0); });
+  expect(document.getPage).toHaveBeenLastCalledWith(2);
+  await act(async () => { observed.get(second)!(false); observed.get(third)!(true); await vi.advanceTimersByTimeAsync(0); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(14999); });
+  expect(ui.queryByRole('alert')).toBeNull(); expect(workers[0].terminate).not.toHaveBeenCalled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  expect(ui.getByRole('alert').textContent).toContain('Document parsing timed out.');
+  fireEvent.click(ui.getByRole('button', { name: 'Retry preview' })); expect(retry).toHaveBeenCalledOnce();
+  expect(workers[0].terminate).toHaveBeenCalledOnce(); expect(vi.getTimerCount()).toBe(0);
+  await act(async () => { held.resolve(page); });
+  expect(page.render).toHaveBeenCalledOnce();
+  expect(document.getPage.mock.calls.some(([number]: [number]) => number === 3)).toBe(false);
+  expect(workers[0].terminate).toHaveBeenCalledOnce();
+});
 
 it('opens the first page of a long document without requesting offscreen page geometry', async () => {
   vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} });

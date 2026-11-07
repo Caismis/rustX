@@ -206,17 +206,77 @@ it('the full-width workflow editor does not inherit the retired Start-icon allow
   }
 });
 
+it('the real workflow CI capture retains exactly its 608 raw curve observations', () => {
+  const name = workflowReference, expected = reference(name);
+  const file = 'workflow-editor-noise-42313212047-linux.png';
+  const actual = fixture(file);
+  const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+  expect(hash(readFileSync(new URL(`./e2e/workflow-editor.spec.ts-snapshots/${name}`, import.meta.url))))
+    .toBe('0289fc15fbcc7b77de5af83c1f647bb98f713c8e0c946f81ddb7c8b2f7bc84e4');
+  expect(hash(readFileSync(new URL(file, frozen))))
+    .toBe('3b70711ff4cea0938cd7d6264fb055b393d9ad67b6bdb7ee641653f971c51bba');
+  const accepted = compare(actual, name, expected, noisePolicy);
+  expect(accepted.totalChanged).toBe(608);
+  expect(accepted.ok).toBe(true);
+  expect(compare(actual, name, expected, []).ok).toBe(false);
+  expect(compare(actual, 'workflow-library-linux.png', expected, noisePolicy).ok).toBe(false);
+  const capture = workflowCaptures.find(capture => capture.run === 42313212047)!;
+  expect(capture.pngSha256).toBe(hash(readFileSync(new URL(file, frozen))));
+  expect(capture.pixels).toHaveLength(608);
+  for (const [x, y, before, after] of capture.pixels) {
+    expect(pixel(expected, x, y)).toEqual(before);
+    expect(pixel(actual, x, y)).toEqual(after);
+  }
+  const maximum = ([, , before, after]: MeasuredNoisePixel) =>
+    Math.max(...before.map((channel, index) => Math.abs(after[index]! - channel)));
+  const previous = new Map<string, number>();
+  for (const old of workflowCaptures.slice(0, 2)) for (const tuple of old.pixels) {
+    const key = `${tuple[0]},${tuple[1]}`;
+    previous.set(key, Math.max(previous.get(key) ?? 0, maximum(tuple)));
+  }
+  expect(previous.size).toBe(639);
+  const added = capture.pixels.filter(([x, y]) => !previous.has(`${x},${y}`));
+  expect(added.map(([x, y]) => [x, y])).toEqual([
+    [750, 306], [750, 307], [803, 320], [750, 321], [750, 322], [750, 324], [816, 325],
+    [780, 407], [771, 408], [767, 409], [769, 409], [770, 409], [771, 409], [773, 409],
+    [774, 409], [775, 409], [776, 409], [777, 409], [778, 409],
+  ]);
+  const raised = capture.pixels.filter(tuple => {
+    const old = previous.get(`${tuple[0]},${tuple[1]}`);
+    return old !== undefined && maximum(tuple) > old;
+  });
+  expect(raised).toHaveLength(63);
+  const entry = noisePolicy.find(row => row.reference === name)!;
+  // A new site at the largest measured delta and an increased existing bound
+  // both remain strict at exactly one channel level beyond their observation.
+  for (const [x, y] of [[750, 324], [850, 317]]) {
+    const bound = entry.regions.find(region => region.x === x && region.y === y)!;
+    const excessive = copy(expected); nudge(excessive, x!, y!, bound.maxChannelDelta + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  for (const [x, y] of [[749, 306], [140, 326], [0, 0]]) {
+    const outside = copy(actual); nudge(outside, x!, y!, 1);
+    const rejected = compare(outside, name, expected, noisePolicy);
+    expect(rejected.ok).toBe(false); expect(rejected.changedOutsideRegions).toBe(1);
+  }
+});
+
 it('Workflow curve coverage admits exactly the observed union within each measured per-site maximum', () => {
   const name = 'workflow-editor-linux.png', expected = reference(name);
   const entry = noisePolicy.find(row => row.reference === name)!;
   const measured = entry.pixels as MeasuredNoisePixel[];
-  expect(workflowCaptures.map(capture => capture.pixels.length)).toEqual([547, 602]);
+  expect(workflowCaptures.map(capture => capture.pixels.length)).toEqual([547, 602, 608]);
+  expect(workflowCaptures.map(capture => capture.pngSha256)).toEqual([
+    'd7774fcf88d6204e54d85218533004fbc2fb0e8b3c454f5a27920a4cefd80324',
+    '6e8431347632197043132eda97a06768a94f4a96a8aa659e81c4cdb871106252',
+    '3b70711ff4cea0938cd7d6264fb055b393d9ad67b6bdb7ee641653f971c51bba',
+  ]);
   const observations = new Map<string, MeasuredNoisePixel[]>();
   for (const capture of workflowCaptures) for (const tuple of capture.pixels) {
     const key = `${tuple[0]},${tuple[1]}`;
     observations.set(key, [...(observations.get(key) ?? []), tuple]);
   }
-  expect(measured).toHaveLength(639);
+  expect(measured).toHaveLength(658);
   expect(new Set(measured.map(([x, y]) => `${x},${y}`))).toEqual(new Set(observations.keys()));
   expect(entry.regions.flatMap(cells)).toEqual(measured.map(([x, y]) => [x, y]));
   for (const [i, region] of entry.regions.entries()) {
@@ -228,7 +288,7 @@ it('Workflow curve coverage admits exactly the observed union within each measur
       Math.max(...before.map((channel, j) => Math.abs(after[j] - channel))))));
     expect(region.maxChannelDelta).toBe(Math.max(...before.map((channel, j) => Math.abs(after[j] - channel))));
   }
-  expect(Math.max(...entry.regions.map(region => region.maxChannelDelta))).toBe(31);
+  expect(Math.max(...entry.regions.map(region => region.maxChannelDelta))).toBe(32);
   const observed = copy(expected);
   for (const [x, y, , after] of measured) paint(observed, x, y, after);
   expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
@@ -237,7 +297,7 @@ it('Workflow curve coverage admits exactly the observed union within each measur
     const excessive = copy(expected); nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
     expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
   }
-  for (const [x, y] of [[750, 306], [751, 305], [900, 316], [900, 408], [750, 408], [0, 0]]) {
+  for (const [x, y] of [[749, 306], [751, 305], [900, 316], [900, 408], [750, 408], [0, 0]]) {
     const adjacent = copy(observed); nudge(adjacent, x, y, 1);
     const result = compare(adjacent, name, expected, noisePolicy);
     expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);

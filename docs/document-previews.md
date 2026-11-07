@@ -95,6 +95,11 @@ PDF main-thread timers are cooperative watchdogs, not hard CPU/preemption
 limits. Synchronous render/text work can delay their dispatch. Worker termination
 retires worker execution once requested; it cannot preempt synchronous browser
 main-thread work. This deliberately differs from the external Office service timer.
+Once a page acquires the serial execution slot, its watchdog covers page parsing,
+bitmap rendering and text work until physical settlement or document retirement.
+Visibility cancellation ends the caller's wait but does not remove that deadline.
+Queued pages can cancel immediately before acquiring the slot. Expiry retires the
+document worker and surfaces a retryable preview error.
 PDF fonts use the built-in glyph-path renderer (`disableFontFace`); previews do not register document FontFaces in application state. Text selection uses a fallback font layer and can differ in glyph appearance. Public PDF filter resources, selected-page buffers and owner references are released explicitly even when a failed worker cannot acknowledge PDF.js destruction.
 
 The spreadsheet parser rejects a source or rectangular cell area above its budget;

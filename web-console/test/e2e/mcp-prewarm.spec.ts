@@ -50,6 +50,11 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh']) test(`silent
     const send = page.getByRole('button', { name: locale === 'zh' ? '发送' : 'Send', exact: true });
     await expect(editor).toBeEditable();
     await editor.fill('mcp startup from a ready draft'); await expect(send).toBeEnabled();
+    // Connection/Home navigation can still be expanding the sidebar. Finish
+    // that user-navigation transition before measuring MCP-only stability.
+    await page.locator('[data-harness-frame]').evaluate(async frame => {
+      await Promise.allSettled(frame.getAnimations().map(animation => animation.finished));
+    });
     const composer = page.locator('[data-resident-composer]');
     const pendingText = await composer.innerText();
     const pendingBounds = await composer.boundingBox();

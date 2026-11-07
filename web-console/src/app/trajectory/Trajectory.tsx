@@ -9,7 +9,7 @@ import { WorkflowNodeReadInspector, TrajectoryInspector, inspectorTabs } from '.
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
 import type { TrajectoryRowActions } from './TrajectoryRow';
 import { TrajectoryTimeline } from './TrajectoryTimeline';
-import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, ledgerRows, withHistoryGaps, rowOwnsKey, isInspectable, type InspectableDisplayItem, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
+import { projectTrajectory, trajectoryItems, matchingCalls, matchedRecordIds, visibleItems, displayUniverse, preferredItem, selectionOf, ledgerRows, withHistoryGaps, completeHistoryThrough, rowOwnsKey, isInspectable, type InspectableDisplayItem, type StructuralDisplayItem, type TrajectoryFacet, type TrajectorySelection } from './layout';
 import { searchItems } from './search';
 import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type TrajectoryTimeRange, type TrajectoryTimelineMode } from './timeline';
 import css from './Trajectory.module.css';
@@ -184,7 +184,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
   const inspector = selected && selection && selectedItem
     ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
-      records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={!cache.page.next_cursor} onOpen={openRecord} />
+      records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={completeHistoryThrough(cache.page.records, selected.id, cache.page.next_cursor, cache.gaps)} onOpen={openRecord} />
     : unresolvedWorkflow ? <WorkflowNodeReadInspector node={unresolvedWorkflow.instance} error={workflowNodes.get(selection!.owner_record_id)?.error}
       onRetry={() => retryWorkflowNodes(selection!.owner_record_id)} onClose={close} /> : null;
   const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;

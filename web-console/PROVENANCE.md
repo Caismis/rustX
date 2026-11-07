@@ -23,6 +23,24 @@ their disjoint union, not a claimed twelve-pixel capture. Negative contracts
 continue to reject triangle neighbors and excess delta, and additionally reject
 panel neighbors, delta 6/11, foreground edits and foreign-reference reuse.
 
+The unchanged Workflow reference has a third measured FULL CI observation
+(run 42313212047): 608 changed pixels, adding 19 sites and exceeding 63 previous
+per-site maxima. The raw PNG, complete RGBA pairs, reference/capture/trace hashes
+and current graph/CSS hashes are retained. Its three screenshot checkpoints have
+the same serialized graph. Compared with main, only invisible insertion-button
+portal sibling order differs; their coordinate/content sets match, and sorting
+only those siblings produces exactly the main graph. SVG paths and their paint
+order, node DOM, transforms, selection and visible content remain exact. The
+Workflow stylesheet and three shared stylesheets match byte-for-byte; index CSS
+changes belong to unrelated preview, Files, empty-home, streaming and composer
+modules.
+
+The browser's internal cause remains unestablished. The policy retains both prior
+captures and allows only the three-capture measured union: 658 separate 1x1 sites,
+each at its largest observed delta (maximum 32). Contract tests bind the new raw PNG to its
+unchanged reference, preserve both older observations, and reject excess delta,
+neighbors, foreground changes and use with another reference.
+
 ## PDF reference geometry and cancellable page rendering (2026-11-07)
 
 Document zoom now reads one cached, finite first-page geometry from the existing

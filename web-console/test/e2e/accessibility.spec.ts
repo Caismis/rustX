@@ -60,8 +60,9 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByRole('button', { name: 'Connect', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await tabTo(page.getByRole('button', { name: 'Home', exact: true })); await page.keyboard.press('Enter');
-    if (!await page.getByRole('button', { name: 'New Conversation', exact: true }).isVisible()) { await tabTo(page.getByRole('button', { name: 'Home', exact: true })); await page.keyboard.press('Enter'); }
-    await tabTo(page.getByRole('button', { name: 'New Conversation', exact: true }).first()); await page.keyboard.press('Enter');
+    const create = page.locator('#home-sidebar button[aria-label="New Conversation"]');
+    if (!await create.isVisible()) { await tabTo(page.getByRole('button', { name: 'Home', exact: true })); await page.keyboard.press('Enter'); }
+    await tabTo(create); await page.keyboard.press('Enter');
     const workspace = page.getByLabel('Choose Workspace');
     await tabTo(workspace); await page.keyboard.press('Enter');
     await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).focus(); await page.keyboard.press('Enter');

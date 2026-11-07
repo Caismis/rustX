@@ -133,10 +133,11 @@ export class PdfDocumentOwner {
     const current = () => { signal.throwIfAborted(); if (this.retired) throw new Error('obsolete'); };
     const work = this.tail.catch(() => {}).then(async () => {
       current();
-      // A page owns its deadline only after the serialized render slot starts.
+      // The started physical operation owns this deadline through settlement.
+      // Visibility cancellation retires its caller, but an unresolved getPage,
+      // bitmap or text task can still hold the serialized slot until retirement.
       this.renderTimer = setTimeout(() => { this.dispose(); this.failed('parser_timeout'); }, limits.renderWatchdogMs);
       const clearDeadline = () => { clearTimeout(this.renderTimer); this.renderTimer = undefined; };
-      signal.addEventListener('abort', clearDeadline, { once: true });
       try {
         current();
         const document = await this.document; current();
@@ -198,7 +199,7 @@ export class PdfDocumentOwner {
           if (this.cancelPage === abort) this.cancelPage = undefined;
           abort(); page.cleanup(); this.canvases.clear(); (document.filterFactory as BaseFilterFactory).destroy(); TextLayer.cleanup();
         }
-      } finally { signal.removeEventListener('abort', clearDeadline); clearDeadline(); }
+      } finally { clearDeadline(); }
     });
     this.tail = work;
     // Cancellation of a queued page settles immediately; its retired queue seat

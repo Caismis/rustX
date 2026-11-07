@@ -374,3 +374,55 @@ scenario passed twice under the pinned authority.
 Current exact-head FULL verification is recorded on
 [PR #539](https://github.com/Caismis/rustX/pull/539); the historical baseline run
 above does not certify the subsequent review changes.
+
+### Follow-up review: cancellation settlement and Trace presentation
+
+The next review of `1931e69cc` confirmed the preceding fixes and identified three
+additional presentation/lifetime boundaries. Their regressions reproduce the
+failures using actual document owners and Trajectory components:
+
+- A started PDF page keeps its watchdog through physical page parsing, bitmap
+  and text settlement, even after visibility cancellation. A held page 2 read,
+  cancelled before page 3 queues, retires the worker exactly once at 15 seconds
+  and exposes a working Retry action. Unstarted queue cancellation stays prompt;
+  late page completion cannot render or publish the queued page.
+- Every cached Trace gap keeps a paging control, including after a tail consisting
+  entirely of hidden Interaction or Subagent audit records. Multiple controls
+  follow native cache order and load their own continuation, independently of
+  semantic filtering and the outer oldest-history cursor.
+- Cumulative usage requires an explicitly complete native prefix through the
+  selected owner. Missing cursor evidence, a missing owner/anchor or an earlier
+  middle gap withholds the cumulative value. A later gap does not invalidate an
+  already complete earlier prefix. Filling the gap updates the selected request
+  from unknown cumulative usage to the complete 60-input/6-output total.
+
+The Workspace Host documentation now distinguishes ephemeral launcher
+configuration from the persistent Workspace registry and manual selection.
+The merged shell's browser helper scopes creation to the sidebar action rather
+than the identically named provisional history title. MCP stability measurement
+waits for the frame's finite Home-navigation animation before taking its pending
+baseline, with the native MCP gate still held. Its exact geometry, process-count,
+request-count and no-eager-creation assertions remain unchanged.
+
+The [FULL run for `1931e69cc`](https://github.com/Caismis/rustX/actions/runs/42313212047)
+passed the native Linux/macOS suites, Web/Host/launcher, protocol, formatting and
+TUI checks. Its browser shards exposed the creation-selector/animation issues
+above and a further Workflow curve raster observation. The latter retains the
+unchanged main reference and both prior raw observations; 608 measured pixels
+add 19 single-pixel sites and raise 63 previously measured bounds. The exact
+three-capture union is 658 separate sites, each capped at its largest observed
+delta (maximum 32). Visible graph DOM, SVG paths, geometry and applicable rules
+match; hidden insertion-portal sibling order and unrelated index CSS differ, as
+explicitly recorded in `web-console/PROVENANCE.md`. Internal browser causes remain
+unestablished. Neither comparator runtime nor global thresholds changed.
+
+Final local follow-up checks passed: **4,178 Web tests**, 4 existing skips;
+**201 focused Trace checks**, **40 PDF/view-state checks**, **67 comparator
+contracts**; TypeScript, production build, 347 source records and 349 production
+notices. **76 distinct relevant pinned-browser cases passed** across eight files,
+including all four keyboard viewport widths, startup measurements, real Office/PDF
+previews, Trace ledger/Inspector behavior and the complete Workflow editor file.
+Independent reviewers who did not author each fix found no remaining blockers.
+Rust sources are unchanged by this follow-up; the complete local Rust and native
+CI evidence for the preceding revision is identified above. Updated exact-head
+FULL verification is recorded on the PR before merge.
