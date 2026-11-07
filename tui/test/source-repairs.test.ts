@@ -1,3 +1,4 @@
+import {summaryFor} from '../../protocol/app-server/testing.ts';
 import { boundedSettings } from "./support/fixtures.ts";
 /**
  * Issue #464: native automatic configuration repair as the terminal presents
@@ -959,10 +960,10 @@ function focused(sessionId: string): AppServerSession {
 async function answerSummary(harnessed: Awaited<ReturnType<typeof harness>>, cwd: string): Promise<string> {
   const read = await nextRequest(harnessed, "session/summary");
   const { session_id } = paramsOf(read, "session/summary");
-  harnessed.transport.respond(read.id, { type: "session_summary", summary: {
+  harnessed.transport.respond(read.id, { type: "session_summary", summary: summaryFor({
     id: session_id, cwd, ownership_generation: "1", updated_at: "2026-01-01T00:00:00Z",
     active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
-  } });
+  }) });
   return session_id;
 }
 
@@ -977,7 +978,7 @@ async function answerRead(harnessed: Awaited<ReturnType<typeof harness>>): Promi
 /** Inspection only: the connection carried reads and nothing else. */
 function assertReadOnly(harnessed: Awaited<ReturnType<typeof harness>>) {
   const methods = new Set(harnessed.transport.log.requests.map(request => request.method));
-  for (const method of methods) assert.ok(["initialize", "session/read", "session/node", "thread/resume", "session/checkpoint", "session/subscribe", "session/summary", "session/configuration", "session/settings", "configuration/sourcesRead", "configuration/sourceValueRead"].includes(method), method);
+  for (const method of methods) assert.ok(["initialize", "session/read", "thread/read", "session/node", "thread/resume", "session/checkpoint", "session/subscribe", "session/summary", "session/configuration", "session/settings", "configuration/sourcesRead", "configuration/sourceValueRead"].includes(method), method);
 }
 
 function body(outcome: Awaited<ReturnType<CommandDispatcher["submit"]>>): string {
@@ -1068,10 +1069,10 @@ it("an in-flight inspection keeps its Session and never presents a replaced App 
   const summary = await nextRequest(h, "session/summary");
   dispatcher.setSession(focused(SESSION_B));
   assert.equal(paramsOf(summary, "session/summary").session_id, SESSION_A);
-  h.transport.respond(summary.id, { type: "session_summary", summary: {
+  h.transport.respond(summary.id, { type: "session_summary", summary: summaryFor({
     id: SESSION_A, cwd: "/srv/a", ownership_generation: "1", updated_at: "2026-01-01T00:00:00Z",
     active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
-  } });
+  }) });
   assert.deepEqual(await answerRead(h), { kind: "workspace", directory: "/srv/a" });
   assert.ok(body(await operation).includes("## Workspace rustx.toml (/srv/a)"));
   assert.equal(h.transport.transportCount("session/summary"), 1);
@@ -1082,10 +1083,10 @@ it("an in-flight inspection keeps its Session and never presents a replaced App 
   const pending = await nextRequest(h, "session/summary");
   const replacement = await harness();
   dispatcher.setHost(replacement.host);
-  h.transport.respond(pending.id, { type: "session_summary", summary: {
+  h.transport.respond(pending.id, { type: "session_summary", summary: summaryFor({
     id: SESSION_A, cwd: "/srv/a", ownership_generation: "1", updated_at: "2026-01-01T00:00:00Z",
     active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
-  } });
+  }) });
   await answerRead(h);
   assert.deepEqual(await replaced, {
     kind: "transient", level: "error",

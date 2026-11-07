@@ -873,12 +873,12 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         .await;
     let mut driver = connect(&fixture, factory);
 
-    // v73 cannot decode the new closed ModelCapabilities view. Reject it
+    // v74 cannot decode the new closed ModelCapabilities view. Reject it
     // before any checkpoint or model catalog can cross this connection.
     let old = driver
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(6),
-            protocol_version: 73,
+            protocol_version: 74,
         })
         .await;
     assert_eq!(old.id, RequestId::new(6));

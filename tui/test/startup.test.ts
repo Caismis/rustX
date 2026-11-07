@@ -1,4 +1,4 @@
-import {threadFor} from '../../protocol/app-server/testing.ts';
+import {threadFor,summaryFor} from '../../protocol/app-server/testing.ts';
 import { followAttachment } from './support/app-server-peer.ts';
 import { checkpoint } from "./support/fixtures.ts";
 /** Startup ownership, driven by explicit wire replies and user selections. */
@@ -35,14 +35,15 @@ const rows = [SESSION_A, SESSION_B].map((id) => ({ id, name: `Session ${id}`, cw
 
 async function connected(authority = 'fixture-app-server-authority') {
   const transport = new FakeTransport();
+  transport.scriptedReply=request=>request.method==='inbound/submissionLookup'?{type:'inbound_submission',acceptance:null}:undefined;
   const pending = AppServerClient.initialize({ transport });
   const [request] = await transport.log.awaitMethod("initialize");
-  transport.respond(request!.id, { type: "initialized", authority_id: authority, protocol_version: 73, capabilities: SERVER_CAPABILITIES });
+  transport.respond(request!.id, { type: "initialized", authority_id: authority, protocol_version: 74, capabilities: SERVER_CAPABILITIES });
   return { transport, host: new AppServerHost({ client: await pending, ownership: "external" }) };
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
   const request = (await transport.log.awaitMethod("session/list", count)).at(-1)!;
-  transport.respond(request.id, { type: "sessions", sessions, });
+  transport.respond(request.id, { type: "sessions", sessions:sessions.map(row=>summaryFor(row)), });
 }
 async function nextAttach(transport: FakeTransport) {
   const existing = transport.log.matching('thread/resume').find(request=>!transport.answered.has(request.id));
@@ -181,7 +182,7 @@ async function selectResumeByKeyboard(h: ReturnType<typeof appFor>, transport: F
     command.handleInput('\r');
   } else h.input('\r');
   const list = await transport.nextPending('session/list');
-  transport.respond(list.id, { type: 'sessions', sessions: rows.map(row => row.id === sessionId ? { ...row, active_node: node } : row) });
+  transport.respond(list.id, { type: 'sessions', sessions: (rows.map(row => row.id === sessionId ? { ...row, active_node: node } : row)).map(row=>summaryFor(row)) });
   await tick();
   const selector = h.surfaces.at(-1)!;
   assert.ok(selector instanceof ResumeSelector);
@@ -691,7 +692,7 @@ it("an inadmissible Thread A does not block browsing or selecting B", async (t) 
   assert.equal(transport.log.count('thread/resume'), 1, 'the old selection lease cannot attach another identity');
   h.input('\r');
   const list = await transport.nextPending('session/list');
-  transport.respond(list.id, { type: 'sessions', sessions: rows });
+  transport.respond(list.id, { type: 'sessions', sessions: (rows).map(row=>summaryFor(row)) });
   await tick();
   const reopened = h.surfaces.at(-1)!;
   assert.notEqual(reopened, selector, 'failure remains recoverable through a newly authorized picker');
@@ -899,7 +900,7 @@ it("committed create retires empty authority before failed attach; reopening rea
   await tick();
   const fresh = h.surfaces.at(-1)!;
   assert.notEqual(fresh, stale);
-  assert.deepEqual(fresh.selector.visibleSessions(), [createdRow]);
+  assert.deepEqual(fresh.selector.visibleSessions(), [summaryFor(createdRow)]);
   assert.doesNotMatch(fresh.render(80).join(), /No Sessions available|New Session/);
   assert.equal(transport.log.count("thread/start"), 1);
   assert.equal(transport.log.count("thread/resume"), 1, "catalog refresh does not retry attachment");

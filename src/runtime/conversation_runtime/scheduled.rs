@@ -189,6 +189,7 @@ impl RuntimeInner {
             .expect("native scheduled admission owns coordinator fence");
         drop(state);
         let inner = self.clone();
+        let activity = self.activity.lease();
         self.executor.spawn(async move {
             let result = if recovered_writer {
                 let _lease = inner
@@ -231,6 +232,7 @@ impl RuntimeInner {
             }
             drop(state);
             drop(admission);
+            drop(activity);
             inner.settlement.notify_waiters();
             inner.mailbox.wake().notify_one();
         });

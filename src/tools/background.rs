@@ -833,6 +833,7 @@ struct PreparedRecord {
 
 /// The synchronized registry state.
 struct BackgroundRegistryState {
+    activity_records: std::collections::HashSet<usize>,
     /// A scoped Goal admission excludes new preparations while its durable
     /// callback runs outside this mutex. Existing preparations preclude it.
     goal_idle_claimed: bool,
@@ -915,6 +916,7 @@ impl ConversationBackgroundRegistry {
         Self {
             conversation_id,
             inner: Arc::new(Mutex::new(BackgroundRegistryState {
+                activity_records: std::collections::HashSet::new(),
                 goal_idle_claimed: false,
                 prepared: HashMap::new(),
                 observation_generation: 0,
@@ -931,6 +933,10 @@ impl ConversationBackgroundRegistry {
             resources,
             state_version,
         }
+    }
+
+    pub(crate) fn activity_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.state_version.subscribe()
     }
 
     fn notify_state_change(&self) {
@@ -1496,6 +1502,7 @@ impl ConversationBackgroundRegistry {
             let next_index = state.records.len();
             state.index.insert(execution_id.clone(), next_index);
             state.records.push(prepared_record.record);
+            state.activity_records.insert(next_index);
             state.records[next_index].observation_layout = Arc::default();
             state.observation_generation = state.observation_generation.saturating_add(1);
             let cut = Self::observation_cut_locked(&state);
@@ -1792,9 +1799,24 @@ impl ConversationBackgroundRegistry {
         Some(snapshot_of(&state.records[index]))
     }
 
-    /// The non-terminal (Starting/Running/Cancelling/PublishingTerminal)
-    /// snapshots in execution allocation order. Terminal executions never
+    /// Hold the existing owner without changing any activity fact.
+    #[cfg(test)]
+    pub(crate) fn with_activity_lock_for_test(&self, read: impl FnOnce()) {
+        let state = self.state();
+        read();
+        drop(state);
+    }
+    pub(crate) fn wait_activity_ready(&self) {
+        drop(self.state());
+    }
     /// Includes private preparations as well as committed live records.
+    pub(crate) fn with_activity<T>(&self, read: impl FnOnce(bool) -> T) -> Option<T> {
+        let state = self.inner.try_lock().ok()?;
+        let result = read(!state.prepared.is_empty() || !state.activity_records.is_empty());
+        drop(state);
+        Some(result)
+    }
+
     pub(crate) fn owns_idle_work(&self) -> bool {
         let state = self.state();
         !state.prepared.is_empty()
@@ -1804,7 +1826,7 @@ impl ConversationBackgroundRegistry {
                 .any(|record| record.lifecycle.is_active())
     }
 
-    /// appear here.
+    /// Non-terminal snapshots in allocation order, excluding terminal records.
     #[must_use]
     pub fn active_snapshot(&self) -> Vec<BackgroundExecutionSnapshot> {
         let state = self.state();
@@ -1995,6 +2017,7 @@ impl ConversationBackgroundRegistry {
             }
         }
         if let Some(committed) = committed_sequence {
+            state.activity_records.remove(&index);
             state.records[index].observation_layout = Arc::default();
             state.observation_generation = state.observation_generation.saturating_add(1);
             let cut = Self::observation_cut_locked(&state);
@@ -2170,6 +2193,7 @@ impl ConversationBackgroundRegistry {
             }
         }
         if let Some(committed) = committed_sequence {
+            state.activity_records.remove(&index);
             state.records[index].observation_layout = Arc::default();
             state.observation_generation = state.observation_generation.saturating_add(1);
             let cut = Self::observation_cut_locked(&state);
@@ -2211,6 +2235,7 @@ impl ConversationBackgroundRegistry {
                 return;
             }
             state.records[index].publication_abandoned = true;
+            state.activity_records.remove(&index);
         }
         self.notify_state_change();
     }
@@ -2457,6 +2482,7 @@ impl ConversationBackgroundRegistry {
             self.discard_prepared_record(&mut state, execution_id)
         };
         if discarded {
+            self.notify_state_change();
             // No canonical terminal notification exists for a private owner.
             // Revisit a Goal idle decision that this preparation blocked.
             self.resources.mailbox.wake().notify_one();

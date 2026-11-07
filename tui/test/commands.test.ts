@@ -1,3 +1,4 @@
+import {summaryFor} from '../../protocol/app-server/testing.ts';
 import {threadFor} from '../../protocol/app-server/testing.ts';
 import {readCut} from './support/fixtures.ts';
 import { checkpoint, domainReceipt, goalReceipt, compactReceipt, jobReceipt } from './support/fixtures.ts';
@@ -59,7 +60,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v73.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v74.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -668,18 +669,18 @@ describe("CommandDispatcher", () => {
       type: "sessions",
 
       sessions: [
-        {
+        summaryFor({
           id: "ses_84097828-fc31-78c8-9292-10df48901a85",
           name: "current",
           updated_at: "2026-08-21T00:00:00Z",
           cwd: "/server/work", ownership_generation: "1", active_node: "node_35971be6-e9bb-724a-8955-82fe0e42e048",
-        },
-        {
+        }),
+        summaryFor({
           id: "ses_5d906140-8048-712d-8539-25aed45333a1",
           name: "saved review",
           updated_at: "2026-08-20T00:00:00Z",
           cwd: "/server/work", ownership_generation: "1", active_node: "node_1779f59f-4df2-71f6-b81a-eb08fb52a5d8",
-        },
+        }),
       ],
     });
 

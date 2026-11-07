@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v73.ts';
+import type { Request1 } from './v74.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -151,6 +151,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'mcp/draftPrepare': { effect: 'connection_local' },
   'mcp/draftCancel': { effect: 'connection_local', lane: 'control' },
   'thread/read': {effect:'read',lane:'metadata'},
+  'thread/loaded/list': {effect:'read',lane:'metadata'},
   'thread/list': {effect:'read',lane:'metadata'},
   'thread/name/set': {effect:'side_effecting',lane:'metadata'},
   'thread/archive': {effect:'side_effecting',lane:'metadata'},

@@ -1,4 +1,4 @@
-import type {CheckpointReadCut,CheckpointValueChunk,TraceFieldSource} from './v73.ts';
+import type {CheckpointReadCut,CheckpointValueChunk,TraceFieldSource} from './v74.ts';
 
 export type TraceValueField=Extract<TraceFieldSource,{type:'value'}>;
 export type TraceValueSelector=Pick<TraceValueField,'domain'|'item_offset'|'path'>;

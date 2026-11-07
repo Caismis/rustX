@@ -164,7 +164,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v73 notice reaches only a connection that negotiated v73.
+        // A v74 notice reaches only a connection that negotiated v74.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -339,6 +339,23 @@ impl AppServerConnection {
         }
     }
 
+    async fn next_thread_status(&self) -> NotificationMethod {
+        if self.initialized.lock().expect("initialize mutex").is_none() {
+            return std::future::pending().await;
+        }
+        let mut events = self.thread_status_events.lock().await;
+        match events.recv().await {
+            Ok(crate::local_runtime::session_runtime_manager::status::ThreadStatusEvent::Changed(event)) => NotificationMethod::ThreadStatusChanged(event.into()),
+            Ok(crate::local_runtime::session_runtime_manager::status::ThreadStatusEvent::ResyncRequired) => NotificationMethod::ThreadStatusResyncRequired {},
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                *events = events.resubscribe();
+                NotificationMethod::ThreadStatusResyncRequired {}
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => std::future::pending().await,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // One fair selection across instance and attachment notifications.
     pub(crate) async fn next_notification_candidate(
         &self,
     ) -> (
@@ -388,6 +405,7 @@ impl AppServerConnection {
                 .collect();
             if routes.is_empty() {
                 tokio::select! {
+                    status=self.next_thread_status()=>return level_notification(status),
                     notification = &mut levels, if levels_pending => {
                         if let Some(notification) = notification {
                             return level_notification(notification);
@@ -429,6 +447,7 @@ impl AppServerConnection {
                 })
                 .collect();
             let (route, delivery, observed, registration) = tokio::select! {
+                status=self.next_thread_status()=>return level_notification(status),
                 notification = &mut levels, if levels_pending => {
                     if let Some(notification) = notification {
                         return level_notification(notification);

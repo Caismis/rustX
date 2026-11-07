@@ -115,6 +115,7 @@ impl Family<'_> {
             | Method::SessionAttachmentStatus { .. } => Family::Attachment,
             Method::ThreadRead { .. }
             | Method::ThreadList { .. }
+            | Method::ThreadLoadedList { .. }
             | Method::ThreadName { .. }
             | Method::ThreadArchive { .. }
             | Method::ThreadUnarchive { .. }

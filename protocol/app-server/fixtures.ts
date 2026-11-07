@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v73.js';
+import type {ProtocolMessage} from './v74.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -217,7 +217,16 @@ export const fixtures = [
         "generated_title": null,
         "preview": "Native first user message",
         "updated_at": "1970-01-01T00:00:00Z",
-        "active_node": "node_00000000-0000-7000-8000-000000000001"
+        "active_node": "node_00000000-0000-7000-8000-000000000001",
+        "thread_id": "conv_00000000-0000-7000-8000-000000000001",
+        "thread_status": {
+          "threadId": "conv_00000000-0000-7000-8000-000000000001",
+          "status": {
+            "type": "idle"
+          },
+          "revision": "0",
+          "runtimeIncarnation": "9007199254740993"
+        }
       }
     }
   },
@@ -279,7 +288,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 73,
+      "protocol_version": 74,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -297,7 +306,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 73,
+      "protocol_version": 74,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -1269,6 +1278,90 @@ export const fixtures = [
         "kind": "archive_preparation_failed",
         "reason": "artifact_unavailable"
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "notLoaded"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "idle"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "systemError"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "active",
+        "activeFlags": [
+          "waitingOnApproval",
+          "waitingOnUserInput"
+        ]
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/resyncRequired",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "loaded-threads",
+    "method": "thread/loaded/list",
+    "params": {
+      "offset": 0,
+      "limit": 64
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "loaded-threads",
+    "result": {
+      "type": "loaded_threads",
+      "data": [
+        {
+          "threadId": "conv_00000000-0000-7000-8000-000000000001",
+          "status": {
+            "type": "idle"
+          },
+          "revision": "9007199254740993",
+          "runtimeIncarnation": "9007199254740993"
+        }
+      ],
+      "next_offset": null
     }
   },
   {

@@ -1,5 +1,5 @@
-import type { CheckpointReadCut, TraceRecord, WorkflowTraceNode } from '../../../../protocol/app-server/v73';
-export type { WorkflowTraceNode } from '../../../../protocol/app-server/v73';
+import type { CheckpointReadCut, TraceRecord, WorkflowTraceNode } from '../../../../protocol/app-server/v74';
+export type { WorkflowTraceNode } from '../../../../protocol/app-server/v74';
 import { sameTraceStep } from '../../../../protocol/app-server/trace-identity';
 import type { TraceFieldReader } from '../../client/trace';
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';

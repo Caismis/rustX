@@ -17,6 +17,7 @@ mod history;
 mod model_catalog;
 mod projection;
 mod schedule;
+mod status;
 mod upload;
 mod workflows;
 

@@ -1,3 +1,5 @@
+import {threadStatusText,ThreadStatusNotifications} from '../../../protocol/app-server/thread-status.ts';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v74.ts';
 import { readSourceRepairFields, type SourceRepairRead } from '../../../protocol/app-server/source-observation.ts';
 import { materializeSettings } from '../../../protocol/app-server/settings-observation.ts';
 import { readEditor } from '../../../protocol/app-server/editor.ts';
@@ -128,6 +130,8 @@ function sessionIdOf(notification: Notification): string | undefined {
     case "configuration/changed":
       return notification.params.application.scope;
     case "configuration/sourceRepairChanged":
+    case "thread/status/changed":
+    case "thread/status/resyncRequired":
     case "schedule/changed":
       return undefined;
     case "session/ownershipRetired":
@@ -142,6 +146,48 @@ function sessionIdOf(notification: Notification): string | undefined {
 export type SourceRepairListener = (observation: SourceRepairObservation) => void;
 
 export class AppServerHost {
+  readonly #threadStatuses=new Map<string,ThreadStatusEntry>();
+  readonly #statusInterests = new Set<string>();
+  readonly #statusNotifications = new ThreadStatusNotifications();
+  readonly #threadStatusListeners=new Set<()=>void>();
+  #statusRepair?:Promise<void>;
+  #statusRepairEpoch = 0;
+  #statusUnsynchronized = false;
+  threadStatus(id:string):ThreadStatusEntry|undefined {return this.client.closed||this.#statusUnsynchronized?undefined:this.#threadStatuses.get(id);}
+
+  threadStatusLabel(id:string):string {return threadStatusText(this.threadStatus(id));}
+  onThreadStatus(listener:()=>void):()=>void {this.#threadStatusListeners.add(listener);return()=>this.#threadStatusListeners.delete(listener);}
+  #retainThreadStatus(entry:ThreadStatusEntry):void {
+    const previous=this.#threadStatuses.get(entry.threadId),current=this.#statusNotifications.snapshot(entry,previous);
+    if(!current)return;
+    if(current===previous)return;
+    this.#threadStatuses.delete(entry.threadId);this.#threadStatuses.set(entry.threadId,current);
+    if(this.#threadStatuses.size>128)this.#threadStatuses.delete(this.#threadStatuses.keys().next().value!);
+    for(const listener of this.#threadStatusListeners)listener();
+  }
+  #rememberStatusInterest(threadId:string):void {
+    this.#statusInterests.delete(threadId);this.#statusInterests.add(threadId);
+    if(this.#statusInterests.size>128)this.#statusInterests.delete(this.#statusInterests.values().next().value!);
+  }
+  async #readThreadStatus(threadId:string):Promise<void> {
+    this.#rememberStatusInterest(threadId);
+    const epoch=this.#statusRepairEpoch;
+    const {thread}=await this.client.call('thread/read',{threadId},'thread');
+    if(thread.id!==threadId)throw new Error('Mismatched Thread status identity.');
+    if(epoch!==this.#statusRepairEpoch){void this.#repairThreadStatuses();return;}
+    if(!this.client.closed)this.#retainThreadStatus({threadId:thread.id,status:thread.status,revision:thread.statusRevision,runtimeIncarnation:thread.runtimeIncarnation});
+  }
+  #repairThreadStatuses():Promise<void> {
+    ++this.#statusRepairEpoch;
+    this.#statusNotifications.clear();
+    this.#statusUnsynchronized = true;
+    if(this.#statusRepair)return this.#statusRepair;
+    const ids=[...new Set([...this.#threadStatuses.keys(),...[...this.#sessions.values()].map(session=>session.target.conversation_id)])];this.#threadStatuses.clear();
+    for(const listener of this.#threadStatusListeners)listener();
+    const work=(async()=>{let repaired:number;do {repaired=this.#statusRepairEpoch;const currentIds=new Set([...ids,...this.#statusInterests,...this.#threadStatuses.keys(),...[...this.#sessions.values()].map(session=>session.target.conversation_id)]);for(const id of currentIds){try {await this.#readThreadStatus(id);}catch {this.#statusNotifications.forget(id,this.#threadStatuses.get(id));this.#threadStatuses.delete(id);}}}while(!this.client.closed&&repaired!==this.#statusRepairEpoch);if(!this.client.closed){this.#statusUnsynchronized=false;for(const listener of this.#threadStatusListeners)listener();}})().catch(()=>{}).finally(()=>{if(this.#statusRepair===work)this.#statusRepair=undefined;});
+    this.#statusRepair=work;return work;
+  }
+
   readonly endpoint: string | undefined;
   readonly client: AppServerClient;
   readonly ownership: ProcessOwnership;
@@ -205,6 +251,13 @@ export class AppServerHost {
     // is its own, so a superseded incarnation cannot reach its replacement.
     // Source-scoped notices go to the host's source observations instead.
     client.onNotification((notification) => {
+      if(notification.method==='thread/status/changed') {
+        if(!this.#statusNotifications.observe(notification.params))return;
+        if(this.#statusInterests.has(notification.params.threadId)||this.#threadStatuses.has(notification.params.threadId)||[...this.#sessions.values()].some(session=>session.target.conversation_id===notification.params.threadId))this.#retainThreadStatus(notification.params);
+        return;
+      }
+      if(notification.method==='thread/status/resyncRequired') {void this.#repairThreadStatuses();return;}
+
       if (notification.method === "configuration/sourceRepairChanged") {
         const { target, receipt, sequence } = notification.params;
         this.#observeSourceRepair({ target, receipt: receipt ?? undefined, sequence });
@@ -451,6 +504,7 @@ export class AppServerHost {
     this.#failedInitializations.delete(sessionId);
     this.#sessions.set(sessionId, session);
     await this.repairInputReceipts(session);
+    void this.#readThreadStatus(session.target.conversation_id).catch(()=>{});
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
       // installs a fresh one rather than reusing a target the server retired.
@@ -534,6 +588,7 @@ export class AppServerHost {
     offset = 0,
     limit = SESSION_PROJECTION_PAGE_LIMIT,
   ): Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }> {
+    const statusEpoch=this.#statusRepairEpoch,statusCut=this.#statusNotifications.checkpoint();
     const page = await this.client.call(
       "session/list",
       {
@@ -543,6 +598,15 @@ export class AppServerHost {
       },
       "sessions",
     );
+    for(const row of page.sessions){
+      this.#rememberStatusInterest(row.thread_id);
+      if(statusEpoch===this.#statusRepairEpoch&&row.thread_status)this.#retainThreadStatus(row.thread_status);
+      if(!row.thread_status&&!this.#statusNotifications.latestSince(row.thread_id,statusCut)){
+        this.#statusNotifications.forget(row.thread_id,this.#threadStatuses.get(row.thread_id));this.#threadStatuses.delete(row.thread_id);
+        for(const listener of this.#threadStatusListeners)listener();
+      }
+      if(statusEpoch!==this.#statusRepairEpoch||!this.threadStatus(row.thread_id))void this.#readThreadStatus(row.thread_id).catch(()=>{});
+    }
     return {
       sessions: page.sessions,
       nextOffset: page.next_offset ?? undefined,
@@ -617,7 +681,7 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: import("../../../protocol/app-server/v73.ts").CanonicalContentLocator,
+    boundary?: import("../../../protocol/app-server/v74.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
@@ -640,7 +704,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: import("../../../protocol/app-server/v73.ts").CanonicalContentLocator,
+    boundary: import("../../../protocol/app-server/v74.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
@@ -747,7 +811,7 @@ export class AppServerHost {
 
 async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor?: import('../../../protocol/app-server/v73.ts').EditorLocator | null;
+  editor?: import('../../../protocol/app-server/v74.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
 }): Promise<SessionTransition> {
   return {

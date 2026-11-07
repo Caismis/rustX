@@ -1486,6 +1486,7 @@ async fn live_catalog_publication_never_parks_on_background_ownership() {
         fixture.sessions.push(session.clone());
         fixture.manager.load(&session.id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let mut status_changes=fixture.manager.status_notifications();
         let mut publications = runtime.runtime_catalog_publications();
         let before = *publications.borrow();
         let background = runtime.tool_runtime().background().clone();
@@ -1519,6 +1520,8 @@ async fn live_catalog_publication_never_parks_on_background_ownership() {
         tokio::task::spawn_blocking(move || entered.wait_entered())
             .await
             .unwrap();
+        assert!(fixture.manager.thread_statuses(vec![session.active_conversation_id.clone()]).await.is_err(),"a long native source lock makes reads unavailable without parking Coordinator");
+        loop {if matches!(status_changes.recv().await.unwrap(),crate::local_runtime::session_runtime_manager::status::ThreadStatusEvent::ResyncRequired){break;}}
         *mcp.control.schema_kind.lock().unwrap() = "integer";
         runtime
             .capability()

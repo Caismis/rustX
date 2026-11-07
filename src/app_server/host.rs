@@ -250,6 +250,7 @@ impl AppServerHost {
     #[must_use]
     pub fn new(manager: SessionRuntimeManager, policy: AppServerPolicy) -> Self {
         manager.bind_process_policy(policy);
+        manager.start_status_observer();
         let callbacks = Arc::new(super::callbacks::Callbacks::default());
         manager.bind_host_tools(Arc::new(callbacks.clone()));
         manager.bind_interaction_lifecycle(Arc::new(callbacks.clone()));

@@ -1,3 +1,4 @@
+import {summaryFor} from '../../protocol/app-server/testing';
 import { threadFor } from '../../protocol/app-server/testing.ts';
 import { RpcFailure } from '../src/client/errors';
 import {applicationReceipt} from './fixture';
@@ -301,7 +302,7 @@ it('late metadata searches cannot replace newer results or results after Workspa
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw new Error('wrong request');
     const id = request.params.query!;
-    return { type: 'sessions', sessions: [{ ownership_generation: '1', id, cwd: '/workspace/A', active_node: `node-${id}`, name: id, updated_at: '0' }] };
+    return { type: 'sessions', sessions: ([{ ownership_generation: '1', id, cwd: '/workspace/A', active_node: `node-${id}`, name: id, updated_at: '0' }]).map(row=>summaryFor(row)) };
   });
   fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'old' } });
   const old = await server.waitFor('session/list', 2);
@@ -558,7 +559,7 @@ it('classification belongs to exactly the native summary page that requested it'
   const pending = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
   await mount(host);
   host.classifyLocations = vi.fn(() => pending.promise);
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [{ ownership_generation: '1', id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }], }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: ([{ ownership_generation: '1', id: 'C', name: 'Fresh Session', cwd: '/workspace/B', active_node: 'c', updated_at: '2026-09-18T00:00:00Z' }]).map(row=>summaryFor(row)), }));
   await act(async () => { await server.client.listSessions(); });
   const groupContaining = () => screen.getByRole('button', { name: 'Open Fresh Session' }).closest('[data-workspace-group]')?.textContent ?? '';
   expect(groupContaining()).toBe('');
@@ -572,7 +573,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v73').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v74').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A' },'0')));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -631,7 +632,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by its dedicated actor. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v73').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v74').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();
@@ -692,7 +693,7 @@ it('UX-04 keeps confirmed groups while a cloned native page refresh is gated', a
 it.each(['success', 'failure'] as const)('UX-04 normal next-page demand settles before the old page %s', async outcome => {
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw new Error('wrong request');
-    return { type: 'sessions', sessions: [server.summary(request.params.offset === 0 ? 'A' : 'B')], next_offset: request.params.offset === 0 ? 32 : undefined };
+    return { type: 'sessions', sessions: ([server.summary(request.params.offset === 0 ? 'A' : 'B')]).map(row=>summaryFor(row)), next_offset: request.params.offset === 0 ? 32 : undefined };
   });
   const host = hostFixture(), a = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>(), b = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
   vi.mocked(host.classifyLocations).mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
@@ -779,7 +780,7 @@ it.each(['success', 'failure', 'unavailable'] as const)('current page notice ign
   vi.mocked(host.classifyLocations).mockReturnValueOnce(old);
   await mount(host);
   if (outcome === 'unavailable') await act(async () => reject(new Error('old page unavailable')));
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: ([server.summary('B')]).map(row=>summaryFor(row)) }));
   await act(async () => server.client.listSessions());
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'View options' })));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Refresh list' })));
@@ -811,7 +812,7 @@ it('one refresh moves sidebar and selected Session together to the replacement r
 it.each(['en', 'zh'] as const)('selected off-page demand refreshes silently and reports failures in %s', async locale => {
   const host = await mount();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: ([server.summary('B')]).map(row=>summaryFor(row)) }));
   await act(async () => server.client.listSessions());
   const gate = deferred<Awaited<ReturnType<ProductHostWorkspaces['classifyLocations']>>>();
   vi.mocked(host.classifyLocations).mockReturnValueOnce(gate.promise);
@@ -878,8 +879,8 @@ it('native activity invalidation replaces the current page with a recently activ
   let recent = false;
   server.snapshots.set('older', snapshot('older'));
   server.summaries.set('older', { cwd: '/workspace/A', name: 'Older conversation', updated_at: '2026-10-07T00:00:00Z' });
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: recent
-    ? [server.summary('older'), server.summary('A')] : [server.summary('A'), server.summary('B')], next_offset: 32 }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: (recent
+    ? [server.summary('older'), server.summary('A')] : [server.summary('A'), server.summary('B')]).map(row=>summaryFor(row)), next_offset: 32 }));
   await mount();
   expect(screen.queryByRole('button', { name: 'Open Older conversation' })).toBeNull();
   recent = true;

@@ -650,6 +650,8 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
                 notification,
                 NotificationMethod::SummaryInvalidated { .. }
                     | NotificationMethod::SourceRepairChanged { .. }
+                    | NotificationMethod::ThreadStatusChanged(..)
+                    | NotificationMethod::ThreadStatusResyncRequired { .. }
             ) {
                 continue;
             }
@@ -891,6 +893,8 @@ async fn t13_attach_identity_checkpoint_and_subscribe_preserve_the_native_cut() 
                 notification,
                 NotificationMethod::SummaryInvalidated { .. }
                     | NotificationMethod::SourceRepairChanged { .. }
+                    | NotificationMethod::ThreadStatusChanged(..)
+                    | NotificationMethod::ThreadStatusResyncRequired { .. }
             ) {
                 continue;
             }
@@ -1354,13 +1358,10 @@ async fn t07_t13_source_failure_fences_registration_without_replay_loss_or_curso
             .await,
             ErrorData::ObservationUnavailable {diagnostic} if diagnostic.contains("inherited occupancy reading source unavailable")
         ));
-        assert!(
-            connection
-                .next_notification_candidate()
-                .now_or_never()
-                .is_none(),
-            "unavailable registration is fenced, not a notification loop"
-        );
+        while let Some((notification,_))=connection.next_notification_candidate().now_or_never() {
+            assert!(matches!(notification.notification,NotificationMethod::ThreadStatusChanged(..)|NotificationMethod::ThreadStatusResyncRequired{..}|NotificationMethod::SummaryInvalidated{..}|NotificationMethod::SourceRepairChanged{..}),"unavailable registration cannot deliver attachment observations");
+        }
+
         assert_eq!(slot.accepted_cursor(), Some(checkpoint.cursor));
         fault.restore();
         let MethodResult::Checkpoint {checkpoint:repaired}=call(&connection,47_803,Method::SessionCheckpoint {target:target.clone(),trace_records:vec![]}).await else {panic!("explicit public checkpoint repairs the original Source");};

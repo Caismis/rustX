@@ -690,6 +690,8 @@ impl SessionRuntimeManager {
                 .expect("process incarnation identity exhausted"),
         );
         Ok(Arc::new_cyclic(|resident| ResidentRuntime {
+            status_read: Mutex::new(()),
+            status_wake: Arc::new(tokio::sync::Notify::new()),
             node: access.node.id.clone(),
             initialization: initialization.clone(),
             operations: watch::channel(0).0,
@@ -1030,8 +1032,10 @@ impl TerminalGuard {
             writer,
         }
     }
+    #[allow(clippy::too_many_lines)] // One initialization publication, fenced against retirement.
     fn finish(mut self, result: CompositionOutcome) {
         let mut catalog_observer = None;
+        let mut status_observer = None;
         if let Ok(Some(runtime)) = &result {
             // Install the incarnation in the flight owner while Loading still
             // excludes all other claimants. Activation can synchronously admit
@@ -1043,6 +1047,7 @@ impl TerminalGuard {
             // inert, outside registry/control locks. It starts observing only
             // after Loaded is visible; a losing initialization drops it here.
             catalog_observer = self.owner.prepare_runtime_catalog_observer(runtime);
+            status_observer = self.owner.prepare_status_observer(runtime);
             let can_activate = self
                 .flight
                 .initialization
@@ -1124,6 +1129,9 @@ impl TerminalGuard {
             #[cfg(test)]
             let attach = registry.resident_attach.clone();
             drop(registry);
+            if let Some(observer) = status_observer {
+                tokio::spawn(observer);
+            }
             if let Some(observer) = catalog_observer {
                 tokio::spawn(observer);
             }
@@ -1226,6 +1234,7 @@ impl TerminalGuard {
             }
         };
         self.flight.result.send_replace(Some(outcome));
+        self.owner.status.wake.notify_one();
         drop(registry);
         if let Some((session, node, flight)) = restart {
             self.owner

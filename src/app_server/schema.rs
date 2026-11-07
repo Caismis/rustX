@@ -17,6 +17,7 @@ use super::protocol::{
 /// # Panics
 /// Panics if a constant fixture violates its native value constructor.
 pub fn fixtures() -> Vec<ProtocolMessage> {
+    use super::thread_status::{ThreadActiveFlag, ThreadStatus, ThreadStatusEntry};
     const EXACT: u64 = 9_007_199_254_740_993;
     use crate::events::interaction::{
         ExactInteger, FiniteNumber, IntegerAnswer, NumberAnswer, QuestionnaireAnswer,
@@ -47,6 +48,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         attempt_id: Some(crate::runtime::identity::AttemptId::new("attempt-fixture")),
         attempt_id_source: None,
     };
+    let status_target = target.clone();
     let mut fixtures = vec![
         ProtocolMessage::ServerMessage(super::protocol::ServerMessage::Request(super::protocol::ServerRequest {
             jsonrpc: JsonRpcVersion::V2,
@@ -190,7 +192,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-session-summary".into()),
             result: MethodResult::SessionSummary {
-                summary: crate::local_runtime::session::SessionSummary {
+                summary: crate::app_server::thread_status::SessionSummary { metadata: crate::local_runtime::session::SessionSummary {
                     ownership_generation: "1".into(),
                     id: target.session_id.clone(),
                     cwd: "/workspace".into(),
@@ -201,6 +203,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     active_node: crate::local_runtime::session::SessionNodeId::new(
                         "node_00000000-0000-7000-8000-000000000001",
                     ),
+                },
+                thread_id: target.conversation_id.clone(),
+                thread_status: Some(crate::app_server::thread_status::ThreadStatusEntry {thread_id:target.conversation_id.clone(),status:crate::app_server::thread_status::ThreadStatus::Idle,revision:0,runtime_incarnation:Some(target.runtime_incarnation)}),
                 },
             },
         }))),
@@ -767,6 +772,55 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         })));
     }
+    let statuses = [
+        ThreadStatus::NotLoaded,
+        ThreadStatus::Idle,
+        ThreadStatus::SystemError,
+        ThreadStatus::Active {
+            active_flags: vec![
+                ThreadActiveFlag::WaitingOnApproval,
+                ThreadActiveFlag::WaitingOnUserInput,
+            ],
+        },
+    ];
+    for status in statuses {
+        fixtures.push(ProtocolMessage::Notification(Notification {
+            jsonrpc: JsonRpcVersion::V2,
+            notification: NotificationMethod::ThreadStatusChanged(ThreadStatusEntry {
+                thread_id: status_target.conversation_id.clone(),
+                status,
+                revision: EXACT,
+                runtime_incarnation: Some(status_target.runtime_incarnation),
+            }),
+        }));
+    }
+    fixtures.push(ProtocolMessage::Notification(Notification {
+        jsonrpc: JsonRpcVersion::V2,
+        notification: NotificationMethod::ThreadStatusResyncRequired {},
+    }));
+    fixtures.push(ProtocolMessage::Request(Box::new(Request {
+        jsonrpc: JsonRpcVersion::V2,
+        id: RequestId::String("loaded-threads".into()),
+        call: Method::ThreadLoadedList {
+            offset: 0,
+            limit: 64,
+        },
+    })));
+    fixtures.push(ProtocolMessage::Response(Response::Success(Box::new(
+        Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("loaded-threads".into()),
+            result: MethodResult::LoadedThreads {
+                data: vec![ThreadStatusEntry {
+                    thread_id: status_target.conversation_id.clone(),
+                    status: ThreadStatus::Idle,
+                    revision: EXACT,
+                    runtime_incarnation: Some(status_target.runtime_incarnation),
+                }],
+                next_offset: None,
+            },
+        },
+    ))));
     workflow_fixtures(&mut fixtures);
     schedule_fixtures(&mut fixtures);
     reasoning_order_fixtures(&mut fixtures);
@@ -1576,9 +1630,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v73.schema.json", "v73.ts"]);
+        assert_eq!(generations, ["v74.schema.json", "v74.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v73.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v74.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

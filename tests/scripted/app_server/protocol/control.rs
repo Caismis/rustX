@@ -8,6 +8,8 @@ async fn headless_interactions_broadcast_survive_disconnect_and_select_one_respo
     bounded(async {
         use crate::runtime::interaction::{ApprovalDecision, InteractionResponse, InteractionSettleGate, QuestionnaireResponse};
         use std::sync::Arc;
+        struct ReleaseSettlement(Arc<InteractionSettleGate>);
+        impl Drop for ReleaseSettlement {fn drop(&mut self){self.0.release();}}
         for tool in ["read", "ask_user"] {
             for first in ["response", "error", "invalid"] {
                 let f = Fixture::with_session_count(Some(tool), 1).await;
@@ -22,10 +24,12 @@ async fn headless_interactions_broadcast_survive_disconnect_and_select_one_respo
                     target: initial.clone(), content: vec![UserInputBlock::Text(crate::message::content::TextBlock { text:"request-A".into() })],
                 }).await;
                 f.gates[0].wait_entered().await;
-                call(&connection, 61, Method::SessionDetach { target:initial }).await;
+                call(&connection, 61, Method::SessionDetach { target:initial.clone() }).await;
                 f.gates[0].release();
                 coordinator.pending_published.notified().await;
                 assert_eq!(coordinator.pending_count(), 1);
+                let waiting = crate::app_server::thread_status::ThreadStatus::Active { active_flags: vec![if tool == "read" {crate::app_server::thread_status::ThreadActiveFlag::WaitingOnApproval} else {crate::app_server::thread_status::ThreadActiveFlag::WaitingOnUserInput}] };
+                assert_eq!(super::status::read(&connection, &initial.conversation_id).await.status, waiting);
                 let target = attach(&connection, &f, 0).await;
                 let MethodResult::Checkpoint { checkpoint } = call(&connection, 62, Method::SessionCheckpoint { trace_records:vec![],target:target.clone() }).await else { panic!("checkpoint") };
                 let interaction = checkpoint.snapshot.pending_interactions[0].interaction.clone();
@@ -37,6 +41,14 @@ async fn headless_interactions_broadcast_survive_disconnect_and_select_one_respo
                 call(&rival, 63, Method::SessionSubscribe {target,after_cursor:checkpoint.cursor}).await;
                 let ServerMessage::Request(replayed) = rival.next_server_message().await.unwrap() else { panic!("request replay") };
                 assert_eq!(request, replayed);
+                let third = AppServerConnection::new(f.host.clone()); initialize(&third).await;
+                let third_target = attach(&third, &f, 0).await;
+                let MethodResult::Checkpoint {checkpoint:third_checkpoint}=call(&third,64,Method::SessionCheckpoint{target:third_target.clone(),trace_records:vec![]}).await else {panic!("third checkpoint")};
+                call(&third,65,Method::SessionSubscribe{target:third_target,after_cursor:third_checkpoint.cursor}).await;
+                let ServerMessage::Request(third_request)=third.next_server_message().await.unwrap() else {panic!("third subscriber")};
+                assert_eq!(third_request,request);
+                assert_eq!(coordinator.pending_count(),1);
+                assert_eq!(super::status::read(&third,&initial.conversation_id).await.status,waiting);
                 // A disconnected subscriber never settles shared native work.
                 connection.close(); assert_eq!(coordinator.pending_count(),1);
                 let response = if tool == "read" { InteractionResponse::Approval {decision:ApprovalDecision::Allow} }
@@ -47,13 +59,14 @@ async fn headless_interactions_broadcast_survive_disconnect_and_select_one_respo
                     "invalid" => serde_json::json!({"jsonrpc":"2.0","id":request.id,"result":"invalid domain payload"}),
                     _ => serde_json::json!({"jsonrpc":"2.0","id":request.id,"error":{"code":-32000,"message":"declined"}}),
                 };
-                let gate = Arc::new(InteractionSettleGate::default()); gate.arm(); coordinator.install_settle_gate(gate.clone());
+                let gate = Arc::new(InteractionSettleGate::default()); gate.arm();let _release=ReleaseSettlement(gate.clone()); coordinator.install_before_settle_gate(gate.clone());
                 assert!(rival.handle_json(&winner.to_string()).await.is_none());
                 let entered = gate.clone(); tokio::task::spawn_blocking(move || entered.wait_entered()).await.unwrap();
                 let loser = serde_json::json!({"jsonrpc":"2.0","id":request.id,"result":result});
                 assert!(rival.handle_json(&loser.to_string()).await.is_none());
                 let ServerMessage::Resolved {params,..} = rival.next_server_message().await.unwrap() else { panic!("resolved") };
                 assert_eq!(params.request_id, request.id);
+                assert_eq!(super::status::read(&rival,&initial.conversation_id).await.status,waiting,"claiming the transport reply does not settle the native wait");
                 gate.release();
                 loop {
                     if let NotificationMethod::Event {event,..} = rival.next_notification().await.notification
@@ -61,7 +74,8 @@ async fn headless_interactions_broadcast_survive_disconnect_and_select_one_respo
                 }
                 assert_eq!(coordinator.pending_count(),0);
                 assert!(runtime.with_pending_interaction_header(&interaction, |_| ()).is_none());
-                drop(coordinator); drop(runtime); drop(connection); drop(rival); f.close().await;
+                super::status::next_status(&third,&initial.conversation_id,&crate::app_server::thread_status::ThreadStatus::Idle).await;
+                drop(coordinator); drop(runtime); drop(connection); drop(rival); drop(third); f.close().await;
             }
         }
     }).await;

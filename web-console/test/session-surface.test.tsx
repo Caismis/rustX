@@ -1,3 +1,4 @@
+import {summaryFor} from '../../protocol/app-server/testing';
 import { boundedSettings } from "./fixture";
 import { translator, displayText } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -10,7 +11,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v73';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v74';
 
 let server: Server;
 beforeEach(() => {
@@ -140,7 +141,7 @@ it('a summary begun before canonical history cannot complete its later preview c
 
 it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retryable off-page after reconnect: %s', async failure => {
   server.summaries.set('A', { name: null, preview: null });
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: ([server.summary('B')]).map(row=>summaryFor(row)) }));
   await mount(['A']);
   const reads = () => methods().filter(method => method === 'session/summary').length;
   expect(reads()).toBe(1); // Exact off-page empty metadata, before canonical work.
@@ -172,7 +173,7 @@ it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retry
   const retried = await server.waitFor('session/summary', 3);
   await act(async () => {
     // Obsolete-generation responses cannot publish metadata or finish the check.
-    oldSocket.deliver({ jsonrpc: '2.0', id: failed.id, result: { type: 'session_summary', summary: { ...server.summary('A'), preview: 'Obsolete preview' } } });
+    oldSocket.deliver({ jsonrpc: '2.0', id: failed.id, result: { type: 'session_summary', summary: summaryFor({ ...server.summary('A'), preview: 'Obsolete preview' }) } });
     server.reply(retried); await reconnect;
   });
   expect(reads()).toBe(3);
@@ -188,7 +189,7 @@ it.each(['rpc', 'socket'] as const)('failed exact first-message read stays retry
 it.each([false, true])('repairs off-page cached metadata on reconnect (completed file-only preview: %s)', async fileOnly => {
   server.summaries.set('A', { name: fileOnly ? null : 'Old name', preview: null });
   if (fileOnly) server.snapshots.set('A', canonicalUser(null));
-  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: [server.summary('B')] }));
+  server.handlers.set('session/list', () => ({ type: 'sessions', sessions: ([server.summary('B')]).map(row=>summaryFor(row)) }));
   await mount(['A']);
   const reads = () => methods().filter(method => method === 'session/summary').length;
   expect(reads()).toBe(1);
@@ -333,7 +334,7 @@ it('restores an explicitly named empty Session outside the current catalog page'
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw new Error('wrong method');
     const id = 'A';
-    return { type: 'sessions', sessions: [server.summary(id)] };
+    return { type: 'sessions', sessions: ([server.summary(id)]).map(row=>summaryFor(row)) };
   });
   server.summaries.set('B', { name: 'Named empty Session' });
   await mount(['B']);
@@ -699,7 +700,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v73').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v74').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 
@@ -726,7 +727,7 @@ it('A2 a Session first introduced by a later page converges without changing pag
   server.summaries.set('A', { name: null, preview: null });
   const pages = () => ({ type: 'sessions' as const, sessions: [server.summary('B')], next_offset: 1 });
   server.handlers.set('session/list', request => request.method === 'session/list' && request.params.offset === 0 ? pages()
-    : { type: 'sessions', sessions: [server.summary('A')], next_offset: null });
+    : { type: 'sessions', sessions: ([server.summary('A')]).map(row=>summaryFor(row)), next_offset: null });
   await server.connect();
   expect(previews()).toEqual({ B: null });
   server.held.add('session/list');

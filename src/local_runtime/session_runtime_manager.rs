@@ -29,6 +29,7 @@ mod model_selection;
 mod schedule;
 mod schedule_catalog;
 mod schedule_driver;
+pub(crate) mod status;
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
 mod sessions;
 mod source_watch;
@@ -335,6 +336,8 @@ impl ManagedRuntime {
 /// Sole strong composition owner, retained only by registry/transition machinery.
 #[derive(Debug)]
 struct ResidentRuntime {
+    status_read: Mutex<()>,
+    status_wake: Arc<tokio::sync::Notify>,
     node: SessionNodeId,
     initialization: Arc<Initialization>,
     identity: Arc<ManagedRuntime>,
@@ -422,6 +425,13 @@ impl ResidentRuntime {
             .expect("resident owns operation drain");
     }
 
+    fn try_observation_runtime(&self) -> Option<ConversationRuntime> {
+        self.composition
+            .try_lock()
+            .ok()?
+            .as_ref()
+            .map(|c| c.runtime().clone())
+    }
     // Shutdown alone may clone execution authority. Never exposed to clients.
     fn shutdown_runtime(&self) -> Option<ConversationRuntime> {
         self.composition
@@ -445,7 +455,7 @@ enum Entry {
 #[derive(Debug)]
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // independent test hooks
 struct RegistryState {
-    entries: HashMap<ConversationId, Entry>,
+    entries: status::ResidencyEntries,
     // WriterAbsent results are observation receipts, never residency owners.
     // Keep them per Conversation so automatic attachment cannot retry a failure.
     failed_submissions: HashMap<ConversationId, Arc<Flight>>,
@@ -601,6 +611,7 @@ struct RuntimeRegistry(Mutex<RegistryState>);
 /// current configuration sources to `configuration`, and execution to each core.
 #[derive(Clone)]
 pub struct SessionRuntimeManager {
+    status: Arc<status::StatusPublisher>,
     interaction_lifecycle:
         Arc<std::sync::OnceLock<Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>>>,
     pub(super) sessions: SessionController,
@@ -781,10 +792,11 @@ impl SessionRuntimeManager {
             error("SessionController already allocated its runtime manager; clone that manager")
         })?;
         Ok(Self {
+            status: Arc::default(),
             sessions,
             registry: Arc::new(RuntimeRegistry(Mutex::new(RegistryState {
                 policy,
-                entries: HashMap::new(),
+                entries: status::ResidencyEntries::default(),
                 schedule_open: true,
                 schedule_write_fenced: std::collections::HashSet::new(),
                 schedule_reads: watch::channel(0).0,

@@ -92,8 +92,9 @@ run header rather than accepting a completed child node.
 
 The final independent source review found no remaining blocking issues. It also
 checked native lifecycle/cancellation/broker lock order and the main branch's
-submission-activity sampling. No WebUI/TUI controls, layouts, styles or screenshot
-references were added, removed or redesigned. Product changes adapt protocol,
+submission-activity sampling. For the initial shared-control delivery, no WebUI/TUI controls, layouts, styles
+or screenshot references were added, removed or redesigned. The v74 amendment
+below updates the existing status surfaces and their corresponding references. Product changes adapt protocol,
 identity and state synchronization behind the existing UI.
 Static presentation fixtures declare only their implemented API subset. Their
 unchanged references do not assert unchanged feature visibility against Native:
@@ -141,3 +142,74 @@ instructions are in [shared-control.md](shared-control.md#existing-clients-and-s
 
 These targeted regressions do not replace final-head FULL verification for the
 approved Thread runtime-status amendment.
+
+## Thread runtime-status amendment (v74)
+
+This delta preserves the four review-boundary fixes above and uses existing
+Native owners: manager residency, Attempt/scheduled/manual physical task tails,
+logical root/routed Interactions, Background/Child/Auxiliary execution, and
+Native durability/MCP/recovery/retirement faults. The status projection grants no
+control and adds no execution journal. Cold metadata stays separate from runtime
+residency; nullable metadata proofs retain exact `thread_id` while strong Thread
+queries return the existing typed `observation_unavailable` error.
+
+| Amendment invariant | Deterministic evidence |
+| --- | --- |
+| Cold read/list/loaded enumeration never loads or calls a model; start, completion, unload, fresh incarnation and observer eviction | `thread_status_cold_reads_running_settlement_and_unload_need_no_attachment` |
+| An absorbing Native fault cannot be cleared by reads; proven physical retirement and recomposition establish a healthy new incarnation | `thread_status_native_fault_is_absorbing_and_cannot_be_cleared_by_reads`; `thread_status_fault_crossing_native_retirement_never_reports_idle` |
+| No false idle after the Attempt slot clears but its real physical owner remains | Native drain test's `activity().active` assertion at the existing Attempt exit gate |
+| Full logical Interaction map, simultaneous approval/questionnaire flags, remaining approvals, fenced older cleanup | `thread_status_counts_logical_waits_beyond_the_observation_head_and_fences_old_cleanup` |
+| Three subscribers share one Native wait; callback claim and resolved notification do not retire it before Native settlement | `headless_interactions_broadcast_survive_disconnect_and_select_one_response` with the before-settlement gate |
+| Host application callback waiting is active without human flags; ordinary failures/unknown outcomes retain Native settlement | Public Thread read in `tests/conformance/app_server_host.rs`; existing Host process-death conformance |
+| Unproven Child physical settlement and admission rollback are system faults instead of false idle or eternal running | `unproven_control_or_cleanup_terminal_blocks_live_and_recovered_agent`; `staged_rollback_uncertainty_survives_prepare_and_durable_admission_rollback` |
+| Status acquisition cannot park Native admission/configuration; unavailable metadata stays readable and recovers even without an activity notification | Four real-lock barriers in `thread_status_busy_metadata_lock_recovers_without_a_semantic_wake` (Background, Coordinator, capture, composition); `live_catalog_publication_never_parks_on_background_ownership` |
+| Meaningful-only publication, finite resident cache and explicit slow-consumer repair | `thread_status_publication_deduplicates_and_bounds_slow_consumer_delivery` |
+| Early notifications, unknown exact summaries, repeated gaps, reconnect, per-ID failures and passive recovery | `web-console/test/thread-status.test.ts`; `tui/test/thread-status.test.ts` |
+| Nullable proof revocation retains Native revision watermarks, including after cache eviction; late older/equal notifications cannot restore stale status | Shared bounded `ThreadStatusNotifications` exercised through both real clients' status tests |
+| Controls, drafts, focus, stale-response fences and richer Native outcomes survive the projection change | Existing Web/TUI composer, attachment, Trace, recovery, actual-process and browser suites |
+
+The independent read-only agent re-reviewed Native ownership/lock order,
+publication and recovery, exact client identities and all revision-revocation
+fixes. It found no remaining actionable source issues. The observer never waits
+for a Native source while holding Registry, Coordinator or capture locks; its
+separate recovery worker waits on each owner independently. A public unavailable
+read wakes that worker even if the held operation emits no semantic notification.
+Client proof revocation preserves finite revision evidence, without retaining
+transcripts or introducing a second execution authority.
+
+Final amendment validation is recorded below after all corresponding checks
+complete. The old FULL run on `33c7f5f` does not verify v74; the primary PR must
+record FULL verification for the amended final head, including Linux, macOS and
+complete browser-shard coverage. Pending results are not counted as passes.
+
+### Local amendment results
+
+| Check | Result |
+| --- | --- |
+| Native Session runtime manager suite | 467 passed, 2 ignored |
+| Native status, logical Interaction accounting, fault cut and four-source lock recovery | 6 passed |
+| Child physical-proof and resume suites | 4 and 9 passed |
+| `cargo fmt --all -- --check`; all-target/all-feature Clippy with warnings denied | Pass |
+| Native bins; protocol regeneration with four artifact hashes unchanged; protocol TypeScript | Pass |
+| Linux FULL test-lane coverage discovery | Pass; no uncovered runnable tests |
+| TUI TypeScript and required-emulator full suite | Pass; 1342 passed, 1 platform skip |
+| Web TypeScript and required-emulator full deterministic suite (`--maxWorkers=2`) | Pass; 4198 passed, 4 platform skips |
+| Web production build, i18n, provenance and notices | Pass; 347 source records and 349 package notices |
+| Pinned Playwright Shell, activity, composer and recovery acceptance | 60 passed, ordinary assertion mode after explicit reference review |
+| `git diff --check` | Pass |
+
+The 14 updated Shell references retain dimensions, controls and layout styles.
+Pixel review confines differences to existing waiting-status copy, disconnected
+status dots, and the former Queue/cancellation-intent status regions. Queue
+acceptance is not runtime execution, and cancellation acknowledgement is not
+Native settlement. The original generic waiting message is now the appropriate
+Native approval/input label. Snapshot noise policies and comparison thresholds
+were not relaxed.
+
+Broad local monolithic Native runs are not counted as complete passes: under
+concurrent verification, existing MCP/provider fixture gates failed. The unchanged
+MCP one-round and repeated ambiguous-HTTP cases passed their exact follow-up runs;
+the complete manager and real TUI process suites also passed. Final amended-head
+FULL CI, using the repository's separate verification lanes, remains the authority
+for complete Native, macOS and browser coverage. Its exact head/run/result must
+be recorded on the primary PR before this amendment is declared complete.

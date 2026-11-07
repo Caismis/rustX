@@ -2,7 +2,7 @@ import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-ser
 import { InputReceipts } from './input-receipts.ts';
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
 import { ATTACHMENT_REQUEST_CAPACITY, requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
-import type { Request1 } from '../../../protocol/app-server/v73.ts';
+import type { Request1 } from '../../../protocol/app-server/v74.ts';
 /**
  * The one typed App Server client.
  *
@@ -75,7 +75,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 73;
+export const APP_SERVER_PROTOCOL_VERSION = 74;
 
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
@@ -452,7 +452,7 @@ export class AppServerClient {
 
     const record = decodeServerOutput(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v73 protocol message");
+      this.#fail("invalid App Server v74 protocol message");
       return;
     }
 

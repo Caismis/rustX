@@ -152,6 +152,13 @@ pub(super) struct Route {
 #[derive(Clone)]
 pub struct AppServerConnection {
     callbacks: Arc<super::callbacks::Client>,
+    thread_status_events: Arc<
+        tokio::sync::Mutex<
+            tokio::sync::broadcast::Receiver<
+                crate::local_runtime::session_runtime_manager::status::ThreadStatusEvent,
+            >,
+        >,
+    >,
     host: AppServerHost,
     sessions: SessionController,
     initialized: Arc<Mutex<Option<InitializeParams>>>,
@@ -341,6 +348,9 @@ impl AppServerConnection {
         let schedule_changes = Arc::new(Mutex::new(host.manager().schedule_catalog_changes()));
         Self {
             callbacks: host.callbacks().connect(),
+            thread_status_events: Arc::new(tokio::sync::Mutex::new(
+                host.manager().status_notifications(),
+            )),
             summary_invalidations,
             summary_invalidations_delivered: Arc::new(Mutex::new(delivered)),
             schedule_changes,

@@ -1,6 +1,6 @@
 import {isPlainMessageKind} from '../../../../protocol/app-server/message-kind';
 import { useState } from 'react';
-import type { MessageBlock } from '../../../../protocol/app-server/v73';
+import type { MessageBlock } from '../../../../protocol/app-server/v74';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconAgentPresetOutline16, IconApiOutline14 } from '../../presentation/primitives/icons';

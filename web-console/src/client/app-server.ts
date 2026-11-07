@@ -1,3 +1,5 @@
+import {newerThreadStatus, ThreadStatusNotifications} from '../../../protocol/app-server/thread-status';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v74';
 import {credentialSubprotocol} from '../../../protocol/app-server/auth';
 import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-server/callbacks';
 import { AuxiliaryQuestions } from './auxiliary';
@@ -28,12 +30,12 @@ import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, RuntimeClientInteractionHeader,
-} from '../../../protocol/app-server/v73';
+} from '../../../protocol/app-server/v74';
 import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
 import { RequestPipeline } from './request-pipeline';
 import { RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import { interactionKey, type CancellationTarget, type ClientView, type ConnectionState, type OperationAdmission, type SessionView, type Socket, type SocketFactory, type Submission } from './contracts';
+import { interactionKey, type CancellationTarget, type ClientView, type ConnectionState, type OperationAdmission, type SessionView, type SessionSummary, type Socket, type SocketFactory, type Submission } from './contracts';
 
 
 type SessionAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
@@ -108,7 +110,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v73').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v74').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -145,7 +147,45 @@ export class AppServerClient {
     return !!this.state.views[id]?.snapshot && this.observationChains.get(id)?.phase === 'following'
       && this.lifecycles.controls(id, admission);
   }
+  private readonly statusNotifications = new ThreadStatusNotifications();
+  private statusGapQueued = false;
+  private readonly statusSnapshotCut = new WeakMap<SessionSummary,number>();
+  private readonly statusSnapshotEpoch = new WeakMap<ThreadStatusEntry,number>();
+  private mergeSummaryStatus(row: SessionSummary, previous?: ThreadStatusEntry|null): SessionSummary {
+    if(row.thread_status===undefined)return row;
+    const threadId=row.thread_id??row.thread_status?.threadId;
+    if (!threadId) return row;
+    const currentEpoch=this.statusRepairEpoch;
+    const freshPrevious=previous&&(this.statusSnapshotEpoch.get(previous)??0)===currentEpoch?previous:undefined;
+    const status = !row.thread_status ? this.statusNotifications.latestSince(threadId,this.statusSnapshotCut.get(row)??this.statusNotifications.checkpoint()) : (this.statusSnapshotEpoch.get(row.thread_status)??0)!==currentEpoch
+      ? this.statusNotifications.latest(row.thread_status.threadId)??freshPrevious
+      : this.statusNotifications.snapshot(row.thread_status, freshPrevious);
+    if(!row.thread_status&&!status)this.revokeStatusProof(threadId,previous);
+    if (!status && row.thread_status && !this.statusGapQueued) {
+      const generation = this.state.generation;
+      this.statusGapQueued = true;
+      queueMicrotask(() => {
+        this.statusGapQueued = false;
+        if (this.current(generation)) void this.repairThreadStatuses();
+      });
+    }
+    return { ...row, thread_status: status };
+  }
   private publish(patch: Partial<ClientView>) {
+    // Preserve newer native status proofs when a catalog/snapshot response
+    // races a lightweight notification. Metadata has its own catalog fences.
+    if(patch.sessions)patch.sessions=patch.sessions.map(row=>{
+      const old=this.state.sessions.find(value=>value.id===row.id)?.thread_status;
+      return this.mergeSummaryStatus(row, old);
+    });
+    if(patch.views)patch.views=Object.fromEntries(Object.entries(patch.views).map(([id,view])=>{
+      const old=this.state.views[id];
+      const summary=view.summary?this.mergeSummaryStatus(view.summary,old?.summary?.thread_status):view.summary;
+      const threadId=view.target?.conversation_id??view.nodeConversationId;
+      const offered=(view.threadStatus?.threadId===threadId?view.threadStatus:undefined)??(summary?.thread_status&&summary.thread_status.threadId===threadId?summary.thread_status:undefined);
+      const threadStatus=offered?this.statusNotifications.snapshot(offered,old?.threadStatus?.threadId===threadId?old.threadStatus:undefined):undefined;
+      return [id,{...view,summary,threadStatus}];
+    }));
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
   }
@@ -175,10 +215,10 @@ export class AppServerClient {
         turnOutline: view.turnOutline && { ...view.turnOutline, loading: false },
         turnNavigation: view.turnNavigation && { intent: view.turnNavigation.intent },
       } : {}),
-      ...(changedNode ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
+      ...(changedNode ? { threadStatus: undefined, snapshot: undefined, publicationHeads: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(opening ? { modelIntent: undefined, cancellation: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined, cancellation: undefined } : {}),
-      ...(attached && result ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+      ...(attached && result ? { threadStatus: undefined, snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
         history: readingHistory ? { ...readingHistory, loading: false, initialLoading: false, error: undefined } : undefined,
         turnOutline: undefined, turnNavigation: undefined } : {}),
     };
@@ -190,6 +230,7 @@ export class AppServerClient {
       return;
     }
     this.publish({ views: { ...this.state.views, [id]: projection } });
+    if (attached && result) void this.readThreadStatus(result.target.conversation_id).catch(() => {});
     if (previous?.epoch !== context.epoch) this.catalog.epochChanged(id);
     if (retiredClaim || facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) this.retireAttachmentWork(id);
     if (facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) {
@@ -241,7 +282,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v73').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v74').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -338,7 +379,8 @@ export class AppServerClient {
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
     this.lifecycles.replaceAuthority(); this.reading.retireAuthority(); this.catalog.retireAuthority();
     this.inputAcknowledgements.clear();
-    this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
+    this.statusNotifications.clear();
+    this.publish({ threadStatusSynchronized:false, authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
       authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
   }
   // Browser transport authority, not a durable server identity. Reconnect alone
@@ -367,7 +409,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v73', credentialSubprotocol(token)]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v74', credentialSubprotocol(token)]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -385,12 +427,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 73, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 74, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 73 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.shared_writable_clients) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v73 with native multi-Session, headless interactions, and shared writable admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 74 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.shared_writable_clients) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v74 with native multi-Session, headless interactions, and shared writable admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -408,12 +450,13 @@ export class AppServerClient {
       this.sourceRepairs.attribute(hello.authority_id);
       this.lifecycles.transport(generation, true);
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
+      const statusEpoch = this.statusRepairEpoch;
       await this.catalog.list();
       if (!this.current(generation)) return;
       // Transport readiness precedes runtime restoration. A cold attachment
       // may wait for MCP; an actual Send must already be able to arm Native's
       // submission deadline while that Session keeps its own connecting state.
-      this.publish({ connection: 'connected' });
+      this.publish({ connection: 'connected', threadStatusSynchronized: statusEpoch === this.statusRepairEpoch && !this.statusRepair });
       this.lifecycles.reconnect();
     } catch (error) {
       if (!this.current(generation)) return;
@@ -471,9 +514,10 @@ export class AppServerClient {
     for (const [key, operation] of Object.entries(operations)) operations[key] = {...operation,status:'uncertain'};
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.lifecycles.transport(this.state.generation + 1, false);
-    this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
+    this.statusNotifications.clear();
+    this.publish({ sessions:this.state.sessions.map(row=>({...row,thread_status:undefined})), threadStatusSynchronized:false, connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view,modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, inboundRequests: undefined,
+        ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, inboundRequests: undefined,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -505,6 +549,8 @@ export class AppServerClient {
     const value = parsed as Response | Notification;
     if (value.jsonrpc !== '2.0') { this.lose(generation); return; }
     if ('result' in value || 'error' in value || 'id' in value) { this.pipeline.response(value as Response, generation); return; }
+    if(value.method==='thread/status/changed'){this.observeThreadStatus(value.params);return;}
+    if(value.method==='thread/status/resyncRequired'){void this.repairThreadStatuses();return;}
     if (value.method === 'configuration/changed') { this.configurations.changed(value.params.application, generation); return; }
     if (value.method === 'configuration/sourceRepairChanged') {
       // Source-scoped (Issue #464): it addresses a configuration source, never
@@ -651,7 +697,7 @@ export class AppServerClient {
   loadTraceDetail(id: string, record: string) { return this.traces.loadTraceDetail(id, record); }
   projections(id: string, after?: string) { return this.traces.projections(id, after); }
   projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
-  projectionDetailReader(detail: import('../../../protocol/app-server/v73').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
+  projectionDetailReader(detail: import('../../../protocol/app-server/v74').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
   private readonly controls = new SessionControls({
     request: (...args) => this.request(...args),
     state: () => this.state,
@@ -732,13 +778,85 @@ export class AppServerClient {
   loadInitialHistory(id: string) { return this.reading.loadInitialHistory(id); }
   loadEarlierPreview(id: string) { return this.cold.loadEarlierPreview(id); }
   private readonly catalog = new SessionCatalog({
-    request: (...args) => this.request(...args),
+    request: async (...args) => {
+      const epoch=this.statusRepairEpoch,cut=this.statusNotifications.checkpoint();
+      const result=await this.request(...args);
+      const response:MethodResult=result;
+      if(response.type==='sessions')for(const row of response.sessions){this.statusSnapshotCut.set(row,cut);if(row.thread_status)this.statusSnapshotEpoch.set(row.thread_status,epoch);}
+      if(response.type==='session_summary'){this.statusSnapshotCut.set(response.summary,cut);if(response.summary.thread_status)this.statusSnapshotEpoch.set(response.summary.thread_status,epoch);}
+      return result;
+    },
     state: () => this.state,
     current: generation => this.current(generation),
     epoch: id => this.lifecycles.epoch(id),
     publish: patch => this.publish(patch),
   });
-  listSessions(offset?: number, query?: string, current?: () => boolean) { return this.catalog.list(offset, query, current); }
+  async listSessions(offset?: number, query?: string, current?: () => boolean) {
+    await this.catalog.list(offset, query, current);
+  }
+  private observeThreadStatus(entry:ThreadStatusEntry) {
+    if(!this.statusNotifications.observe(entry))return;
+    this.statusSnapshotEpoch.set(entry,this.statusRepairEpoch);
+    let changed=false;
+    const sessions=this.state.sessions.map(row=>{
+      if(row.thread_id!==entry.threadId)return row;
+      const current=newerThreadStatus(row.thread_status??undefined,entry);if(current===row.thread_status)return row;
+      changed=true;return {...row,thread_status:current};
+    });
+    const views=Object.fromEntries(Object.entries(this.state.views).map(([id,view])=>{
+      const summary=view.summary&&view.summary.thread_id===entry.threadId?{...view.summary,thread_status:newerThreadStatus(view.summary.thread_status??undefined,entry)}:view.summary;
+      const threadStatus=(view.target?.conversation_id??view.nodeConversationId)===entry.threadId?newerThreadStatus(view.threadStatus,entry):view.threadStatus;
+      if(summary===view.summary&&threadStatus===view.threadStatus)return [id,view];
+      changed=true;return [id,{...view,summary,threadStatus}];
+    }));
+    if(changed)this.publish({sessions,views});
+  }
+  private async readThreadStatus(threadId:string,generation=this.state.generation) {
+    const epoch=this.statusRepairEpoch;
+    const {thread}=await this.request({method:'thread/read',params:{threadId}},'thread');
+    if(thread.id!==threadId)throw new Error('Mismatched Thread status identity.');
+    if(this.current(generation)&&epoch===this.statusRepairEpoch)this.observeThreadStatus({threadId:thread.id,status:thread.status,revision:thread.statusRevision,runtimeIncarnation:thread.runtimeIncarnation});
+  }
+  private revokeStatusProof(threadId:string,previous?:ThreadStatusEntry|null):void {
+    this.statusNotifications.forget(threadId,previous);
+    for(const view of Object.values(this.state.views)){
+      this.statusNotifications.forget(threadId,view.threadStatus);
+      this.statusNotifications.forget(threadId,view.summary?.thread_status);
+    }
+  }
+  private forgetThreadStatus(threadId:string):void {
+    this.revokeStatusProof(threadId,this.state.sessions.find(row=>row.thread_id===threadId)?.thread_status);
+    this.publish({sessions:this.state.sessions.map(row=>row.thread_status?.threadId===threadId?{...row,thread_status:undefined}:row),
+      views:Object.fromEntries(Object.entries(this.state.views).map(([id,view])=>[id,{...view,
+        threadStatus:view.threadStatus?.threadId===threadId?undefined:view.threadStatus,
+        summary:view.summary?.thread_status?.threadId===threadId?{...view.summary,thread_status:undefined}:view.summary,
+      }]))});
+  }
+  private statusRepair?:Promise<void>;
+  private statusRepairEpoch = 0;
+  private repairThreadStatuses():Promise<void> {
+    ++this.statusRepairEpoch;
+    this.statusNotifications.clear();
+    if(this.statusRepair)return this.statusRepair;
+    const generation=this.state.generation;
+    this.publish({threadStatusSynchronized:false});
+    const work=(async()=>{
+      let repaired: number;
+      do {
+        repaired = this.statusRepairEpoch;
+        const knownIds = () => [...this.state.sessions.map(row=>row.thread_id),...Object.values(this.state.views).flatMap(view=>[view.target?.conversation_id,view.nodeConversationId,view.summary?.thread_id])].filter((id):id is string=>!!id);
+        const ids = new Set(knownIds());
+        await this.catalog.list().catch(()=>{});
+        for(const id of knownIds())ids.add(id);
+        for(const id of ids) {
+          try {await this.readThreadStatus(id,generation);}
+          catch {if(this.current(generation))this.forgetThreadStatus(id);}
+        }
+      } while(this.current(generation) && repaired !== this.statusRepairEpoch);
+      if(this.current(generation))this.publish({threadStatusSynchronized:true});
+    })().catch(()=>{}).finally(()=>{if(this.statusRepair===work)this.statusRepair=undefined;});
+    this.statusRepair=work;return work;
+  }
   readSessionSummary(id: string) { return this.catalog.readSummary(id); }
   renameSession(id: string, name: string) { return this.catalog.rename(id, name); }
   private exports = new SessionExportController(async id => {
@@ -781,6 +899,7 @@ export class AppServerClient {
   async attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     if (!navigationCurrent()) return;
     await this.lifecycles.command(id, { kind: 'open', node: nodeId, current: navigationCurrent, attached });
+
   }
   /** Explicit reconciliation/recovery only. Native bounded replay owns overlap. */
   refresh(id: string): Promise<void> {

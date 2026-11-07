@@ -1,3 +1,4 @@
+import {summaryFor} from '../../protocol/app-server/testing';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
@@ -52,13 +53,13 @@ it('waiting interactions outrank running; queued input alone is not a waiting in
   const row = screen.getByRole('button', { name: 'Open Session A' }).closest('[role=treeitem]')!;
   expect(row.querySelector('[data-state]')?.getAttribute('data-state')).toBe('warning');
   expect(row.textContent).toContain('Waiting for approval');
-  await act(async () => { server.snapshots.get('A')!.pending_interactions = []; await server.client.refresh('A'); });
+  await act(async () => { await server.update('A',{...server.snapshots.get('A')!,pending_interactions:[]}); });
   expect(row.querySelector('[data-state]')?.getAttribute('data-state')).toBe('ongoing');
 });
 it('native paging sends offsets and does not create browser-owned Session membership', async () => {
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw Error('wrong request');
-    return { type: 'sessions', sessions: [{ ownership_generation: '1', id: `page-${request.params.offset}`, name: `Page ${request.params.offset}`, cwd: '/workspace/A', active_node: 'n', updated_at: '2026-09-18T00:00:00Z' }], next_offset: request.params.offset === 0 ? 32 : null };
+    return { type: 'sessions', sessions: ([{ ownership_generation: '1', id: `page-${request.params.offset}`, name: `Page ${request.params.offset}`, cwd: '/workspace/A', active_node: 'n', updated_at: '2026-09-18T00:00:00Z' }]).map(row=>summaryFor(row)), next_offset: request.params.offset === 0 ? 32 : null };
   });
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });

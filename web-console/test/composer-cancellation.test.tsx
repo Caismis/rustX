@@ -1,7 +1,7 @@
 import { compactReceipt } from './fixture';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v73';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v74';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/errors';
@@ -30,7 +30,8 @@ it('eligible double Escape sends exactly one native target; a gated reply and se
   await act(async () => escape()); const request = await server.waitFor('turn/interrupt', 1);
   expect(request).toMatchObject({ method: 'turn/interrupt', params: { turnId:'attempt-A', target: server.target('A') } }); expect(cancels()).toHaveLength(1);
   expect(server.client.getSnapshot().views.A.cancellation).toEqual({ attemptId: 'attempt-A', status: 'in-flight' });
-  expect(screen.getByLabelText('Session status').textContent).toContain('Stopping');
+  expect(server.client.getSnapshot().views.A.threadStatus?.status.type).toBe('active');
+  expect(screen.queryByLabelText('Session status')).toBeNull();
   for (let i = 0; i < 4; i++) escape(); expect(cancels()).toHaveLength(1);
   expect(input().value).toBe('keep draft'); expect([input().selectionStart, input().selectionEnd]).toEqual([2, 5]);
   expect(screen.getByRole('button', { name: 'Remove kept.txt' })).toBeTruthy();

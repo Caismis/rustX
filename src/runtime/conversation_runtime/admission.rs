@@ -992,6 +992,7 @@ impl RuntimeInner {
             .lifecycle
             .try_enter_running()
             .expect("the coordinator lock owns the attempt admission boundary");
+        let activity = self.activity.lease();
         drop(state);
         #[cfg(test)]
         self.enter_attempt_execution_probe();
@@ -1015,6 +1016,7 @@ impl RuntimeInner {
                 .await;
             inner.finish_attempt(attempt_id, result);
             drop(attempt_admission);
+            drop(activity);
         });
     }
 }

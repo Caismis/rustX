@@ -144,6 +144,7 @@ export class SelectorSurfaces {
       return;
     }
     const selector = new ResumeSelector({
+      status:row=>row.thread_id?this.#port.host().threadStatusLabel(row.thread_id):'Status unavailable',
       initialPage: sessions === undefined ? undefined : { sessions, nextOffset }, query, client: this.#port.host(), workflow,
       alive: () => this.#port.isCurrent(lease) && this.#port.overlay() === handle,
       feedback: (text) => this.#port.showTransient("info", text),

@@ -1479,6 +1479,10 @@ async fn attempt_task_exit_belongs_to_the_quiescence_proof() {
         !fixture.runtime.has_current_attempt(),
         "the current-attempt slot is already clear at the parked exit boundary"
     );
+    assert!(
+        fixture.runtime.activity().unwrap().active,
+        "Thread status retains the physical attempt task tail"
+    );
 
     assert!(
         fixture.runtime.idle_epoch().is_err(),

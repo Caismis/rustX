@@ -7,7 +7,7 @@ import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { startDogfood } from './dogfood-server';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
-import type { WorkflowCheckReport } from '../../../protocol/app-server/v73';
+import type { WorkflowCheckReport } from '../../../protocol/app-server/v74';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 import { rootBlock } from '../workflow-root';
 

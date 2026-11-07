@@ -165,6 +165,7 @@ export class RustxTuiApp {
   readonly #footer = new FooterView(() => ({
     state: this.#connecting ? undefined : this.#session?.state,
     connection: this.#connectionLabel(),
+    threadStatus:this.#session?this.#host.threadStatusLabel(this.#session.target.conversation_id):undefined,
     session: this.#connecting ? undefined : this.#sessionInfo,
     conversation: this.#connecting ? undefined : this.#conversationContext(),
     application: this.#connecting ? undefined : this.#session?.application,
@@ -215,6 +216,7 @@ export class RustxTuiApp {
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
   #removeClosedListener: (() => void) | undefined;
+  #removeThreadStatusListener:()=>void=()=>{};
   #removeConnectionListener: () => void = () => {};
   /** The durable metadata of the visible Session, refreshed authoritatively. */
   #sessionInfo: SessionView | undefined;
@@ -279,6 +281,7 @@ export class RustxTuiApp {
 
     this.#watchConnection();
     this.#watchSourceRepairs();
+    this.#watchThreadStatuses();
     this.#bindSession(this.#session);
   }
 
@@ -296,6 +299,16 @@ export class RustxTuiApp {
    */
   #watchSourceRepairs(): void {
     this.#repairStatus.watch(this.#host, host => this.#host === host && !this.#quitting && !this.#finished, () => { if (this.#started) this.#tui.requestRender(); });
+  }
+
+  #watchThreadStatuses():void {
+    this.#removeThreadStatusListener();
+    const host=this.#host;
+    this.#removeThreadStatusListener=host.onThreadStatus(()=>{
+      if(this.#host!==host||this.#quitting||this.#finished)return;
+      if(this.#session)this.#renderState(this.#session.state);
+      this.#tui.requestRender();
+    });
   }
 
   #watchConnection(): void {
@@ -367,6 +380,7 @@ export class RustxTuiApp {
       this.#bindSession(undefined, this.#draft);
       this.#watchConnection();
       this.#watchSourceRepairs();
+      this.#watchThreadStatuses();
       if (focus !== undefined) {
         this.#switching = false;
         await this.#focusSession(focus.sessionId, focus.nodeId, undefined, undefined, this.#presentationLease(), false, focus);
@@ -1235,6 +1249,7 @@ export class RustxTuiApp {
       return;
     }
     this.#quitting = true;
+    this.#removeThreadStatusListener();
     this.#invalidatePresentation();
     this.#editor.disableSubmit = true;
     this.#showTransient(
@@ -1553,6 +1568,7 @@ export class RustxTuiApp {
     }
     this.#view.render(state, {
       preferences: this.#preferences,
+      threadStatus:this.#session?this.#host.threadStatus(this.#session.target.conversation_id):undefined,
       sessionInfo: this.#sessionInfo,
       workspace: this.#workspace,
       selectedAgentId: this.#subagentListFocused ? this.#selectedAgentId : undefined,

@@ -234,7 +234,8 @@ test('Session product states stay concise without developer diagnostics', async 
     await expect(page.getByLabel('Session status')).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: 'Deep diving' }).first()).toBeVisible();
     await page.evaluate(mode => window.sessionFixture.state(mode), mode);
-    const expected = { idle: undefined, queued: 'Queued', stopping: 'Stopping…', reconnect: undefined, uncertain: 'Needs verification' }[mode];
+    // Queue acceptance and cancellation intent do not change Native execution status.
+    const expected = { idle: undefined, queued: undefined, stopping: undefined, reconnect: undefined, uncertain: 'Needs verification' }[mode];
     if (expected) await expect(page.getByLabel('Session status')).toContainText(expected);
     else await expect(page.getByLabel('Session status')).toHaveCount(0);
     const ordinary = await page.locator('main').innerText();
@@ -477,7 +478,7 @@ for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as con
   await page.evaluate(() => window.sessionFixture.settleInput());
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v73').Request[]) => requests.filter(request => [
+const nativeMutations = (requests: import('../../../protocol/app-server/v74').Request[]) => requests.filter(request => [
   'thread/start', 'thread/resume', 'thread/fork', 'thread/archive', 'thread/unarchive', 'thread/name/set',
   'session/detach', 'session/switchNode', 'session/unload',
   'turn/start', 'turn/steer', 'turn/interrupt', 'inbound/queue', 'inbound/edit', 'inbound/remove',

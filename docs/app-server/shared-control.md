@@ -4,7 +4,7 @@ This is the implementation contract for issue #532. The implementation base is
 `4ecd28b8834d91566404ccc24a601ba7cf2e9b7d`. The reference is OpenAI Codex
 `rust-v0.166.0`, resolved to immutable commit
 `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`.
-The public protocol is App Server v73, with Runtime Client v84, Session catalog
+The public protocol is App Server v74, with Runtime Client v84, Session catalog
 v19, SQLite v86 and Runtime Manifest v5. Earlier protocols and storage layouts
 are rejected; there is no compatibility reader or alternate gateway.
 
@@ -24,10 +24,10 @@ journal.
 
 | Pinned Codex capability | rustX public contract | Native owner and intentional difference | Validation |
 | --- | --- | --- | --- |
-| `initialize` | `initialize { protocol_version:73, client, presentation }` | Connection negotiation; rustX retains explicit protocol and finite presentation capabilities | Schema fixtures; transport conformance |
+| `initialize` | `initialize { protocol_version:74, client, presentation }` | Connection negotiation; rustX retains explicit protocol and finite presentation capabilities | Schema fixtures; transport conformance |
 | `thread/start` | `thread/start { settings, dynamicTools, submission? }` -> `session_transition { thread, session, ... }` | SessionController allocates exact native lineage; rustX retains its existing first-submission and editor receipts | Catalog and product first-submit suites |
 | `thread/resume` | `thread/resume { threadId }` -> exact AttachmentTarget | SessionRuntimeManager loads the catalog's exact Session/node; attachment identity includes runtime incarnation | Shared-control conformance; attachment and node-switch tests |
-| Thread read/list | `thread/read`, `thread/list { offset, limit, archived }` | Native catalog; at most 64 summaries, without declaration bodies in list rows | Thread catalog regression; schema |
+| Thread read/list/status | `thread/read`, `thread/list { offset, limit, archived }`, `thread/loaded/list { offset, limit }`; `thread/status/changed`, `thread/status/resyncRequired` | Native catalog identities plus SessionRuntimeManager residency and ConversationRuntime activity; 64 rows per Thread page, instance notifications without transcript attachments | Native status, Interaction, physical-tail, shared-control and Web/TUI status regressions |
 | Thread name/archive | `thread/name/set`, `thread/archive`, `thread/unarchive` | Native node metadata. Archive drains only an idle runtime under the manager's retirement fence; active work is refused | Thread catalog regression; residency tests |
 | Thread history/Items | `session/history`, `session/historyPage`, `session/node`, `session/turns`, transcript/ContentRef readers | Existing bounded native history, turn and content authorities. rustX keeps chunked bodies and exact integer text | History, reading, root checkpoint and large-content suites |
 | Fork/branch | `thread/fork`, `session/branch`, `session/switchNode` | Existing catalog/lineage transactions. Explicit forks copy declarations; switching preserves exact-target admission and native retirement | Catalog switch/fork and projection tests |
@@ -68,7 +68,7 @@ network credential flags are rejected for stdio. Initialize does not authenticat
   `now >= nbf - skew`. Additional role/scope/Thread claims grant no permission tier.
 
 A native client sends `Authorization: Bearer <credential>`. A browser offers
-`rustx.app-server.v73` and `rustx-token.<base64url-no-pad(credential bytes)>`. Encode the ASCII bearer bytes
+`rustx.app-server.v74` and `rustx-token.<base64url-no-pad(credential bytes)>`. Encode the ASCII bearer bytes
 with RFC 4648 URL-safe Base64 and omit padding; native Authorization sends the
 original bytes. There is no raw-token subprotocol alternative. Both reach the same verifier.
 The server selects only the normal protocol, never echoes the secret, and rejects
@@ -199,8 +199,8 @@ cargo run --all-features --bin rustx -- app-server --listen ws://127.0.0.1:8787 
 node examples/app-server/connect.mjs ws://127.0.0.1:8787/ /absolute/socket-token
 ```
 
-It connects, initializes v73 and prints the read-only `server/info` result. It is
-not an SDK or a second demo application. Rust-derived `v73.schema.json`, `v73.ts`
+It connects, initializes v74 and prints the read-only `server/info` result. It is
+not an SDK or a second demo application. Rust-derived `v74.schema.json`, `v74.ts`
 and fixtures are generated together; product clients validate server output apart
 from the generic client-response envelope so arbitrary callback results cannot
 weaken native server-response validation.
@@ -217,3 +217,97 @@ is handed to the original acknowledgement owner; Web's revision-sensitive compos
 consumes only that submission's text/files, and TUI settles the retained operation.
 Absent proofs and failed reads preserve uncertainty. Recovery never resends input
 or upgrades durable acceptance into execution completion.
+
+## Thread runtime status (v74 amendment)
+
+The public vocabulary follows the pinned Codex
+[Thread status source](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/app-server/src/thread_status.rs).
+rustX derives it from its existing native ownership boundaries rather than
+introducing another execution state machine or journal. Catalog archive/deletion,
+Turn outcomes, connection state and current runtime status are independent.
+
+| Public state | Native derivation |
+| --- | --- |
+| `notLoaded` | No execution composition owns the exact Conversation. A storage-only catalog/store entry is also cold. |
+| `active` | Initialization or retirement owns the residency slot; or an admitted Attempt, scheduled invocation, manual compaction, physical task tail, background execution/preparation, live Child/recovery/resume, auxiliary call, or logical human Interaction remains owned. |
+| `activeFlags` | All logical root and routed Child Interactions: approvals set `waitingOnApproval`; questionnaires and Workflow reviews set `waitingOnUserInput`. Both may coexist, ordered approval then user input, once each. |
+| `systemError` | Native durability admission is closed by its absorbing committed or requested failure, MCP settlement is unproven, Child terminal physical settlement or admission rollback is unproven, Child reconciliation has exited with unresolved recovery ownership, or manager retirement is unproven. Fault visibility does not release any execution owner. |
+| `idle` | Loaded composition, no native work or logical human wait, and no native system fault. This says nothing about the previous Turn's outcome. |
+
+The coordinator and joint Interaction → Background → Child → Auxiliary leaf
+snapshot prevent mixed-owner false idle during handoffs. Leaf and Gate reads use
+nonblocking lock acquisition while Coordinator is held. Coordinator, composition
+and per-Thread capture locks also use try acquisition. A busy native source
+makes the observation unavailable, without holding Coordinator or the per-Thread
+capture lock across the source's long operation. The manager emits one resync
+notice per unavailable resident. Its separate recovery worker awaits native mutex
+availability outside all other locks, including holders that emit no activity
+change, then retries capture; recovery publishes a fresh revision even if the
+public level is unchanged. The absorbing durability
+frontier is reread after releasing the leaf locks, while the coordinator remains
+held: auxiliary reservation takes Gate → Auxiliary, so status must not invert
+that order. Observational RAII leases live with actual task/admission tails;
+they do not authorize work. Background and Child activity indexes contain live
+ownership records, avoiding a scan of historical completed executions.
+
+A callback transport claim, cancellation receipt or dialog closure cannot settle
+a native Interaction. Native terminal arbitration and audit commitment remove the
+logical wait. Three subscriber copies remain one native request. Host Tool
+callbacks contribute ordinary active Tool execution, with no human flag. Native
+OutcomeUnknown terminal settlement ends the required native owner; status never
+waits indefinitely for unknowable application side effects. Provider retries and
+ordinary failed/cancelled Tool or Turn outcomes alone are not system faults.
+
+A fault cannot be cleared by a status read, reconnect or successful previous Turn.
+Durability failure is absorbing for that runtime allocation; MCP/recovery and
+retirement failures retain their native recovery requirements. Only native
+reconciliation and proven retirement/recomposition, or process restart with its
+existing recovery, can establish a healthy new incarnation. Initializing and
+stopping remain active until native proof permits a different state; unproven
+retirement remains systemError. An unloaded/restarted Thread never inherits an
+old process's running bit or pending dialog.
+
+Thread reads capture only addressed identities, at most 64, without load,
+MCP initialization, model calls, history hydration or lifecycle admission. Session
+list/summary envelopes carry the active node's exact `thread_id` and a nullable
+`thread_status` proof in one bounded response (Session pages remain 32). A busy
+Native source clears only its proof; the metadata page and other Threads remain
+readable. Strong Thread reads return an explicit observation-unavailable error
+instead of inventing a status. Lightweight recovery notifications restore a
+failed proof using the retained exact identity. The durable catalog stays pure
+metadata. `thread/loaded/list` excludes storage-only entries and includes owned
+initializing/stopping slots. Its sorted offset pages reflect current residency;
+membership can change between pages, so consumers reread from offset zero after
+an invalidation instead of treating offsets as a frozen cursor.
+
+Each meaningful status/incarnation change publishes one process-local exact u64
+revision, encoded as decimal text, with exact `threadId` and nullable
+`runtimeIncarnation`. Snapshot revisions are current publication cuts, including
+cold reads. Per-Thread captures serialize before native observation; registry
+identity validation fences replacement before publication. Resident observers
+hold only weak runtime/registry references and scalar watches across waits.
+Loaded publication never invents active while its native observer is pending.
+No token stream or identical snapshot generates a status notification, and retired
+identities leave no permanent tombstone cache.
+
+Initialized instance connections receive these lightweight facts without any
+transcript attachment; transcript and callback routing remain exact-Thread scoped.
+The broadcast is bounded at 256. A lagging receiver discards its backlog and emits
+`thread/status/resyncRequired`, requiring authoritative current reads. A connection
+close fences delivery and never cancels server-owned work.
+
+Web and TUI fold revisions under their negotiated process authority and retain
+128 early notification proofs so a first snapshot cannot overwrite a newer
+unknown-Thread event. Eviction records one revision floor; an ambiguous older
+snapshot becomes unavailable and triggers bounded pure-read repair. Repeated
+overflow advances a repair epoch and requires another read before synchronization
+is restored. Web repairs the current catalog page and all retained exact view
+identities; TUI repairs its bounded retained/attached interest set. Disconnect
+shows unavailable rather than idle; reconnect reads fresh proofs. Status consumers
+use the row's or focused view's exact Thread, preserving drafts, controls and focus.
+
+A nullable metadata proof revokes status cached before that metadata request.
+Clients retain a successful higher-revision Native notification received since
+its start, so a recovery notice arriving before the nullable response is not
+lost. Duplicate or delayed revisions do not certify recovery. Thread identity
+remains available for later notifications even while its status is unknown.

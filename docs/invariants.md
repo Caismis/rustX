@@ -8384,3 +8384,13 @@ Multiple Host handlers may perform external effects; only one canonical result a
 continuation are authoritative. Remote cancellation does not prove external work
 stopped. Native recovery preserves OutcomeUnknown and never replays a Host effect.
 See the [identity/method/owner/test matrix](app-server/shared-control.md).
+
+Thread runtime status never grants execution, settlement or residency authority.
+Native activity includes physical task tails and unresolved execution owners;
+callback claim/cancellation acknowledgement cannot clear them. Human flags fold
+logical native Interactions, independently of subscriber count. Native fault
+visibility cannot prove owner release. Revision/incarnation fences prevent old
+reads or delayed notifications from replacing newer status, and transport loss or
+observation gaps display unavailability rather than fabricated idle. Bounded
+read repair never loads a cold runtime or repeats semantic work. See the
+[status ownership matrix](app-server/shared-control.md#thread-runtime-status-v74-amendment).

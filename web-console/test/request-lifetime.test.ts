@@ -1,6 +1,6 @@
 import { jobReceipt, compactReceipt, readingWindow } from './fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v73';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v74';
 import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { Server, snapshot } from './fixture';
 import { firstSubmitPort } from '../src/app/new-conversation/port';

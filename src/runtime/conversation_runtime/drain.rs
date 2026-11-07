@@ -195,6 +195,7 @@ impl RuntimeInner {
                 && state.mcp_settlement_failure.is_none()
             {
                 state.mcp_settlement_failure = Some(detail);
+                self.activity.pulse();
             }
             match lifecycle_state {
                 ConversationLifecycleState::Inactive => {

@@ -1,3 +1,5 @@
+import {threadFor} from '../../../protocol/app-server/testing.ts';
+import {sessionView} from './fixtures.ts';
 /**
  * Scripted App Server peers for the deterministic client suites.
  *
@@ -118,15 +120,20 @@ export class FakeTransport extends BaseTransport {
   readonly log = new RequestLog();
   readonly answered = new Set<AppServerRequestId>();
   readonly results = new Map<AppServerRequestId, MethodResult>();
-  readonly replies: import("../../../protocol/app-server/v73.ts").ClientReply[] = [];
+  readonly replies: import("../../../protocol/app-server/v74.ts").ClientReply[] = [];
   async nextPending(method:MethodName):Promise<ObservedRequest>{
     for(;;){const pending=this.log.matching(method).find(row=>!this.answered.has(row.id));if(pending)return pending;await this.log.awaitMethod(method,this.log.count(method)+1);}
   }
   #disposed = false;
-  #pendingInteractions:import('../../../protocol/app-server/v73.ts').RuntimeClientInteractionHeader[]=[];
-  publishInteraction(thread:string,interaction:import('../../../protocol/app-server/v73.ts').RuntimeClientInteractionHeader) {
+  #pendingInteractions:import('../../../protocol/app-server/v74.ts').RuntimeClientInteractionHeader[]=[];
+  publishInteraction(thread:string,interaction:import('../../../protocol/app-server/v74.ts').RuntimeClientInteractionHeader) {
     this.deliver({jsonrpc:'2.0',id:`callback:${interaction.interaction.conversation_id}:${interaction.interaction.interaction_id}`,method:'item/interaction/request',params:{threadId:thread,interaction}});
   }
+  scriptedReply?: (request:ObservedRequest)=>MethodResult|undefined;
+  readonly #threadSnapshots = new Map<string, import('../../../protocol/app-server/v74.ts').Thread>();
+  /** Explicit server snapshot for lifecycle-only fixtures; status tests leave
+   * this unstaged so they can control every response and notification. */
+  stageThread(thread: import('../../../protocol/app-server/v74.ts').Thread): void { this.#threadSnapshots.set(thread.id, thread); }
   #editors=new Map<string,import('../../src/protocol/app-server.ts').UserInputBlock[]>();
   editor(session:{id:string,active_node:string},content:import('../../src/protocol/app-server.ts').UserInputBlock[]|null|undefined) {
     if(content==null)return null;
@@ -150,10 +157,16 @@ export class FakeTransport extends BaseTransport {
 
   protected override writeMessage(message: unknown): Promise<void> {
     if (message && typeof message === 'object' && !('method' in message) && ('result' in message || 'error' in message)) {
-      this.replies.push(message as import('../../../protocol/app-server/v73.ts').ClientReply); return Promise.resolve();
+      this.replies.push(message as import('../../../protocol/app-server/v74.ts').ClientReply); return Promise.resolve();
     }
     const request=message as ObservedRequest;
     this.log.record(request);
+    const reply=this.scriptedReply?.(request);
+    if(reply)queueMicrotask(()=>this.respond(request.id,reply));
+    if(request.method==='thread/read') {
+      const thread=this.#threadSnapshots.get(request.params.threadId);
+      if(thread)queueMicrotask(()=>this.respond(request.id,{type:'thread',thread}));
+    }
     if(request.method==='session/editorRead')queueMicrotask(()=>{
       const {locator,block_index,max_bytes}=request.params;const offset=Number(request.params.offset);
       const content=this.#editors.get(JSON.stringify(locator))??[],block=content[block_index];
@@ -362,6 +375,7 @@ export async function followAttachment(transport:FakeTransport, target:Attachmen
  const configurations=transport.log.count('session/configuration')+1;
  transport.respond(subscription.id,{type:'subscribed',target,after_cursor:cursor});
  const configuration=(await transport.log.awaitMethod('session/configuration',configurations)).at(-1)!;
+ transport.stageThread({...threadFor(sessionView({id:target.session_id,active_conversation_id:target.conversation_id})),status:{type:'idle'},statusRevision:'1',runtimeIncarnation:target.runtime_incarnation});
  transport.respond(configuration.id,{type:'session_configuration',projection:(null)});
 }
 

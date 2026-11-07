@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v73 envelope and method vocabulary.
+//! Rust authority for the App Server v74 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 73;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 74;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -121,6 +121,8 @@ pub enum Method {
         #[serde(rename = "threadId")]
         thread_id: ConversationId,
     },
+    #[serde(rename = "thread/loaded/list")]
+    ThreadLoadedList { offset: usize, limit: usize },
     #[serde(rename = "thread/list")]
     ThreadList {
         offset: usize,
@@ -1036,6 +1038,7 @@ impl Method {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
             Self::ThreadRead { .. }
             | Self::ThreadList { .. }
+            | Self::ThreadLoadedList { .. }
             | Self::InboundSubmissionLookup { .. }
             | Self::WorkflowScheduledRecovery { .. }
             | Self::ScheduleCatalog { .. }
@@ -1437,8 +1440,9 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
-    Thread { thread: crate::local_runtime::session::threads::Thread },
-    Threads { data: Vec<crate::local_runtime::session::threads::ThreadSummary>, next_offset: Option<usize> },
+    Thread { thread: super::thread_status::Thread },
+    Threads { data: Vec<super::thread_status::ThreadSummary>, next_offset: Option<usize> },
+    LoadedThreads { data: Vec<super::thread_status::ThreadStatusEntry>, next_offset: Option<usize> },
     InboundSubmission { acceptance: Option<crate::durable::inbox::InboundAcceptance> },
     TurnInputAccepted {
         #[serde(rename = "turnId")]
@@ -1583,16 +1587,16 @@ pub enum MethodResult {
         page: super::editor_read::EditorPage,
     },
     SessionTransition {
-        thread: crate::local_runtime::session::threads::Thread,
+        thread: super::thread_status::Thread,
         session: crate::local_runtime::session::SessionSnapshot,
         editor: Option<super::editor_read::EditorLocator>,
         durability_diagnostic: Option<String>,
     },
     SessionSummary {
-        summary: crate::local_runtime::session::SessionSummary,
+        summary: super::thread_status::SessionSummary,
     },
     Sessions {
-        sessions: Vec<crate::local_runtime::session::SessionSummary>,
+        sessions: Vec<super::thread_status::SessionSummary>,
         next_offset: Option<usize>,
     },
     Node {
@@ -1753,6 +1757,10 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    #[serde(rename = "thread/status/changed")]
+    ThreadStatusChanged(super::thread_status::ThreadStatusEntry),
+    #[serde(rename = "thread/status/resyncRequired")]
+    ThreadStatusResyncRequired {},
     /// Task definitions or their latest trigger changed; clients re-read native facts.
     #[serde(rename = "schedule/changed")]
     ScheduleChanged {},

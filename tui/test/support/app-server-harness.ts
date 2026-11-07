@@ -1,3 +1,4 @@
+import {threadFor} from '../../../protocol/app-server/testing.ts';
 import { fixtures as uploadFixtures } from "../../../protocol/app-server/fixtures.ts";
 const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
 const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
@@ -99,6 +100,8 @@ export async function harness(
   const configuration=(await transport.log.awaitMethod('session/configuration')).at(-1)!;
   transport.respond(configuration.id,{type:'session_configuration',projection:(null)});
   const session = await attaching;
+  const statusRead = (await transport.log.awaitMethod('thread/read')).at(-1)!;
+  transport.respond(statusRead.id, {type:'thread',thread:{...threadFor(sessionView({id:sessionId,active_conversation_id:initial.conversation_id})),status:{type:'idle'},statusRevision:'1',runtimeIncarnation:'1'}});
 
   const stopRouting = client.onNotification((message) =>
     session.applyNotification(message),

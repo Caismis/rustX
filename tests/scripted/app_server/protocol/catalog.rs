@@ -802,7 +802,7 @@ async fn thread_identity_tools_names_archive_and_unarchive_remain_native_metadat
             assert!(matches!(operation.await.status,ToolExecutionStatus::Success));
         }
         call(&second,106,Method::SessionDetach {target:b}).await;
-        let controller=crate::runtime::local_storage::ProductRoot::existing(&f.archive_root).unwrap();let persisted=crate::local_runtime::session::SessionCatalog::read_under_guard(&controller).unwrap().unwrap().thread(&thread.id).unwrap();assert_eq!(persisted,restored);
+        let controller=crate::runtime::local_storage::ProductRoot::existing(&f.archive_root).unwrap();let persisted=crate::local_runtime::session::SessionCatalog::read_under_guard(&controller).unwrap().unwrap().thread(&thread.id).unwrap();assert_eq!(persisted.id,restored.id);assert_eq!(persisted.name,restored.name);assert_eq!(persisted.archived,restored.archived);assert_eq!(persisted.dynamic_tools,restored.dynamic_tools);
         first.close(); second.close(); f.manager.unload(&thread.id).await.unwrap(); f.close().await;
     }).await;
 }

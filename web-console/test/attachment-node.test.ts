@@ -1,6 +1,6 @@
 import{traceReceipt}from'./fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult } from '../../protocol/app-server/v73';
+import type { MethodResult } from '../../protocol/app-server/v74';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { checkpoint, Server, snapshot } from './fixture';
 import { traceRecord, requestDetail } from './trace-fixture';
@@ -505,7 +505,7 @@ it('switch deletion exclusion is Session scoped', async () => {
 });
 
 it('generic request cannot bypass the actor to acquire, switch, detach or delete a Session', async () => {
-  const s = await setup(); s.held.add('session/settings');
+  const s = await setup(); s.held.add('session/settings');s.held.add('thread/read');s.held.add('session/summary');
   await s.client.attach('A', 'left'); const target = s.client.target('A'), before = s.client.getSnapshot(), count = s.requests.length;
   const operations = [
     { method: 'thread/resume', params: {threadId:('A').replace(/^ses_/, 'conv_')} },

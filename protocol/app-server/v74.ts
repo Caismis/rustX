@@ -37,6 +37,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'thread/loaded/list';
+      params: {
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
       method: 'thread/list';
       params: {
         offset: number;
@@ -2434,6 +2441,11 @@ export type MethodResult =
       type: 'threads';
     }
   | {
+      data: ThreadStatusEntry[];
+      next_offset?: number | null;
+      type: 'loaded_threads';
+    }
+  | {
       acceptance?: InboundAcceptance | null;
       type: 'inbound_submission';
     }
@@ -2671,11 +2683,11 @@ export type MethodResult =
       type: 'session_transition';
     }
   | {
-      summary: SessionSummary1;
+      summary: SessionSummary2;
       type: 'session_summary';
     }
   | {
-      sessions: SessionSummary1[];
+      sessions: SessionSummary2[];
       next_offset?: number | null;
       type: 'sessions';
     }
@@ -2872,6 +2884,29 @@ export type MethodResult =
       projection: BoundedSessionSettings;
       type: 'settings';
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ThreadStatus".
+ */
+export type ThreadStatus =
+  | {
+      type: 'notLoaded';
+    }
+  | {
+      type: 'idle';
+    }
+  | {
+      type: 'systemError';
+    }
+  | {
+      activeFlags: ThreadActiveFlag[];
+      type: 'active';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ThreadActiveFlag".
+ */
+export type ThreadActiveFlag = 'waitingOnApproval' | 'waitingOnUserInput';
 /**
  * A conversation-scoped inbound sequence number.
  *
@@ -6410,6 +6445,14 @@ export type Notification = {
   jsonrpc: JsonRpcVersion;
 } & Notification1;
 export type Notification1 =
+  | {
+      method: 'thread/status/changed';
+      params: ThreadStatusEntry;
+    }
+  | {
+      method: 'thread/status/resyncRequired';
+      params: {};
+    }
   | {
       method: 'schedule/changed';
       params: {};
@@ -10158,10 +10201,11 @@ export interface Thread {
   name?: string | null;
   archived: boolean;
   dynamicTools: HostToolDefinition[];
+  status: ThreadStatus;
+  statusRevision: string;
+  runtimeIncarnation?: RuntimeIncarnationId | null;
 }
 /**
- * Finite catalog rows omit declaration bodies; one Thread read owns those.
- *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ThreadSummary".
  */
@@ -10171,6 +10215,19 @@ export interface ThreadSummary {
   nodeId: SessionNodeId;
   name?: string | null;
   archived: boolean;
+  status: ThreadStatus;
+  statusRevision: string;
+  runtimeIncarnation?: RuntimeIncarnationId | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ThreadStatusEntry".
+ */
+export interface ThreadStatusEntry {
+  threadId: ConversationId;
+  status: ThreadStatus;
+  revision: string;
+  runtimeIncarnation?: RuntimeIncarnationId | null;
 }
 /**
  * Durable acceptance evidence for a caller-owned input correlation. Lookup
@@ -17906,12 +17963,13 @@ export interface ContentChunk {
   complete: boolean;
 }
 /**
- * Native display metadata, shared by exact identity reads and catalog rows.
+ * Session catalog surfaces carry the exact active-node status without one
+ * client RPC or transcript attachment per sidebar row.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SessionSummary".
+ * via the `definition` "SessionSummary2".
  */
-export interface SessionSummary1 {
+export interface SessionSummary2 {
   /**
    * Native execution ownership generation, encoded as an exact decimal integer.
    * Changes only when active-node ownership is replaced; never a display timestamp.
@@ -17952,6 +18010,8 @@ export interface SessionSummary1 {
    * Active node in the session.
    */
   active_node: string;
+  thread_id: ConversationId;
+  thread_status?: ThreadStatusEntry | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -20172,6 +20232,54 @@ export interface InteractionRequester2 {
 export interface HostToolResponse {
   success: boolean;
   contentItems: HostToolContent[];
+}
+/**
+ * Native display metadata, shared by exact identity reads and catalog rows.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionSummary".
+ */
+export interface SessionSummary1 {
+  /**
+   * Native execution ownership generation, encoded as an exact decimal integer.
+   * Changes only when active-node ownership is replaced; never a display timestamp.
+   */
+  ownership_generation: string;
+  /**
+   * Canonical durable Session cwd, projected without loading a runtime.
+   */
+  cwd: string;
+  /**
+   * Session identity.
+   */
+  id: string;
+  /**
+   * The user-defined display name, when this Session has one.
+   */
+  name?: string | null;
+  /**
+   * Automatic label; manual name takes precedence when both are present.
+   */
+  generated_title?: SessionGeneratedTitle | null;
+  /**
+   * The first ordinary user message of this Session's root lineage,
+   * bounded to one line. It labels a row without a saved name/title, and
+   * it is the client-facing projection of the persisted
+   * `display_preview`: the catalog stores the derived line so listing,
+   * pagination, and search never open a conversation store. `None` is
+   * legitimate — no ordinary user message exists yet, or the first one
+   * has no renderable text — and yields the client-side identity
+   * fallback.
+   */
+  preview?: string | null;
+  /**
+   * Latest committed human-message time, or creation time for a new Session.
+   */
+  updated_at: string;
+  /**
+   * Active node in the session.
+   */
+  active_node: string;
 }
 /**
  * The original native filesystem root, independent of the viewing lineage.

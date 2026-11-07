@@ -32,6 +32,7 @@ const SESSION_ENTRY_ROWS = 2;
 const BOUNDARY_ENTRY_ROWS = 2;
 
 export interface SessionSelectorOptions {
+  status?:(session:SessionSummaryView)=>string;
   sessions: SessionSummaryView[];
   nextOffset?: number;
   query?: string;
@@ -46,6 +47,7 @@ export class SessionSelector implements PopupContent, Focusable {
   onQueryChange?: (query: string) => void;
   onLoadMore?: () => void;
 
+  readonly #status:SessionSelectorOptions['status'];
   #sessions: SessionSummaryView[];
   #nextOffset: number | undefined;
   #query: string;
@@ -55,6 +57,7 @@ export class SessionSelector implements PopupContent, Focusable {
 
   constructor(options: SessionSelectorOptions) {
     this.#sessions = options.sessions;
+    this.#status=options.status;
     this.#nextOffset = options.nextOffset;
     this.#query = options.query ?? "";
   }
@@ -198,7 +201,7 @@ export class SessionSelector implements PopupContent, Focusable {
       const marker = index === this.#selected ? role.accent("❯") : " ";
       const label = sessionRowLabel(session);
       lines.push(`${marker} ${index === this.#selected ? style.bold(label) : label}`);
-      lines.push(`    ${role.meta(`${session.id} · node ${session.active_node}`)}`);
+      lines.push(`    ${role.meta(`${session.id} · node ${session.active_node}${this.#status?` · ${this.#status(session)}`:''}`)}`);
     }
     if (window.start === 0 && window.end === visible.length) {
       // Nothing is scrolled out of view, so the position line is noise.

@@ -169,7 +169,7 @@ impl AppServerConnection {
                     .create_session_submitted(settings, dynamic_tools, claim)
                     .await
                 {
-                    Ok(result) => catalog::transition(result, &sessions).await,
+                    Ok(result) => catalog::transition(result, &sessions, &manager).await,
                     Err(error) => Err(session_error(error)),
                 };
                 let _ = send.send(result);

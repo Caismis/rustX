@@ -115,6 +115,8 @@ async fn three_clients_broadcast_first_response_error_and_invalid_payload_commit
             let ServerMessage::Request(copy)=second.callback().await else {panic!("broadcast")};
             let ServerMessage::Request(unhandled)=generic.callback().await else {panic!("generic subscriber")};
             assert_eq!(call,copy); assert_eq!(copy,unhandled);
+            let MethodResult::Thread {thread:working}=generic.rpc(Method::ThreadRead{thread_id:thread.id.clone()}).await else {panic!("Thread status")};
+            assert_eq!(working.status,rustx::app_server::thread_status::ThreadStatus::Active{active_flags:vec![]},"Host callbacks are ordinary active execution without human waits");
             let ServerRequestMethod::ToolCall(tool)=&call.call else {panic!("tool callback")};
             assert_eq!(tool.thread_id,thread.id); assert_eq!(tool.turn_id,turn_id); assert_eq!(tool.namespace.as_deref(),Some("business")); assert_eq!(tool.tool,"lookup"); assert_eq!(tool.arguments,serde_json::json!({"key":"invoice"}));
             // Both application handlers have observed/executed the call before

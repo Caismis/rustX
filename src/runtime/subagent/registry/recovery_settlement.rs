@@ -421,6 +421,7 @@ impl SubagentRegistry {
                         .completion
                         .send_replace(super::agents::AdmissionSettlement::RolledBack);
                 }
+                state.failed_admissions.remove(&agent_id);
             } else {
                 state.records[index].physical_settlement_proven = true;
             }

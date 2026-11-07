@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution } from '../../../protocol/app-server/v73';
+import type { ForegroundToolExecution } from '../../../protocol/app-server/v74';
 import type { ToolCardView } from '../presentation/agent/ToolCard';
 import { json } from './projection';
 import { launchResult } from './jobs';

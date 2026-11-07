@@ -1,4 +1,4 @@
-import type { ContentRef, RuntimeClientSnapshot } from '../../../protocol/app-server/v73';
+import type { ContentRef, RuntimeClientSnapshot } from '../../../protocol/app-server/v74';
 import { checkpoint, type Server } from '../fixture';
 import { messageSource } from '../../../protocol/app-server/content-identity';
 

@@ -345,6 +345,7 @@ use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ModelToolDefinition;
 
+mod activity;
 mod admission;
 mod attempt;
 pub mod auxiliary;
@@ -880,6 +881,7 @@ struct CoordinatorState {
 
 /// The shared state of one conversation runtime.
 pub(crate) struct RuntimeInner {
+    activity: activity::TaskActivity,
     configuration_owner: Arc<()>,
     /// The first configuration commit this allocation published but could
     /// not record. The durability gate keeps only its first failure, so this
