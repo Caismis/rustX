@@ -1546,12 +1546,7 @@ mod tests {
         let wire = serde_json::to_value(request).unwrap();
         assert!(validator.is_valid(&wire));
         let payload = wire["result"].clone();
-        assert!(
-            serde_json::from_value::<crate::runtime::interaction::InteractionResponse>(
-                payload.clone()
-            )
-            .is_ok()
-        );
+        assert!(super::super::wire::interaction_response_from_value(payload.clone()).is_ok());
         for (index, invalid) in [
             (0, "9223372036854775808"),
             (0, "-0"),
@@ -1565,10 +1560,8 @@ mod tests {
                 serde_json::from_value::<super::super::protocol::ClientReply>(wire.clone()).is_ok()
             );
             assert!(
-                serde_json::from_value::<crate::runtime::interaction::InteractionResponse>(
-                    wire["result"].clone()
-                )
-                .is_err()
+                super::super::wire::interaction_response_from_value(wire["result"].clone())
+                    .is_err()
             );
         }
     }

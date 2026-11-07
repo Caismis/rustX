@@ -35,6 +35,9 @@ Environment: Linux x86_64, Rust 1.98.1, Node 24.19.0, locked pnpm 11.13.1 and th
 repository's Python/uv provider emulator. Browser references use the repository's
 immutable Playwright 1.63.0 container. Results below refer to the integrated base
 above and the completed implementation, including the independent review fixes.
+The full-suite snapshot precedes the final interaction-reply numeric-codec
+correction. Its follow-up App Server unit suite passed all 58 tests; final-head
+FULL CI below owns the complete result after that correction.
 
 | Check | Result |
 | --- | --- |
@@ -44,12 +47,13 @@ above and the completed implementation, including the independent review fixes.
 | Provider emulator `uv run --frozen pytest` | 55 passed |
 | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --no-fail-fast` | Pass; Cargo reports 5999 passed, 20 ignored; includes actual process death and required-emulator conformance |
 | `cargo run --all-features --example check_test_lanes` | Pass; Linux FULL discovery has no missing, empty or stale lane selections |
+| `cargo test --all-features app_server:: --lib` after the reply-codec correction | 58 passed; exact Workflow u64 identities round-trip, noncanonical/overflow values fail |
 | Protocol generation drift, editor schema generation and TypeScript checks | Pass; generated editor schemas have no drift |
 | Development launcher typecheck and tests | Pass; 43 tests |
 | TUI typecheck and required-emulator full suite | Pass; 1326 passed, 1 skipped |
 | Web typecheck and full deterministic suite | Pass; 4181 passed, 4 skipped |
 | Web production build, i18n, provenance and notices | Pass; 347 source records, 349 production package notices |
-| Pinned-container browser acceptance | Local traversal exposed obsolete permission, capability and wire assertions. Focused repairs passed delivery 2/2, presentation 3/3 and all 60 Shell/navigation cases across two runs. The complete final-head browser-shard and coverage verdict is recorded on [the primary PR](https://github.com/Caismis/rustX/pull/540) |
+| Pinned-container browser acceptance | Full local traversal reported 633 passed and 34 failed. Focused repairs passed delivery 2/2, presentation 3/3 and all 60 Shell/navigation cases across two runs. The remaining review-codec repair's browser recheck awaited container startup at this snapshot. Its result and the complete final-head browser-shard/coverage verdict are recorded on [the primary PR](https://github.com/Caismis/rustX/pull/540) |
 | Five-mode real-process performance measurement | Pass; 100 native Turns, exact 20/40 model requests per mode; [raw data and method](../../benchmarks/app-server/README.md) |
 | `git diff --check` | Pass |
 
@@ -80,6 +84,11 @@ assertions, and the canonical integration documentation. The browser's real
 history/reconnect test and the 21-test probe suite pass after the probe repair.
 It also verified finite fake-server capabilities, current mutation guards and
 the exact Attempt ID in interrupt assertions; 242 affected unit tests pass.
+The final browser traversal also found a claimed review result bypassing the
+existing exact-u64 wire decoder. App Server now reuses that decoder after claim;
+an independent review verified that invalid results still settle once and that
+free-form Host JSON is unchanged. Workflow completion assertions now check the
+run header rather than accepting a completed child node.
 
 The final independent source review found no remaining blocking issues. It also
 checked native lifecycle/cancellation/broker lock order and the main branch's

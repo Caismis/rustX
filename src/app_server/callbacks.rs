@@ -256,10 +256,9 @@ impl Callbacks {
                     return;
                 };
                 let response = match reply {
-                    ClientReply::Success(reply) => serde_json::from_value::<
-                        crate::runtime::interaction::InteractionResponse,
-                    >(reply.result)
-                    .ok(),
+                    ClientReply::Success(reply) => {
+                        super::wire::interaction_response_from_value(reply.result).ok()
+                    }
                     ClientReply::Error(_) => None,
                 };
                 if let Some(response) = response {

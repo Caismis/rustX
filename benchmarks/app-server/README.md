@@ -42,8 +42,10 @@ and binary SHA-256. `workingTree: true` records that the implementation was
 measured before its commit. The source digest hashes tracked measured paths and
 their current bytes; the recorded base SHA alone does not identify the binary.
 The captured source digest was verified against implementation commit
-`fbcf66f66d0c199a61bb5100f1182bb82bf9f753` before later documentation and browser
-assertion corrections. Those corrections change no measured execution behavior.
+`fbcf66f66d0c199a61bb5100f1182bb82bf9f753` before later documentation, browser
+assertion and interaction-reply numeric-codec corrections. These workloads do
+not publish human interactions, so they do not execute that corrected decoder.
+The samples identify the captured implementation and binary, not a later build.
 
 The comparable Host modes all issue exactly 40 model requests for 20 Turns.
 Tool continuations and extra subscribers do not add native Turns or model calls.

@@ -92,7 +92,7 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await review.getByRole('button', { name: copy('Submit', '提交'), exact: true }).click();
     await expect(review).toHaveCount(0);
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
-    await expect(run).toContainText(copy('completed', '已完成'));
+    await expect(run.getByRole('button').first()).toContainText(copy('completed', '已完成'));
     await expect(run.getByRole('button').first()).toHaveAttribute('aria-expanded', 'false');
     await run.getByRole('button').first().click();
     await expect(run).not.toContainText(copy('Steps used', '已执行'));
