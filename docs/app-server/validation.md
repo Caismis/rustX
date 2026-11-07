@@ -188,6 +188,9 @@ complete browser-shard coverage. Pending results are not counted as passes.
 | --- | --- |
 | Native Session runtime manager suite | 467 passed, 2 ignored |
 | Native status, logical Interaction accounting, fault cut and four-source lock recovery | 6 passed |
+| Protocol-version rejection over direct and stdio Runtime Client transports | 2 passed; historical v73 input remains independent of App Server v74 |
+| Complete documentation/protocol contracts suite | 31 passed |
+| Real App Server concurrent Sessions across external disconnect | Passed; instance status notices retain exact Thread identities and transcript isolation assertions |
 | Child physical-proof and resume suites | 4 and 9 passed |
 | `cargo fmt --all -- --check`; all-target/all-feature Clippy with warnings denied | Pass |
 | Native bins; protocol regeneration with four artifact hashes unchanged; protocol TypeScript | Pass |
@@ -206,9 +209,15 @@ Native settlement. The original generic waiting message is now the appropriate
 Native approval/input label. Snapshot noise policies and comparison thresholds
 were not relaxed.
 
-Broad local monolithic Native runs are not counted as complete passes: under
-concurrent verification, existing MCP/provider fixture gates failed. The unchanged
-MCP one-round and repeated ambiguous-HTTP cases passed their exact follow-up runs;
+Broad local monolithic Native runs are not counted as complete passes. They
+exposed a historical Runtime Client fixture changed during the App Server version
+bump, an outdated documented rejection boundary, and a process test that did not
+yet recognize instance-scoped status notices. Each is corrected and its focused
+follow-up passed, including the entire contracts suite. The same audit restored
+an unrelated TypeScript icon path changed by the version replacement and
+regenerated its provenance record. Under concurrent verification, existing
+MCP/provider fixture gates also failed. The unchanged MCP one-round and repeated
+ambiguous-HTTP cases passed their exact follow-up runs;
 the complete manager and real TUI process suites also passed. Final amended-head
 FULL CI, using the repository's separate verification lanes, remains the authority
 for complete Native, macOS and browser coverage. Its exact head/run/result must

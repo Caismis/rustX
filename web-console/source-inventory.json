@@ -4841,7 +4841,7 @@
       "retained_dependencies": [
         "./code-file-types.ts"
       ],
-      "local_sha256": "eeb78e7abfe6a8f2d5df89b0abebc5a6d880e5d94130c80dbc0646130c0d8200"
+      "local_sha256": "8596e54f1e00e0f6137816c215169148d661d6ec2bf82f8be650b1ec7e389ce4"
     },
     {
       "upstream": "packages/client/ui-primitives/src/PathLabel.tsx",

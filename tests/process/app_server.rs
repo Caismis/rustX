@@ -1126,6 +1126,14 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         loop {
             use app_server_conformance::AppServerConformanceDriver;
             let notification = client.next_notification().await.notification;
+            // Lightweight Thread status is instance-scoped, without changing
+            // transcript routing or subscribing this client to another Thread.
+            if let NotificationMethod::ThreadStatusChanged(entry) = &notification {
+                assert!(
+                    entry.thread_id == a.conversation_id || entry.thread_id == b.conversation_id
+                );
+                continue;
+            }
             // Session metadata invalidation is not a Conversation event and is
             // not routed by attachment target (Issue #386); nor is a
             // source-scoped repair level (Issue #464), nor a Session's
@@ -1136,6 +1144,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
                 NotificationMethod::SummaryInvalidated { .. }
                     | NotificationMethod::SourceRepairChanged { .. }
                     | NotificationMethod::ConfigurationChanged { .. }
+                    | NotificationMethod::ThreadStatusResyncRequired { .. }
             ) {
                 continue;
             }
