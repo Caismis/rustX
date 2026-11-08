@@ -44,7 +44,7 @@ These exclusions do not waive required in-scope behavior.
 | Minimal external-client smoke | Real authenticated v75 initialize/server-info passed from outside the repository |
 | Independent code review | Initial/shutdown/watch/EOF/descriptor findings repaired. Subsequent credential, PTY-signal, busy-watch, output-fairness, native START and terminal-watch findings were independently re-reviewed: no remaining P1/P2 or weakened assertions. |
 | Final-head FULL CI, including macOS and both browser shards | Pending at capture time; required on the final PR head. The PR description tracks its exact SHA, run and verdict. |
-| Performance/resource measurements | Seven source-identified baseline/candidate pairs and seven native environment captures are retained below. The latest captures identify proxy-authentication source `ec0759b26`; every source/binary digest and raw sample count was independently verified. |
+| Performance/resource measurements | Eight source-identified baseline/candidate pairs and eight native environment captures are retained below. The latest captures identify native START/watch source `f64e5b873`; source/binary digests and raw samples are verified against each stated revision. |
 
 Native commit points, physical settlement and resource limits are specified in the
 service contract above. Lost responses never authorize command/mutation replay.
@@ -770,5 +770,71 @@ claiming it was necessarily the wait that timed out in #1780. The repaired sourc
 passed the complete local regression above, strict all-target/all-feature Clippy
 and formatting. The equivalent START-state enum refactor then passed all 18
 native runner tests and 24 environment boundaries. Source-identified captures
-and final-head FULL CI remain required; historical successes above do not
-substitute for that verdict.
+follow below; final-head FULL CI remains required. Historical successes above
+do not substitute for that verdict.
+
+
+### Native START/watch source measurements
+
+The eighth sequential baseline/candidate Turn pair and eighth native environment
+capture identify committed product source
+`f64e5b873e33d5b0983d71ff038bb0298865ca80`:
+[baseline](baseline-start-watch-measurements.json),
+[candidate](candidate-start-watch-measurements.json), and
+[environment](environment-start-watch-measurements.json).
+They ran after all local compilation and regression work ended, in that fixed
+order with the existing debug/all-features binaries and unchanged harnesses.
+The untouched baseline remains `57447d2e825f914e80bbfecc68d373fcab487446`.
+
+Candidate Turn source SHA-256:
+`f4c3076095e4e8dc0971d62f1a3d75fb0d8b19fe9ae6084285e9a2b2c12077ec`.
+Environment source SHA-256:
+`46da7f11c6e2e42bb8522641c107d52ceb6c20ed5fc66cff680c7207312e77dd`.
+Both use binary SHA-256
+`d601225c72e1cc07c79279dfeab103d787b6c1485810672947a40e9b14c6db9b`.
+The baseline binary remains
+`c2532fa4c9560388e4b67190f8da2555d40dcf0dd15a257746ce3c7ed8f0ac19`.
+Git objects and actual measured files match the recorded digests: 952 baseline
+Turn files, 965 candidate Turn files and 964 environment files. The harness's
+`workingTree: true` marker does not imply uncommitted product differences; the
+selected paths match the stated committed source.
+
+Each Turn mode retains twenty raw samples, twenty actually settled native Turns
+and twenty provider requests without Host Tools or forty with Host Tools.
+The following Turn values show **baseline / candidate**; the environment table
+contains candidate values.
+
+| Mode | CPU ms | RSS after MiB | Write calls | Kernel written MiB | Latency p50 ms | Latency p95 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| no-host-tools | 7530 / 4800 | 325.2 / 320.5 | 31186 / 30617 | 62.20 / 61.94 | 2318.6 / 152.6 | 7443.1 / 170.1 |
+| host-one-client | 18110 / 17880 | 339.2 / 339.9 | 70909 / 70575 | 143.16 / 143.14 | 807.8 / 570.7 | 1049.1 / 607.7 |
+| host-three-clients | 24630 / 23240 | 345.2 / 349.6 | 71095 / 70699 | 143.34 / 143.09 | 677.0 / 562.3 | 2178.2 / 593.7 |
+| host-three-clients-one-paused | 21510 / 21570 | 345.4 / 346.3 | 70611 / 70722 | 143.13 / 143.19 | 642.0 / 554.5 | 768.1 / 611.5 |
+| host-three-resident-sessions | 23520 / 22970 | 359.1 / 360.2 | 60146 / 60198 | 123.13 / 123.17 | 589.1 / 540.7 | 662.5 / 582.3 |
+
+| Environment mode | Parent / reaped-child CPU ms | RSS after MiB | Cycle p50 / p95 ms | Write calls | Kernel written MiB | Descriptors before / peak / cleanup |
+| --- | --- | --- | --- | --- | --- | --- |
+| environment-one-client | 250 / 50 | 154.7 | 33.2 / 34.2 | 610 | 0.08 | 19 / 75 / 19 |
+| environment-three-clients | 470 / 90 | 158.0 | 43.3 / 46.2 | 642 | 0.08 | 21 / 77 / 21 |
+| environment-three-sessions | 560 / 90 | 164.4 | 42.9 / 48.5 | 534 | 0.08 | 21 / 77 / 21 |
+| environment-one-idle-paused-client | 480 / 100 | 156.4 | 42.1 / 46.2 | 622 | 0.08 | 21 / 77 / 21 |
+
+
+The shared-host baseline includes actual multi-second outliers: no-Host p50/p95
+was 2,318.6/7,443.1 ms and the largest raw sample was 9,045.8 ms. These were not
+filtered or rerun away. Lower candidate latency in this fixed-order pair does
+not establish that the native concurrency changes caused an improvement.
+Candidate paused-client CPU increased from 21,510 to 21,570 ms; all four Host
+modes also sampled higher final RSS. Write-call/byte increases remain visible
+in the paused-client and resident-session modes. Twenty samples per mode on a
+shared developer host do not establish zero overhead or production throughput.
+
+All eighty environment cycles invoked zero models/Host Tools and retained their
+original 19/21 descriptors. The separate peak held four admitted commands and
+eight watches, 75/77 descriptors and thirteen OS processes; cleanup returned to
+one server process and the original descriptor count. Cycle resource deltas
+exclude setup/peak work. Kernel writes are not physical-device I/O, summed
+process-tree RSS repeats shared pages, and an idle paused peer does not prove
+saturation behavior. Native queue/settlement regression tests cover that
+contract. macOS correctness and the full browser matrix require the final-head
+FULL run recorded in the PR description; these Linux samples do not replace it.
