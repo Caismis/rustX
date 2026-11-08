@@ -90,6 +90,12 @@ PTY master and slave descriptors are allocated atomically close-on-exec through
 the existing rustix PTY operations. Neither the command nor a concurrently
 spawned command inherits another terminal's raw endpoints; only its explicitly
 assigned stdin/stdout/stderr cross the native execution boundary.
+The lifecycle supervisor catches terminal foreground-group signals (including
+INT, QUIT and HUP) without inheriting ignored or blocked dispositions into the
+business program. Exec restores its default dispositions, so applications can
+handle Ctrl-C/Ctrl-\\ or terminate normally. Physical containment without a
+business exit status produces a process-control failure promptly; it does not
+wait for the command deadline or invent a successful exit.
 
 Only `ToolEnvironment`'s four native baseline variables and explicit validated
 entries reach the business program. Parent process/provider/App Server credentials
@@ -113,7 +119,9 @@ converted into successful settlement. Capacity remains with the physical owner,
 including after loss of the RPC waiter. A connection admits at most four independent
 commands; control retains its reserved lane. Output queues are bounded; a saturated
 consumer is retired, and its processes are cancelled and drained by the same
-native owner. The final output receipt is fenced at actual transport acceptance,
+native owner. The I/O actor cooperates between completed turns, including after
+the capture cap, so a continuously ready PTY cannot fill the queue entirely
+within one task poll while excluding transport/control scheduling. The final output receipt is fenced at actual transport acceptance,
 not merely at enqueue. Commands are not durable jobs and are never replayed.
 
 ## Filesystem operations
@@ -176,6 +184,14 @@ child-descriptor slots. Initial exhaustion refuses registration; subsequent
 reconciliation failure retires the watch with a resync hint. Coalesced vnode hints
 always require rereads. Native teardown retains these descriptors and admission
 through actual observer exit; macOS cancellation wakes its queue without polling.
+If concurrent environment I/O prevents a callback's identity check, the same
+watch owner schedules a single coalesced deferred check. Native callbacks never
+wait for the I/O gate. The owner preserves a valid directory identity or retires
+a replaced/unavailable source even if the old inode emits no more events. At
+most one blocking check and one pending recheck wake-up exist per watch; physical
+capacity remains held through that check, including after disconnect.
+Unwatch also cancels any pending retirement-notification receipt wait; a live
+client need not consume a withdrawn notice to return physical observer capacity.
 
 Watch IDs belong to one connection and cannot address another connection's watch.
 There are at most eight per connection and 32 shared native file-observation
@@ -220,6 +236,11 @@ connection, including an empty opaque token. Cycles, more than 128 total
 descriptors, or an inventory above 64 KiB fail as `list_failed`; partial catalogs
 are never labeled complete. Tool, resource and template descriptions are
 credential-redacted, and business invocation is unavailable through this API.
+The native connection owner includes every accepted literal environment/header
+value and every resolved sensitive reference in one private redaction set.
+Redaction covers nested schema keys and values, and the final redacted projection
+must still fit the same 64 KiB bound. Neither private redaction values nor resolved
+credentials enter serialized or debug configuration views.
 Catalog kind is `tools`, `resources` or `templates`; `expected_revision` binds
 the authored MCP source before and after native discovery.
 Probe/catalog native tasks retain counted host admission through physical close

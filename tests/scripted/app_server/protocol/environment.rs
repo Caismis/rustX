@@ -4,6 +4,7 @@ use crate::app_server::command::{ExecParams, ExecStatus, WriteParams};
 use base64::Engine as _;
 use std::path::Path;
 use std::sync::Arc;
+pub(crate) mod review;
 
 fn parameters(fixture: &Fixture, command: &[&str]) -> ExecParams {
     serde_json::from_value(serde_json::json!({"command":command,"cwd":fixture.workspaces[0],"env":{},"processId":null,"tty":false,"streamStdin":false,"streamStdoutStderr":false,"outputBytesCap":null,"timeoutMs":10_000,"size":null})).unwrap()

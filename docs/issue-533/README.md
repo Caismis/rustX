@@ -33,18 +33,18 @@ These exclusions do not waive required in-scope behavior.
 | Check | Current result |
 | --- | --- |
 | Provider emulator locked Python 3.12 environment / pytest | 55 passed |
-| Real command/PTY/filesystem/Skills/MCP protocol boundaries | 17 passed, including descriptor-bound watch ABA, canonical PTY EOF, PTY descriptor isolation, Host drain, native cleanup failure and instance-capacity cases; macOS adds its native child/capacity boundary in FULL CI |
+| Real command/PTY/filesystem/Skills/MCP protocol boundaries | 21 passed, including literal/reference HTTP/stdio credential echo, ready-gated PTY signals and missing-status settlement, atomic replacement deferred identity checks, unread-retirement cancellation, post-cap output termination, descriptor-bound watch ABA, canonical PTY EOF, PTY descriptor isolation, Host drain, native cleanup failure and instance-capacity cases; macOS adds its native child/capacity boundary in FULL CI |
 | Native file fault/race/CAS tests | 6 passed in the full run |
 | Rust formatting and all-target/all-feature Clippy (`-D warnings`) | Passed |
-| Complete local Rust all-target/all-feature regression | 6036 passed / 20 existing ignored; subsequent shutdown/MCP refinements passed the 14 boundary and 7 native probe tests; watch/PTY follow-up boundaries are included in the 17-case run; final-head FULL CI is required below |
+| Complete local Rust all-target/all-feature regression | Initial implementation: 6036 passed / 20 existing ignored. Latest native-owner follow-up: all 207 relevant credential, process runner, interactive/Bash supervisor, MCP, native file/probe and environment-boundary tests passed. The final-head FULL run must validate the entire target matrix. |
 | CI lane coverage | Passed; Linux FULL and FAST selectors cover their required tests |
 | Generated protocol/schema/fixtures and existing client typechecks | Generated-artifact drift check and all four package typechecks passed |
 | TUI, dev and Web deterministic suites | dev: 43 passed; TUI: 1349 passed / 1 native skip; Web: 4204 passed / 4 existing skips |
 | Browser acceptance | Full local pinned run: 660 passed / 7 expectation timeouts on the shared host. Focused diagnostics reproduced intermittent timing failures; native 34-Turn history preparation passed on untouched base and candidate, and the original browser assertions passed with temporary logging (removed). No assertion, timeout or screenshot baseline was relaxed. Final-head FULL browser acceptance is required in the PR. |
 | Minimal external-client smoke | Real authenticated v75 initialize/server-info passed from outside the repository |
-| Independent code review | Initial and shutdown findings repaired; external watch/PTY findings and follow-up source-identity/child-directory cases are repaired and independently re-reviewed; the later PTY descriptor leak is also repaired and independently re-reviewed before the final FULL run |
+| Independent code review | Initial/shutdown/watch/EOF/descriptor findings repaired. Subsequent literal-credential, PTY-signal and busy-watch findings, redaction expansion/diagnostic caps, unread-retirement cancellation and actor fairness were independently re-reviewed: no remaining P1/P2 or weakened assertions. |
 | Final-head FULL CI, including macOS and both browser shards | Required on the final PR head; exact SHA, run and verdict are recorded in the PR description |
-| Performance/resource measurements | Two initial baseline/candidate pairs plus a watch/EOF-source pair and repeated native environment modes completed; raw samples and observed regressions below |
+| Performance/resource measurements | Historical source-identified baseline/candidate pairs and native environment captures are retained below. The latest native-owner follow-up requires fresh captures identified by its committed source and binary. |
 
 Native commit points, physical settlement and resource limits are specified in the
 service contract above. Lost responses never authorize command/mutation replay.
@@ -342,3 +342,66 @@ The final committed head requires a new FULL run after this test fix; its exact
 run and verdict belong in the PR. The two preceding attempts are not final
 all-green validation. Product source and all performance captures above are
 unchanged by this test-only follow-up.
+
+## Subsequent native-owner review and CI follow-up
+
+FULL [run #1776](https://github.com/Caismis/rustX/actions/runs/42420431724)
+on `fd73e29878f9452590a034bc9032c803b78f4bb9` passed Linux (6,042 tests,
+20 existing ignored), both browser shards and coverage (all 667 cases, zero
+skips), client/protocol checks and macOS Desktop/Host. Native macOS FULL failed
+the existing raw duplex PTY boundary: a pending stdin batch reported unknown
+partial effects and the command reported connection closure. It completed
+4,194 other in-crate tests with eight existing ignored; later external targets
+did not run. This is a failed run, not final-head validation.
+
+A subsequent external review confirmed three independent native boundaries:
+
+- Literal MCP transport environment/header values were absent from catalog
+  redaction. The native binding/connect owner now includes every accepted
+  literal and resolved reference in its private credential projection. Real
+  HTTP and stdio peers echo received credentials into all three catalogs,
+  including nested schema keys and values. An isolated child test process
+  supplies synthetic host references without mutating global test environment.
+- PTY foreground signals also reached the lifecycle supervisor. Caught
+  TERM/INT/QUIT/HUP and terminal job-control handlers now preserve that owner
+  while exec restores business-program defaults. Real ready-gated programs
+  handle INT/QUIT and continue, or terminate with their defaults. Physical
+  containment without a business exit status now settles as a control failure
+  before the command deadline, while retaining actual reaping requirements.
+- A watch callback's busy identity check could leave it bound to a replaced
+  inode forever. The existing owner now performs a serial deferred check with
+  one coalesced pending recheck wake-up. A barrier after rename and before parent
+  fsync proves both file/directory callbacks encounter the held I/O gate; the
+  file watch then retires and releases capacity while the unchanged directory
+  continues observing another retained child. A second held-gate barrier proves
+  pending native checks retain capacity through unwatch/disconnect and Host
+  teardown, then return all slots after actual completion.
+
+Independent follow-up review also found and repaired two adjacent issues.
+Redaction scans original text once, so credential values matching substrings
+of `<redacted>` cannot recursively expand inserted masks; a regression includes
+every nonempty mask substring and unmatched UTF-8. Final catalog size is checked
+after redaction as well. Tool/resource final failure statuses retain their
+existing 1 KiB diagnostic budget after redaction, including short values matching
+mask text; real HTTP error responses exercise both final executor exits. A peer
+marker and resource-read count prove those errors originate from the actual
+HTTP requests. Unwatch cancels a withdrawn retirement-notification receipt wait.
+A real queued-retirement barrier verifies all 32 observer slots return while
+the connection remains alive and never reads that notification.
+
+The macOS duplex failure exposed a continuously ready PTY producer's ability to
+fill its 32-slot observation queue within one task poll. The command actor now
+cooperates after completed select turns, including after reaching its capture
+cap. It never yields inside a read future after consuming bytes and does not
+wait for individual output receipts while servicing stdin. Queue bounds,
+saturated-consumer retirement, final transport-acceptance fencing and original
+duplex assertions remain unchanged. Both real pipe and PTY infinite-output
+regressions observe the cap notification before requesting prompt termination.
+
+All of these repairs remain inside the existing native owners. WebUI/TUI
+presentation, screenshot references, retry policies and timeouts are unchanged.
+Independent read-only review of the implementation and incremental lifecycle
+changes found no remaining P1/P2 issues or weakened assertions. The fresh source
+identity, corresponding measurements and final exact-head FULL verdict must be
+verified after this product-source follow-up; earlier captures above remain
+historical evidence for their explicitly identified sources.

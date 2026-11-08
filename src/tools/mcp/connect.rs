@@ -130,7 +130,12 @@ impl McpServerRuntime {
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::Connect,
         );
-        let credentials = request.binding.credentials.clone();
+        let binding = request.binding.with_connection_redactions();
+        let request = OwnedConnect {
+            binding: &binding,
+            ..request
+        };
+        let credentials = binding.credentials.clone();
         Self::connect_admitted(request)
             .await
             .map_err(|error| error.redacted(&credentials))

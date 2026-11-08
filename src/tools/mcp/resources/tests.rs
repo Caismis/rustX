@@ -772,6 +772,84 @@ fn credentials(secret: &str) -> crate::credentials::SourceCredentials {
     credentials
 }
 
+#[tokio::test]
+async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() {
+    use crate::capabilities::ToolSourceId;
+    use crate::tools::mcp::{
+        McpResourceBinding, McpRuntimeGeneration, McpRuntimeRetirementRegistry,
+    };
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000533");
+    let secret = "FINAL_DIAGNOSTIC_SENTINEL_533";
+    let error =
+        rmcp::ErrorData::invalid_params(format!("HTTP533 {secret} {}", "e".repeat(2048)), None);
+    let mut peer = HttpPeer::start(FixtureServer {
+        resources_supported: true,
+        call_error: Some(error.clone()),
+        resource_state: fixture::resources::ResourceFixtureState {
+            error: Some(error),
+            ..Default::default()
+        },
+        ..FixtureServer::default()
+    })
+    .await;
+    peer.binding.credentials = credentials(secret);
+    let McpTransportConfig::StreamableHttp { headers, .. } = &mut peer.binding.transport else {
+        unreachable!()
+    };
+    // This short literal also occurs in the redaction marker. Reprocessing a
+    // safe diagnostic must not grow its final status beyond the original cap.
+    headers.insert("X-Short-Value".into(), "e".into());
+    let connection = peer.connect_as(&tools, "bounded").await;
+    let catalog = connection.discover_catalog().await.unwrap();
+    let retirement = McpRuntimeRetirementRegistry::new();
+    let generation = McpRuntimeGeneration::from_connection(
+        McpServerId::new("bounded"),
+        connection.clone(),
+        None,
+        tokio::runtime::Handle::current(),
+        &retirement,
+    );
+    let ordinary = crate::tools::mcp::executor::definitions_owned(
+        &McpServerId::new("bounded"),
+        peer.binding.policy,
+        &generation.binding(),
+        catalog,
+    );
+    let resource = crate::tools::mcp::resource_definitions(BTreeMap::from([(
+        ToolSourceId::Mcp(McpServerId::new("bounded")),
+        McpResourceBinding::new(
+            generation.binding(),
+            crate::tools::types::ToolApprovalPolicy::Never,
+        ),
+    )]));
+    for (entry, arguments) in [
+        (&ordinary[0], serde_json::json!({})),
+        (
+            &resource[2],
+            serde_json::json!({"server":"bounded", "uri":"fixture://error"}),
+        ),
+    ] {
+        let result = run_helper(entry, arguments, &tools).await;
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("correlated peer error must fail: {result:?}")
+        };
+        assert!(
+            error.len() <= 1024,
+            "final diagnostic escaped its existing byte budget: {}",
+            error.len()
+        );
+        assert!(
+            error.contains("HTTP533"),
+            "the correlated peer error must reach the final status"
+        );
+        assert_redacted(&result, secret);
+    }
+    assert_eq!(peer.fixture.resource_state.reads.load(Ordering::SeqCst), 1);
+    assert!(generation.retire_and_close().await.is_none());
+    assert!(retirement.settle_all().await.is_empty());
+    peer.close(&connection).await;
+}
+
 fn assert_redacted(result: &ToolExecutionResult, secret: &str) {
     for rendered in [
         serde_json::to_string(result).unwrap(),

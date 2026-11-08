@@ -1078,6 +1078,12 @@ impl SupervisedCommandRunner {
                         }
                     }
                     Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
+                        // Physical containment can outlive an abnormally lost
+                        // inner supervisor. Missing shell status is a control
+                        // failure, never a reason to wait for the run deadline.
+                        if self.failure.is_none() && self.settled.is_none() && self.exit_status.is_none() {
+                            self.failure = Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
+                        }
                         self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminalObserved);
                         send_terminal_ack(&mut self.stream).await;
                         #[cfg(test)]

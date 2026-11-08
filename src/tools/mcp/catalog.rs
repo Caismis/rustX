@@ -140,6 +140,11 @@ impl McpServerRuntime {
         let mut value = serde_json::to_value(page)
             .map_err(|_| McpError::Discovery("invalid MCP catalog".into()))?;
         redact(&mut value, &self.credentials);
+        if !crate::bounded_file::json_fits(&value, 65_536) {
+            return Err(McpError::Discovery(
+                "redacted MCP inventory exceeds bounds".into(),
+            ));
+        }
         serde_json::from_value(value).map_err(|_| McpError::Discovery("invalid MCP catalog".into()))
     }
 }

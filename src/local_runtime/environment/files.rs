@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
+#[cfg(test)]
+use std::os::unix::fs::MetadataExt;
 
 use std::path::{Component, Path};
 
@@ -496,6 +498,8 @@ fn atomic_write(
             }
             Ok(())
         })?;
+        #[cfg(test)]
+        committed_write(directory, leaf);
         sync_directory(directory)
     })();
     let _ = rustix::fs::unlinkat(directory.descriptor(), temporary.as_str(), AtFlags::empty());
@@ -503,6 +507,39 @@ fn atomic_write(
         result.map_err(uncertain)
     } else {
         result
+    }
+}
+#[cfg(test)]
+type WriteCommitHook = Box<dyn FnOnce() + Send>;
+#[cfg(test)]
+type WriteCommitKey = (u64, u64, std::ffi::OsString);
+#[cfg(test)]
+static WRITE_COMMITS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::BTreeMap<WriteCommitKey, WriteCommitHook>>,
+> = std::sync::LazyLock::new(std::sync::Mutex::default);
+#[cfg(test)]
+pub(crate) fn write_commit_hook(path: &Path, hook: WriteCommitHook) {
+    let metadata = std::fs::metadata(path.parent().unwrap()).unwrap();
+    WRITE_COMMITS.lock().unwrap().insert(
+        (
+            metadata.dev(),
+            metadata.ino(),
+            path.file_name().unwrap().to_owned(),
+        ),
+        hook,
+    );
+}
+#[cfg(test)]
+fn committed_write(directory: &PackageDirectory, leaf: &std::ffi::OsStr) {
+    let metadata = File::from(directory.descriptor().try_clone().unwrap())
+        .metadata()
+        .unwrap();
+    let hook = WRITE_COMMITS
+        .lock()
+        .unwrap()
+        .remove(&(metadata.dev(), metadata.ino(), leaf.into()));
+    if let Some(hook) = hook {
+        hook();
     }
 }
 #[cfg(test)]

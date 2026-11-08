@@ -95,7 +95,7 @@ impl McpServerRuntime {
         match &mut result.status {
             ToolExecutionStatus::Failed { error }
             | ToolExecutionStatus::OutcomeUnknown { detail: error } => {
-                *error = self.credentials.redact(error);
+                *error = bound_error(&self.credentials.redact(error));
             }
             _ => {}
         }

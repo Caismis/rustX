@@ -248,7 +248,9 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
         panic!("the invalid frame must fail before dispatch");
     };
     assert!(error.contains("MCP protocol violation"));
-    assert!(error.contains("structurally invalid stdio"));
+    // The fixture's literal corruption selector is itself write-only. Its
+    // value also appears in this diagnostic's fixed text and is redacted.
+    assert!(error.contains("structurally <redacted> stdio"), "{error}");
     assert!(error.contains("method"));
     let projection = result.model_facing_projection().as_text();
     let health = runtime.unusable_reason().unwrap();
@@ -261,6 +263,10 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
         ("runtime health diagnostic", health.as_str()),
         ("bounded framing evidence", recorded.as_str()),
     ] {
+        assert!(
+            !diagnostic.contains(raw::CORRUPTION_INVALID),
+            "{name} leaked a literal environment value: {diagnostic}"
+        );
         assert!(!diagnostic.contains(secret), "{name} leaked the credential");
         assert!(
             !diagnostic.contains(&secret[..12.min(secret.len())]),

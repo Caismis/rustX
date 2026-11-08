@@ -613,6 +613,12 @@ async fn run(
                 }
             },
         }
+        // Raw AsyncFd readiness can stay immediately ready across many small
+        // PTY fragments. Cooperate at the completed actor-turn boundary so the
+        // transport can consume its bounded queue and controls keep progressing,
+        // including after the output cap. No read future yields after consuming
+        // bytes: select cancellation must never discard an already-read chunk.
+        tokio::task::yield_now().await;
     }
     if let Some(receipt) = last_receipt {
         events

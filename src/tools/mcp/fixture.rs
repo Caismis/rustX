@@ -34,6 +34,7 @@
 //! hand-written pre-2026 wire fixture for the one peer shape an rmcp server
 //! cannot represent.
 
+pub mod credential_echo;
 pub mod legacy;
 pub mod raw;
 pub mod recovery;
@@ -376,6 +377,8 @@ pub struct FixtureServer {
     /// When set, `tools/list` fails with a correlated error message of
     /// exactly this many bytes (the oversized-diagnostic seam).
     pub list_tools_error_bytes: Option<usize>,
+    /// An optional correlated tools/call error for real diagnostic boundaries.
+    pub call_error: Option<rmcp::ErrorData>,
     /// When set, the successful `echo` tool returns one text block of exactly
     /// this many bytes.
     pub result_bytes: Option<usize>,
@@ -1031,6 +1034,7 @@ impl ServerHandler for FixtureServer {
         context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResponse, rmcp::ErrorData>> + Send {
         let changed = self.changed.clone();
+        let call_error = self.call_error.clone();
         let sink = self.sink.clone();
         let slow_started = self.slow_started.clone();
         let cancel_observed = self.cancel_observed.clone();
@@ -1050,6 +1054,9 @@ impl ServerHandler for FixtureServer {
         let task_registry = self.task_registry.clone();
         let task_observation_file = self.task_observation_file.clone();
         async move {
+            if let Some(error) = call_error {
+                return Err(error);
+            }
             if let Some(task_tools) = &task_tools
                 && let Some(scenario) = task_tools.scenario_of(&request.name)
             {
@@ -1661,6 +1668,16 @@ pub fn fixture_tool_named(name: &str) -> Tool {
 
 /// Serves one fixture over stdio until the client closes the transport.
 pub async fn serve_stdio(fixture: FixtureServer) {
+    if let Ok(value) = std::env::var(credential_echo::ECHO_ENV) {
+        credential_echo::CredentialEcho(Some(value))
+            .serve(rmcp::transport::stdio())
+            .await
+            .expect("credential echo fixture")
+            .waiting()
+            .await
+            .expect("credential echo wait");
+        return;
+    }
     let server = tasks::TaskReviewPeer(fixture)
         .serve(rmcp::transport::stdio())
         .await

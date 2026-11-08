@@ -388,6 +388,10 @@ impl AppServerConnection {
     pub(crate) async fn command_admitted_for_test(&self, id: &str) {
         self.commands.admitted_for_test(id).await;
     }
+    #[cfg(test)]
+    pub(crate) fn watch_retirement_for_test(&self, id: &str) -> tokio::sync::oneshot::Receiver<()> {
+        self.watches.observe_retirement(id)
+    }
 
     /// Bind transport lifetime to the same ordinary API eligibility. Closing
     /// this carrier fences its pending publications and connection resources.

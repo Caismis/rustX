@@ -115,7 +115,7 @@ impl McpConnection {
         match &mut result.status {
             ToolExecutionStatus::Failed { error }
             | ToolExecutionStatus::OutcomeUnknown { detail: error } => {
-                *error = runtime.credentials.redact(error);
+                *error = bound_error(&runtime.credentials.redact(error));
             }
             _ => {}
         }

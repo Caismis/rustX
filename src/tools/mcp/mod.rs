@@ -352,6 +352,23 @@ pub struct McpServerBinding {
     pub policy: ToolInvocationPolicy,
 }
 
+impl McpServerBinding {
+    /// Freeze every accepted credential input at the native connection owner,
+    /// including bindings constructed without the configuration parser.
+    fn with_connection_redactions(&self) -> Self {
+        let mut binding = self.clone();
+        let values = match &self.transport {
+            McpTransportConfig::Stdio { environment, .. } => environment.values(),
+            McpTransportConfig::StreamableHttp { headers, .. } => headers.values(),
+        };
+        binding.credentials.literal_redactions = values
+            .filter(|value| !value.is_empty())
+            .map(|value| crate::model::catalog::ResolvedCredential::new(value.clone()))
+            .collect();
+        binding
+    }
+}
+
 impl std::fmt::Debug for McpServerBinding {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter

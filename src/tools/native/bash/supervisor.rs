@@ -286,8 +286,8 @@ use crate::runtime::supervised_unit::{
     MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED,
     MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK,
     MSG_TERMINATE, POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper,
-    contain_group, enforce_fixed_group_membership, ignore_group_term, wait_for_supervisor_event,
-    wake_on_child_change,
+    contain_group, enforce_fixed_group_membership, protect_supervisor_signals,
+    wait_for_supervisor_event, wake_on_child_change,
 };
 
 /// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
@@ -822,9 +822,9 @@ fn run_inner() -> i32 {
         let _ = stream.write_preownership_failure("injected SIGTERM handler installation failure");
         return INNER_EXIT_NORMAL;
     }
-    if let Err(error) = ignore_group_term() {
+    if let Err(error) = protect_supervisor_signals() {
         let _ = stream.write_preownership_failure(&format!(
-            "cannot install the invocation SIGTERM handler: {error}"
+            "cannot install the invocation group-signal handlers: {error}"
         ));
         return INNER_EXIT_NORMAL;
     }
@@ -1302,7 +1302,7 @@ fn supervisor_binary() -> std::path::PathBuf {
     std::env::current_exe().expect("current executable")
 }
 
-// Structural primitives (`become_child_subreaper`, `ignore_group_term`,
+// Structural primitives (`become_child_subreaper`, `protect_supervisor_signals`,
 // `enforce_fixed_group_membership`) come from the shared supervisor-unit core.
 
 fn observe_inner_group(pgid: i32) -> Result<WaitStatus, Errno> {

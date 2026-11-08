@@ -20,6 +20,8 @@ struct Entry {
     watcher: Option<native::Watcher>,
     stop: CancellationToken,
     generation: Arc<()>,
+    #[cfg(test)]
+    retirement_queued: Option<tokio::sync::oneshot::Sender<()>>,
 }
 #[derive(Default)]
 struct State {
@@ -29,6 +31,18 @@ struct State {
 #[derive(Default)]
 pub(super) struct Watches(Mutex<State>);
 impl Watches {
+    #[cfg(test)]
+    pub(crate) fn observe_retirement(&self, watch_id: &str) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.0
+            .lock()
+            .unwrap()
+            .active
+            .get_mut(watch_id)
+            .unwrap()
+            .retirement_queued = Some(sender);
+        receiver
+    }
     pub fn close(&self) {
         let mut state = self.0.lock().expect("filesystem watches");
         state.closed = true;
@@ -85,6 +99,11 @@ impl Watches {
                 let armed = Arc::new(AtomicBool::new(false));
                 let active = armed.clone();
                 let retained_capacity=capacity.clone();
+                let recheck = Arc::new(tokio::sync::Notify::new());
+                let pending_recheck = recheck.clone();
+                let recheck_environment = environment.clone();
+                let recheck_path = authorized.clone();
+                let recheck_identity = expected.clone();
                 #[cfg(test)]
                 registration_phase(absolute, 1);
                 let watcher = native::Watcher::new(source, absolute.clone(), move |event: notify::Result<notify::Event>| {
@@ -102,6 +121,12 @@ impl Watches {
                     match native.try_metadata(authorized.to_str().expect("validated UTF-8 path")) {
                         Ok(metadata) if metadata.identity==expected=>{},
                         Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=> {
+                            // One pending permit coalesces native events. The
+                            // existing watch owner revisits identity after I/O,
+                            // even if this inode never produces another event.
+                            pending_recheck.notify_one();
+                            #[cfg(test)]
+                            recheck_scheduled(&authorized);
                             let _=output.emit_fenced(NotificationMethod::FsChanged(Changed {watch_id:identity.clone(),changed_paths:Vec::new(),resync_required:true,retired:false}),Some(stopped.clone()));
                             return;
                         },
@@ -125,29 +150,21 @@ impl Watches {
                 let mut state = owner.0.lock().expect("filesystem watches");
                 if state.closed || events.closed.is_cancelled() { return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "connection closed")); }
                 if state.active.len() >= 8 || state.active.contains_key(&watch_id) { return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "watch capacity or identity conflict")); }
-                state.active.insert(watch_id.clone(), Entry { watcher: Some(watcher), stop: stop.clone(), generation:generation.clone() });
+                state.active.insert(watch_id.clone(), Entry { watcher: Some(watcher), stop: stop.clone(), generation:generation.clone(), #[cfg(test)] retirement_queued: None });
                 drop(state);
                 armed.store(true,Ordering::Release);
                 let root_retired = root.cancelled.clone();
                 let registry = Arc::downgrade(&owner);
                 tokio::runtime::Handle::current().spawn(async move {
-                    let _capacity=capacity;
-                    tokio::select! { () = stop.cancelled() => return, () = events.closed.cancelled() => return, () = root_retired.cancelled() => {}, () = source_retired.cancelled() => {} }
-                    if let Some(owner) = registry.upgrade() {
-                        let watcher = {
-                            let mut state = owner.0.lock().expect("filesystem watches");
-                            state.active.get_mut(&watch_id).filter(|entry|Arc::ptr_eq(&entry.generation,&generation)).and_then(|entry|entry.watcher.take())
-                        };
-                        drop(watcher);
+                    let _capacity=capacity.clone();
+                    tokio::select! {
+                        () = stop.cancelled() => return,
+                        () = events.closed.cancelled() => return,
+                        () = root_retired.cancelled() => {},
+                        () = source_retired.cancelled() => {},
+                        () = source_identity_lost(recheck_environment, recheck_path, recheck_identity, recheck, capacity) => {},
                     }
-                    if let Ok(receipt) = events.emit_fenced(NotificationMethod::FsChanged(Changed { watch_id: watch_id.clone(), changed_paths: Vec::new(), resync_required: true, retired: true }),Some(stop.clone())) { let _ = events.emitted(receipt).await; }
-                    if let Some(owner) = registry.upgrade() {
-                        let removed = {
-                            let mut state = owner.0.lock().expect("filesystem watches");
-                            if state.active.get(&watch_id).is_some_and(|entry|Arc::ptr_eq(&entry.generation,&generation)) { state.active.remove(&watch_id) } else { None }
-                        };
-                        if let Some(entry) = removed { entry.stop.cancel(); }
-                    }
+                    retire_watch(registry, watch_id, generation, stop, events).await;
                 });
                 Ok(())
             }).map_err(super::connection::environment_error)
@@ -155,9 +172,143 @@ impl Watches {
     }
 }
 
+async fn retire_watch(
+    registry: std::sync::Weak<Watches>,
+    watch_id: String,
+    generation: Arc<()>,
+    stop: CancellationToken,
+    events: Arc<super::service_events::Events>,
+) {
+    if let Some(owner) = registry.upgrade() {
+        let watcher = {
+            let mut state = owner.0.lock().expect("filesystem watches");
+            state
+                .active
+                .get_mut(&watch_id)
+                .filter(|entry| Arc::ptr_eq(&entry.generation, &generation))
+                .and_then(|entry| entry.watcher.take())
+        };
+        drop(watcher);
+    }
+    if let Ok(receipt) = events.emit_fenced(
+        NotificationMethod::FsChanged(Changed {
+            watch_id: watch_id.clone(),
+            changed_paths: Vec::new(),
+            resync_required: true,
+            retired: true,
+        }),
+        Some(stop.clone()),
+    ) {
+        #[cfg(test)]
+        if let Some(owner) = registry.upgrade() {
+            let queued = owner
+                .0
+                .lock()
+                .unwrap()
+                .active
+                .get_mut(&watch_id)
+                .filter(|entry| Arc::ptr_eq(&entry.generation, &generation))
+                .and_then(|entry| entry.retirement_queued.take());
+            if let Some(queued) = queued {
+                let _ = queued.send(());
+            }
+        }
+        // Unwatch withdraws this fenced notice. It must also release its
+        // receipt wait when the live client no longer reads notifications.
+        tokio::select! {
+            () = stop.cancelled() => {},
+            _ = events.emitted(receipt) => {},
+        }
+    }
+    if let Some(owner) = registry.upgrade() {
+        let removed = {
+            let mut state = owner.0.lock().expect("filesystem watches");
+            if state
+                .active
+                .get(&watch_id)
+                .is_some_and(|entry| Arc::ptr_eq(&entry.generation, &generation))
+            {
+                state.active.remove(&watch_id)
+            } else {
+                None
+            }
+        };
+        if let Some(entry) = removed {
+            entry.stop.cancel();
+        }
+    }
+}
+
+async fn source_identity_lost(
+    environment: Arc<crate::local_runtime::environment::Environment>,
+    path: std::path::PathBuf,
+    expected: String,
+    pending: Arc<tokio::sync::Notify>,
+    capacity: Arc<tokio::sync::OwnedSemaphorePermit>,
+) {
+    loop {
+        pending.notified().await;
+        let native = environment.clone();
+        let path = path.clone();
+        let retained = capacity.clone();
+        let checked = tokio::task::spawn_blocking(move || {
+            // A cancelled observer still owns this physical check until it
+            // returns; Host teardown waits for the same capacity permit.
+            let _retained = retained;
+            #[cfg(test)]
+            recheck_phase(&path, 1);
+            native.with_paths(&[path.to_str().expect("validated UTF-8 path")], |paths| {
+                crate::local_runtime::environment::files::metadata(&paths[0].1, &paths[0].2)
+            })
+        })
+        .await;
+        if !matches!(checked, Ok(Ok(metadata)) if metadata.identity == expected) {
+            return;
+        }
+    }
+}
+
 fn relevant(event: &notify::Event) -> bool {
     event.need_rescan()
         || !matches!(event.kind, notify::EventKind::Access(kind) if !matches!(kind, notify::event::AccessKind::Close(notify::event::AccessMode::Write)))
+}
+
+#[cfg(test)]
+type RecheckHooks = BTreeMap<std::path::PathBuf, [Option<tokio::sync::oneshot::Sender<()>>; 2]>;
+#[cfg(test)]
+static RECHECKS: std::sync::LazyLock<Mutex<RecheckHooks>> =
+    std::sync::LazyLock::new(Mutex::default);
+#[cfg(test)]
+pub(crate) fn observe_recheck(path: std::path::PathBuf, sender: tokio::sync::oneshot::Sender<()>) {
+    RECHECKS.lock().unwrap().entry(path).or_default()[0] = Some(sender);
+}
+#[cfg(test)]
+pub(crate) fn observe_recheck_started(
+    path: std::path::PathBuf,
+    sender: tokio::sync::oneshot::Sender<()>,
+) {
+    RECHECKS.lock().unwrap().entry(path).or_default()[1] = Some(sender);
+}
+#[cfg(test)]
+fn recheck_scheduled(path: &std::path::Path) {
+    recheck_phase(path, 0);
+}
+#[cfg(test)]
+fn recheck_phase(path: &std::path::Path, phase: usize) {
+    let sender = {
+        let mut hooks = RECHECKS.lock().unwrap();
+        let sender = hooks.get_mut(path).and_then(|hooks| hooks[phase].take());
+        if hooks
+            .get(path)
+            .is_some_and(|hooks| hooks.iter().all(Option::is_none))
+        {
+            hooks.remove(path);
+        }
+        sender
+    };
+    if let Some(sender) = sender {
+        let _ = sender.send(());
+    }
 }
 
 #[cfg(test)]
