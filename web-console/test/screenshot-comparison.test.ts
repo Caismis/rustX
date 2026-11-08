@@ -136,31 +136,27 @@ it('A: an exact baseline passes with and without a noise policy', () => {
 
 it('the captured deletion-dialog raster difference admits only its 63 measured one-level sites', () => {
   const name = 'settings-delete-confirm-light-linux.png';
-  const entry = manifest.find(row => row.reference === name)!;
-  const expected = reference(name), actual = fixture(entry.capture!);
+  const entry = frozenManifest.find(row => row.reference === name)!;
+  const expected = fixture(name), actual = fixture(entry.capture!);
   const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-  const directory = snapshotDirectories.find(path => {
-    try { return hash(readFileSync(new URL(name, path))) === entry.referenceSha256; }
-    catch { return false; }
-  });
-  expect(directory).toBeDefined();
+  expect(hash(readFileSync(new URL(name, frozen)))).toBe(entry.referenceSha256);
   expect(hash(readFileSync(new URL(entry.capture!, frozen)))).toBe(entry.captureSha256);
   expect(entry.regions).toHaveLength(63);
   for (const region of entry.regions) expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 1 });
-  const accepted = compare(actual, name, expected, noisePolicy);
+  const accepted = compare(actual, name, expected, comparatorPolicy);
   expect(accepted.ok).toBe(true);
   expect(accepted.totalChanged).toBe(63);
   expect(compare(actual, name, expected, []).ok).toBe(false);
-  expect(compare(actual, 'another-reference.png', expected, noisePolicy).ok).toBe(false);
+  expect(compare(actual, 'another-reference.png', expected, comparatorPolicy).ok).toBe(false);
   const measured = entry.pixels as MeasuredNoisePixel[];
   const [x, y] = measured[0]!;
   const excessive = copy(expected); nudge(excessive, x, y, 2);
-  expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
   const observed = new Set(measured.map(([px, py]) => `${px},${py}`));
   const neighbor = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].find(([px, py]) => !observed.has(`${px},${py}`))!;
   for (const [px, py] of [neighbor, [670, 584], [0, 0]]) {
     const changed = copy(expected); nudge(changed, px!, py!, 1);
-    const rejected = compare(changed, name, expected, noisePolicy);
+    const rejected = compare(changed, name, expected, comparatorPolicy);
     expect(rejected.ok).toBe(false);
     expect(rejected.changedOutsideRegions).toBe(1);
   }
@@ -363,21 +359,21 @@ it('Settings conflict disclosure glyph edges admit only their ten measured blue-
 });
 
 it.each(['light', 'dark'])('the %s narrow model input corners admit only their four measured pixels within individual deltas', theme => {
-  const name = `model-advanced-${theme}-390-linux.png`, expected = reference(name);
-  const entry = noisePolicy.find(row => row.reference === name)!;
+  const name = `model-advanced-${theme}-390-linux.png`, expected = fixture(name);
+  const entry = comparatorPolicy.find(row => row.reference === name)!;
   expect(entry.regions.map(region => [region.x, region.y, region.width, region.height, region.maxChangedPixels, region.maxChannelDelta]))
     .toEqual([[34, 348, 1, 1, 1, 1], [35, 348, 1, 1, 1, 3], [34, 349, 1, 1, 1, 1], [34, 447, 1, 1, 1, 1]]);
   const actual = copy(expected);
   for (const [x, y, , after] of entry.pixels as MeasuredNoisePixel[]) paint(actual, x, y, after);
-  expect(compare(actual, name, expected, noisePolicy).ok).toBe(true);
-  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+  expect(compare(actual, name, expected, comparatorPolicy).ok).toBe(true);
+  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, comparatorPolicy).ok).toBe(false);
   for (const region of entry.regions) {
     const excessive = copy(expected); nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
-    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
   }
   for (const [x, y] of [[33, 348], [36, 348], [34, 347], [34, 446], [34, 448], [0, 0]]) {
     const outside = copy(actual); nudge(outside, x, y, 1);
-    const result = compare(outside, name, expected, noisePolicy);
+    const result = compare(outside, name, expected, comparatorPolicy);
     expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
   }
 });

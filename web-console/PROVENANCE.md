@@ -1,3 +1,13 @@
+## Primary navigation selection (2026-11-08)
+
+Selected primary navigation buttons use the existing active background token
+and rounded shape, without the inset leading marker. Hover and keyboard-focus
+styles remain separate. Affected shell references are recaptured in the pinned
+browser. Earlier deletion-dialog and narrow Model-dialog references and their
+measured raster noise move to the frozen comparator fixtures; the new live
+references are strict.
+No upstream code, assets, dependencies or native behavior change.
+
 ## Combined-shell reference verification (2026-11-07)
 
 The UI-experience branch incorporates main's dual-sidebar shell. Nineteen
