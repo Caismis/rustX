@@ -25,7 +25,6 @@ export function ModelFields({ form, duplicate }: { form: TypedForm<Model>; dupli
           : Number(value) >= Number(form.state.values.context_window) ? message('settings:models.output-context-limit') : undefined} />
     </div>
     <Advanced title={tx('settings:models.advanced')}>
-    <Text form={form} name="provider" label={tx('settings:models-page.provider-identity')} required />
     <InputModalities form={form} />
     <Bool form={form} name="capabilities.json_schema_output" label={tx('settings:models-page.json-schema-output')} />
     <Profiles key={resets} form={form} modelParameters={modelParameters} />

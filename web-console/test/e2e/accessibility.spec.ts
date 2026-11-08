@@ -56,7 +56,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByRole('button', { name: 'Connection', exact: true })); await page.keyboard.press('Enter');
     await tabTo(page.getByLabel('Connection mode')); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
     await tabTo(page.getByLabel('WebSocket endpoint')); await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.type(fixture.endpoint);
-    await tabTo(page.getByLabel('Transport token')); await page.keyboard.type(fixture.token);
+    await tabTo(page.getByLabel('Access token')); await page.keyboard.type(fixture.token);
     await tabTo(page.getByRole('button', { name: 'Connect', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await tabTo(page.getByRole('button', { name: 'Home', exact: true })); await page.keyboard.press('Enter');
@@ -109,16 +109,16 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     const endpoint = settings.getByLabel('Base URL', { exact: true });
     await tabTo(endpoint); await expect(endpoint).toBeFocused();
     await page.keyboard.press('End'); await page.keyboard.type('/draft-only');
-    // A select opens and closes from the keyboard without changing the value.
-    const credential = settings.getByRole('button', { name: /Credential source$/ });
+    // The advanced connection options disclosure opens from the keyboard.
+    const options = settings.getByRole('button', { name: 'Connection options', exact: true });
+    await tabTo(options); await page.keyboard.press('Enter');
+    await expect(options).toHaveAttribute('aria-expanded', 'true');
+    // A select opens and closes without changing the credential source.
+    const credential = settings.getByRole('button', { name: /API Key source$/ });
     await tabTo(credential); await page.keyboard.press('Enter');
     await expect(page.getByRole('listbox')).toBeVisible();
     await page.keyboard.press('Escape'); await expect(page.getByRole('listbox')).toHaveCount(0);
     await expect(credential).toBeFocused();
-    // A disclosure toggles from the keyboard.
-    const revision = settings.getByRole('form', { name: 'Provider fixture', exact: true }).getByRole('button', { name: 'Configuration details', exact: true });
-    await tabTo(revision); await page.keyboard.press('Enter');
-    await expect(revision).toHaveAttribute('aria-expanded', 'true');
     // A destructive action opens a modal confirmation that holds focus, is
     // dismissed with Escape without writing, and returns focus to its trigger.
     const remove = settings.getByRole('button', { name: 'Remove Provider fixture', exact: true });

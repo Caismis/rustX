@@ -26,7 +26,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const connect = async () => {
     await connectRemote(page, `${fixture.endpoint}/`, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
   };
   const openSession = async (id: string) => {
     await page.locator(`button[data-session-id="${id}"]`).click();
@@ -64,7 +64,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await defaultModel.getByRole('button', { name: 'Save Default model', exact: true }).click();
     await expect(settings.getByText('Default model saved.')).toBeVisible();
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await confirmSettingsAction(page, 'Use global default Default model');
@@ -90,7 +90,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await connectionAction(page, 'Disconnect');
     await expect(page.locator('button[data-phase=disconnected]')).toBeVisible();
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await expect.poll(() => selectedTarget(page, wire)).toMatchObject({
@@ -144,7 +144,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await fixture.control('observations/await?kind=response_completed&count=7&timeoutMs=30000');
     await remote.shutdown(); remote = undefined;
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await openQuestionnaire(page);
     await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit', exact: true }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
@@ -157,7 +157,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await settings.getByRole('button', { name: 'Back to Advanced', exact: true }).click();
     await openSettingsPage(page, 'Advanced');
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     await returnHome(page);
     await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.model?.configured.model).toBe('fixture/console-model');
     // The fixed 32-row native tail excludes A's earliest response after the

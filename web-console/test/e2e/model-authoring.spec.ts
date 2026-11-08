@@ -56,11 +56,12 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await expect(settings.getByRole('alert')).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('first-model');
     expect(readFileSync(fixture.settings, 'utf8').split('[models.')[1]).not.toContain('protocol =');
-    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toContainText('openai_responses');
+    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).not.toContainText('openai_responses');
     await choose(provider, 'API format', 'OpenAI Chat Completions (/v1/chat/completions)');
     await provider.getByRole('button', { name: 'Save Provider custom', exact: true }).click();
     await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeDisabled();
-    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toContainText('openai_chat_completions');
+    expect(readFileSync(fixture.settings, 'utf8').split('[models.')[0]).toContain('protocol = "openai_chat_completions"');
+    await expect(provider.getByRole('button', { name: /API format$/ })).toContainText('OpenAI Chat Completions');
 
 
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();

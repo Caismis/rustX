@@ -33,7 +33,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
     writeFileSync(mcpFile, '[mcp_servers.implicit-http]\nurl = "https://example.invalid/mcp"\nheaders = { Authorization = "fixture-header-secret" }\n[mcp_servers.implicit-stdio]\ncommand = "fixture-not-executed"\nenv = { TOKEN = "fixture-env-secret" }\n');
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -112,7 +112,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
     expect(mcp).toContain('fixture-header-secret'); expect(mcp).toContain('fixture-env-secret');
     expect(mcp).not.toMatch(/^type\s*=/m);
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     expect(errors).toEqual([]);
   } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

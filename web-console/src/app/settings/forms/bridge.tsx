@@ -9,10 +9,10 @@ import { useSettingsActor, useUnitTransaction } from '../machines/react';
 import { admitsSourceMutation, committedUnit, unitOutcome, type MutationOutcome } from '../machines/settings-target';
 import { awaitingCommitObservation, committed as unitCommitted, discardable, requiresReview } from '../machines/unit-transaction';
 import {
-  authoredStateLabel, effectiveStateLabel, provenanceLabel, revisionSelector, shadowedDefinition, unitFacts, unitOwnership,
+  revisionSelector, shadowedDefinition, unitFacts, unitOwnership,
   type ShadowedDefinition,
 } from '../projection';
-import { Advanced, ConfirmAction } from '../primitives/aria';
+import { ConfirmAction } from '../primitives/aria';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** The typed form instance of one semantic unit's editor.
@@ -308,9 +308,6 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
    * focus settles on the card itself, which stays mounted and enabled through
    * the whole write. */
   const card = useRef<HTMLFormElement>(null);
-  const preserved = unit.draft ? tx('settings:copy.your-draft-and-original-revision-are-preserved')
-    : unit.committed ? tx('settings:copy.your-committed-revision-is-no-longer-the-current-source')
-      : tx('settings:copy.your-removal-and-its-original-revision-are-preserved');
   // A Workspace removal restores what it shadows: a semantic unit always has an
   // inherited value, and a resource definition has one exactly when a User
   // definition of the same identity exists. Removing a Workspace definition
@@ -322,16 +319,17 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           // unit this Workspace authors, through exact CAS, and the native
           // inherited value becomes effective again. The effective resource
           // survives, so this is never presented as deleting it.
-          ? <span data-removal="override-removal"><ConfirmAction tone="restore" label={tx('settings:bridge.use-global-default-value', { p0: title })} triggerText={presentation ? tx('settings:models.restore') : undefined} disabled={!unit.admitted}
+          ? <span data-removal="override-removal"><ConfirmAction tone="restore" label={tx('settings:bridge.use-global-default-value', { p0: title })} triggerText={tx('settings:models.restore')} disabled={!unit.admitted}
             title={tx('settings:bridge.use-the-global-default-for-value', { p0: title })} confirm={tx('settings:bridge.use-global-default-value', { p0: title })}
-            description={<><p>{tx('settings:bridge.this-removes-the-semantic-unit-this-workspace-authors-through-ex')}</p><p>{tx('settings:bridge.nothing-is-removed-from-the-global-source-and-no-other-scope-is')}</p></>}
+            description={tx('settings:forms.restore-help')}
             settle={card} onConfirm={() => unit.submit(true)} /></span>
           // Otherwise the removal really removes this scope's authored unit.
-          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={tx('settings:bridge.remove-value', { p0: title })} triggerText={presentation ? tx('settings:copy.delete') : undefined} disabled={!unit.admitted}
+          : <span data-removal="authored-removal"><ConfirmAction tone="destructive" label={tx('settings:bridge.remove-value', { p0: title })} triggerText={unit.configUnit && !presentation ? tx('settings:forms.reset-default') : tx('settings:copy.delete')} disabled={!unit.admitted}
             title={tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: owner })} confirm={tx('settings:bridge.remove-value', { p0: title })}
-            description={<><p>{tx('settings:bridge.this-removes-the-value-this')}{' '}{owner} {tx('settings:bridge.source-authors-through-exact-cas-on-its-current-revision')}</p>{removalNotice ?? <p>{tx('settings:bridge.the-native-default-for-this-unit-applies-once-it-is-absent')}</p>}</>}
+            description={removalNotice ?? tx(unit.configUnit && !presentation ? 'settings:forms.reset-help' : 'settings:forms.delete-help')}
             settle={card} onConfirm={() => unit.submit(true)} /></span>);
   return <UnitReset.Provider value={unit.resets}><form ref={card} tabIndex={-1} aria-label={title} className={`${css.unit}${presentation ? ` ${presentation === 'dialog' ? css.unitDialog : css.unitResource}` : ''}`} data-definition={unit.definition} data-draft={unit.draft || undefined}
+    data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}
     data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
     onSubmit={event => { event.preventDefault(); if (onSubmit) onSubmit(); else unit.submit(); }}>
     <fieldset disabled={unit.busy || unavailable}><legend>{title}</legend>
@@ -341,47 +339,38 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         {unit.facts.authored.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.authored-source-is-invalid')}{' '}{unit.facts.authored.diagnostic}</p>}
         {unit.facts.effective.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.native-effective-resolution-failed')}{' '}{unit.facts.effective.diagnostic}</p>}
       </>}
-      {redacted && <p className={css.hint}>{tx('settings:bridge.the-authored-value-is-never-projected-to-the-browser-saving-repl')}</p>}
-      {unit.definition && (!presentation || unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit} owner={owner} />}
+      {redacted && <p className={css.hint}>{tx('settings:forms.secret-replacement')}</p>}
+      {unit.definition && (!presentation || unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit} />}
       {/* Inspecting an inherited definition shows its safe native facts in the
           same fields, and none of them is writable until the explicit
           override transition. */}
       <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
-      <Advanced title={tx('settings:bridge.source-revision-replacement')}>
-        {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <p className={css.hint} data-authored={unit.facts.authored.state} data-effective={unit.facts.effective.state}>
-          {authoredStateLabel(tx, unit.facts.authored, unit.scope)} · {effectiveStateLabel(tx, unit.facts.effective)} · {provenanceLabel(tx, unit.facts.origin)}
-        </p>}
-        {unit.inheritance && <Advanced title={tx('settings:bridge.native-resolved-value-not-session-adoption')}>
-          <pre>{unit.facts.effective.state === 'available' ? JSON.stringify(unit.facts.effective.value, null, 2) : effectiveStateLabel(tx, unit.facts.effective)}</pre>
-        </Advanced>}
-        <p className={css.hint}>{tx('settings:bridge.draft-base-revision')}{' '}{unit.base}<br />{tx('settings:bridge.current-revision')}{' '}{unit.observed}</p>
-        <p>{tx('settings:bridge.save-replaces-this-native-semantic-unit-remove-omits-it-from-thi')}</p>
-      </Advanced>
-      {unit.reviewNeeded && <div className={css.review}>
-        <p role="status">{tx('settings:bridge.source-revision-changed')}{' '}{preserved} {tx('settings:bridge.review-the-current-source-before-replacing-it')}</p>
+      {unit.reviewNeeded && unit.outcome.kind !== 'conflict' && <div className={css.review}>
+        <p role="status">{tx('settings:forms.changed-elsewhere')}</p>
       </div>}
       {/* Two different facts, reported separately: the native write is
           definitively committed, and the authoritative reread that settles it
           has been observed. Neither is ever presented as the other. Both sit
           above the actions, which close the card. */}
-      {unit.committed && presentation !== 'resource' && <p role="status">{tx('settings:bridge.saved-native-application-proceeds-automatically')}</p>}
+      {unit.awaitingObservation && <p role="status">{tx('settings:forms.saved-refreshing')}</p>}
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       {presentation === 'dialog' && removal && <div className={css.unitRemoval}>{removal}</div>}
       </div>
       <div className={css.actions}>
-        <Button variant="primary" type="submit" aria-label={`${tx('settings:bridge.save')} ${title}`} disabled={!unit.draft || !unit.admitted}>{tx('settings:bridge.save')}{!presentation && <> {title}</>}</Button>
+        <Button variant="primary" type="submit" aria-label={`${tx('settings:bridge.save')} ${title}`} disabled={!unit.draft || !unit.admitted}>{tx('settings:bridge.save')}</Button>
         {/* Authoring an absent unit is always an explicit gesture, never
             something rendering it does. For a Workspace it is an override of
             the inherited value; for User it starts this scope's own authored
             value from the neutral seed. It is what makes an explicit empty
             selection authorable without an incidental edit. */}
         {unit.override && <Button type="button" variant="primary"
+          aria-label={`${tx('settings:bridge.override')} ${title} ${tx('settings:bridge.in-this-workspace')}`}
           title={tx('settings:bridge.begin-a-workspace-definition-of-value-from-the-inherited-one-not', { p0: title })}
-          disabled={unit.awaitingObservation} onClick={unit.override}>{tx('settings:bridge.override')}{' '}{title} {tx('settings:bridge.in-this-workspace')}</Button>}
-        {unit.configUnit && !unit.overriding && (!presentation || unit.inheritance) && <Button type="button" disabled={unit.awaitingObservation}
+          disabled={unit.awaitingObservation} onClick={unit.override}>{tx('settings:forms.customize')}</Button>}
+        {unit.configUnit && !unit.authoredPresent && !unit.intent && !unit.overriding && (!presentation || unit.inheritance) && <Button type="button" disabled={unit.awaitingObservation}
           aria-label={`${workspace ? tx('settings:bridge.override') : tx('settings:bridge.author')} ${title}`}
           title={workspace ? tx('settings:bridge.author-this-unit-in-this-workspace-nothing-is-written-until-you') : tx('settings:bridge.author-this-unit-in-this-source-nothing-is-written-until-you-sav')}
-          onClick={() => unit.edit(unit.displayed)}>{workspace ? tx('settings:bridge.override') : tx('settings:bridge.author')}{!presentation && <> {title}</>}</Button>}
+          onClick={() => unit.edit(unit.displayed)}>{tx('settings:forms.customize')}</Button>}
         {presentation !== 'dialog' && removal}
         {(unit.intent || presentation === 'dialog') && <Button type="button" disabled={!unit.intent} onClick={unit.discard}>{presentation === 'dialog' ? tx('settings:models.reset-form') : tx('settings:bridge.discard-draft')}</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
@@ -393,29 +382,16 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
 
 /** What one whole-identity resource definition is in this scope, worded for
  * exactly its lifecycle state. */
-function DefinitionNotice<T>({ unit, owner }: { unit: UnitEditing<T>; owner: string }) {
+function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
   const tx = useTranslation();
   const shadowed = unit.shadowed;
-  const withheld = shadowed && shadowed.withheld.length > 0 && <p className={css.hint}>
-    {tx('settings:bridge.the-user-definition-holds-literal-values-for')}{' '}{shadowed.withheld.join(', ')}{tx('settings:bridge.native-never-projects-them-so-an-override-does-not-copy-them-ent')}</p>;
-  switch (unit.definition) {
-    case 'new': return <p role="status" data-definition-state="new">{tx('settings:bridge.new')}{' '}{owner} {tx('settings:bridge.definition-nothing-is-written-until-you-save')}</p>;
-    case 'inherited': return <>
-      <p role="status" data-definition-state="inherited">{tx('settings:bridge.inherited-from-user')}{shadowed!.path}{tx('settings:bridge.this-workspace-authors-no-definition-so-these-fields-are-read-on')}</p>
-      {shadowed!.seed === undefined && <p role="status">{tx('settings:bridge.the-user-definition-s-content-is-not-available-to-this-browser-s')}</p>}
-      {shadowed!.diagnostic && <p role="alert" className={css.error}>{shadowed!.diagnostic}</p>}
-      {withheld}
-    </>;
-    case 'overriding': return <>
-      <p role="status" data-definition-state="overriding">{tx('settings:bridge.workspace-override-draft-saving-creates-a-workspace-definition-t')}</p>
-      {withheld}
-    </>;
-    case 'authored': return <p role="status" data-definition-state="authored">
-      {owner} {tx('settings:extension-detail.definition')}{shadowed ? tx('settings:bridge.overrides-the-user-definition-of-the-same-identity') : ''}.
-      {unit.unparsed && <> {' '}{tx('settings:bridge.its-file-does-not-parse-so-no-field-shows-its-content-saving-rep')}</>}
-    </p>;
-    default: return null;
-  }
+  return <>
+    {unit.definition === 'inherited' && <p role="status" data-definition-state="inherited">{tx('settings:forms.using-global')}</p>}
+    {unit.definition === 'inherited' && shadowed?.diagnostic && <p role="alert" className={css.error}>{shadowed.diagnostic}</p>}
+    {unit.definition === 'overriding' && <p role="status" data-definition-state="overriding">{tx('settings:forms.workspace-customization')}</p>}
+    {!!shadowed?.withheld.length && <p className={css.hint}>{tx('settings:forms.reenter-secrets', { names: shadowed.withheld.join(', ') })}</p>}
+    {unit.unparsed && <p role="status" data-definition-state="authored">{tx('settings:forms.unreadable')}</p>}
+  </>;
 }
 
 /** One native semantic unit's own outcome, named so it can never be read as a

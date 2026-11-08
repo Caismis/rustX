@@ -45,6 +45,5 @@ export function AgentPage({ document, revision }: { document: RuntimeLayer; scop
       </>}
     </UnitForm>
 
-    <p className={css.hint}>{tx('settings:agent-page.named-agents-are-separate-resources-with-their-own-definitions-m')}</p>
   </section>;
 }

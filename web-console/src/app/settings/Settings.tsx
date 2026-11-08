@@ -203,8 +203,8 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
       repairFocused={focus.advanced?.kind === 'auto_repair'}
       inspection={inspection}
       repairPresented={observed && targetValid ? receiptId => navigation.send({ type: 'INSPECTED', receiptId, source: scope === 'user' ? { kind: 'user' } : observed.target }) : undefined}
-      closed={<MalformedNotice config={config} diagnostic={false} />}
-      processPolicyImpacts={source.process_policy_impacts} busy={busy} targetValid={targetValid} />}
+      closed={<MalformedNotice config={config} />}
+      busy={busy} targetValid={targetValid} />}
     {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
         current revision. It exists only while the source contract is invalid. */}
     {config.state === 'malformed' && current !== 'extensions' && current !== 'mcp' && <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={config.revision} removable={false}
@@ -258,17 +258,14 @@ function SourcePending({ lifecycle }: { lifecycle: ReturnType<typeof settingsLif
   return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}><p>{text}</p></div>;
 }
 
-/** A document that does not parse is named with the native reason it failed,
- * because that reason is what the repair below has to address. Advanced
- * reports that reason with its other native diagnostics instead. */
-function MalformedNotice({ config, diagnostic = true }: {
+/** Keep the actual parse error next to the configuration repair action. */
+function MalformedNotice({ config }: {
   config: { state: 'malformed'; path: string; diagnostic?: string } | { state: 'structured' } | { state: 'unavailable' };
-  diagnostic?: boolean;
 }) {
   const tx = useTranslation();
   if (config.state !== 'malformed') return null;
   return <>
     <p role="status">{tx('settings:settings.structured-editing-is-unavailable-because')}{' '}{config.path} {tx('settings:settings.violates-the-source-contract-repair-it-to-edit-again')}</p>
-    {diagnostic && <p role="alert" className={css.error}>{config.diagnostic ?? tx('settings:source.not-loaded')}</p>}
+    <p role="alert" className={css.error}>{config.diagnostic ?? tx('settings:source.not-loaded')}</p>
   </>;
 }

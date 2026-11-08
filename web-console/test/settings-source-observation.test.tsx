@@ -1,3 +1,4 @@
+import { settingsContext } from './settings-harness';
 import {applicationReceipt} from './fixture';
 import { materializeSource } from '../../protocol/app-server/source-observation';
 import { sourceReceipt } from './fixture';
@@ -6,7 +7,7 @@ import { boundedSettings } from "./fixture";
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v76';
-import { findOnAdvanced, openSettingsPage, queryOnAdvanced, settingsReady, SettingsSurface } from './settings-harness';
+import { waitForSettingsRevision, openSettingsPage, observedRevision, settingsReady, SettingsSurface } from './settings-harness';
 import { RpcFailure } from '../src/client/errors';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ProductHostWorkspaces, WorkspaceConfigurationReread } from '../src/workspaces/host';
@@ -49,7 +50,7 @@ async function open(native: Native) {
   // policy and the raw projections are all diagnostics, so Advanced is where
   // these observation-ordering regressions do their work.
   await openSettingsPage('Advanced');
-  await screen.findByText(new RegExp(`Revision: ${native.revision}`));
+  await waitForSettingsRevision(`${native.revision}`);
   return s;
 }
 const sent = (s: Server, method: Request['method']) => s.requests.filter(item => item.request.method === method).map(item => item.request);
@@ -69,7 +70,7 @@ async function settleReads(s: Server, from = 1) {
   for (const read of sent(s, 'configuration/sourcesRead').slice(from)) await deliver(s, read);
 }
 /** The authoritative native process-binding projection, not a status label. */
-const bindings = () => JSON.parse(screen.getByRole('heading', { name: 'Process bindings' }).nextElementSibling!.textContent!) as { max_connections: number };
+const bindings = () => settingsContext().observation!.process_bindings!;
 /** Root guidance lives on Agent; process policy and diagnostics on Advanced.
  * Each helper selects its page first, so a test reads a control where the
  * product actually puts it. */
@@ -77,15 +78,15 @@ const agentPage = () => { fireEvent.click(screen.getByRole('tab', { name: 'Agent
 /** Advanced is the diagnostics surface; selecting it is idempotent. */
 const diagnostics = () => { fireEvent.click(screen.getByRole('tab', { name: 'Advanced' })); };
 /** The whole accepted projection, exposed only by the Advanced diagnostics. */
-const acceptedProjection = () => JSON.parse(screen.getByLabelText('Source and application projection').textContent!) as SourceSettings;
+const acceptedProjection = () => settingsContext().observation!;
 /** Save 19 with the acknowledgement held, freezing the projection the App Server
  * captured while application was still preparing, then complete application. */
 async function saveHeldWrite(s: Server, native: Native) {
   // The App Server process policy is a User-only advanced unit.
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; native.application = native.applied('1', 'preparing');
   s.commit(write);
@@ -95,7 +96,7 @@ async function saveHeldWrite(s: Server, native: Native) {
 async function expectApplied(after: () => void = () => {}) {
   diagnostics(); after();
   await waitFor(() => expect(bindings().max_connections).toBe(19));
-  expect(screen.getByText('Saved process policy is active.')).toBeTruthy();
+  expect(acceptedProjection().application?.units.process_bindings?.status).toBe('applied');
 }
 
 it('S1 a newer applied notification preceding an older preparing acknowledgement still converges', async () => {
@@ -139,7 +140,7 @@ it('S3 an accepted newer application observation is not regressed by a late ackn
   await settleReads(s, 2);
   await screen.findByText(/saved\./);
   expect(bindings().max_connections).toBe(19);
-  expect(screen.getByText('Saved process policy is active.')).toBeTruthy();
+  expect(acceptedProjection().application?.units.process_bindings?.status).toBe('applied');
 });
 
 it('S4 the acknowledgement-first order converges under the same observation model', async () => {
@@ -156,14 +157,14 @@ it('S4 the acknowledgement-first order converges under the same observation mode
 
 it('S5 automatic convergence never replays the write or rewrites an unsaved draft', async () => {
   const native = new Native(); const s = await open(native);
-  fireEvent.change(agentPage().getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.change(agentPage().getByRole('textbox', { name: 'Description' }), { target: { value: 'unsaved draft' } });
   const write = await saveHeldWrite(s, native);
   await publish(s, native.applied('2', 'applied'));
   await deliver(s, write);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeGreaterThan(2));
   await settleReads(s);
   await expectApplied();
-  expect((agentPage().getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect((agentPage().getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('unsaved draft');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   // Convergence is bounded by the versions actually published, never a poll.
   expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(3);
@@ -174,8 +175,8 @@ it('S6 a publication arriving during an outstanding convergence read still drive
   const native = new Native(); native.application = native.applied('1', 'applied');
   const s = await open(native); // settles at application 1
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   // Native commits the write and republishes application 2, still preparing.
   native.revision = 'user-2'; native.application = native.applied('2', 'preparing');
@@ -208,12 +209,12 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   const native = new Native(); native.application = native.applied('7', 'applied');
   const s = await open(native);
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
+  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
   // An explicit authoritative read is outstanding before the save starts.
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   const read = sent(s, 'configuration/sourcesRead')[1];
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   // The acknowledgement captured revision B at application version 7.
   native.revision = 'user-2'; native.description = 'revision B';
@@ -224,18 +225,18 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   native.revision = 'user-3'; native.description = 'revision C';
   s.commit(read); // The authoritative read observes C at the same version 7.
   await deliver(s, read);
-  await findOnAdvanced(/Revision: user-3/);
+  await waitForSettingsRevision('user-3');
   // The delayed equal-version acknowledgement cannot restore B over the
   // causally later authoritative read.
   await deliver(s, write);
-  expect(queryOnAdvanced(/Revision: user-3/)).toBeTruthy();
+  expect(observedRevision('user-3')).toBeTruthy();
   // The acknowledgement settles its save exactly once, after the bounded
   // post-commit authoritative read owed by that commit.
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(3));
   await settleReads(s, 2);
   await screen.findByText(/saved\./);
-  expect(queryOnAdvanced(/Revision: user-3/)).toBeTruthy();
-  expect((agentPage().getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('revision C');
+  expect(observedRevision('user-3')).toBeTruthy();
+  expect((agentPage().getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('revision C');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
 });
@@ -244,14 +245,14 @@ it('S8 a write acknowledgement cannot cancel an outstanding newer-authority read
   const native = new Native(); native.application = native.applied('1', 'applied');
   const s = await open(native);
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
+  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
   // Native publishes application 2; the convergence read starts and is frozen.
   native.application = native.applied('2', 'preparing');
   await publish(s, native.applied('2', 'preparing'));
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   const read = sent(s, 'configuration/sourcesRead')[1];
   // The older acknowledgement lands while that read is outstanding.
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; s.commit(write); // captured before application 3
   // Native settles at application 3 while the read is outstanding; the
@@ -331,10 +332,10 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   const ui = render(<SettingsSurface client={s.client} target={userSettingsTarget} host={host} />);
   await settingsReady();
   await openSettingsPage('Advanced');
-  await findOnAdvanced(/Revision: user-1/);
+  await waitForSettingsRevision('user-1');
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; native.application = native.applied('2', 'preparing');
   s.commit(write);
@@ -345,13 +346,13 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   ui.rerender(<SettingsSurface client={s.client} target={workspaceSettingsTarget('workspace-a', 'Workspace A')} host={host} />);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(3));
   await deliver(s, sent(s, 'configuration/sourcesRead')[2]);
-  await findOnAdvanced(/Revision: ws-1/);
+  await waitForSettingsRevision('ws-1');
   const reads = sent(s, 'configuration/sourcesRead').length;
   // Stale continuations from the replaced lifetime cannot land or re-arm.
   await deliver(s, staleRead);
   await deliver(s, write);
-  expect(queryOnAdvanced(/Revision: user-2/)).toBeNull();
-  expect(queryOnAdvanced(/Revision: ws-1/)).toBeTruthy();
+  expect(observedRevision('user-2')).toBeNull();
+  expect(observedRevision('ws-1')).toBeTruthy();
   expect(screen.queryByText(/saved\./)).toBeNull();
   expect(sent(s, 'configuration/sourcesRead').length).toBe(reads);
   // The replacement lifetime still converges on its own publications.
@@ -359,7 +360,7 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   await publish(s, workspaceApplication);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(reads + 1));
   await settleReads(s, reads);
-  await findOnAdvanced(/Revision: ws-1/);
+  await waitForSettingsRevision('ws-1');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
 });
 
@@ -377,8 +378,8 @@ it('S11 a superseded convergence worker transfers a publication that arrived beh
   const r1 = sent(s, 'configuration/sourcesRead')[1];
   s.commit(r1);
   // Step 3: deliver the successful sourceWrite acknowledgement.
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2';
   s.commit(write);
@@ -401,7 +402,7 @@ it('S11 a superseded convergence worker transfers a publication that arrived beh
   await screen.findByText(/saved\./);
   diagnostics();
   expect(acceptedProjection().application?.version).toBe('2');
-  expect(screen.queryByText('Saved process policy is active.')).toBeNull();
+  expect(acceptedProjection().application?.units.process_bindings?.status).not.toBe('applied');
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(4));
   // Step 7: release the cancelled R1. It can neither discharge v3, nor publish
   // a projection, nor arm another read.
@@ -412,7 +413,7 @@ it('S11 a superseded convergence worker transfers a publication that arrived beh
   await expectApplied();
   expect(acceptedProjection().application?.version).toBe('3');
   expect(bindings().max_connections).toBe(19);
-  expect(screen.getByText('Saved process policy is active.')).toBeTruthy();
+  expect(acceptedProjection().application?.units.process_bindings?.status).toBe('applied');
   // Exactly one write, no replay, one read per real obligation, nothing after.
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBe(4);
@@ -460,27 +461,27 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
   };
   await s.connect();
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
-  await findOnAdvanced(/Revision: ws-A/);
+  await waitForSettingsRevision('ws-A');
   // B and C will both settle at application version 2; only the authored
   // revision distinguishes them.
   application = { ...cfg3SourceApplication(target), version: '2' };
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
   await capturedB;
   // Step: external authority advances to C while the write response is held.
   revision = 'ws-C';
   await publish(s, { ...cfg3SourceApplication(target), version: '2' });
-  await findOnAdvanced(/Revision: ws-C/);
+  await waitForSettingsRevision('ws-C');
   // Step: release the held response carrying the equal-version reread B.
   releaseWrite();
   await screen.findByText(/saved\./);
   // The newer accepted projection C is never regressed by the late, stale B.
-  expect(queryOnAdvanced(/Revision: ws-C/)).toBeTruthy();
-  expect(queryOnAdvanced(/Revision: ws-B/)).toBeNull();
+  expect(observedRevision('ws-C')).toBeTruthy();
+  expect(observedRevision('ws-B')).toBeNull();
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   // No replay, and convergence stays bounded to the real commit obligation.
-  await waitFor(() => expect(queryOnAdvanced(/Revision: ws-C/)).toBeTruthy());
+  await waitFor(() => expect(observedRevision('ws-C')).toBeTruthy());
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(5);
 });
@@ -543,11 +544,11 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   await s.connect();
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
   // Step 1: Workspace Settings is open at revision A.
-  await findOnAdvanced(/Revision: ws-A/);
+  await waitForSettingsRevision('ws-A');
   // Step 2: a Workspace save whose write-owned reread captured revision B.
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
   // Step 3: hold the write response carrying that reread.
   await captured.reached;
   // Step 4/5: a newer authoritative read N+1 is initiated and stays pending. It
@@ -564,8 +565,8 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   // Step 7: B is not adopted merely because N+1 has not completed yet, and the
   // saved notice waits for the read that actually owns the read sequence rather
   // than racing it with a redundant read of its own.
-  expect(queryOnAdvanced(/Revision: ws-B/)).toBeNull();
-  expect(queryOnAdvanced(/Revision: ws-A/)).toBeTruthy();
+  expect(observedRevision('ws-B')).toBeNull();
+  expect(observedRevision('ws-A')).toBeTruthy();
   // The commit is definitive, but the saved notice is truthful only against the
   // projection this presentation is actually showing, so it waits for the read
   // that owns the read sequence instead of racing it with a redundant one.
@@ -581,8 +582,8 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   expect(screen.getByText(/authoritative read unavailable/)).toBeTruthy();
   await screen.findByText(/saved\./);
   // Step 10: the older B projection never became authoritative presentation.
-  expect(queryOnAdvanced(/Revision: ws-B/)).toBeNull();
-  expect(queryOnAdvanced(/Revision: ws-A/)).toBeTruthy();
+  expect(observedRevision('ws-B')).toBeNull();
+  expect(observedRevision('ws-A')).toBeTruthy();
   // Steps 11/12: exactly one source write, no replay, and the still-unobserved
   // commit drives at most one more bounded convergence read.
   await flush();
@@ -614,10 +615,10 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
   };
   await s.connect();
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
-  await findOnAdvanced(/Revision: ws-A/);
+  await waitForSettingsRevision('ws-A');
   fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
   fireEvent.click(screen.getByLabelText('read'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
   await captured.reached;
   // A newer authoritative read is initiated and held pending.
   s.held.add('configuration/sourcesRead');
@@ -642,7 +643,7 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
   await settleReads(s, 1);
   await screen.findByText(/saved\./);
   expect(screen.queryByText(/Saved, but the authoritative reread failed/)).toBeNull();
-  await waitFor(() => expect(queryOnAdvanced(/Revision: ws-B/)).toBeTruthy());
+  await waitFor(() => expect(observedRevision('ws-B')).toBeTruthy());
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(4));
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
 });
@@ -661,7 +662,7 @@ it('MCP refresh is one read and an unrelated native source update never replays 
   await publish(s, native.application);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3));
   await openSettingsPage('Advanced');
-  await screen.findByText(/Revision: user-2/);
+  await waitForSettingsRevision('user-2');
   await openSettingsPage('MCP servers');
   cleanup();
   expect(s.requests.map(item => item.request.method)).toEqual(['initialize', 'session/list', ...Array(3).fill('configuration/sourcesRead')]);

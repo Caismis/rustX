@@ -657,7 +657,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c26e0e904c4242548d6ce7a134f8a955b99811db90a04d82637750f95aeed7e1"
+      "local_sha256": "8167442890548e6ecf96b0063510102a02d75bd56c1be0979c81c330c9f752ce"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -672,7 +672,6 @@
         "../../../presentation/settings/SettingsContent",
         "../../../presentation/settings/SettingsContent.module.css",
         "../../../presentation/settings/SettingsWorkflow.module.css",
-        "../../components/NativeFacts",
         "../capability",
         "../forms/bridge",
         "../forms/controls",
@@ -722,7 +721,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "919200a7598c895c4bcf4d1e96877a59b44fa05a084feaf58e19011f4c138d18"
+      "local_sha256": "3d761e1a716191032400e05ef7b37ca9b6d3d828b6d5801cdb11826e7a086901"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -776,7 +775,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "ac238f78b63d30515ae76c04897d19fcfac9a489a19685991d06eddf9c3171c7"
+      "local_sha256": "21be0879ef3cae27c16ce4b73d2dd7d6f5d616d9d7a2a2acd1b22504e30388e3"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -4100,7 +4099,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "72783106f3a4b0a62b6758f528ab891bdaad8755d16a123cf4a2d4146964b439"
+      "local_sha256": "edba4386534252def356ba361ce458c3145cad1b83f89755849ca1531d9ab2fe"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -7595,7 +7594,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "62feec4272115d4cc01091e957dd0334f0f49b844bef376f43cc222a1f5b1d85"
+      "local_sha256": "3d85deee79c692d0cd2eb6b5bdb8a25b471386d33644c78d418c332fd4a7456c"
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.tsx",

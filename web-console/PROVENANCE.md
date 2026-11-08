@@ -1,3 +1,20 @@
+## Settings information density (2026-11-08)
+
+Compared ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` SettingsPage,
+ProviderCardSections, SettingsFormActions and SkillsSection presentation. Removed
+per-form configuration metadata, raw projections, process internals and duplicate
+resource inspection facts. Common fields remain visible; credential source is
+under Connection options. Errors, conflicts, deletion confirmations and repair
+receipts retain their native lifecycle with shorter product wording. No ZCode
+implementation was copied. Coordination tests inspect the existing authority
+actor directly instead of exposing hashes and projections as product UI.
+
+Pinned Chromium references were recaptured for desktop, narrow, light, dark and
+Chinese settings. Two independent strict runs reproduced one RGB-level variant
+at the same single pixel on the narrow light Model input corner. Both raw PNG
+variants are frozen with the comparator; only that measured 1×1 site and delta
+are admitted. Larger deltas, adjacent pixels and other references remain strict.
+
 ## Provider-first model authoring (2026-11-08)
 
 Reviewed ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` provider split

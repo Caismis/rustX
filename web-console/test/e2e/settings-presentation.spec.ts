@@ -121,14 +121,10 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
 
   // Settings forms retain their geometry; Provider cards use pinned Harness ModelsSection geometry.
   await openSettingsPage(page, 'Agent');
-  const identity = settings.getByRole('form', { name: 'Root identity' });
-  const configurationDetails = identity.getByRole('button', { name: 'Configuration details', exact: true });
-  await expect(identity.locator('[data-authored]')).toBeHidden();
-  await configurationDetails.click();
-  await expect(identity.locator('[data-authored]')).toBeVisible();
-  await configurationDetails.click();
-  await expect(identity.locator('[data-authored]')).toBeHidden();
-  const unit = await settings.getByRole('form', { name: 'Root identity' }).evaluate(el => {
+  const identity = settings.getByRole('form', { name: 'Agent name' });
+  await expect(identity.getByRole('button', { name: 'Configuration details', exact: true })).toHaveCount(0);
+  await expect(identity).toHaveAttribute('data-authored', 'absent');
+  const unit = await settings.getByRole('form', { name: 'Agent name' }).evaluate(el => {
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
   });
@@ -158,7 +154,7 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
   // Inherited: displayed, authored nothing, no draft, offers Override only.
   await openSettingsPage(page, 'Tools & Permissions');
   const approval = settings.getByRole('form', { name: 'Approval mode' });
-  await expect(approval.locator('[data-authored="absent"]')).toContainText('Inherited — no Workspace override');
+  await expect(approval).toHaveAttribute('data-authored', 'absent');
   await expect(approval.getByRole('button', { name: 'Save Approval mode' })).toBeDisabled();
   await expect(approval.getByRole('button', { name: 'Override Approval mode' })).toBeVisible();
   await expect(approval.getByRole('button', { name: /Use global default/ })).toHaveCount(0);
@@ -168,23 +164,21 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
 
   // Overridden and dirty: the draft's Save / Discard row sticks in reach.
   await openSettingsPage(page, 'Agent');
-  const identity = settings.getByRole('form', { name: 'Root identity' });
-  await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
-  await expect(identity.locator('[data-authored="present"]')).toBeVisible();
-  await identity.getByRole('button', { name: 'Configuration details', exact: true }).click();
-  await identity.getByLabel('Agent identity').fill('rustx-workspace-reviewer');
+  const identity = settings.getByRole('form', { name: 'Agent name' });
+  await expect(identity).toHaveAttribute('data-authored', 'present');
+  await identity.getByLabel('Name', { exact: true }).fill('rustx-workspace-reviewer');
   await expect(identity).toHaveAttribute('data-draft', 'true');
-  await expect(identity.getByRole('button', { name: 'Save Root identity' })).toBeEnabled();
-  await expect(identity.getByRole('button', { name: 'Discard draft' })).toBeVisible();
+  await expect(identity.getByRole('button', { name: 'Save Agent name' })).toBeEnabled();
+  await expect(identity.getByRole('button', { name: 'Discard' })).toBeVisible();
   await expectStableScreenshot(settings, 'settings-workspace-override-light.png');
-  await identity.getByRole('button', { name: 'Discard draft' }).click();
+  await identity.getByRole('button', { name: 'Discard' }).click();
   await expect(identity).not.toHaveAttribute('data-draft', 'true');
 
   // Restoring inheritance is an ordinary dialog, not a deletion; Escape closes
   // only that topmost layer and returns focus to its trigger inside Settings.
-  const restore = identity.getByRole('button', { name: 'Use global default Root identity', exact: true });
+  const restore = identity.getByRole('button', { name: 'Use global default Agent name', exact: true });
   await restore.click();
-  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Root identity?' });
+  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Agent name?' });
   await expect(confirmation).toBeVisible();
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
@@ -216,16 +210,16 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   await expect(deletion).toHaveCount(0);
 
   // CAS conflict: the draft and its base survive, the review is local to the
-  // unit, and Save / Discard / Use reviewed revision stay in reach.
+  // unit, and Save / Discard / Use latest setting stay in reach.
   const endpoint = settings.getByLabel('Base URL', { exact: true });
   await endpoint.fill('https://user.invalid/v2');
   const unit = settings.getByRole('form', { name: 'Provider transport' });
   await unit.getByRole('button', { name: 'Save Provider transport' }).click();
-  await expect(unit.getByRole('alert')).toHaveText('Provider transport was not saved: the source changed. Your draft and base revision are preserved.');
+  await expect(unit.getByRole('alert')).toHaveText('Provider transport was not saved because it changed elsewhere. Your draft is kept.');
   await expect(endpoint).toHaveValue('https://user.invalid/v2');
-  await expect(unit.getByRole('status').filter({ hasText: 'Source revision changed.' })).toBeVisible();
+  await expect(unit.getByRole('status').filter({ hasText: 'This setting changed elsewhere.' })).toHaveCount(0);
   await endpoint.scrollIntoViewIfNeeded();
-  for (const action of ['Save Provider transport', 'Discard draft', 'Use reviewed revision']) await expect(unit.getByRole('button', { name: action, exact: true })).toBeInViewport();
+  for (const action of ['Save Provider transport', 'Discard', 'Use latest setting']) await expect(unit.getByRole('button', { name: action, exact: true })).toBeInViewport();
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-conflict-light.png');
   expect(errors).toEqual([]);
@@ -251,13 +245,14 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
-test('dark desktop Advanced keeps the same family and native diagnostics', async ({ page }) => {
+test('dark desktop Advanced keeps useful controls without internal diagnostics', async ({ page }) => {
   const errors = await start(page);
   await setTheme(page, 'Dark');
   await openUserSettings(page);
   await openSettingsPage(page, 'Advanced');
   const settings = settingsPage(page);
-  await expect(settings.getByText(/Revision: user-1/)).toBeVisible();
+  await expect(settings.getByText(/Revision: user-1/)).toHaveCount(0);
+  await expect(settings.getByLabel('Reserved tokens', { exact: true })).toBeVisible();
   await expect(settings.getByRole('button', { name: 'Rescan configuration files' })).toBeVisible();
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-advanced-dark.png');
@@ -656,9 +651,9 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   const settings = settingsPage(page);
   await openWorkspaceSettings(page, 'Workspace A');
   await openSettingsPage(page, 'Agent');
-  const unit = settings.getByRole('form', { name: 'Root identity' });
-  const restore = unit.getByRole('button', { name: 'Use global default Root identity', exact: true });
-  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Root identity?' });
+  const unit = settings.getByRole('form', { name: 'Agent name' });
+  const restore = unit.getByRole('button', { name: 'Use global default Agent name', exact: true });
+  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Agent name?' });
   // This Workspace mutation travels through the native Product Host boundary.
   const writes = () => page.evaluate(() => (window as unknown as { rustxHeldWorkspaceWrites: () => number }).rustxHeldWorkspaceWrites());
   for (const dismissal of ['Cancel', 'Escape', 'outside'] as const) {
@@ -677,7 +672,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await page.keyboard.press('Enter');
   await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(confirmation.getByRole('button', { name: 'Use global default Root identity', exact: true })).toBeFocused();
+  await expect(confirmation.getByRole('button', { name: 'Use global default Agent name', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(confirmation).toHaveCount(0);
   await expect(restore).toBeDisabled();
@@ -688,8 +683,8 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await expect(unit).toBeFocused();
   await releaseWrites(page);
   await expect.poll(writes).toBe(1);
-  await expect(unit.getByText('Root identity saved.')).toBeVisible();
-  await expect(unit.locator('[data-authored="absent"]')).toContainText('Inherited — no Workspace override');
+  await expect(unit.getByText('Agent name saved.')).toBeVisible();
+  await expect(unit).toHaveAttribute('data-authored', 'absent');
   await expect(unit).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
@@ -729,7 +724,7 @@ test('reduced motion removes Settings and banner motion', async ({ page }) => {
   await expect(dot).toHaveCSS('animation-name', 'none');
   await openUserSettings(page);
   await openSettingsPage(page, 'Extensions');
-  await settingsPage(page).getByRole('tab', { name: 'Native', exact: true }).click();
+  await settingsPage(page).getByRole('tab', { name: 'Built-in', exact: true }).click();
   const track = settingsPage(page).getByRole('switch').first().locator('xpath=ancestor::label[1]').locator('[class*="switchTrack"]');
   await expect(track).toHaveCSS('transition-duration', '0s');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -860,7 +855,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     const model = page.getByRole('dialog', { name: `Model ${longModel}`, exact: true });
     await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
     await model.getByRole('button', { name: 'Advanced configuration', exact: true }).click();
-    const capability = model.getByRole('switch', { name: 'Native JSON Schema output', exact: true });
+    const capability = model.getByRole('switch', { name: 'Structured output', exact: true });
     await expect(capability).toHaveCount(1);
     await expect(capability).not.toBeChecked();
     await capability.locator('xpath=ancestor::label').click();

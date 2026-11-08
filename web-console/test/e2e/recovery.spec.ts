@@ -13,7 +13,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -29,7 +29,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       // asking connectionAction to inspect a tab behind that modal.
       await openSettingsPage(page, 'Advanced');
       await connectionAction(page, 'Reconnect');
-      await expect(page.getByLabel('Transport token')).toBeHidden();
+      await expect(page.getByLabel('Access token')).toBeHidden();
       await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     };
     const openModel = async (mode: 'open' | 'restore') => {
@@ -71,7 +71,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect(model.getByLabel('Context window')).toHaveValue('250000');
     expect(readFileSync(fixture.settings, 'utf8')).not.toContain('250000');
     expect(writes()).toHaveLength(1);
-    await model.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
+    await model.getByRole('button', { name: 'Use latest setting', exact: true }).click();
     wire.loseNext('configuration/sourceWrite');
     await model.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
     await expect.poll(wire.lost).toBe(1);

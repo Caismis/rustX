@@ -33,7 +33,7 @@ it('edits an MCP definition independently from root selection and retains exact 
   // Saving the definition never touched the root Agent's selection: that is a
   // separate native unit with a separate Save of its own.
   expect(save.mock.calls.every(([mutation]) => mutation.kind === 'mcp')).toBe(true);
-  expect(screen.getByRole('form', { name: 'Source search' })).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Tools: search' })).toBeTruthy();
 });
 
 it('creates a Workspace definition without borrowing the User transport or credentials', async () => {

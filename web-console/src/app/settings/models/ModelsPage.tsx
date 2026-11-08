@@ -32,11 +32,6 @@ const emptyModel = (provider = '', id = ''): Model => ({
   capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false },
 });
 
-function credentialLabel(tx: Translate, provider: ProviderView | undefined): string {
-  return !provider ? tx('settings:copy.definition-not-resolved')
-    : provider.credential.type === 'environment' ? tx('settings:copy.environment-value', { p0: provider.credential.variable }) : tx('settings:copy.literal-secret-redacted');
-}
-
 /** ZCode's provider navigation/detail split and model dialog, bound to rustX's
  * native semantic units. Each Provider owns its connection protocol; its Models
  * inherit it in native resolution and never author a separate API format. */
@@ -98,7 +93,7 @@ export function ModelsPage({ source, scope, revision, models, profiles, focus, o
       </div>
     </div>
     <Advanced title={tx('settings:models-page.all-models-value', { p0: catalog.length })}>
-      <ResourceList label={tx('settings:models-page.all-models')} rows={catalog.map(entry => modelRow(tx, entry, scope, providers))}
+      <ResourceList label={tx('settings:models-page.all-models')} rows={catalog.map(entry => modelRow(tx, entry, scope))}
         onOpen={id => onFocus({ kind: 'model', id, provider: (catalog.find(entry => entry.id === id)?.authored ?? catalog.find(entry => entry.id === id)?.effective)?.provider })}
         empty={tx('settings:copy.no-model-is-defined-for-this-source-yet')} />
     </Advanced>
@@ -138,12 +133,10 @@ function ProviderNameDialog({ exists, onCreate, onClose }: { exists: readonly st
   </DialogSurface>;
 }
 
-function modelRow(tx: Translate, entry: CatalogEntry<Model>, scope: SourceScope, providers: CatalogEntry<ProviderView>[]): ResourceRow {
+function modelRow(tx: Translate, entry: CatalogEntry<Model>, scope: SourceScope): ResourceRow {
   const model = entry.authored ?? entry.effective;
-  const provider = providers.find(candidate => candidate.id === model?.provider);
-  const protocol = (provider?.authored ?? provider?.effective)?.protocol;
   return { id: entry.id, name: entry.id,
-    facts: <>{protocol && <Badge>{protocol}</Badge>}{scope === 'workspace' && <Badge>{provenanceLabel(tx, entry.origin)}</Badge>}</>,
+    facts: scope === 'workspace' ? <Badge>{provenanceLabel(tx, entry.origin)}</Badge> : undefined,
     detail: <p className={css.hint}>{model?.id !== entry.id && <>{model?.id} · </>}{model?.context_window}{' '}{tx('settings:models-page.context')}{' '}{model?.max_output_tokens}{' '}{tx('settings:models-page.output')}</p>,
   };
 }
@@ -159,22 +152,22 @@ function ProviderDetail({ source, scope, revision, id, onBack, onModel, onAddMod
   return <section aria-label={tx('settings:models-page.provider-value', { p0: id })} className={cards.detail}>
     <Button size="sm" className={cards.back} onClick={onBack}>{tx('settings:models-page.models-2')}</Button>
     <h3 aria-label={tx('settings:models-page.provider-value', { p0: id })} title={id}><IconApiOutline14 size={20}/>{id}</h3>
-    {inherited && <p className={css.hint}>{tx('settings:models-page.native-effective-provider')}{' '}{id}: {inherited.base_url} · {credentialLabel(tx, inherited)}{tx('settings:models-page.an-override-authors-a-complete-new-definition-here-the-inherited')}</p>}
+    {inherited && <p className={css.hint}>{tx('settings:forms.using-global')}</p>}
     <TypedUnitForm<ProviderWrite> key={`provider:${id}`} title={tx('settings:models-page.provider-value', { p0: id })}
       authored={authored && { protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } }} blank={{ protocol: inherited?.protocol ?? 'openai_chat_completions', base_url: '', credential: { kind: 'literal', value: '' } }}
       inherited={() => undefined} revision={revision} presentation="resource"
       removalNotice={<p>{tx('settings:models-page.models-that-name-this-provider-identity-are-not-changed-and-no-s')}</p>}
       mutation={value => ({ kind: 'config', mutation: { unit: 'provider', id, authored: value } })}>
-      {form => <ProviderFields form={form} authored={!!authored} />}
+      {form => <ProviderFields form={form} />}
     </TypedUnitForm>
     <div className={cards.modelsHeading}><h4>{tx('settings:models.list')}</h4><Button size="sm" disabled={!authored && !inherited} onClick={onAddModel}>{tx('settings:models.add-model')}</Button></div>
     {!authored && !inherited && <p className={css.hint}>{tx('settings:models.save-provider-first')}</p>}
-    {owned.length ? <ResourceList label={tx('settings:models-page.models-of-provider-value', { p0: id })} rows={owned.map(entry => modelRow(tx, entry, scope, catalogEntries<ProviderView>(source, scope, 'providers')))}
+    {owned.length ? <ResourceList label={tx('settings:models-page.models-of-provider-value', { p0: id })} rows={owned.map(entry => modelRow(tx, entry, scope))}
       onOpen={onModel} empty="" /> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
   </section>;
 }
 
-function ProviderFields({ form, authored }: { form: TypedForm<ProviderWrite>; authored: boolean }) {
+function ProviderFields({ form }: { form: TypedForm<ProviderWrite> }) {
   const tx = useTranslation();
   const Credential = form.Field as unknown as (props: { name: 'credential'; children: (field: { state: { value: ProviderWrite['credential'] }; handleChange: (value: ProviderWrite['credential']) => void }) => React.ReactNode }) => React.ReactNode;
   return <>
@@ -191,11 +184,16 @@ function ProviderFields({ form, authored }: { form: TypedForm<ProviderWrite>; au
       ['anthropic_messages', tx('settings:models.api-anthropic')],
     ]} />
     <Credential name="credential">{field => <>
-      <Choice label={tx('settings:models-page.credential-source')} value={field.state.value.kind}
-        options={[...(authored ? [['retain', tx('settings:copy.keep-the-credential-this-scope-already-authored')] as const] : []), ['environment', tx('settings:copy.read-it-from-an-environment-variable')] as const, ['literal', tx('settings:copy.enter-a-literal-secret')] as const]}
-        onChange={kind => field.handleChange(kind === 'retain' ? { kind } : kind === 'environment' ? { kind, variable: '' } : { kind, value: '' })} />
       {field.state.value.kind === 'environment' ? <Text form={form} name="credential.variable" label={tx('settings:models-page.environment-variable')} required />
         : <LiteralCredential key={field.state.value.kind} credential={field.state.value} onChange={field.handleChange} />}
+      <Advanced title={tx('settings:models.connection-options')}>
+        <Choice label={tx('settings:models-page.credential-source')} value={field.state.value.kind === 'environment' ? 'environment' : 'literal'}
+          options={[["literal", tx('settings:copy.enter-a-literal-secret')], ["environment", tx('settings:copy.read-it-from-an-environment-variable')]]}
+          onChange={kind => {
+            if (kind === (field.state.value.kind === 'environment' ? 'environment' : 'literal')) return;
+            field.handleChange(kind === 'environment' ? { kind, variable: '' } : { kind: 'literal', value: '' });
+          }} />
+      </Advanced>
     </>}</Credential>
   </>;
 }

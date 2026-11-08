@@ -38,10 +38,6 @@ export function ToolsPage({ source, document, scope, revision }: {
   const [mcpPolicy, setMcpPolicy] = useState('');
   const [selectedMcpPolicy, selectMcpPolicy] = useState('');
   const sources = [...new Set([...reachableIdentities(scope, agent?.tools?.sources, resolved?.agent?.tools?.sources), ...added])];
-  const skillRoots = [
-    source.user_resource_root ? `${source.user_resource_root}/skills` : '',
-    source.workspace_resource_root ? `${source.workspace_resource_root}/skills` : '',
-  ];
   return <section aria-label={tx('settings:tools-page.tools-permissions')}>
     <h3>{tx('settings:tools-page.tools-amp-permissions')}</h3>
 
@@ -54,7 +50,6 @@ export function ToolsPage({ source, document, scope, revision }: {
     <UnitForm<string[]> title={tx('settings:extension-detail.native-tools')} authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'native_tools', authored } })}>
       {(value, change) => <>
-        <p className={css.hint}>{tx('settings:tools-page.an-absent-selection-grants-no-built-in-tools-an-explicit-empty-s')}</p>
         <CheckboxList label={tx('settings:tools-page.explicit-whitelist')} values={nativeTools} selected={value} change={change} />
       </>}
     </UnitForm>
@@ -73,7 +68,6 @@ export function ToolsPage({ source, document, scope, revision }: {
 
     <h4>{tx('settings:tools-page.skills')}</h4>
     <p className={css.hint}>{tx('settings:tools-page.skill-selection-controls-which-skill-descriptions-are-advertised')}</p>
-    <dl><dt>{tx('settings:tools-page.user-skill-root')}</dt><dd>{skillRoots[0]}</dd><dt>{tx('settings:tools-page.workspace-skill-root')}</dt><dd>{skillRoots[1]}</dd></dl>
     <UnitForm<AgentSkillSelection> title={tx('settings:extension-detail.skill-visibility')} authored={agent?.skills ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'skills', authored } })}>
       {(value, change) => <Selection label={tx('settings:extension-detail.visible-skills')} value={value} change={change} />}
@@ -82,13 +76,11 @@ export function ToolsPage({ source, document, scope, revision }: {
     <h4>{tx('settings:tools-page.delegation')}</h4>
     <UnitForm<string[]> title={tx('settings:extension-detail.agent-allowlist')} authored={agent?.agents ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'agents', authored } })}>
-      {(value, change) => <Names label={/* i18n-raw: the authored config key */ 'agents'} value={value} change={change} />}
+      {(value, change) => <Names label={tx('settings:extension-detail.delegated-agents')} value={value} change={change} />}
     </UnitForm>
     <p className={css.hint}>{tx('settings:extension-detail.workflow-enabled-in-library')}</p>
-    <AgentControls composed={source.prospective_resources?.main?.agent_controls.map(tool => tool.name)} />
 
     <Advanced title={tx('settings:tools-page.advanced-tool-policies')}>
-      <p>{tx('settings:tools-page.invocation-policy-governs-execution-ownership-concurrency-and-ap')}</p>
       {policyTools.map(name => <UnitForm<NativePolicyOverrideDocument> key={name} title={tx('settings:tools-page.value-policy', { p0: name })}
         authored={document.native_tools?.[name as NativeTool] ?? undefined} blank={{}} revision={revision}
         mutation={authored => ({ kind: 'config', mutation: { unit: 'native_policy', id: name as NativeTool, authored } })}>
@@ -107,17 +99,6 @@ export function ToolsPage({ source, document, scope, revision }: {
     </Advanced>
     {sourceView(source, scope) === undefined && <p role="alert" className={css.error}>{tx('settings:tools-page.this-scope-has-no-source-view')}</p>}
   </section>;
-}
-
-/** The runtime-composed Agent control group, as native inspection reports it.
- * It has no enablement control: it follows the Agent allowlist alone. */
-function AgentControls({ composed }: { composed: readonly string[] | undefined }) {
-  const tx = useTranslation();
-  return <p className={css.hint} role="note" aria-label={tx('settings:tools-page.agent-controls')}>
-    {composed?.length
-      ? tx('settings:tools-page.agent-controls-composed', { p0: composed.join(', ') })
-      : tx('settings:tools-page.agent-controls-absent')}
-  </p>;
 }
 
 export function PolicyFields({ value, change }: { value: NativePolicyOverrideDocument; change: (value: NativePolicyOverrideDocument) => void }) {

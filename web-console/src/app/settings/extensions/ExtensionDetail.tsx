@@ -5,9 +5,8 @@ import type {
   SourceScope, SourceSettings, SourceToolSelection,
 } from '../../../../../protocol/app-server/v76';
 import { mcpTransport } from '../../../bindings/mcp';
-import { Badge, Facts } from '../../../presentation/settings/SettingsContent';
+import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
-import { NativeFacts } from '../../components/NativeFacts';
 import { toolSourceId } from '../capability';
 import { TypedUnitForm, UnitForm } from '../forms/bridge';
 import { CheckboxList, Names, Selection, nativeTools } from '../forms/controls';
@@ -16,7 +15,7 @@ import { Advanced, Choice } from '../primitives/aria';
 import { documentAuthoring, extensionFamilyLabel, type ExtensionFamily } from '../projection';
 import type { PageFocus } from '../machines/navigation';
 import { ModelSelection, type ModelProfiles } from '../models/ModelsPage';
-import { extensionEntries, preparationLabel, preparationTitle, relationshipLabel, selectionLabel, validityLabel } from './inventory';
+import { extensionEntries, relationshipLabel } from './inventory';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import workflow from '../../../presentation/settings/SettingsWorkflow.module.css';
 
@@ -51,26 +50,15 @@ export function ExtensionDetail(props: ExtensionDetailProps) {
   const tx = useTranslation();
   const { source, scope, family, name, onFocus } = props;
   const entry = family === 'native' ? undefined : extensionEntries(source, scope, family as ResourceFamily).find(item => item.name === name);
-  const preparation = entry && preparationLabel(tx, entry);
-  const selection = entry && selectionLabel(tx, entry);
   return <section aria-label={tx('settings:extension-detail.value-value', { p0: extensionFamilyLabel(tx, family), p1: name })} className={workflow.detail}>
     <div className={workflow.breadcrumb}><Button size="sm" onClick={() => onFocus(undefined)}>{props.backLabel ?? tx('settings:extension-detail.extensions')}</Button><span>{extensionFamilyLabel(tx, family)} {name}</span></div>
     <h3>{name}</h3>
     {entry ? <>
       <div className={workflow.rowFacts}>
         <Badge>{extensionFamilyLabel(tx, family)}</Badge>
-        <Badge>{entry.owner === 'user' ? tx('settings:extension-detail.user') : tx('settings:extension-detail.workspace')}</Badge>
         <Badge>{relationshipLabel(tx, entry, scope)}</Badge>
-        <Badge tone={entry.valid === undefined ? undefined : entry.valid ? 'success' : 'error'}>{validityLabel(tx, entry)}</Badge>
-        {preparation && <Badge>{preparation}</Badge>}
-        {selection && <Badge>{selection}</Badge>}
+        {entry.valid === false && <Badge tone="error">{tx('settings:copy.invalid-definition')}</Badge>}
       </div>
-      <Facts rows={[
-        [tx('settings:copy.source'), entry.path],
-        ...(entry.shadowed ? [[tx('settings:extensions-page.shadows'), entry.shadowed] as const] : []),
-        ...(preparation ? [[preparationTitle(tx, entry), preparation] as const] : []),
-        ...(selection ? [[tx('settings:copy.root-agent'), selection] as const] : []),
-      ]} />
       {entry.diagnostics.map((reason, index) => <p className={css.error} key={index}>{reason}</p>)}
     </> : <p className={css.hint}>{tx('settings:extension-detail.this-identity-is-not-present-in-the-current-native-inventory-not')}</p>}
 
@@ -104,8 +92,6 @@ export function McpDefinition({ source, scope, name }: ExtensionDetailProps) {
   // always has an authored value.
   const authored = mcp.document[name];
   return <section aria-label={tx('settings:extension-detail.mcp-definition')}><h4>{tx('settings:extension-detail.mcp-definition')}</h4>
-    <p>{tx('settings:extension-detail.a-definition-is-inert-it-is-prepared-and-connected-only-once-som')}</p>
-    <p className={css.hint}>{mcp.path}</p>
     <TypedUnitForm<McpWrite> key={`mcp:${name}`} title={tx('settings:extension-detail.mcp-value', { p0: name })} revision={mcp.revision} authored={authored}
       blank={{ definition: { type: 'stdio', command: '', args: [] }, retained_env: [], retained_headers: [] }}
       removalNotice={<p>{tx('settings:extension-detail.nothing-that-is-already-running-is-stopped-by-this-and-no-sessio')}</p>}
@@ -155,7 +141,6 @@ function AgentDefinition({ source, scope, name, models, profiles }: ExtensionDet
   const tx = useTranslation();
   const current = source.agents.find(agent => agent.scope === scope && agent.name === name);
   return <section aria-label={tx('settings:extension-detail.agent-definition')}><h4>{tx('settings:extension-detail.agent-definition')}</h4>
-    <p>{tx('settings:extension-detail.each-named-agent-is-an-independent-complete-profile-a-workspace')}</p>
     {current?.source.diagnostic && <p role="alert" className={css.error}>{current.source.diagnostic}</p>}
     <TypedUnitForm<AgentProfileDocument> key={`agent:${name}`} title={tx('settings:extension-detail.agent-value', { p0: name })}
       authoredPresent={current !== undefined} authored={current?.source.authored ?? undefined} blank={{}}
@@ -192,7 +177,6 @@ function AgentFields({ form, models, profiles }: { form: import('../forms/bridge
     }}</Field>
     <Field name="agents">{field => <Names label={tx('settings:extension-detail.delegated-agents')} value={(field.state.value as string[] | undefined) ?? []} change={value => field.handleChange(value as never)} />}</Field>
     <Field name="workflows">{field => <Names label={tx('settings:extension-detail.delegated-workflows')} value={(field.state.value as string[] | undefined) ?? []} change={value => field.handleChange(value as never)} />}</Field>
-    <p>{tx('settings:extension-detail.native-scope-validation-decides-which-capabilities-this-profile')}</p>
     <Field name="skills">{field => <Selection label={tx('settings:extension-detail.skill-prompt-visibility')} value={(field.state.value as AgentSkillSelection | undefined) ?? []} change={value => field.handleChange(value as never)} />}</Field>
     <Advanced title={tx('settings:extension-detail.extensions-and-guidance')}>
       <Field name="plugins">{field => {
@@ -237,26 +221,18 @@ function SourceSelections({ value, change }: { value: Record<string, SourceToolS
  * and all useful. What is deliberately absent is a fabricated Edit, Save or
  * Delete: there is no native operation behind one, so rendering it would be a
  * promise the App Server cannot keep. */
-function UnauthorableResource({ source, family, name }: ExtensionDetailProps) {
+function UnauthorableResource({ source, scope, family, name }: ExtensionDetailProps) {
   const tx = useTranslation();
   const resources = source.prospective_resources;
   const label = extensionFamilyLabel(tx, family);
   const inspection = family === 'workflow' ? resources?.workflows[name]
     : family === 'managed_python' ? resources?.sources[toolSourceId('managed_python', name)] : undefined;
-  const skill = family === 'skill' ? resources?.skills.find(entry => entry.name === name) : undefined;
+  const entry = extensionEntries(source, scope, family as ResourceFamily).find(item => item.name === name);
   return <section aria-label={tx('settings:extension-detail.value-definition', { p0: label })}><h4>{label} {tx('settings:extension-detail.definition')}</h4>
-    <p role="status">{tx('settings:extension-detail.this-protocol-has-no-operation-that-authors-a')}{' '}{label} {tx('settings:extension-detail.definition-this-detail-shows-the-native-inventory-its-diagnostic')}</p>
-    {family === 'skill' && <p>{tx('settings:extension-detail.skill-selection-controls-which-skill-descriptions-are-advertised')}</p>}
-    {skill && <>
-      <Facts rows={[[tx('settings:copy.effective-package'), skill.location], [tx('settings:copy.owning-source'), skill.source]]} />
-      {!!skill.shadowed.length && <Advanced title={tx('settings:extension-detail.shadowed-same-identity-packages-value', { p0: skill.shadowed.length })}><NativeFacts value={skill.shadowed} /></Advanced>}
-    </>}
-    {inspection && <Advanced title={tx('settings:extension-detail.native-inspection')} expanded><NativeFacts value={inspection} /></Advanced>}
-    {/* Skill discovery diagnostics name packages, not this Skill, so they are
-        the Skills family's and are listed on the Extensions Skills filter —
-        never here, where another package's failure would read as this one's. */}
-    {family === 'workflow' && resources?.workflows[name]?.status === 'disabled'
-      && <Advanced title={tx('settings:extension-detail.workflow-admission-diagnostics')} expanded><NativeFacts value={resources.workflows[name]} /></Advanced>}
+    <p>{tx('settings:extensions.manage-files')}</p>
+    {entry?.path && <p className={css.hint}>{entry.path}</p>}
+    {inspection?.status === 'unavailable' && <p role="alert" className={css.error}>{tx('settings:extensions.unavailable')}</p>}
+    {family === 'workflow' && resources?.workflows[name]?.status === 'disabled' && <p role="alert" className={css.error}>{tx('settings:extensions.workflow-unavailable')}</p>}
   </section>;
 }
 
@@ -276,7 +252,6 @@ function RootAvailability({ source, scope, revision, family, name }: ExtensionDe
   if (family === 'mcp' || family === 'managed_python') {
     const id = toolSourceId(family as ResourceFamily, name);
     return <section aria-label={tx('settings:extension-detail.root-agent-availability')}><h4>{tx('settings:extension-detail.availability-to-the-root-agent')}</h4>
-      <p>{tx('settings:extension-detail.saved-separately-from-the-definition-granting-access-and-definin')}</p>
       <UnitForm<SourceToolSelection> key={`source_tools:${id}`} title={tx('settings:extension-detail.source-value', { p0: id })}
         authored={agent?.tools?.sources?.[id] ?? undefined} blank={[]} revision={revision}
         mutation={authored => ({ kind: 'config', mutation: { unit: 'source_tools', id, authored } })}>
@@ -289,24 +264,22 @@ function RootAvailability({ source, scope, revision, family, name }: ExtensionDe
     <p>{tx('settings:extension-detail.workflow-enabled-in-library')}</p></section>;
   if (family === 'agent') {
     return <section aria-label={tx('settings:extension-detail.root-agent-availability')}><h4>{tx('settings:extension-detail.availability-to-the-root-agent')}</h4>
-      <p>{tx('settings:extension-detail.this-edits-the-root-agent-s')}{' '}{tx('settings:agent-page.agent')} {tx('settings:extension-detail.allowlist-the-same-unit-as-the-one-on-tools-amp-permissions-shar')}</p>
       <UnitForm<string[]> key="agents" title={tx('settings:extension-detail.agent-allowlist')}
         authored={agent?.agents ?? undefined} blank={[]} revision={revision}
         mutation={authored => ({ kind: 'config', mutation: { unit: 'agents', authored } })}>
         {(value, change) => <>
           <MembershipToggle name={name} value={value} change={change} />
-          <Names label={/* i18n-raw: the authored config key */ 'agents'} value={value} change={change} />
+          <Names label={tx('settings:extension-detail.delegated-agents')} value={value} change={change} />
         </>}
       </UnitForm>
     </section>;
   }
   return <section aria-label={tx('settings:extension-detail.root-agent-availability')}><h4>{tx('settings:extension-detail.availability-to-the-root-agent')}</h4>
-    <p>{tx('settings:extension-detail.this-edits-the-root-agent-s-skill-visibility-the-same-unit-as-th')}</p>
     <UnitForm<AgentSkillSelection> key="skills" title={tx('settings:extension-detail.skill-visibility')} authored={agent?.skills ?? undefined} blank={[]} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'skills', authored } })}>
       {(value, change) => <>
         {value === 'all'
-          ? <p role="status">{tx('settings:extension-detail.every-skill-is-visible-because-this-source-authors-the-explicit')}{' '}<code>{tx('settings:extension-detail.all')}</code> {tx('settings:extension-detail.selection-changing-that-for-one-skill-means-choosing-exact-ident')}</p>
+          ? <p role="status">{tx('settings:extension-detail.every-skill-is-visible-because-this-source-authors-the-explicit')}{' '}{tx('settings:extension-detail.selection-changing-that-for-one-skill-means-choosing-exact-ident')}</p>
           : <MembershipToggle name={name} value={value} change={change} />}
         <Selection label={tx('settings:extension-detail.visible-skills')} value={value} change={change} />
       </>}

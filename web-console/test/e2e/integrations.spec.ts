@@ -25,7 +25,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
       observed: async () => {},
     }); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -44,7 +44,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
     await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
@@ -79,7 +79,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     expect(invalidateNextWrite).toBe(false);
     await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('preserved-draft');
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
-    await settings.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
+    await settings.getByRole('button', { name: 'Use latest setting', exact: true }).click();
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     await openSettingsPage(page, 'Extensions');
@@ -100,7 +100,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.getByRole('button',{name:'← Extensions',exact:true}).click();
     await settings.screenshot({ path: test.info().outputPath('cfg3-named-agent.png') });
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Adopt prepared context', exact: true })).toHaveCount(0);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

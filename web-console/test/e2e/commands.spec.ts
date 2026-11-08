@@ -27,7 +27,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(message).toBeEnabled();
     expect((await snapshot()).conversation_id).toMatch(/^conv_/);
@@ -46,7 +46,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect.poll(async () => (await snapshot()).model?.configured.model).toBe('fixture/second-model');
     await message.fill('/not-a-command'); await message.press('Enter');
     await expect(page.getByRole('alert')).toContainText('Unsupported command');
@@ -142,7 +142,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     expect(batches).toHaveLength(1);
     expect(readFileSync(join(root, batches[0], 'note.txt'), 'utf8')).toBe('Owned by native Session');
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(message).toBeEnabled();
     // Model selection belongs to Session identity and is inherited by its Fork;
     // cold lineage replacement does not select the global default again.

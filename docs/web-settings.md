@@ -24,21 +24,19 @@ the Workspace object action opens `Workspace Settings — <workspace>` for that
 exact authorized Workspace. There is no ordinary `Configuration owner` selector;
 a Session focus change never retargets an open editor, and a revoked or
 unregistered Workspace is fenced (its draft and error are retained) rather than
-redirected to User or another Workspace. Resolved source previews are read-only and are
-not the Session's committed binding. The actual User pathname is displayed separately
-from fixed `~/rustx/.agents`.
+redirected to User or another Workspace.
 
 Settings is organized by product task into seven sections:
 
 | Page | What it holds |
 | --- | --- |
 | **General** | Browser-owned preferences: Appearance (theme) and Language (English / 中文). Explicit User Settings opens here; the primary Settings item resumes its previous section. |
-| **Models** | Provider list → Provider detail (endpoint, shared API format, credentials and its Models) → one Model dialog (identity, limits, then capabilities and Model Profiles under Advanced). All Models and the default model for new Sessions follow the Provider panel. |
+| **Models** | Provider list → Provider detail (Base URL, shared API format, API Key and its Models; credential source under Connection options) → one Model dialog (identity, limits, then capabilities and Model Profiles under Advanced). All Models and the default model for new Sessions follow the Provider panel. |
 | **Agent** | Root identity, description, instructions and project guidance. |
 | **Tools & Permissions** | Approval mode, Native Tools, Tool-source selections, Skill visibility, the Agent and Workflow delegation allowlists, and per-Tool/MCP policies under **Advanced Tool policies**. |
 | **MCP Servers** | Native MCP source definitions, permissions and observation for the exact Settings owner. |
-| **Extensions** | One searchable inventory of Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Native**. |
-| **Advanced** | Context and runtime limits, environment identities, App Server process policy, **Auto Repair** (this owner's latest native automatic `rustx.toml` repair receipt, #464), native diagnostics (source paths, revisions, application observations, process bindings, raw projections) and **Rescan configuration files**. **Connection** is a sub-surface of Advanced, not a separate Settings section. |
+| **Extensions** | One searchable inventory of Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Built-in**. |
+| **Advanced** | Context limits, timeouts, concurrent subagent limits, environment variables and **Rescan configuration files**. **Auto Repair** appears for a repair receipt, a malformed document or an explicit inspection request. **Connection** is a sub-surface of Advanced, not a separate Settings section. |
 
 A Provider without Models is valid setup in progress. Save its connection before
 adding Models. The Model dialog owns the complete creation draft and validates
@@ -46,6 +44,11 @@ required fields, duplicate identities and token limits before submitting; it
 closes after the saved source is observed. Every Model inherits its Provider's
 API format. Existing credentials stay redacted, and changing credential mode
 replaces the previous mode's fields.
+
+Settings shows controls and actionable feedback. Internal revision hashes, raw
+projections, process bindings, server process budgets and per-unit configuration
+metadata are not product UI. File locations appear when needed to repair a
+malformed document or manage a file-based resource.
 
 Settings is an independent application page beside the permanent primary rail.
 Its sections fill the available content area, with a fixed
@@ -70,8 +73,8 @@ while its fields scroll, and long identities, endpoints, paths and native
 diagnostics wrap instead of widening the page.
 
 Workspace Settings is a constrained surface of the same pages without General
-(everything on General is client-owned) and without the User-only App Server
-policy or Connection; it lands on Models. These are navigation capabilities of
+(everything on General is client-owned) and without
+Connection; it lands on Models. These are navigation capabilities of
 the target, so no Workspace detail, page or action can reach them. There is no Overview page and no alias
 for any earlier section route. Each primary page and each detail inside it is a
 navigation fact of the one Settings navigation machine, so returning to a page
@@ -80,9 +83,9 @@ restores the detail the user left, and a new target starts with none.
 Provider and Model edits address independent identities. Workspace
 replacement edits complete objects. Native Tools use an explicit checkbox whitelist;
 MCP, Python and Skill selections have all/exact/none controls. Skill guidance explains
-prompt visibility and displays absolute collection roots. Plugins default off.
+availability. Plugins default off.
 
-The Model capability editor contains one **Native JSON Schema output** checkbox
+The Model capability editor contains one **Structured output** checkbox
 (`json_schema_output`), defaulting to false. Its declaration means native API schema
 enforcement verified for the selected model, endpoint, protocol and usable Profiles.
 It follows the same whole-Model replacement and User/Workspace precedence as other
@@ -115,8 +118,8 @@ states rather than one “loading” label. Change behavior (“Applies immediat
 “Requires App Server restart”) is distinguished from the observed result
 (Applied / Preparing / Failed / Restart pending), and any “Active” statement is
 scoped to the native-confirmed unit rather than every Session. Conflicts preserve
-the draft. Settings renders simultaneous applied, preparing, failed/retry,
-process-restart state. There is no adoption control: native commits a prepared
+the draft. The Settings actor retains simultaneous application states; ordinary forms show
+only actionable failures and their own save outcome. There is no adoption control: native commits a prepared
 candidate automatically at the Session's safe boundary, and the compact status
 line below the focused Session title only observes it. Failed preparation offers one owner-specific Settings
 action per authored owner named by native `ConfigurationApplication.sources`.
@@ -126,15 +129,13 @@ nothing to a default owner. A Workspace owner the Product Host does not register
 reports an explicit error and never falls back to User authoring; opening an
 owning editor allocates no Workspace, Session or runtime, and a later Session
 focus change never retargets it. Waiting for current work never cancels it.
-Diagnostics offers native rescan. Uncertain writes and commits are repaired by rereading authority, never replayed. Reconnect rereads native
+Advanced offers configuration rescan. Uncertain writes and commits are repaired by rereading authority, never replayed. Reconnect rereads native
 state.
 
-Every Extensions row reports kind, owning scope and its relationship to this
-target (authored, overriding, inherited or shadowed), definition validity,
-native preparation or admission, and whether the root Agent may use it, as
-separate facts. A valid definition is not a prepared one, a prepared one is not
-one the root Agent may use, and a fact native did not publish is reported as
-not observed — never as "no". Opening the page probes and connects nothing.
+Extensions lists names, descriptions, kind and agent access, grouped by scope.
+Details retain scope relationships and actionable configuration errors without
+healthy validity, preparation or admission badges. Unknown observations do not
+become negative statuses. Opening the page probes and connects nothing.
 
 What a resource kind supports comes from a single native capability matrix
 (`app/settings/capability.ts`). MCP definitions and named-Agent profiles have
@@ -157,7 +158,7 @@ Removal is confirmed in a modal dialog that states the actual native
 consequence, and cancelling it writes nothing and returns focus to the button
 that opened it. Confirming it moves focus to the setting's card, which reports
 the outcome while its controls stay closed until native answers. In User Settings the action is
-**Remove** (the authored definition is removed from User configuration): a
+**Delete** for resources, or **Reset to default** for settings: a
 destructive alert dialog with a trash glyph on its trigger and a destructive
 confirm action. In Workspace Settings it is **Use global default**, which removes
 only the Workspace override so the inherited value applies again; it is an
@@ -170,11 +171,8 @@ stdio. Ordinary edits preserve that authored omission and retained credentials.
 
 These captures come from the real App Server/provider-emulator acceptance suite:
 
-- [Effective values and native provenance](images/cfg3-effective-provenance.png)
-- [Named-Agent source editor](images/cfg3-named-agent.png)
-- [External-edit CAS conflict preserving the draft](images/cfg3-cas-conflict.png)
-- [Failed application retaining the effective configuration](images/cfg3-application-failed.png)
-- [Mobile named-Agent editor after publication](images/cfg3-settings-mobile.png)
+- [Provider settings, Chinese dark desktop](images/settings-models.png)
+- [Add Model dialog, Chinese dark desktop](images/settings-add-model.png)
 
 ## Harness integration
 

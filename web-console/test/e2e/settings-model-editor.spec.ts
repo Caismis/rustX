@@ -113,7 +113,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await context.fill('256000');
     await expect(modal.getByRole('button', {name:'Reset form', exact:true})).toBeEnabled();
     // Scrolling the body never moves its title or footer outside the dialog.
-    await modal.getByLabel('Provider identity', {exact:true}).scrollIntoViewIfNeeded();
+    await modal.getByRole('checkbox', {name:'Image',exact:true}).scrollIntoViewIfNeeded();
     await expect(modal.getByRole('heading', {name:'Edit Model', exact:true})).toBeInViewport();
     for (const name of ['Cancel','Reset form','Save Model '+model]) await expect(modal.getByRole('button', {name,exact:true})).toBeInViewport();
     await expectStableScreenshot(page, `model-advanced-${theme.toLowerCase()}-${width}.png`);
@@ -214,8 +214,6 @@ test('provider creation validates the native name; API Key reveal is explicit an
   await expect(add.getByRole('alert')).toHaveText('This configuration name already exists.');
   await add.getByRole('button',{name:'Cancel'}).click();
   await settings(page).getByRole('row',{name:'transport',exact:true}).click();
-  await settings(page).getByRole('button',{name:/Credential source$/}).click();
-  await page.getByRole('option',{name:'Enter a literal secret'}).click();
   const key = settings(page).getByLabel('API Key',{exact:true});
   await key.fill('fixture-only-value');
   await expect(key).toHaveAttribute('type','password');

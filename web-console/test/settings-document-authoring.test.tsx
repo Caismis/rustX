@@ -4,7 +4,7 @@ import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v76';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import { findOnAdvanced, openResourceRow, SettingsSurface } from './settings-harness';
+import { waitForSettingsRevision, openResourceRow, SettingsSurface } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 afterEach(cleanup);
 
@@ -51,8 +51,8 @@ async function assertRepairIsTheOnlyConfigMutation(s: ReturnType<typeof cfg3Clie
   // Extensions: the native extensions and root availability are units of the
   // same document, and they are closed on the same terms.
   open('Extensions');
-  filter('Native');
-  expect(screen.getByText(/Structured editing of this source's rustx\.toml is unavailable/)).toBeTruthy();
+  filter('Built-in');
+  expect(screen.getByText(/Fix the configuration file to edit these settings/)).toBeTruthy();
   expect(forms()).toEqual([]);
   open('Advanced');
   expect(writes(s)).toHaveLength(0);
@@ -71,19 +71,19 @@ it.each(['user', 'workspace'] as const)('DA-02 a malformed %s rustx.toml exposes
     ? <SettingsSurface client={s.client} target={userSettingsTarget} />
     : <SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   // Diagnostics stay on Advanced even while the document does not parse.
-  await findOnAdvanced(new RegExp(`Revision: ${scope}-1`));
+  await waitForSettingsRevision(`${scope}-1`);
   open('Advanced');
   expect(screen.getAllByRole('alert').map(alert => alert.textContent)).toContain(MALFORMED);
   if (scope === 'workspace') expect(forms()).toEqual(['Repair invalid source']);
   await assertRepairIsTheOnlyConfigMutation(s, `${scope}-1`);
   // The committed repair is observed by an authoritative read, and only that
   // observation makes structured editing available again.
-  await screen.findByText(/Revision: saved-2/);
+  await waitForSettingsRevision('saved-2');
   expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
   open('Tools & Permissions');
-  const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
+  const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
   fireEvent.click(tools.getByLabelText('read'));
-  fireEvent.click(tools.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.click(tools.getByRole('button', { name: 'Save Built-in tools' }));
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params).toMatchObject({ expected_revision: 'saved-2', mutation: { kind: 'config', mutation: { unit: 'native_tools', authored: ['read'] } } });
   expect(sourcesReads(s).length).toBeGreaterThanOrEqual(2);
@@ -93,7 +93,7 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   const s = cfg3Client();
   malformed(s.source, 'user');
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
-  await findOnAdvanced(/Revision: user-1/);
+  await waitForSettingsRevision('user-1');
   // MCP: its own valid document, its own revision.
   open('Extensions');
   filter('MCP servers');
@@ -127,7 +127,7 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   const s = cfg3Client();
   s.source.user_mcp = { path: '/home/user/rustx/.agents/mcp.toml', revision: 'mcp-1', authored: null, diagnostic: 'invalid MCP document' };
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
-  await findOnAdvanced(/Revision: user-1/);
+  await waitForSettingsRevision('user-1');
   open('Extensions');
   filter('MCP servers');
   expect(screen.getByText('invalid MCP document')).toBeTruthy();
@@ -135,9 +135,9 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   expect(screen.queryByLabelText('New MCP identity')).toBeNull();
   expect(forms()).toEqual([]);
   open('Tools & Permissions');
-  const tools = within(screen.getByRole('form', { name: 'Native Tools' }));
+  const tools = within(screen.getByRole('form', { name: 'Built-in tools' }));
   fireEvent.click(tools.getByLabelText('read'));
-  fireEvent.click(tools.getByRole('button', { name: 'Save Native Tools' }));
+  fireEvent.click(tools.getByRole('button', { name: 'Save Built-in tools' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'user-1', mutation: { kind: 'config' } });
 });
@@ -172,7 +172,7 @@ async function reachableModels() {
   fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
   const agent = screen.getByRole('form', { name: 'Agent helper' });
-  fireEvent.click(within(agent).getByLabelText('Explicit child model'));
+  fireEvent.click(within(agent).getByLabelText('Use a specific model'));
   const named = options(agent, /Model$/);
   fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
   const selectable = (list: string[]) => list.filter(option => option !== 'Select model');
@@ -186,7 +186,7 @@ it('ID-03 Workspace-authored models stay reachable in every selector when a malf
   s.source.resolved = null;
   s.source.prospective_diagnostic = 'Source cannot be resolved; repair the diagnosed authored document.';
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
-  await findOnAdvanced(/Revision: workspace-1/);
+  await waitForSettingsRevision('workspace-1');
   // The three surfaces agree, and list exactly what this Workspace authors:
   // nothing is invented from the malformed User document.
   expect(await reachableModels()).toEqual({ catalog: ['workspace-model'], root: ['workspace-model'], named: ['workspace-model'] });
@@ -195,11 +195,11 @@ it('ID-03 Workspace-authored models stay reachable in every selector when a malf
   const defaultToggle = screen.queryByRole('button', { name: 'Default model for new Sessions', expanded: false });
   if (defaultToggle) fireEvent.click(defaultToggle);
   const rootForm = within(screen.getByRole('form', { name: 'Default model' }));
-  expect(rootForm.getByText(/Inherited — no Workspace override/).getAttribute('data-effective')).toBe('invalid');
+  expect(rootForm.getByRole('button', { name: 'Save Default model' }).closest('form')!.getAttribute('data-effective')).toBe('invalid');
   expect(rootForm.queryByText(/Native effective value available/)).toBeNull();
   allModels();
   await openResourceRow('workspace-model');
-  expect(within(screen.getByRole('form', { name: 'Model workspace-model' })).getByText(/Workspace override/)).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Model workspace-model' }).dataset.authored).toBe('present');
   // Nothing was copied into Workspace authoring.
   expect(writes(s)).toHaveLength(0);
 });
@@ -210,13 +210,13 @@ it('ID-04 a resolved Workspace reaches inherited effective models in every selec
   s.source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: { models: { 'workspace-model': model('wire-w') } } };
   s.source.resolved = { models: { 'user-model': model('wire-u'), 'workspace-model': model('wire-w') } } as never;
   const view = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
-  await findOnAdvanced(/Revision: workspace-1/);
+  await waitForSettingsRevision('workspace-1');
   expect(await reachableModels()).toEqual({
     catalog: ['user-model', 'workspace-model'], root: ['user-model', 'workspace-model'], named: ['user-model', 'workspace-model'],
   });
   view.unmount();
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
-  await findOnAdvanced(/Revision: user-1/);
+  await waitForSettingsRevision('user-1');
   expect(await reachableModels()).toEqual({ catalog: ['user-model'], root: ['user-model'], named: ['user-model'] });
   expect(writes(s)).toHaveLength(0);
 });

@@ -150,7 +150,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     expect(await ids()).toEqual(['z-off']);
     await modal.getByRole('button', { name: 'Delete profile z-off', exact: true }).click();
     await expect(list).toHaveCount(0);
-    await expect(modal.getByText('Add Profiles before configuring reasoning order.')).toBeVisible();
+    await expect(modal.getByText('Add a profile to configure reasoning levels.')).toBeVisible();
     await save();
     const empty = readFileSync(source, 'utf8');
     expect(empty).not.toContain('reasoning_profile_order');

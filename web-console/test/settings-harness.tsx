@@ -13,6 +13,7 @@ import { settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type Se
 import { settingsNavigationMachine, type SettingsNavigationActor, type SettingsPage } from '../src/app/settings/machines/navigation';
 import { Settings, type SettingsProps } from '../src/app/settings/Settings';
 import { cfg3Source } from './cfg3-data';
+import { configurationSystem, type SettingsTargetActor } from '../src/app/settings/machines/system';
 
 /** One acknowledgement that changes no revision, so a sequence of saves in one
  * editor keeps submitting against the same exact CAS base the editor pinned. */
@@ -110,6 +111,7 @@ export function openSettingsNavigation(target: SettingsTarget, page?: SettingsPa
  * that owner's Settings, so it is delivered to the machine as exactly that
  * `OPEN` event. */
 let contractNavigation: SettingsNavigationActor | undefined;
+let contractAuthority: (() => SettingsTargetActor) | undefined;
 
 export function SettingsSurface({ target, initialPage, navigation, connection, ...props }: Omit<SettingsProps, 'navigation' | 'connection'> & {
   client: AppServerClient; target: SettingsTarget; initialPage?: SettingsPage;
@@ -118,6 +120,11 @@ export function SettingsSurface({ target, initialPage, navigation, connection, .
   const [actor] = useState(() => navigation ?? openSettingsNavigation(target, initialPage));
   const [controller] = useState(() => connection ?? new ConnectionController(props.client));
   useLayoutEffect(() => { contractNavigation = actor; return () => { if (contractNavigation === actor) contractNavigation = undefined; }; }, [actor]);
+  useLayoutEffect(() => {
+    const authority = () => configurationSystem(props.client).settingsTarget(target, () => props.host);
+    contractAuthority = authority;
+    return () => { if (contractAuthority === authority) contractAuthority = undefined; };
+  }, [props.client, props.host, target]);
   const opened = useRef(settingsTargetKey(target));
   useLayoutEffect(() => {
     if (opened.current === settingsTargetKey(target)) return;
@@ -159,8 +166,8 @@ export function openMcpContractEditor(name?: string) {
 }
 
 /** Wait until the open Settings surface holds a current authoritative
- * observation. Source paths and revisions are diagnostics and live on
- * Advanced, so readiness is asserted from the lifecycle itself. */
+ * observation. Readiness is asserted from the lifecycle itself; source
+ * paths and revisions are not product copy. */
 export async function settingsReady() {
   await waitFor(() => expect(document.querySelector('[data-lifecycle=ready]')).toBeTruthy());
 }
@@ -170,23 +177,19 @@ export function currentSettingsPage(): string {
   return screen.getByRole('tab', { selected: true }).textContent ?? '';
 }
 
-/** Native source paths, revisions and raw projections are diagnostics: they
- * live on Advanced, not on the ordinary product pages. These read them there
- * and return to the page the test was on, so asserting a revision never
- * changes what the test is actually exercising. */
-export async function findOnAdvanced(pattern: RegExp) {
-  const previous = currentSettingsPage();
-  if (previous !== 'Advanced') fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
-  const node = await screen.findByText(pattern);
-  if (previous !== 'Advanced') fireEvent.click(screen.getByRole('tab', { name: previous }));
-  return node;
+/** Coordination tests inspect the actual authority rather than requiring
+ * internal revisions and projections in the product UI. */
+export function settingsContext() {
+  if (!contractAuthority) throw new Error('No Settings surface mounted');
+  return contractAuthority().getSnapshot().context;
 }
-export function queryOnAdvanced(pattern: RegExp) {
-  const previous = currentSettingsPage();
-  if (previous !== 'Advanced') fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
-  const node = screen.queryByText(pattern);
-  if (previous !== 'Advanced') fireEvent.click(screen.getByRole('tab', { name: previous }));
-  return node;
+export function observedRevision(expected?: string) {
+  const { observation, target } = settingsContext();
+  const revision = target.kind === 'user' ? observation?.user.revision : observation?.workspace?.revision;
+  return revision !== undefined && (expected === undefined || revision === expected) ? revision : null;
+}
+export async function waitForSettingsRevision(expected?: string) {
+  await waitFor(() => expect(observedRevision(expected)).toBeTruthy());
 }
 
 /** Pick a value from a React Aria Select.
@@ -195,6 +198,10 @@ export function queryOnAdvanced(pattern: RegExp) {
  * the listbox opens in a portal outside the form, so the trigger is found in
  * `scope` and the option globally. */
 export async function chooseOption(label: string, option: string, scope: { getByRole: typeof screen.getByRole } = screen) {
+  if (label === 'API Key source') {
+    const options = screen.queryByRole('button', { name: 'Connection options', expanded: false });
+    if (options) fireEvent.click(options);
+  }
   fireEvent.click(scope.getByRole('button', { name: (accessible: string) => accessible.endsWith(label) }));
   fireEvent.click(await screen.findByRole('option', { name: option }));
 }

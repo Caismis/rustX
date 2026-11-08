@@ -55,9 +55,9 @@ export function AutoRepairSection({ receipt, malformed, focused, inspection, pre
   useEffect(() => {
     if (focused && inspection && receiptId && reportable) report.current?.(receiptId);
   }, [focused, inspection, receiptId, reportable]);
+  if (!receipt && !malformed && !focused) return null;
   return <section ref={section} id="settings-auto-repair" aria-label={tx('settings:auto-repair.title')} data-focused={focused || undefined}>
     <h4>{tx('settings:auto-repair.title')}</h4>
-    <p className={css.hint}>{tx('settings:auto-repair.intro')}</p>
     {!receipt ? <p role="status">{tx('settings:auto-repair.none')}</p> : <>
       {receipt.status === 'repaired'
         ? <p role="status">{tx('settings:auto-repair.repaired', { count: repairCount(tx, receipt.changed_count) })}</p>
@@ -71,11 +71,7 @@ export function AutoRepairSection({ receipt, malformed, focused, inspection, pre
         {receipt.truncated && <p className={css.hint}>{tx('settings:auto-repair.truncated', { shown: receipt.changes.length, total: receipt.changed_count })}</p>}
       </>}
       <p>{receipt.backup_available ? tx('settings:auto-repair.backup-kept') : tx('settings:auto-repair.backup-none')}</p>
-      <p className={css.hint}>{receipt.after_revision
-        ? tx('settings:auto-repair.revisions', { before: receipt.before_revision, after: receipt.after_revision })
-        : tx('settings:auto-repair.revision', { before: receipt.before_revision })}</p>
       {receipt.status !== 'repaired' && malformed && <p>{tx('settings:auto-repair.manual-repair')}</p>}
     </>}
-    <p className={css.hint}>{tx('settings:auto-repair.not-application')}</p>
   </section>;
 }

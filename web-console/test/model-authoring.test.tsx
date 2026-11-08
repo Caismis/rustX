@@ -50,7 +50,7 @@ it('a model is added in one dialog, confirmed by native observation, and listed 
   expect(writes(subject)).toHaveLength(1);
 });
 
-it('changes API format once on the provider and every model row inherits it', async () => {
+it('changes API format once on the provider without exposing protocol identifiers on model rows', async () => {
   const subject = cfg3Client(async (operation, source) => {
     if (operation.method !== 'configuration/sourceWrite') return;
     const mutation = operation.params.mutation;
@@ -66,7 +66,8 @@ it('changes API format once on the provider and every model row inherits it', as
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0][0]).toMatchObject({ params: { mutation: { mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'anthropic_messages', credential: { kind: 'retain' } } } } } });
   await waitFor(() => {
-    for (const id of ['one', 'two']) expect(within(screen.getByRole('row', { name: id })).getByText('anthropic_messages')).toBeTruthy();
+    for (const id of ['one', 'two']) expect(within(screen.getByRole('row', { name: id })).queryByText('anthropic_messages')).toBeNull();
+    expect(screen.getByRole('button', { name: /API format$/ }).textContent).toContain('Anthropic Messages');
   });
   fireEvent.click(screen.getByRole('button', { name: '+ Add Model' }));
   expect(within(screen.getByRole('dialog', { name: 'Add Model' })).queryByLabelText('API format')).toBeNull();
@@ -138,9 +139,9 @@ it('an untouched required field is validated on submission, and a new provider c
 it('switching credential modes removes the previous mode and its secret from the submitted provider', async () => {
   const subject = cfg3Client();
   await openModels(subject);
-  await chooseOption('Credential source', 'Enter a literal secret');
+  await chooseOption('API Key source', 'Enter a literal secret');
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'DISCARDED_FIXTURE_SECRET' } });
-  await chooseOption('Credential source', 'Read it from an environment variable');
+  await chooseOption('API Key source', 'Read it from an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'PROVIDER_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));

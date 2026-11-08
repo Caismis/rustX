@@ -20,13 +20,12 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
    const settings = page.getByRole('region', { name: 'Settings', exact: true });
    await openSettingsPage(page, 'Advanced');
-   await expect(settings.getByText(/Revision:/)).toBeVisible();
-   await settings.getByLabel('max_connections', { exact: true }).fill('19');
-   await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
-   await expect(settings.getByText('App Server policy saved.')).toBeVisible();
-   await expect(settings.getByText('Saved process policy is active.')).toBeVisible();
+   await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
+   await settings.getByLabel('Reserved tokens', { exact: true }).fill('19');
+   await settings.getByRole('button', { name: 'Save Context', exact: true }).click();
+   await expect(settings.getByText('Context saved.')).toBeVisible();
    const source = await readSource(remote,{kind:'user'});
-   expect(source.process_bindings?.max_connections).toBe(19);
+   expect(source.user.authored?.context?.reserve_tokens).toBe('19');
    expect(source.workspace).toBeNull();
    await returnHome(page);
    await openWorkspaceSettings(page, a.displayName);
@@ -34,9 +33,8 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    // The User source authors every Native Tool, so this Workspace displays the
    // native effective value while authoring none of it.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await settings.getByRole('form', { name: 'Native Tools', exact: true }).getByRole('button', { name: 'Configuration details', exact: true }).click();
-   await expect(settings.getByRole('form', { name: 'Native Tools', exact: true }).getByText('Inherited — no Workspace override')).toBeVisible();
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('form', { name: 'Built-in tools', exact: true })).toHaveAttribute('data-authored', 'absent');
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
    // An explicit edit against that displayed value is Workspace A's own draft.
    await settings.getByLabel('read', { exact: true }).uncheck();
    await returnHome(page);
@@ -45,15 +43,15 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    // Workspace B is a different target: it still shows the inherited value and
    // never receives Workspace A's draft.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
    await settings.getByLabel('write', { exact: true }).uncheck();
    await returnHome(page);
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
    await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
    await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
-   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
-   await expect(settings.getByText('Native Tools saved.')).toBeVisible();
+   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+   await expect(settings.getByText('Built-in tools saved.')).toBeVisible();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
    if (authored.kind !== 'read') throw new Error('expected a read outcome');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
@@ -64,7 +62,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await f.workspaceHost.host.removeWorkspace(await f.workspaceHost.host.listWorkspaces(), a.id);
    // A revoked target fences the next authored change and retains the draft.
    await settings.getByLabel('read', { exact: true }).check();
-   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
+   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
    await expect(settings.getByRole('alert').filter({ hasText: /was not saved\. WorkspaceHostError: Workspace Host: Error: Unknown/ })).toBeVisible();
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await returnHome(page);
@@ -73,15 +71,15 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await openSettingsPage(page, 'Tools & Permissions');
    // A fresh User lifetime carries no draft, so there is nothing to save until
    // an explicit edit changes the authored value.
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
    await settings.getByLabel('read', { exact: true }).uncheck();
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeEnabled();
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeEnabled();
    const before = wire.requests.filter(row => row.method === 'configuration/sourceWrite').length;
    wire.loseNext('configuration/sourceWrite');
-   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
+   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
    await expect.poll(wire.lost).toBe(1);
    await connectionAction(page, 'Reconnect');
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeEnabled();
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeEnabled();
    expect(wire.lost()).toBe(1);
    expect(wire.requests.filter(row => row.method === 'configuration/sourceWrite')).toHaveLength(before + 1);
    expect((await sessions()).sessions).toEqual([]);

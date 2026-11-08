@@ -109,7 +109,7 @@ export async function connectRemote(page: Page, endpoint: string, token: string)
   await openConnectionSettings(page);
   await page.getByLabel('Connection mode').selectOption('remote');
   await page.getByLabel('WebSocket endpoint').fill(endpoint);
-  await page.getByLabel('Transport token').fill(token);
+  await page.getByLabel('Access token').fill(token);
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('.connection-status')).toHaveText('Connected');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();

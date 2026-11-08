@@ -21,7 +21,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
   const agent = readFileSync(agentPath, 'utf8');
   const connect = async () => {
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     // Transport initialization precedes restoration of the selected Session.
     // Large authored inputs must finish native attachment before replay checks.
     if (session) await wire.attachedTarget(session);

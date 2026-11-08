@@ -51,13 +51,8 @@ export interface ExtensionEntry {
   readonly diagnostics: readonly string[];
   readonly capability: ResourceCapability;
 }
-
 /** A native preparation or admission status, never a presentation state. */
 export type Preparation = SourceInspection['status'] | WorkflowInspection['status'];
-
-export function validityLabel(tx: Translate, entry: ExtensionEntry): string {
-  return entry.valid === undefined ? tx('settings:copy.validity-not-observed') : entry.valid ? tx('settings:copy.valid-definition') : tx('settings:copy.invalid-definition');
-}
 
 export const resourceFamilies: readonly ResourceFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python'];
 
@@ -169,33 +164,4 @@ export function relationshipLabel(tx: Translate, entry: ExtensionEntry, scope: S
     : entry.relationship === 'overriding' ? tx('settings:copy.overrides-the-inherited-definition')
       : entry.relationship === 'inherited' ? tx('settings:copy.inherited-from-user-no-override-in-this-workspace')
         : tx('settings:copy.shadowed-by-the-workspace-definition');
-}
-
-/** What a Workflow's observation is called: native admits a Workflow program,
- * and prepares an MCP or Managed Python source. */
-export function preparationTitle(tx: Translate, entry: ExtensionEntry): string {
-  return entry.family === 'workflow' ? tx('settings:copy.admission') : tx('settings:copy.preparation');
-}
-
-export function preparationLabel(tx: Translate, entry: ExtensionEntry): string | undefined {
-  if (!entry.capability.preparation) return undefined;
-  // Native published no observation for this identity, so its status is
-  // unknown. Unknown is never rendered as a negative status.
-  if (entry.preparation === undefined) return tx('settings:copy.value-not-observed', { p0: preparationTitle(tx, entry) });
-  switch (entry.preparation) {
-    case 'ready': return tx('settings:copy.prepared');
-    case 'unprepared': return tx('settings:copy.not-prepared');
-    case 'unavailable': return tx('settings:copy.preparation-unavailable');
-    case 'enabled': return tx('settings:copy.admitted');
-    case 'disabled': return tx('settings:copy.not-admitted');
-  }
-}
-
-export function selectionLabel(tx: Translate, entry: ExtensionEntry): string | undefined {
-  if (entry.capability.selection === 'none') return undefined;
-  // Native published no root inspection, so whether the root Agent may use
-  // this resource is unknown. Unknown is never rendered as "no".
-  if (entry.selected === undefined) return tx('settings:copy.root-selection-not-observed');
-  if (entry.family === 'skill') return entry.selected ? tx('settings:copy.visible-to-the-root-agent') : tx('settings:copy.not-visible-to-the-root-agent');
-  return entry.selected ? tx('settings:copy.allowed-for-the-root-agent') : tx('settings:copy.not-allowed-for-the-root-agent');
 }

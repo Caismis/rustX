@@ -5,7 +5,6 @@ import { useTranslation } from '../../../locale/react';
 import type { ResourceFamily, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v76';
 import { Button } from '../../../presentation/primitives/Button';
 import { IconAgentPresetOutline16, IconCodeOutline16 } from '../../../presentation/primitives/icons';
-import { NativeFacts } from '../../components/NativeFacts';
 import { Advanced, FilterTabs, Search } from '../primitives/aria';
 import { extensionFamilyLabel, type ExtensionFamily } from '../projection';
 import type { PageFocus } from '../machines/navigation';
@@ -40,8 +39,8 @@ export function ExtensionsPage({ source, scope, revision, models, profiles, focu
   const entries = filter === 'all' ? allExtensionEntries(source, scope).filter(entry => entry.family !== 'mcp') : filter === 'native' ? [] : extensionEntries(source, scope, filter);
   const canCreate = filter === 'agent';
   const describe = (entry: ExtensionEntry) => {
-    if (entry.family === 'agent') return source.agents.find(agent => agent.name === entry.name && agent.scope === entry.owner)?.source.authored?.description || entry.path;
-    return entry.path;
+    if (entry.family === 'agent') return source.agents.find(agent => agent.name === entry.name && agent.scope === entry.owner)?.source.authored?.description ?? '';
+    return '';
   };
   const needle = query.trim().toLocaleLowerCase();
   const matches = entries.filter(entry => [entry.name, describe(entry), entry.path].some(text => text.toLocaleLowerCase().includes(needle)));
@@ -56,8 +55,8 @@ export function ExtensionsPage({ source, scope, revision, models, profiles, focu
     {items.map(entry => <div key={`${entry.family}:${entry.name}`} role="listitem" aria-label={entry.name} className={catalog.card}><button type="button" className={catalog.open} aria-label={`${extensionFamilyLabel(tx,entry.family)} ${entry.name}`} onClick={() => open(entry)}>
       <span className={catalog.icon} aria-hidden="true">{entry.family === 'agent' ? <IconAgentPresetOutline16/> : <IconCodeOutline16/>}</span>
       <span className={catalog.content}><span className={catalog.name}><span className={catalog.identity}>{entry.name}</span>{filter === 'all' && <span className={catalog.count}>{extensionFamilyLabel(tx,entry.family)}</span>}</span>
-        <span className={catalog.description} title={entry.diagnostics[0] ?? describe(entry)}>{entry.diagnostics[0] ?? describe(entry)}</span></span>
-      <span className={catalog.state} data-invalid={entry.valid === false || undefined}>{entry.valid === false ? tx('settings:copy.invalid-definition') : entry.selected === undefined ? tx('settings:catalog.unknown') : entry.selected ? tx('settings:catalog.enabled') : tx('settings:catalog.disabled')}</span>
+        {(entry.diagnostics[0] || describe(entry)) && <span className={catalog.description} title={entry.diagnostics[0] ?? describe(entry)}>{entry.diagnostics[0] ?? describe(entry)}</span>}</span>
+      <span className={catalog.state} data-invalid={entry.valid === false || undefined}>{entry.valid === false ? tx('settings:copy.invalid-definition') : entry.selected === undefined ? null : entry.selected ? tx('settings:catalog.enabled') : tx('settings:catalog.disabled')}</span>
     </button>{revision !== undefined && (entry.family === 'skill' || entry.family === 'agent') && <ResourceAvailability family={entry.family} name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision} inspect={() => open(entry)}/>}</div>)}
   </div>;
   return <section className={catalog.catalog} aria-label={tx('settings:extensions-page.extensions')}>
@@ -94,13 +93,15 @@ export function ExtensionsPage({ source, scope, revision, models, profiles, focu
 export function CollectionDiagnostics({ source, families }: { source: SourceSettings; families: readonly ResourceFamily[] }) {
   const tx = useTranslation();
   const diagnostics = collectionDiagnostics(source, families);
-  const skills = families.includes('skill') ? source.prospective_resources?.skill_diagnostics ?? [] : [];
+  const skills = families.includes('skill') ? (source.prospective_resources?.skill_diagnostics ?? []).filter(item => item.kind !== 'shadowed') : [];
   if (!diagnostics.length && !skills.length) return null;
   return <section aria-label={tx('settings:extensions-page.source-diagnostics')}>
     <h4>{tx('settings:extensions-page.source-diagnostics')}</h4>
     {diagnostics.map((item, index) => <p className={css.error} key={index}>
       {extensionFamilyLabel(tx, item.subject.family)} {tx('settings:extensions-page.source')}{item.file ? tx('settings:extensions-page.value', { p0: item.file }) : ''}: {item.reason}
     </p>)}
-    {!!skills.length && <Advanced title={tx('settings:extensions-page.skill-discovery-diagnostics-value', { p0: skills.length })}><NativeFacts value={skills} /></Advanced>}
+    {!!skills.length && <Advanced title={tx('settings:extensions-page.skill-discovery-diagnostics-value', { p0: skills.length })}>
+      {skills.map((item, index) => <p className={css.error} key={index}>{tx(`settings:skill-issue.${item.kind}`)}{' '}{'package' in item ? item.package : 'root' in item ? item.root : 'name' in item ? item.name : item.roots.join(', ')}</p>)}
+    </Advanced>}
   </section>;
 }

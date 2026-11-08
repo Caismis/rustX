@@ -106,7 +106,7 @@ it('keeps reasoning membership coherent on add, delete, final delete and reset',
   fireEvent.click(screen.getByRole('button', { name: 'Delete profile a' }));
   fireEvent.click(screen.getByRole('button', { name: 'Delete profile b' }));
   expect(screen.queryByRole('list', { name: 'Reasoning order (low to high)' })).toBeNull();
-  expect(screen.getByText('Add Profiles before configuring reasoning order.')).toBeTruthy();
+  expect(screen.getByText('Add a profile to configure reasoning levels.')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(writes).toHaveBeenCalledTimes(2));
   expect(writes.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
@@ -203,28 +203,28 @@ it('authors general Model Profiles as complete presets, moving model parameters 
 it.each(['all', 'none', 'exact'] as const)('writes exact native %s Skill selection', async mode => {
   const source = workspaceSource();
   const { writes: write } = await renderEditor(toolsPage(source, {}, 'workspace', 's1'), { source, context: source });
-  const form = within(screen.getByRole('form', { name: 'Skill visibility' }));
+  const form = within(screen.getByRole('form', { name: 'Available skills' }));
   // An explicitly authored empty selection is a value, not the absence of one,
   // so it is authored by the explicit Override gesture rather than produced by
   // re-picking the mode the control already displays.
-  if (mode === 'none') fireEvent.click(form.getByRole('button', { name: 'Override Skill visibility' }));
+  if (mode === 'none') fireEvent.click(form.getByRole('button', { name: 'Override Available skills' }));
   else await chooseOption('Selection', mode === 'all' ? 'All' : 'Exact identities', form);
-  if (mode === 'exact') fireEvent.change(form.getByLabelText('Visible Skills identities 1'), { target: { value: 'review' } });
-  fireEvent.click(form.getByRole('button', { name: 'Save Skill visibility' }));
+  if (mode === 'exact') fireEvent.change(form.getByLabelText('Skills names 1'), { target: { value: 'review' } });
+  fireEvent.click(form.getByRole('button', { name: 'Save Available skills' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['review'] } }, 's1'));
 });
 
-it('presents the five Agent controls as one automatic group, never as ordinary Tool selections', async () => {
-  // Issue #462 D03: native composes the group from the Agent allowlist alone.
+it('keeps automatically composed Agent controls out of settings', async () => {
+  // Issue #462 D03: native composes the group from the Available subagents alone.
   const controls = ['subagent', 'list_agents', 'send_message', 'wait_agent', 'interrupt_agent'];
   const source = workspaceSource();
   await renderEditor(toolsPage(source, {}, 'workspace', 'c1'), { source, context: source });
-  const whitelist = within(screen.getByRole('group', { name: 'Explicit whitelist' }));
+  const whitelist = within(screen.getByRole('group', { name: 'Available tools' }));
   expect(whitelist.getByRole('checkbox', { name: 'read' })).toBeTruthy();
   for (const name of controls) expect(whitelist.queryByRole('checkbox', { name })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
   for (const name of controls) expect(screen.queryByRole('form', { name: `${name} policy` })).toBeNull();
-  expect(screen.getByRole('note', { name: 'Agent controls' }).textContent).toContain('Admitting at least one named Agent');
+  expect(screen.queryByRole('note', { name: 'Agent controls' })).toBeNull();
   cleanup();
   const composed = workspaceSource();
   composed.prospective_resources = {
@@ -235,8 +235,7 @@ it('presents the five Agent controls as one automatic group, never as ordinary T
     },
   };
   await renderEditor(toolsPage(composed, {}, 'workspace', 'c2'), { source: composed, context: composed });
-  expect(screen.getByRole('note', { name: 'Agent controls' }).textContent)
-    .toBe('Composed automatically from the Agent allowlist: subagent, list_agents, send_message, wait_agent, interrupt_agent. These controls cannot be selected or configured individually.');
+  expect(screen.queryByRole('note', { name: 'Agent controls' })).toBeNull();
 });
 
 it('writes Native and MCP invocation policies independently, and an empty policy only when explicitly authored', async () => {
@@ -282,11 +281,11 @@ it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection
   source.target = { kind: 'user' };
   const document: RuntimeLayer = { agent: { tools: { sources: { [id]: [] } } } };
   const { writes: write } = await renderEditor(toolsPage(source, document, 'user', 'tools-r1'), { source, context: source });
-  const form = within(screen.getByRole('form', { name: `Source ${id}` }));
+  const form = within(screen.getByRole('form', { name: `Tools: ${id}` }));
   for (const mode of ['all', 'none', 'exact'] as const) {
     await chooseOption('Selection', mode === 'all' ? 'All' : mode === 'none' ? 'None' : 'Exact identities', form);
-    if (mode === 'exact') fireEvent.change(form.getByRole('textbox', { name: `${id} identities 1` }), { target: { value: 'inspect' } });
-    fireEvent.click(form.getByRole('button', { name: `Save Source ${id}` }));
+    if (mode === 'exact') fireEvent.change(form.getByRole('textbox', { name: `${id} names 1` }), { target: { value: 'inspect' } });
+    fireEvent.click(form.getByRole('button', { name: `Save Tools: ${id}` }));
     await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'source_tools', id, authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['inspect'] } }, 'tools-r1'));
   }
 });
@@ -630,12 +629,12 @@ it('an unrelated source observation keeps unparsed JSON, and the explicit review
   fireEvent.change(contextWindow(), { target: { value: '64000' } });
   unparsed(input, '{"top_p": ');
   await observe(revision('r3', { main: { ...main, max_output_tokens: main.max_output_tokens - 2 } }));
-  expect(await screen.findByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
+  expect(await screen.findByRole('button', { name: 'Use latest setting' })).toBeTruthy();
   expect(readJson(input)).toBe('{"top_p": ');
   // …and the explicit review gesture is the owner reset: the editor shows the
   // draft's own request_params, which the draft keeps, fenced on r3.
-  fireEvent.click(screen.getByRole('button', { name: 'Use reviewed revision' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Use latest setting' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Use latest setting' })).toBeNull());
   restored(input);
   expect(contextWindow().value).toBe('64000');
   expect(discardButton()).toBeTruthy();
