@@ -44,7 +44,7 @@ These exclusions do not waive required in-scope behavior.
 | Minimal external-client smoke | Real authenticated v75 initialize/server-info passed from outside the repository |
 | Independent code review | Initial/shutdown/watch/EOF/descriptor findings repaired. Subsequent literal-credential, PTY-signal and busy-watch findings, redaction expansion/diagnostic caps, unread-retirement cancellation and actor fairness were independently re-reviewed: no remaining P1/P2 or weakened assertions. |
 | Final-head FULL CI, including macOS and both browser shards | Pending at capture time; required on the final PR head. The PR description tracks its exact SHA, run and verdict. |
-| Performance/resource measurements | Six source-identified baseline/candidate pairs and six native environment captures are retained below. The latest captures identify typed-boundary source `cd9a792f4`; every source/binary digest and raw sample count was independently verified. |
+| Performance/resource measurements | Seven source-identified baseline/candidate pairs and seven native environment captures are retained below. The latest captures identify proxy-authentication source `ec0759b26`; every source/binary digest and raw sample count was independently verified. |
 
 Native commit points, physical settlement and resource limits are specified in the
 service contract above. Lost responses never authorize command/mutation replay.
@@ -647,3 +647,58 @@ whitespace, all-feature binary build and authenticated standalone Node example
 checks passed. The earlier 6,061-test complete local run identifies
 the preceding typed-boundary source; the new final-head FULL run must validate
 the complete target/platform matrix after this small collector extension.
+
+### Proxy authentication source and measurements
+
+The seventh capture pair follows product source
+`ec0759b26735eaf2dc1fea981224547b25f2fecc`, baseline then candidate then
+environment, without concurrent compilation/tests from this task. The untouched
+baseline is still `57447d2e825f914e80bbfecc68d373fcab487446`. Debug all-feature
+binaries, committed source objects, working-file identity and every raw sample
+were checked. The harness retains its `workingTree: true` marker. All earlier
+captures remain historical evidence for their stated sources.
+
+| Capture | Measured-source SHA-256 | Binary SHA-256 |
+| --- | --- | --- |
+| [Baseline Turn](baseline-proxy-authorization-measurements.json) | `9698a4826d8c1f7f65e9d729b41aaa7ff5ade3b8c5179646c2fe416caa53fc22` | `c2532fa4c9560388e4b67190f8da2555d40dcf0dd15a257746ce3c7ed8f0ac19` |
+| [Candidate Turn](candidate-proxy-authorization-measurements.json) | `6e1bed0a89134805700083851929131284b24f798993b33b920c7837d734e782` | `810bcc91234a0445347dfd9fee05d93f0f5e9658a3350f46907def296d833282` |
+| [Candidate environment](environment-proxy-authorization-measurements.json) | `e40d8419d2f4a878abacd79aa7297fa183935f09cee692ee8f94455826e4ecb2` | `810bcc91234a0445347dfd9fee05d93f0f5e9658a3350f46907def296d833282` |
+
+Each mode completed twenty real settled native Turns, with twenty provider
+requests without Host Tools and forty with Host Tools. Values are baseline /
+candidate; all p50/p95 values use their original twenty samples.
+
+| Mode | CPU ms | RSS after MiB | Write calls | Kernel written MiB | Latency p50 ms | Latency p95 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| no-host-tools | 7060 / 5150 | 327.1 / 319.5 | 30936 / 30644 | 62.06 / 61.97 | 692.2 / 200.2 | 6906.3 / 235.3 |
+| host-one-client | 18260 / 17770 | 341.0 / 343.3 | 70772 / 70613 | 142.94 / 143.13 | 741.0 / 630.1 | 1002.1 / 748.3 |
+| host-three-clients | 23950 / 24010 | 345.0 / 349.0 | 70727 / 70723 | 142.96 / 143.04 | 676.6 / 637.7 | 990.5 / 1003.3 |
+| host-three-clients-one-paused | 22190 / 22360 | 346.7 / 349.4 | 70862 / 70787 | 143.22 / 143.36 | 638.0 / 762.9 | 702.5 / 1162.1 |
+| host-three-resident-sessions | 23800 / 23200 | 359.4 / 362.3 | 60020 / 60089 | 123.11 / 123.25 | 602.1 / 547.8 | 681.1 / 572.6 |
+
+Candidate RSS increased in all Host modes, and CPU increased in three-client
+and paused-client modes. Three-client p95 and paused-client p50/p95 increased;
+resident-session CPU and latency decreased while writes/RSS increased. The
+baseline no-Host 7383.5 ms maximum and 6906.3 ms p95 remain visible. These
+fixed-order shared-host debug
+samples do not establish causation, statistical significance, zero overhead or
+production throughput.
+
+All four environment modes completed twenty cycles with zero Host Tools/model
+requests. All eighty descriptor samples retained the original 19/21 counts.
+Four admitted commands and eight watches reached 75/77 descriptors and thirteen
+OS processes; cleanup returned to 19/21 descriptors and one server process.
+
+| Environment mode | Parent / reaped-child CPU ms | RSS after MiB | Cycle p50 / p95 ms | Write calls | Kernel written MiB | Descriptors before / peak / cleanup |
+| --- | --- | --- | --- | --- | --- | --- |
+| environment-one-client | 320 / 60 | 154.5 | 33.8 / 43.6 | 593 | 0.08 | 19 / 75 / 19 |
+| environment-three-clients | 480 / 90 | 155.4 | 42.9 / 47.3 | 630 | 0.08 | 21 / 77 / 21 |
+| environment-three-sessions | 560 / 100 | 163.2 | 43.9 / 47.3 | 502 | 0.08 | 21 / 77 / 21 |
+| environment-one-idle-paused-client | 480 / 90 | 156.4 | 42.9 / 46.2 | 587 | 0.08 | 21 / 77 / 21 |
+
+Setup/peak work is excluded from cycle CPU/write deltas. Kernel counters are not
+physical-device I/O; summed process-tree RSS repeats shared pages. The paused
+idle peer does not establish saturation behavior; native bounded-output tests
+cover that contract. Observed resource return is a cardinality fact, not a
+general workload/capacity guarantee. The PR records the final-head FULL CI
+verdict separately, after this evidence-only commit.
