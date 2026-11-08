@@ -1029,7 +1029,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         let baseline = super::configuration::settled(&f, 0).await;
         let before = probe.configuration_preparations.load(Ordering::SeqCst);
         // An exactly at-bound User source whose only eligible repair,
-        // `schema_version = 9` → `10`, adds one byte.
+        // `schema_version = 9` → `11`, adds one byte.
         let mut document: toml_edit::DocumentMut = std::fs::read_to_string(user_path(&f))
             .unwrap()
             .parse()
@@ -1066,7 +1066,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
         assert_eq!(
             receipt.changes,
-            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 10 }]
+            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 11 }]
         );
         assert!(!receipt.backup_available);
         assert!(receipt.after_revision.is_none());

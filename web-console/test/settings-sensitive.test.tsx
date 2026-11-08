@@ -22,9 +22,9 @@ function redactedSources(s: ReturnType<typeof cfg3Client>) {
   s.source.user.authored = {
     ...s.source.user.authored,
     environment: ['SECRET_ENV', 'PLAIN_ENV'],
-    providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } } },
+    providers: { transport: { protocol: 'openai_responses', base_url: 'https://user.invalid', credential: { type: 'literal' } } },
   };
-  s.source.resolved = { environment: ['SECRET_ENV', 'PLAIN_ENV'], providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } } }, models: {} };
+  s.source.resolved = { environment: ['SECRET_ENV', 'PLAIN_ENV'], providers: { transport: { protocol: 'openai_responses', base_url: 'https://user.invalid', credential: { type: 'literal' } } }, models: {} };
   s.source.provenance = { 'environment.SECRET_ENV': { kind: 'user', document: '/bound/rustx.toml', base: '/bound' } };
   s.source.user_mcp.authored = { search: { definition: { type: 'stdio', command: 'search-server' }, retained_env: ['TOKEN'], retained_headers: [] } };
 }

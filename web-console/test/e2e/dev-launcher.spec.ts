@@ -18,12 +18,12 @@ test('development launcher serves the real Web carrier, native App Server and ex
   const settings = join(directory, 'rustx.toml'); writeFileSync(settings, `[agent.model]
 model = "local/local-model"
 [providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:1/v1"
 api_key = "launcher-test-unused"
 [models."local/local-model"]
 provider = "local"
 id = "local-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
@@ -46,7 +46,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect(launchToken).not.toBe(token);
     // Real native admission: browser credentials cannot enter the v9 transport.
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v75', `rustx-token.${btoa(launchToken!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v76', `rustx-token.${btoa(launchToken!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser token admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
@@ -62,7 +62,7 @@ compat = { chat_reasoning_replay = "omit" }
     const proof = await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE);
     expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/); expect([token, launchToken]).not.toContain(proof);
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v75', `rustx-token.${btoa(proof!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v76', `rustx-token.${btoa(proof!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser session proof admitted by native App Server')); };
       socket.onerror = () => resolve();
     });

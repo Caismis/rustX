@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v75.js';
+import type {ProtocolMessage} from './v76.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -289,7 +289,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 75,
+      "protocol_version": 76,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -307,7 +307,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 75,
+      "protocol_version": 76,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -4458,7 +4458,6 @@ export const fixtures = [
           "authored": {
             "provider": "fixture",
             "id": "wire-model",
-            "protocol": "openai_responses",
             "context_window": "128000",
             "max_output_tokens": 4096,
             "capabilities": {
@@ -4501,7 +4500,6 @@ export const fixtures = [
           "authored": {
             "provider": "fixture",
             "id": "wire-model",
-            "protocol": "openai_responses",
             "context_window": "128000",
             "max_output_tokens": 4096,
             "capabilities": {

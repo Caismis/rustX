@@ -67,12 +67,14 @@ impl SourceTarget {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProviderView {
+    pub protocol: crate::model::ModelProtocol,
     pub base_url: String,
     pub credential: CredentialSourceView,
 }
 impl From<Provider> for ProviderView {
     fn from(provider: Provider) -> Self {
         Self {
+            protocol: provider.protocol,
             base_url: provider.base_url,
             credential: provider.api_key.view(),
         }
@@ -106,6 +108,7 @@ pub enum CredentialEdit {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderWrite {
+    pub protocol: crate::model::ModelProtocol,
     pub base_url: String,
     pub credential: CredentialEdit,
 }
@@ -398,11 +401,9 @@ fn revision(bytes: Option<&[u8]>) -> String {
 /// automatic repair decide them; safe text only.
 fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
     match super::semantics::composition_semantics(document) {
-        Ok(super::semantics::Composition::Complete) => None,
-        Ok(super::semantics::Composition::NoDefaultModel) => Some(
-            "no unambiguous default model selected; set agent.model.model in User or Workspace rustx.toml"
-                .into(),
-        ),
+        // A saved Provider without a Model is valid configuration in progress.
+        // Session creation owns model readiness; source editors must stay usable.
+        Ok(_) => None,
         Err(failure) => Some(failure.summary()),
     }
 }
@@ -611,6 +612,7 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
                         return Err(SettingsError::Invalid);
                     }
                     Ok(Provider {
+                        protocol: authored.protocol,
                         base_url: authored.base_url,
                         api_key: credential,
                     })
@@ -740,6 +742,7 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
 fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     #[derive(Serialize)]
     struct PrivateProvider {
+        protocol: crate::model::ModelProtocol,
         base_url: String,
         api_key: String,
     }
@@ -751,6 +754,7 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     // its literal values here; only the wire projection redacts them.
     let document = document.project(
         |provider| PrivateProvider {
+            protocol: provider.protocol,
             base_url: provider.base_url,
             api_key: match provider.api_key {
                 CredentialSource::Literal(value) => value,

@@ -67,7 +67,8 @@ import type { RevisionSelector } from '../projection';
  * Memory only. Nothing here is persisted, merged with sources, or used as
  * runtime state. */
 export interface UnitTransactionContext {
-  /** `JSON.stringify` of the unit's own mutation shape; the unit's identity. */
+  /** Stable browser unit identity; a creation draft exists before its native
+   * resource name is chosen, while an existing unit uses its mutation shape. */
   readonly identity: string;
   /** The non-sensitive native descriptor naming which source revision settles
    * this unit's mutations. Never the authored payload. */

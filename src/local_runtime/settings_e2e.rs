@@ -13,12 +13,12 @@ fn fixture() -> (tempfile::TempDir, HostEnvironment, LaunchRequest) {
         home.join("rustx/rustx.toml"),
         r#"
 [providers.local]
+protocol = "openai_responses"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "SECRET_SENTINEL"
 [models.a]
 provider = "local"
 id = "wire-a"
-protocol = "openai_responses"
 context_window = 128000
 max_output_tokens = 8192
 [models.a.capabilities]

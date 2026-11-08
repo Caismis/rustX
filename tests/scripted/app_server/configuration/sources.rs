@@ -251,15 +251,15 @@ async fn c05_broken_source_retains_revision_inventory_and_explicit_validated_rep
         let repaired = repaired_projection;
         assert!(repaired.user.authored.is_some());
         assert!(repaired.user.diagnostic.is_none());
-        // Syntactically valid but unresolved sources retain the entire editor and
-        // independently valid inventory; a default model is not read admission.
+        // Missing defaults are valid setup in progress. A dangling selection
+        // still diagnoses the reference without taking away the editor.
         let mut document: toml::Value =
             toml::from_str(&std::fs::read_to_string(&repaired.user.path).unwrap()).unwrap();
         document["agent"].as_table_mut().unwrap().remove("model");
         std::fs::write(&repaired.user.path, toml::to_string(&document).unwrap()).unwrap();
         let missing = f.manager.source_settings(&target).await.unwrap();
         assert!(missing.user.authored.is_some());
-        assert!(missing.prospective_diagnostic.is_some());
+        assert!(missing.prospective_diagnostic.is_none());
         assert!(missing.prospective_resources.is_some());
         document["agent"].as_table_mut().unwrap().insert(
             "model".into(),

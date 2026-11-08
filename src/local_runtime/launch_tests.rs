@@ -843,7 +843,7 @@ fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
     // Models of both documents, so neither owns the failure.
     f.user(json!({}));
     f.project(json!({"models":{"ws/x":{"provider":"missing","id":"x",
-        "protocol":"openai_responses","context_window":128_000,"max_output_tokens":4096,
+        "context_window":128_000,"max_output_tokens":4096,
         "capabilities":{"input_modalities":["text"],"output_modalities":["text"]}}}}));
     let failure = analyzed_failure(&f);
     assert!(!failure.incomplete);
@@ -1430,15 +1430,14 @@ impl Fixture {
     fn user(&self, mut value: serde_json::Value) {
         // Test input owns the requested policy; this fixture explicitly supplies
         // its independent Provider and Model definitions in the same document.
-        value["providers"] =
-            json!({"host": {"base_url":"http://127.0.0.1:9/v1", "api_key":"fixture"}});
+        value["providers"] = json!({"host": {"protocol":"openai_chat_completions", "base_url":"http://127.0.0.1:9/v1", "api_key":"fixture"}});
         value["models"] = json!(
             ["one", "two"]
                 .into_iter()
                 .map(|name| (
                     format!("host/{name}"),
                     json!({"provider":"host", "id":name,
-                "protocol":"openai_chat_completions", "context_window":128_000,
+                "context_window":128_000,
                 "max_output_tokens":4096, "capabilities":{"input_modalities":["text"],
                 "output_modalities":["text"]},
                 "compat":{"chat_reasoning_replay":"omit"}})
@@ -2137,7 +2136,7 @@ fn no_model_or_protocol_is_guessed_and_host_paths_are_validated() {
     let model_path = f.host.config_directory.join("rustx.toml");
     let mut catalog: serde_json::Value =
         crate::toml_authoring::parse(&std::fs::read(&model_path).unwrap()).unwrap();
-    catalog["models"]["host/one"]
+    catalog["providers"]["host"]
         .as_object_mut()
         .unwrap()
         .remove("protocol");

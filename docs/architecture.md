@@ -2,7 +2,7 @@
 
 ## App Server environment services (#533)
 
-The v75 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).
+The v76 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).
 
 The current Web conversation/composer lifecycle and subscription boundaries are
 specified in [WEB-16 resident conversation ownership](issue-406/conversation-surface.md).
@@ -3294,7 +3294,7 @@ M3 Agent Loop
 #### Provider, Model and selection ownership
 
 Provider and Model are independently named atomic domains in `rustx.toml`.
-A Model names its Provider and declares protocol, limits, capabilities,
+A Provider declares its shared protocol. A Model names its Provider and declares limits, capabilities,
 compatibility and opaque native request defaults. Identity spelling infers none
 of those semantics. A Workspace replacement discards the entire lower object,
 including credentials. Root model selection is another atomic semantic unit.

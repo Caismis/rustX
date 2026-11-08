@@ -8,7 +8,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v75';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v76';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -33,11 +33,11 @@ const variant = new URLSearchParams(location.search);
 // short names. None of them is a credential; credentials stay redacted.
 const longProvider = 'enterprise-inference-gateway-eu-central-primary-with-an-exceptionally-long-provider-identity';
 const longModel = 'enterprise-reasoning-model-2026-09-long-context-preview-with-an-exceptionally-long-identity';
-source.user.authored!.providers![longProvider] = {
+source.user.authored!.providers![longProvider] = { protocol: 'openai_responses',
   base_url: 'https://inference-gateway.eu-central-1.enterprise.example.invalid/v1/organizations/rustx-platform-team/deployments/primary',
   credential: { type: 'environment', variable: 'ENTERPRISE_INFERENCE_GATEWAY_EU_CENTRAL_PRIMARY_API_KEY' },
 };
-source.user.authored!.models![longModel] = { provider: longProvider, id: longModel, protocol: 'openai_chat_completions', context_window: '1048576', max_output_tokens: 65536,
+source.user.authored!.models![longModel] = { provider: longProvider, id: longModel, context_window: '1048576', max_output_tokens: 65536,
   capabilities: { input_modalities: ['text', 'image'], output_modalities: ['text'], json_schema_output: false } };
 source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', instructions: 'Inspect the source, implement the change, and verify native boundaries.', tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
 effective.document.providers = source.user.authored!.providers;

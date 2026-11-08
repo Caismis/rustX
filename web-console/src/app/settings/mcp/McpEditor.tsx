@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v75';
+import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v76';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Button } from '../../../presentation/primitives/Button';

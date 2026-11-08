@@ -834,7 +834,7 @@ fn reasoning_order_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     };
     for order in [None, Some(vec!["z-low", "a-high"])] {
         let mut model: crate::model::authoring::Model = serde_json::from_value(serde_json::json!({
-            "provider": "fixture", "id": "wire-model", "protocol": "openai_responses",
+            "provider": "fixture", "id": "wire-model",
             "context_window": 128_000, "max_output_tokens": 4096,
             "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]},
             "default_profile": "a-high", "profiles": {"a-high": {}, "z-low": {}}
@@ -1767,9 +1767,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v75.schema.json", "v75.ts"]);
+        assert_eq!(generations, ["v76.schema.json", "v76.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v75.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v76.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

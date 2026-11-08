@@ -2321,6 +2321,13 @@ export type ConfigMutation =
       unit: 'app_server';
     };
 /**
+ * The model interaction protocol an adapter must speak.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelProtocol".
+ */
+export type ModelProtocol = 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "CredentialEdit".
  */
@@ -2336,13 +2343,6 @@ export type CredentialEdit =
       value: string;
       kind: 'literal';
     };
-/**
- * The model interaction protocol an adapter must speak.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ModelProtocol".
- */
-export type ModelProtocol = 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
 /**
  * One semantic content modality of a model capability set.
  *
@@ -9956,6 +9956,7 @@ export interface McpAuthoring {
  * via the `definition` "ProviderWrite".
  */
 export interface ProviderWrite {
+  protocol: ModelProtocol;
   base_url: string;
   credential: CredentialEdit;
 }
@@ -9969,7 +9970,6 @@ export interface ProviderWrite {
 export interface Model {
   provider: string;
   id: string;
-  protocol: ModelProtocol;
   context_window: string;
   /**
    * The hard maximum output budget of every invocation of this Model.
@@ -18578,6 +18578,7 @@ export interface RuntimeLayer {
  * via the `definition` "ProviderView".
  */
 export interface ProviderView {
+  protocol: ModelProtocol;
   base_url: string;
   credential: CredentialSourceView;
 }

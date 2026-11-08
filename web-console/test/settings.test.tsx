@@ -9,7 +9,7 @@ import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import {
-  confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,
+  chooseOption, confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,
   settingsReady, SettingsSurface,
 } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
@@ -78,8 +78,8 @@ it('C10 Workspace revocation disables mutation and preserves local draft', async
 });
 
 it.each(['target', 'connection'] as const)('C10 late response after %s replacement cannot overwrite new authority', async invalidation => {
- let release!: (result: import('../../protocol/app-server/v75').MethodResult) => void;
- const pending = new Promise<import('../../protocol/app-server/v75').MethodResult>(resolve => { release = resolve; });
+ let release!: (result: import('../../protocol/app-server/v76').MethodResult) => void;
+ const pending = new Promise<import('../../protocol/app-server/v76').MethodResult>(resolve => { release = resolve; });
  let reads = 0;
  const s = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++reads === 1) return pending; });
  const host = cfg3Host(s); const ui = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={host}/>);
@@ -181,16 +181,24 @@ it('Workspace Settings is bound to one exact target and never retargets on Sessi
 });
 
 it('saves a whole Workspace Provider with explicit credentials without copying User members', async () => {
-  const subject = cfg3Client(); await open(subject, 'Models');
+  const subject = cfg3Client(async (operation, source) => {
+    if (operation.method !== 'configuration/sourceWrite' || operation.params.mutation.kind !== 'config') return;
+    const mutation = operation.params.mutation.mutation;
+    if (mutation.unit === 'provider' && mutation.authored?.credential.kind === 'environment') {
+      source.workspace!.authored = { providers: { [mutation.id]: { protocol: mutation.authored.protocol, base_url: mutation.authored.base_url, credential: { type: 'environment', variable: mutation.authored.credential.variable } } } };
+    }
+  }); await open(subject, 'Models');
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'transport' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('');
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
+  await chooseOption('Credential source', 'Read it from an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
+  await chooseOption('API format', 'OpenAI Responses (/v1/responses)');
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await screen.findByText(/Provider transport saved/);
-  expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
+  expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
   expect(screen.queryByRole('button', { name: /Adopt/ })).toBeNull();
 });
 
@@ -352,7 +360,7 @@ it('reconnect rereads native sources without replaying a dirty draft', async () 
 });
 
 it('an older authoritative read cannot replace a newer read', async () => {
-  let release: (value: import('../../protocol/app-server/v75').MethodResult) => void = () => {};
+  let release: (value: import('../../protocol/app-server/v76').MethodResult) => void = () => {};
   let count = 0;
   const subject = cfg3Client(async op => { if (op.method === 'configuration/sourcesRead' && ++count === 2) return new Promise(resolve => { release = resolve; }); });
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={subject.host ??= cfg3Host(subject)} />);
@@ -371,7 +379,7 @@ it('an older authoritative read cannot replace a newer read', async () => {
 it('removes literal credentials from a successful Provider draft using the redacted native acknowledgement', async () => {
   const subject = cfg3Client(async (op, source) => {
     if (op.method === 'configuration/sourceWrite' && op.params.mutation.kind === 'config' && op.params.mutation.mutation.unit === 'provider') {
-      source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
+      source.workspace!.authored = { providers: { secret: { protocol: 'openai_responses', base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
     }
   });
   await open(subject, 'Models');
@@ -383,7 +391,7 @@ it('removes literal credentials from a successful Provider draft using the redac
   fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   await screen.findByText(/Provider secret saved/);
-  await waitFor(() => expect(screen.queryByLabelText('API Key')).toBeNull());
+  await waitFor(() => expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe(''));
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
   fireEvent.click(screen.getByRole('button', { name: '← Models' }));
   await openResourceRow('secret');
@@ -402,6 +410,7 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
   inherited.capabilities.json_schema_output = true;
   subject.source.user.authored!.models = { main: structuredClone(inherited) };
   subject.source.resolved = structuredClone(subject.effective.document);
+  subject.source.resolved.providers = subject.source.user.authored!.providers;
   await open(subject, 'Models');
   fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
   await openResourceRow('main');
@@ -428,15 +437,15 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
 
 it('retains a Model draft when native validation rejects its semantic unit', async () => {
  const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32602, message: 'Invalid provider reference', data: { kind: 'invalid_params' } }); });
+ subject.source.resolved = { providers: subject.source.user.authored!.providers };
  await open(subject, 'Models');
  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
+ await openResourceRow('transport');
  fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
- fireEvent.change(await screen.findByLabelText('New Model identity'), { target: { value: 'draft-model' } });
- fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
  fireEvent.change(await screen.findByLabelText('Model ID'), { target: { value: 'wire' } });
  fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration' }));
  fireEvent.change(screen.getByLabelText('Provider identity'), { target: { value: 'missing' } });
- fireEvent.click(screen.getByRole('button', { name: 'Save Model draft-model' }));
+ fireEvent.click(screen.getByRole('button', { name: 'Save Add Model' }));
  expect((await screen.findByRole('alert')).textContent).toContain('Invalid provider reference');
  expect((screen.getByLabelText('Provider identity') as HTMLInputElement).value).toBe('missing');
 });
@@ -494,7 +503,7 @@ it.each([
   ['effect', 'refresh'], ['refresh', 'refresh'], ['refresh', 'write'],
 ] as const)('fences an obsolete %s read rejection after a newer %s', async (readKind, successor) => {
   let rejectRead!: (error: Error) => void;
-  const pending = new Promise<import('../../protocol/app-server/v75').MethodResult>((_, reject) => { rejectRead = reject; });
+  const pending = new Promise<import('../../protocol/app-server/v76').MethodResult>((_, reject) => { rejectRead = reject; });
   let reads = 0;
   const subject = cfg3Client(async op => {
     if (op.method === 'configuration/sourcesRead' && ++reads === 2) return pending;
@@ -571,8 +580,8 @@ it('T17 a post-commit read that observes the exact pre-save revision asks for re
 });
 
 it('retires a confirmed Provider save, including its literal credential, after the editor unmounts', async () => {
-  let release!: (result: import('../../protocol/app-server/v75').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v75').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v76').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v76').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);
@@ -591,7 +600,7 @@ it('retires a confirmed Provider save, including its literal credential, after t
   expect(screen.queryByLabelText('API Key')).toBeNull();
   // Native commit and its authoritative reread both succeed after unmount.
   subject.source.workspace!.revision = 'saved-2';
-  subject.source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
+  subject.source.workspace!.authored = { providers: { secret: { protocol: 'openai_responses', base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
   release({type:'sources_written',revision:'saved-2',configuration_revision:'1'});
   await openSettingsPage('Advanced');
   await screen.findByText(/Revision: saved-2/);
@@ -607,8 +616,8 @@ it('retires a confirmed Provider save, including its literal credential, after t
 });
 
 it('a late acknowledgement advances the CAS base without erasing a newer draft submitted after it', async () => {
-  let release!: (result: import('../../protocol/app-server/v75').MethodResult) => void;
-  const heldWrite = new Promise<import('../../protocol/app-server/v75').MethodResult>(resolve => { release = resolve; });
+  let release!: (result: import('../../protocol/app-server/v76').MethodResult) => void;
+  const heldWrite = new Promise<import('../../protocol/app-server/v76').MethodResult>(resolve => { release = resolve; });
   const subject = cfg3Client(async operation => { if (operation.method === 'configuration/sourceWrite') return heldWrite; });
   const host = cfg3Host(subject); subject.host = host;
   render(<SettingsSurface client={subject.client} target={workspaceSettingsTarget('A', 'A')} host={host} />);

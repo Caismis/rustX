@@ -25582,6 +25582,9 @@
     "ProviderView": {
       "type": "object",
       "properties": {
+        "protocol": {
+          "$ref": "#/$defs/ModelProtocol"
+        },
         "base_url": {
           "type": "string"
         },
@@ -25590,6 +25593,7 @@
         }
       },
       "required": [
+        "protocol",
         "base_url",
         "credential"
       ]
@@ -25641,9 +25645,6 @@
         },
         "id": {
           "type": "string"
-        },
-        "protocol": {
-          "$ref": "#/$defs/ModelProtocol"
         },
         "context_window": {
           "type": "string",
@@ -25707,7 +25708,6 @@
       "required": [
         "provider",
         "id",
-        "protocol",
         "context_window",
         "max_output_tokens",
         "capabilities"
@@ -38890,6 +38890,9 @@
     "ProviderWrite": {
       "type": "object",
       "properties": {
+        "protocol": {
+          "$ref": "#/$defs/ModelProtocol"
+        },
         "base_url": {
           "type": "string"
         },
@@ -38899,6 +38902,7 @@
       },
       "additionalProperties": false,
       "required": [
+        "protocol",
         "base_url",
         "credential"
       ]

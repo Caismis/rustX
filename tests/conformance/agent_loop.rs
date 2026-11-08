@@ -801,14 +801,24 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
         model["provider"] = "emulator".into();
         models.insert(format!("emulator/{id}"), model);
     }
-    for (provider, id, protocol) in [
-        ("emulator", RESPONSES_MODEL, "openai_responses"),
-        ("emulator-anthropic", ANTHROPIC_MODEL, "anthropic_messages"),
+    for (reference_provider, provider, id, protocol) in [
+        (
+            "emulator",
+            "emulator-responses",
+            RESPONSES_MODEL,
+            "openai_responses",
+        ),
+        (
+            "emulator-anthropic",
+            "emulator-anthropic",
+            ANTHROPIC_MODEL,
+            "anthropic_messages",
+        ),
     ] {
         models.insert(
-            format!("{provider}/{id}"),
+            format!("{reference_provider}/{id}"),
             serde_json::json!({
-                "provider": provider, "id": id, "protocol": protocol,
+                "provider": provider, "id": id,
                 "context_window": window, "max_output_tokens": 1024,
                 "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"]}) } else { text_capabilities() },
             }),
@@ -820,7 +830,7 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
             ("responses-image", "openai_responses"),
         ] {
             models.insert(format!("emulator/{id}"), serde_json::json!({
-                "provider":"emulator", "id":id, "protocol":protocol,
+                "provider": if protocol == "openai_responses" { "emulator-responses" } else { "emulator" }, "id":id,
                 "compat": if protocol == "openai_chat_completions" { serde_json::json!({"chat_reasoning_replay":"omit"}) } else { serde_json::json!({}) },
                 "context_window":window, "max_output_tokens":1024,
                 "capabilities":{"input_modalities":["text","image"],"output_modalities":["text"]}
@@ -829,8 +839,9 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
     }
     toml::to_string_pretty(&serde_json::json!({
         "providers": {
-            "emulator": { "base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
-            "emulator-anthropic": { "base_url": emulator.base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
+            "emulator": { "protocol": "openai_chat_completions", "base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
+            "emulator-responses": { "protocol": "openai_responses", "base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
+            "emulator-anthropic": { "protocol": "anthropic_messages", "base_url": emulator.base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
         },
         "models": models,
     })).unwrap()
@@ -839,7 +850,6 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
 fn chat_model(id: &str, window: u64) -> serde_json::Value {
     serde_json::json!({
         "id": id,
-        "protocol": "openai_chat_completions",
         "context_window": window,
         "max_output_tokens": 1024,
         "capabilities": text_capabilities(),

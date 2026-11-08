@@ -529,13 +529,13 @@ fn requirement_04_older_pages_have_stable_order_without_duplicates_or_gaps() {
 // ---------------------------------------------------------------------------
 
 const MODELS_TOML: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "https://local.issue110.invalid/v1"
 api_key = "$RUSTX_ISSUE110_KEY"
 
 [models."local/issue110-model"]
 provider = "local"
 id = "issue110-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 

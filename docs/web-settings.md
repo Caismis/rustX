@@ -33,12 +33,19 @@ Settings is organized by product task into seven sections:
 | Page | What it holds |
 | --- | --- |
 | **General** | Browser-owned preferences: Appearance (theme) and Language (English / 中文). Explicit User Settings opens here; the primary Settings item resumes its previous section. |
-| **Models** | The default model for new Sessions, then Provider list → Provider detail (endpoint, credential, its Models) → Model detail (the complete typed Model, Model Profiles and protocol compatibility under progressive disclosure). |
+| **Models** | Provider list → Provider detail (endpoint, shared API format, credentials and its Models) → one Model dialog (identity, limits, then capabilities and Model Profiles under Advanced). All Models and the default model for new Sessions follow the Provider panel. |
 | **Agent** | Root identity, description, instructions and project guidance. |
 | **Tools & Permissions** | Approval mode, Native Tools, Tool-source selections, Skill visibility, the Agent and Workflow delegation allowlists, and per-Tool/MCP policies under **Advanced Tool policies**. |
 | **MCP Servers** | Native MCP source definitions, permissions and observation for the exact Settings owner. |
 | **Extensions** | One searchable inventory of Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Native**. |
 | **Advanced** | Context and runtime limits, environment identities, App Server process policy, **Auto Repair** (this owner's latest native automatic `rustx.toml` repair receipt, #464), native diagnostics (source paths, revisions, application observations, process bindings, raw projections) and **Rescan configuration files**. **Connection** is a sub-surface of Advanced, not a separate Settings section. |
+
+A Provider without Models is valid setup in progress. Save its connection before
+adding Models. The Model dialog owns the complete creation draft and validates
+required fields, duplicate identities and token limits before submitting; it
+closes after the saved source is observed. Every Model inherits its Provider's
+API format. Existing credentials stay redacted, and changing credential mode
+replaces the previous mode's fields.
 
 Settings is an independent application page beside the permanent primary rail.
 Its sections fill the available content area, with a fixed

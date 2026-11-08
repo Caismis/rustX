@@ -155,12 +155,12 @@ fn fixture_with_executor(
     let model_source = format!(
         r#"
 [providers.local]
+protocol = "openai_chat_completions"
 base_url = "{}"
 api_key = "{}"
 [models."local/model"]
 provider = "local"
 id = "model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 [models."local/model".capabilities]

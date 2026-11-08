@@ -1,3 +1,22 @@
+## Provider-first model authoring (2026-11-08)
+
+Reviewed ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` provider split
+layout, credential draft handling and Model dialog commit/cancel behavior.
+The existing rustX controls now use a wider provider detail, an explicit empty
+Model list, and one Model creation dialog. Its pending name and complete value
+stay in the Settings transaction actor until the explicit native write; the
+dialog closes only after the committed source is observed. As in ZCode, API
+format is authored on the Provider; every Model inherits it during native
+resolution. Model-level protocol authoring is removed. No ZCode runtime or implementation is
+imported, and no unsupported smart-configuration toggle is presented.
+
+Model-dialog inputs use full CSS-pixel borders. Typed forms submit through TanStack validation. Credential-mode changes replace
+the discriminated credential rather than retaining another mode's fields.
+Native source inspection treats a missing default Model as valid work in
+progress; Session creation still enforces readiness. Relevant visual references
+are recaptured in pinned Chromium. The earlier CAS screenshot/noise evidence is
+frozen with the comparator tests; the new live reference has no tolerance.
+
 ## Primary navigation selection (2026-11-08)
 
 Selected primary navigation buttons use the existing active background token

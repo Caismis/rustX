@@ -28,13 +28,13 @@ use rustx::runtime_client::settings::EffectivePlugins;
 const KEY_ENV: &str = "RUSTX_ISSUE144_KEY";
 
 const MODELS: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_ISSUE144_KEY"
 
 [models."local/model-a"]
 provider = "local"
 id = "model-a"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
@@ -47,7 +47,6 @@ chat_reasoning_replay = "omit"
 [models."local/model-b"]
 provider = "local"
 id = "model-b"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
@@ -190,7 +189,7 @@ impl Lab {
         }
         let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
-        let document = serde_json::json!({"schema_version": 10, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "skills": "all", "agents": root_agents}});
+        let document = serde_json::json!({"schema_version": 11, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "skills": "all", "agents": root_agents}});
         std::fs::write(
             self.root().join("rustx.toml"),
             format!(
@@ -537,7 +536,7 @@ async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_named_agent_only_source_remains_unprepared_until_child_admission() {
     let lab = Lab::new();
-    let mut document = serde_json::json!({"schema_version": 10, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+    let mut document = serde_json::json!({"schema_version": 11, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
             "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
         }, "subagents": {"max_concurrent": 4, "roles": {"explore": {"description": "Read-only repository exploration.", "tools": {"sources": {"offline": ["get_issue"]}}}}}, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}, "agents": ["explore"]}});
     if let Some(mcp) = document.as_object_mut().unwrap().remove("mcp_servers") {
@@ -942,13 +941,13 @@ fn the_runtime_client_projection_carries_the_named_identity() {
 /// all, so a re-resolving child would also *fail* where the parent
 /// succeeded.
 const MODELS_MUTATED: &str = r#"[providers.local]
+protocol = "anthropic_messages"
 base_url = "http://127.0.0.1:10/v2"
 api_key = "$RUSTX_ISSUE144_KEY"
 
 [models."local/model-a"]
 provider = "local"
 id = "model-a"
-protocol = "anthropic_messages"
 context_window = 1000
 max_output_tokens = 64
 request_params = '{"temperature":0.9}'
@@ -1090,7 +1089,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 
     let lab = Lab::new();
     // The generation admits `grep` with a non-default policy on every axis.
-    let mut document = serde_json::json!({"schema_version": 10, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "native_tools": {
+    let mut document = serde_json::json!({"schema_version": 11, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "native_tools": {
             "grep": {
                 "execution": "model_selectable",
                 "concurrency": "parallel",
@@ -1167,7 +1166,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
-    let mut document = serde_json::json!({"schema_version": 10, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+    let mut document = serde_json::json!({"schema_version": 11, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
             "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
         }, "subagents": {"max_concurrent": 4, "roles": {"explore": {"description": "Read-only repository exploration.", "tools": {
                         // `offline` sorts before `python:ghost` in canonical
@@ -1342,7 +1341,7 @@ fn write_config_with_root_extensions(
     }
     let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();
     crate::launch_fixture::write_roles(&lab.workspace(), &mut subagents);
-    let document = serde_json::json!({"schema_version": 10, "agent_id": "agent-issue256", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "plugins": root_extensions.clone(), "tools": {"builtin": ["read"]}, "agents": root_agents}});
+    let document = serde_json::json!({"schema_version": 11, "agent_id": "agent-issue256", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "plugins": root_extensions.clone(), "tools": {"builtin": ["read"]}, "agents": root_agents}});
     std::fs::write(
         lab.root().join("rustx.toml"),
         format!(

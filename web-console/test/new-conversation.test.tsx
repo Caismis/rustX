@@ -10,7 +10,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/errors';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v75';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v76';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -25,7 +25,7 @@ function nativeModel(model: string, profiles: string[] = [], defaultProfile?: st
   return { model, protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities,
     profiles: profiles.map(id => ({ id })), ...(defaultProfile ? { defaultProfile } : {}), credentialSource: { type: 'environment', variable: 'KEY' } };
 }
-const authored = { provider: 'transport', id: 'wire', protocol: 'openai_responses' as const, context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text' as const], output_modalities: ['text' as const], json_schema_output: false } };
+const authored = { provider: 'transport', id: 'wire', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text' as const], output_modalities: ['text' as const], json_schema_output: false } };
 /** A Workspace source read whose configuration documents name a model the
  * native Session catalog does not publish, and whose catalog carries native
  * reasoning vocabulary the documents never mention. */

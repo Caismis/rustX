@@ -1,4 +1,4 @@
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v75';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowConsumerAddress, WorkflowConsumerField, WorkflowExpressionStep } from '../../../../../protocol/app-server/v76';
 import { sameAnalysisQuery } from '../../../../../protocol/app-server/workflow-analysis';
 import { blockAt, nodeAt, sameDocument, type WorkflowDocument } from './model';
 import type { FieldAddress } from './fields';

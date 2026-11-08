@@ -4965,13 +4965,13 @@ mod tests {
 
     #[cfg(unix)]
     const WORKFLOW_TEST_MODELS: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "test-only-secret"
 
 [models."local/model"]
 provider = "local"
 id = "model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 

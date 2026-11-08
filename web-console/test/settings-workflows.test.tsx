@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v75';
+import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v76';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -33,7 +33,7 @@ function deferred<T>() {
 }
 
 const fullModel = (): Model => ({
-  provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192,
+  provider: 'transport', id: 'wire', context_window: '128000', max_output_tokens: 8192,
   capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false },
   default_profile: 'deep', profiles: { deep: { request_params: { effort: 'high', unset: null } } },
   compat: { responses_storage: 'stateless' },
@@ -74,15 +74,13 @@ it('S2-02 a Model added from its Provider names that Provider and is authored as
   await user(s, 'Models');
   await openResourceRow('transport');
   fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
-  fireEvent.change(screen.getByLabelText('New Model identity'), { target: { value: 'second' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   fireEvent.click(screen.getByRole('button', { name: 'Advanced configuration' }));
   expect((screen.getByLabelText('Provider identity') as HTMLInputElement).value).toBe('transport');
   fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'wire-2' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Model second' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Add Model' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'user-1', mutation: { kind: 'config', mutation: {
-    unit: 'model', id: 'second', authored: { provider: 'transport', id: 'wire-2', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192 },
+    unit: 'model', id: 'transport/wire-2', authored: { provider: 'transport', id: 'wire-2', context_window: '128000', max_output_tokens: 8192 },
   } } });
 });
 
@@ -374,7 +372,7 @@ it('S2-06 a rejected definition and a saved selection are reported as two outcom
 
 it('S2-07 Workspace Settings offers only Workspace overrides, with inheritance removal instead of deletion', async () => {
   const s = cfg3Client();
-  s.source.workspace!.authored = { providers: { transport: { base_url: 'https://workspace.invalid', credential: { type: 'environment', variable: 'WS_KEY' } } } };
+  s.source.workspace!.authored = { providers: { transport: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { type: 'environment', variable: 'WS_KEY' } } } };
   await workspace(s);
   expect(screen.getAllByRole('tab', { selected: false }).concat(screen.getAllByRole('tab', { selected: true }))
     .filter(tab => tab.closest('[aria-label="Settings pages"]')).map(tab => tab.textContent).sort())

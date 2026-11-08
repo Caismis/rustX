@@ -573,12 +573,12 @@ async fn profile_presets_authored_as_json_strings_reach_exact_wire_bodies() {
         let source = format!(
             r#"
 [providers.p]
+protocol = "{name}"
 base_url = "{base_url}"
 api_key = "fixture-key"
 [models."p/m"]
 provider = "p"
 id = "wire-test"
-protocol = "{name}"
 context_window = 128000
 max_output_tokens = 8192
 default_profile = "deep"

@@ -1,7 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
 import { useContext, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import type { Model, Modality } from '../../../../../protocol/app-server/v75';
+import type { Model, Modality } from '../../../../../protocol/app-server/v76';
 import { useTranslation } from '../../../locale/react';
+import { message } from '../../../locale/translation';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
 import { Bool, JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
@@ -10,16 +11,18 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
 
 const inputModalities: readonly Modality[] = ['text', 'image'];
-export function ModelFields({ form }: { form: TypedForm<Model> }) {
+export function ModelFields({ form, duplicate }: { form: TypedForm<Model>; duplicate?: (provider: string, id: string) => boolean }) {
   const tx = useTranslation();
   const resets = useContext(UnitReset);
   const modelParameters = useRef<HTMLDivElement>(null);
   return <>
     <div className={cards.basicFields}>
-      <Text form={form} name="id" label={tx('settings:models-page.wire-model-identity')} required />
-      <Protocol form={form} />
-      <NumericText form={form} name="context_window" label={tx('settings:models-page.context-window')} />
-      <Numeric form={form} name="max_output_tokens" label={tx('settings:models-page.maximum-output-tokens')} />
+      <Text form={form} name="id" label={tx('settings:models-page.wire-model-identity')} required
+        validate={value => duplicate?.(form.state.values.provider, String(value).trim()) ? message('settings:models.duplicate') : undefined} />
+      <NumericText form={form} name="context_window" label={tx('settings:models-page.context-window')} required />
+      <Numeric form={form} name="max_output_tokens" label={tx('settings:models-page.maximum-output-tokens')} required listenTo={['context_window']}
+        validate={value => !Number.isInteger(Number(value)) || Number(value) > 4294967295 ? message('settings:validation.positive-integer')
+          : Number(value) >= Number(form.state.values.context_window) ? message('settings:models.output-context-limit') : undefined} />
     </div>
     <Advanced title={tx('settings:models.advanced')}>
     <Text form={form} name="provider" label={tx('settings:models-page.provider-identity')} required />
@@ -31,33 +34,13 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
   </>;
 }
 
-/** Changing API format drops overrides owned by the old protocol. Editing
- * ordinary fields keeps expert overrides authored in source configuration. */
-function Protocol({ form }: { form: TypedForm<Model> }) {
-  const tx = useTranslation();
-  const Bound = form.Field as unknown as Field;
-  return <Bound name="compat">{compat => <Bound name="protocol">{protocol => <Choice
-    label={tx('settings:models-page.protocol')} value={protocol.state.value as string}
-    options={[
-      ['openai_chat_completions', tx('settings:models.api-chat')],
-      ['openai_responses', tx('settings:models.api-responses')],
-      ['anthropic_messages', tx('settings:models.api-anthropic')],
-    ]}
-    onChange={next => {
-      if (next !== protocol.state.value) {
-        compat.handleChange(undefined as never);
-        protocol.handleChange(next as never);
-      }
-    }} />}</Bound>}</Bound>;
-}
-
 function InputModalities({ form }: { form: TypedForm<Model> }) {
   const tx = useTranslation();
   const Bound = form.Field as unknown as Field;
   return <Bound name="capabilities.input_modalities">{field => {
     const value = (field.state.value as Modality[] | undefined) ?? [];
     return <div className={cards.modalityGroup}><span>{tx('settings:models-page.input-modalities')}</span><div className={cards.chips}>{inputModalities.map(modality => <label className={cards.chip} key={modality}>
-      <input type="checkbox" checked={value.includes(modality)}
+      <input type="checkbox" checked={value.includes(modality)} disabled={modality === 'text'}
         onChange={event => field.handleChange((event.target.checked ? [...value, modality] : value.filter(item => item !== modality)) as never)} />{tx(`settings:model-option.${modality}`)}
     </label>)}</div></div>;
   }}</Bound>;

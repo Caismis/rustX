@@ -103,7 +103,7 @@ parser; the App Server deletes them from a source at its native boundaries
 before parsing, together with a few other exactly recognizable constructs (see
 [Automatic source repair](#automatic-source-repair-464)). TOML tables and arrays
 preserve authored omission versus explicit empty values. The current document
-version is `schema_version = 10`.
+version is `schema_version = 11`.
 
 | Top-level field | Owner and meaning |
 | --- | --- |
@@ -133,14 +133,15 @@ Ownership is layered, and each layer owns only its own facts:
 
 | Owner | Owns |
 | --- | --- |
-| Provider | `base_url` and the credential source |
-| Model | provider binding, provider-native `id`, `protocol`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
+| Provider | `protocol`, `base_url` and the credential source |
+| Model | provider binding, provider-native `id`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
 | Model Profile | one complete, independent invocation preset: an optional default `max_output_tokens` and its own native `request_params` |
 | Model selection | the chosen `model`, optional `profile`, explicit `request_params` overrides and an optional output limit |
 | Provider adapter | protocol structure, the output-token field spelling, and final protected-key validation |
 
 ```toml
 [providers.service]
+protocol = "openai_chat_completions"
 base_url = "https://api.example.invalid/v1"
 api_key = "$SERVICE_API_KEY"
 
@@ -148,7 +149,6 @@ api_key = "$SERVICE_API_KEY"
 [models.fast]
 provider = "service"
 id = "provider-wire-model-id"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 request_params = '{"temperature":0.2,"vendor":{"nested_option":true,"unset":null}}'
@@ -162,7 +162,6 @@ output_modalities = ["text"]
 [models.thinker]
 provider = "service"
 id = "provider-reasoning-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 8192
 default_profile = "balanced"
@@ -190,15 +189,17 @@ profile = "fast"
 request_params = '{"seed":7}'
 ```
 
-Each Provider requires `base_url` and `api_key`. Credentials are literal values
+Each Provider requires `protocol`, `base_url` and `api_key`. Its API protocol is
+shared by all Models that name it. Credentials are literal values
 or explicit `$ENV_VAR` references. The environment is resolved by the credential
 owner after admitted demand. Projections never return resolved secret values.
 A Workspace Provider must supply its own complete definition, including its
 credential source; no member is recovered from the shadowed User Provider.
 
-Each Model requires `provider`, provider-native `id`, explicit `protocol`,
+Each Model requires `provider`, provider-native `id`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
-Supported protocols and modality values are enumerated by the generated schema.
+A Model inherits its Provider’s protocol and cannot override it. Supported
+protocols and modality values are enumerated by the generated schema.
 rustX treats every configured model as supporting tool calls; there is no per-model capability switch.
 Agent tool selection and runtime permissions determine which tools are available.
 The obsolete `capabilities.tool_calls` field and `rustx init --tool-calls` flag are
@@ -237,10 +238,11 @@ is an explicit failure and never triggers an extra prompt-mode request.
 Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
 `responses_storage` (Responses defaults to `stored`). Explicit overrides win
-over built-in rules. The model settings UI exposes API format, limits,
-capabilities, profiles and request parameters; protocol overrides belong to
-source configuration. Changing API format in the UI clears overrides belonging
-to the previous protocol. Protocol validation rejects foreign members.
+over built-in rules. The Provider editor exposes its shared API format. The
+Model dialog exposes limits, capabilities, profiles and request parameters;
+compatibility overrides belong to source configuration. When changing a
+Provider's protocol, remove incompatible model `compat` members and request
+parameters in the source first. Native validation rejects foreign members.
 
 #### Provider-native request parameters
 
@@ -1405,13 +1407,13 @@ with those of an image-capable deployment:
 
 ```toml
 [providers.vision]
+protocol = "anthropic_messages"
 base_url = "https://api.example.invalid"
 api_key = "$VISION_API_KEY"
 
 [models.vision]
 provider = "vision"
 id = "image-capable-wire-model-id"
-protocol = "anthropic_messages"
 context_window = 128000
 max_output_tokens = 4096
 

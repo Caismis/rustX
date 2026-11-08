@@ -58,7 +58,7 @@ use crate::model::invocation::{
 use crate::model::types::ModelProtocol;
 
 /// The only model-catalog schema version this runtime accepts.
-pub const MODEL_CATALOG_SCHEMA_VERSION: u32 = 1;
+pub const MODEL_CATALOG_SCHEMA_VERSION: u32 = 2;
 
 /// The identity of one catalog provider.
 ///
@@ -767,6 +767,8 @@ impl ModelDefinition {
 /// One validated catalog provider (before credential resolution).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderDefinition {
+    /// The API protocol shared by every model of this provider.
+    pub protocol: ModelProtocol,
     /// The provider identity.
     pub id: ProviderId,
     /// The mandatory explicit provider endpoint.
@@ -855,14 +857,6 @@ impl ModelCatalog {
         if providers.is_empty() || models.is_empty() {
             return Err(ModelCatalogError::EmptyCatalog);
         }
-        if let Some(model) = models
-            .values()
-            .find(|model| !providers.contains_key(&model.provider))
-        {
-            return Err(ModelCatalogError::UnknownProvider {
-                provider: model.provider.clone(),
-            });
-        }
         let model_ordinals = models.keys().cloned().collect();
         let profile_ordinals = models
             .values()
@@ -887,18 +881,25 @@ impl ModelCatalog {
     ///
     /// Returns the first entry validation failure.
     pub fn validate_entries(document: ModelCatalogDocument) -> Result<(), ModelCatalogError> {
-        Self::validated_entries(document).map(drop)
+        validate_schema_version(document.schema_version)?;
+        let mut protocols = BTreeMap::new();
+        for (raw_id, provider) in document.providers {
+            let id = ProviderId::parse(raw_id)?;
+            let definition = validate_provider(&id, provider)?;
+            protocols.insert(id, definition.protocol);
+        }
+        for (name, model) in document.models {
+            let reference = ModelRef::parse(&name)?;
+            let provider = ProviderId::parse(model.provider.clone())?;
+            validate_model_fields(&reference, &model, protocols.get(&provider).copied())?;
+        }
+        Ok(())
     }
 
     fn validated_entries(
         document: ModelCatalogDocument,
     ) -> Result<CatalogEntries, ModelCatalogError> {
-        if document.schema_version != MODEL_CATALOG_SCHEMA_VERSION {
-            return Err(ModelCatalogError::UnsupportedSchemaVersion {
-                supported: MODEL_CATALOG_SCHEMA_VERSION,
-                found: document.schema_version,
-            });
-        }
+        validate_schema_version(document.schema_version)?;
         let mut providers = BTreeMap::new();
         for (raw_id, provider) in document.providers {
             let id = ProviderId::parse(raw_id)?;
@@ -908,9 +909,14 @@ impl ModelCatalog {
         let mut models = BTreeMap::new();
         for (name, document) in document.models {
             let reference = ModelRef::parse(&name)?;
+            let provider = ProviderId::parse(document.provider.clone())?;
+            let protocol = providers
+                .get(&provider)
+                .ok_or(ModelCatalogError::UnknownProvider { provider })?
+                .protocol;
             models.insert(
                 reference.clone(),
-                Arc::new(validate_model(&reference, document)?),
+                Arc::new(resolve_model(&reference, document, protocol)?),
             );
         }
         Ok((providers, models))
@@ -1222,6 +1228,8 @@ const fn default_schema_version() -> u32 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct ProviderDocument {
+    /// The API protocol shared by every model of this provider.
+    pub protocol: ModelProtocol,
     /// The mandatory explicit provider endpoint.
     pub base_url: String,
     /// The mandatory credential source: a literal or `$ENV_VAR`.
@@ -1237,8 +1245,6 @@ pub struct ModelDocument {
     pub provider: String,
     /// The model identity within its provider.
     pub id: String,
-    /// The protocol an adapter must speak.
-    pub protocol: ModelProtocol,
     /// The model context window in tokens.
     pub context_window: u64,
     /// The configured maximum output tokens.
@@ -1298,6 +1304,16 @@ where
 // Validation
 // ---------------------------------------------------------------------------
 
+fn validate_schema_version(found: u32) -> Result<(), ModelCatalogError> {
+    if found != MODEL_CATALOG_SCHEMA_VERSION {
+        return Err(ModelCatalogError::UnsupportedSchemaVersion {
+            supported: MODEL_CATALOG_SCHEMA_VERSION,
+            found,
+        });
+    }
+    Ok(())
+}
+
 fn validate_provider(
     id: &ProviderId,
     document: ProviderDocument,
@@ -1306,6 +1322,7 @@ fn validate_provider(
     let api_key = document.api_key.clone();
     Ok(ProviderDefinition {
         id: id.clone(),
+        protocol: document.protocol,
         base_url: document.base_url,
         api_key,
     })
@@ -1334,11 +1351,15 @@ fn validate_base_url(provider: &ProviderId, base_url: &str) -> Result<(), ModelC
     Ok(())
 }
 
-fn validate_model(
+// A source may inherit its Provider from the other scope. In that case only
+// protocol-independent constraints are decidable here; composition supplies
+// the Provider's protocol before any Model can become an invocation binding.
+fn validate_model_fields(
     reference: &ModelRef,
-    document: ModelDocument,
-) -> Result<ModelDefinition, ModelCatalogError> {
-    let id = ModelId::parse(document.id.clone())?;
+    document: &ModelDocument,
+    protocol: Option<ModelProtocol>,
+) -> Result<ValidatedProfiles, ModelCatalogError> {
+    ModelId::parse(document.id.clone())?;
     let reference = reference.clone();
 
     if document.context_window == 0 || document.max_output_tokens == 0 {
@@ -1373,36 +1394,47 @@ fn validate_model(
         });
     }
 
-    validate_compat(&reference, document.protocol, document.compat)?;
+    if let Some(protocol) = protocol {
+        validate_compat(&reference, protocol, document.compat)?;
+    }
 
-    let (default_profile, profiles) = validate_profiles(&reference, &document)?;
-    validate_reasoning_profile_order(&reference, &document, &profiles)?;
-    let request_params = document.request_params.unwrap_or_default();
-    validate_request_params_layer(
-        &request_params,
-        document.protocol,
-        RequestParamsLayer::ModelParams,
-    )
-    .map_err(|collision| ModelCatalogError::ProtectedKey {
-        model: reference.clone(),
-        key: collision.key,
-        layer: collision.layer,
-    })?;
-    validate_request_params_numbers(&request_params, RequestParamsLayer::ModelParams).map_err(
+    let (default_profile, profiles) = validate_profiles(&reference, document, protocol)?;
+    validate_reasoning_profile_order(&reference, document, &profiles)?;
+    let empty_params = RequestParams::default();
+    let request_params = document.request_params.as_ref().unwrap_or(&empty_params);
+    if let Some(protocol) = protocol {
+        validate_request_params_layer(request_params, protocol, RequestParamsLayer::ModelParams)
+            .map_err(|collision| ModelCatalogError::ProtectedKey {
+                model: reference.clone(),
+                key: collision.key,
+                layer: collision.layer,
+            })?;
+    }
+    validate_request_params_numbers(request_params, RequestParamsLayer::ModelParams).map_err(
         |inexact| ModelCatalogError::InexactNumber {
             model: reference.clone(),
             layer: inexact.layer,
         },
     )?;
 
+    Ok((default_profile, profiles))
+}
+
+fn resolve_model(
+    reference: &ModelRef,
+    document: ModelDocument,
+    protocol: ModelProtocol,
+) -> Result<ModelDefinition, ModelCatalogError> {
+    let (default_profile, profiles) = validate_model_fields(reference, &document, Some(protocol))?;
+    let id = ModelId::parse(document.id)?;
     Ok(ModelDefinition {
         provider: ProviderId::parse(document.provider)?,
         id,
-        protocol: document.protocol,
+        protocol,
         context_window: document.context_window,
         max_output_tokens: document.max_output_tokens,
         capabilities: document.capabilities,
-        request_params,
+        request_params: document.request_params.unwrap_or_default(),
         default_profile,
         reasoning_profile_order: document.reasoning_profile_order,
         profiles,
@@ -1424,6 +1456,7 @@ type ValidatedProfiles = (
 fn validate_profiles(
     reference: &ModelRef,
     document: &ModelDocument,
+    protocol: Option<ModelProtocol>,
 ) -> Result<ValidatedProfiles, ModelCatalogError> {
     let invalid = |detail: String| ModelCatalogError::InvalidProfiles {
         model: reference.clone(),
@@ -1471,16 +1504,18 @@ fn validate_profiles(
                 document.max_output_tokens
             )));
         }
-        validate_request_params_layer(
-            &profile.request_params,
-            document.protocol,
-            RequestParamsLayer::ModelProfile,
-        )
-        .map_err(|collision| ModelCatalogError::ProtectedKey {
-            model: reference.clone(),
-            key: collision.key,
-            layer: collision.layer,
-        })?;
+        if let Some(protocol) = protocol {
+            validate_request_params_layer(
+                &profile.request_params,
+                protocol,
+                RequestParamsLayer::ModelProfile,
+            )
+            .map_err(|collision| ModelCatalogError::ProtectedKey {
+                model: reference.clone(),
+                key: collision.key,
+                layer: collision.layer,
+            })?;
+        }
         validate_request_params_numbers(&profile.request_params, RequestParamsLayer::ModelProfile)
             .map_err(|inexact| ModelCatalogError::InexactNumber {
                 model: reference.clone(),
@@ -2113,9 +2148,9 @@ mod tests {
 
     fn document() -> Value {
         json!({
-            "providers": {"p": {"baseUrl":"https://gateway.example/v1", "apiKey":"$RUSTX_KEY"}},
+            "providers": {"p": {"protocol":"openai_chat_completions", "baseUrl":"https://gateway.example/v1", "apiKey":"$RUSTX_KEY"}},
             "models": {"chosen": {
-                "provider":"p", "id":"wire/model", "protocol":"openai_chat_completions",
+                "provider":"p", "id":"wire/model",
                 "contextWindow":1000, "maxOutputTokens":100,
                 "capabilities":{"inputModalities":["text"],"outputModalities":["text"]},
                 "compat":{"chatReasoningReplay":"omit"}
@@ -2286,7 +2321,7 @@ mod tests {
     }
     #[test]
     fn provider_required_fields_and_unknown_fields_fail() {
-        for field in ["baseUrl", "apiKey"] {
+        for field in ["protocol", "baseUrl", "apiKey"] {
             let mut value = document();
             value["providers"]["p"]
                 .as_object_mut()
@@ -2297,6 +2332,12 @@ mod tests {
                 Err(ModelCatalogError::Syntax { .. })
             ));
         }
+        let mut value = document();
+        value["models"]["chosen"]["protocol"] = "openai_responses".into();
+        assert!(matches!(
+            catalog(value),
+            Err(ModelCatalogError::Syntax { .. })
+        ));
         for pointer in [
             "/providers/p",
             "/models/chosen",
@@ -2313,6 +2354,26 @@ mod tests {
             matches!(catalog(value), Err(ModelCatalogError::Syntax { .. })),
             "Providers cannot contain Models"
         );
+    }
+
+    #[test]
+    fn every_model_inherits_its_providers_protocol() {
+        let mut value = document();
+        value["models"]["chosen"]["compat"] = json!({});
+        value["models"]["second"] = value["models"]["chosen"].clone();
+        value["models"]["second"]["id"] = "another-model".into();
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            value["providers"]["p"]["protocol"] = json!(protocol);
+            let resolved = catalog(value.clone()).unwrap();
+            assert_eq!(resolved.providers().next().unwrap().protocol, protocol);
+            for model in resolved.model_refs() {
+                assert_eq!(resolved.model(&model).unwrap().protocol, protocol);
+            }
+        }
     }
     #[test]
     fn invalid_base_url_fails() {
@@ -2394,7 +2455,7 @@ mod tests {
     #[test]
     fn invalid_protocol_and_limits_fail() {
         let mut value = document();
-        value["models"]["chosen"]["protocol"] = "guessed".into();
+        value["providers"]["p"]["protocol"] = "guessed".into();
         assert!(matches!(
             catalog(value),
             Err(ModelCatalogError::Syntax { .. })
@@ -2569,7 +2630,7 @@ mod tests {
                 ("chatMaxTokensField", "max_completion_tokens"),
             ] {
                 let mut value = document();
-                value["models"]["chosen"]["protocol"] = protocol.into();
+                value["providers"]["p"]["protocol"] = protocol.into();
                 value["models"]["chosen"]["compat"] = json!({field:setting});
                 assert!(
                     matches!(catalog(value), Err(ModelCatalogError::InvalidCompat { .. })),
@@ -2587,7 +2648,7 @@ mod tests {
     #[test]
     fn absent_compat_never_serializes_foreign_defaults() {
         let mut value = document();
-        value["models"]["chosen"]["protocol"] = "anthropic_messages".into();
+        value["providers"]["p"]["protocol"] = "anthropic_messages".into();
         value["models"]["chosen"]["compat"] = json!({});
         let doc: ModelCatalogDocument = serde_json::from_value(value).unwrap();
         let value = serde_json::to_value(doc).unwrap();
@@ -2997,7 +3058,7 @@ mod tests {
             |v| v["models"]["chosen"]["capabilities"]["inputModalities"] = json!(["text", "image"]),
             |v| v["models"]["chosen"]["compat"]["chatReasoningReplay"] = "reasoning_content".into(),
             |v| {
-                v["models"]["chosen"]["protocol"] = "openai_responses".into();
+                v["providers"]["p"]["protocol"] = "openai_responses".into();
                 v["models"]["chosen"]["compat"] = json!({});
             },
             |v| v["models"]["chosen"]["capabilities"]["jsonSchemaOutput"] = true.into(),

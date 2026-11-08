@@ -144,7 +144,7 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
   await expect(settings.getByRole('heading', { name: 'Provider transport', exact: true })).toBeVisible();
   await expect(settings.getByRole('button', { name: 'Remove Provider transport', exact: true })).toBeVisible();
-  await expect(settings.getByRole('button', { name: '← Models', exact: true })).toBeVisible();
+  await expect(settings.getByRole('button', { name: '← Models', exact: true })).toBeHidden();
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-provider-detail-light.png');
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
@@ -310,7 +310,7 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   // in reach even after the detail has scrolled.
   await settings.getByRole('row', { name: longProvider, exact: true }).click();
   const detail = settings.getByRole('region', { name: `Provider ${longProvider}` });
-  await expect(detail.getByRole('heading', { level: 3 })).toHaveText(`Provider ${longProvider}`);
+  await expect(detail.getByRole('heading', { level: 3 })).toHaveText(longProvider);
   await expect(settings.getByRole('row', { name: 'transport', exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await expectStableScreenshot(page, 'settings-provider-detail-mobile-dark.png');
@@ -640,11 +640,12 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   // Native answers: the removal settles normally, exactly once, and the
   // keyboard is still inside the unit's workflow.
   await releaseWrites(page);
-  await expect(unit.getByText('Provider transport saved.')).toBeVisible();
+  await expect(unit).toHaveCount(0);
   await expect(remove).toHaveCount(0);
   await expect.poll(writes).toBe(1);
-  await expect(unit).toBeFocused();
-  // Tab continues from the unit into its now-enabled controls.
+  await expect(settings.getByRole('region', { name: 'Models', exact: true })).toBeFocused();
+  await expect(settings.getByRole('row', { name: 'transport', exact: true })).toHaveCount(0);
+  // Tab continues from Models after its removed provider editor unmounts.
   await page.keyboard.press('Tab');
   expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

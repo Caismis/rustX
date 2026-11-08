@@ -12,7 +12,6 @@ test('parseable invalid Model orders expose whole-source repair and restore nati
 [models.${id}]
 provider = "fixture"
 id = "console-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
@@ -66,7 +65,6 @@ for (const width of [1440, 390]) test(`reasoning order ${width}: native save, re
 [models.ordered]
 provider = "fixture"
 id = "console-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }

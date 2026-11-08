@@ -21,7 +21,6 @@ for (const auxiliary of ['Summary', 'Title', 'Classification', 'BTW'] as const) 
 [models."${id}"]
 provider = "fixture"
 id = "console-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }

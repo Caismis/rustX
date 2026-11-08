@@ -623,9 +623,6 @@
             "object"
           ]
         },
-        "protocol": {
-          "$ref": "#/$defs/ModelProtocol"
-        },
         "provider": {
           "type": "string"
         },
@@ -650,7 +647,6 @@
       "required": [
         "provider",
         "id",
-        "protocol",
         "context_window",
         "max_output_tokens",
         "capabilities"
@@ -906,9 +902,13 @@
         },
         "base_url": {
           "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/ModelProtocol"
         }
       },
       "required": [
+        "protocol",
         "base_url",
         "api_key"
       ],

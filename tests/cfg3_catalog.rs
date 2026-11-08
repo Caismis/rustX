@@ -6,6 +6,7 @@ use std::path::Path;
 
 const PROVIDER: &str = r#"
 [providers.transport]
+protocol = "openai_responses"
 base_url = "https://user.invalid/v1"
 api_key = "$USER_KEY"
 "#;
@@ -13,7 +14,6 @@ const MODEL: &str = r#"
 [models."arbitrary-name"]
 provider = "transport"
 id = "wire-model"
-protocol = "openai_responses"
 context_window = 128000
 max_output_tokens = 8192
 [models."arbitrary-name".capabilities]
@@ -327,7 +327,7 @@ fn provider_replacement_cannot_borrow_lower_credential() {
     let (host, request) = sources(
         root.path(),
         &format!("{PROVIDER}{MODEL}{ROOT}"),
-        "[providers.transport]\nbase_url = 'https://workspace.invalid/v1'\n",
+        "[providers.transport]\nprotocol = \"openai_responses\"\nbase_url = 'https://workspace.invalid/v1'\n",
     );
     assert!(analyze(&request, &host).is_err());
 }
@@ -553,6 +553,7 @@ fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() 
             mutation: ConfigMutation::Provider {
                 id: "transport".into(),
                 authored: Some(ProviderWrite {
+                    protocol: rustx::model::ModelProtocol::OpenAiResponses,
                     base_url: "https://higher.invalid/v1".into(),
                     credential: CredentialEdit::Retain,
                 }),

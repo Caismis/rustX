@@ -46,7 +46,7 @@ function Errors({ field }: { field: BoundField }) {
   const tx = useTranslation();
   const errors = field.state.meta.errors.filter(Boolean);
   if (!field.state.meta.isTouched || !errors.length) return null;
-  return <span role="alert" className={css.error}>{errors.map(error => displayText(tx, ((error as { message?: DisplayText })?.message ?? error) as DisplayText)).join('; ')}</span>;
+  return <span role="alert" className={css.error}>{[...new Set(errors.map(error => displayText(tx, ((error as { message?: DisplayText })?.message ?? error) as DisplayText)))].join('; ')}</span>;
 }
 
 /** Syntactic checks a browser can make truthfully. Each returns a message or
@@ -54,16 +54,17 @@ function Errors({ field }: { field: BoundField }) {
 export const syntactic = {
   required: (value: unknown) => (value === undefined || value === null || String(value).trim() === '') ? message('settings:validation.required') : undefined,
   url: (value: unknown) => { if (!value) return undefined; try { new URL(String(value)); return undefined; } catch { return message('settings:validation.url'); } },
-  positive: (value: unknown) => value === undefined || value === null || value === '' ? undefined : Number(value) > 0 ? undefined : message('settings:validation.positive'),
+  positive: (value: unknown) => value === undefined || value === null || value === '' ? undefined : Number.isFinite(Number(value)) && Number(value) > 0 ? undefined : message('settings:validation.positive'),
 };
 
-export function Text<T>({ form, name, label, required = false, url = false, placeholder }: {
+export function Text<T>({ form, name, label, required = false, url = false, placeholder, validate: additional }: {
   form: TypedUnitForm<T>; name: FieldPath<T>; label: string; required?: boolean; url?: boolean; placeholder?: string;
+  validate?: (value: unknown) => DisplayText | undefined;
 }) {
-  const validate = (value: unknown) => (required ? syntactic.required(value) : undefined) ?? (url ? syntactic.url(value) : undefined);
-  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => DisplayText | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
-  return <Field name={name as string} validators={{ onChange: ({ value }) => validate(value) }}>{field => <label>{label}
-    <input value={(field.state.value as string | null | undefined) ?? ''} placeholder={placeholder}
+  const validate = ({ value }: { value: unknown }) => (required ? syntactic.required(value) : undefined) ?? (url ? syntactic.url(value) : undefined) ?? additional?.(value);
+  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: typeof validate }; children: (field: BoundField) => ReactNode }) => ReactNode;
+  return <Field name={name as string} validators={{ onChange: validate }}>{field => <label>{label}
+    <input aria-label={label} value={(field.state.value as string | null | undefined) ?? ''} placeholder={placeholder} required={required}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange(event.target.value as never)} />
     <Errors field={field} />
@@ -88,12 +89,15 @@ export function Area<T>({ form, name, label }: { form: TypedUnitForm<T>; name: F
   </label>}</Bound>;
 }
 
-export function Numeric<T>({ form, name, label, min = 1, empty = null }: {
-  form: TypedUnitForm<T>; name: FieldPath<T>; label: string; min?: number; empty?: null | undefined;
+export function Numeric<T>({ form, name, label, min = 1, empty = null, required = false, validate: additional, listenTo }: {
+  form: TypedUnitForm<T>; name: FieldPath<T>; label: string; min?: number; empty?: null | undefined; required?: boolean;
+  validate?: (value: unknown) => DisplayText | undefined;
+  listenTo?: FieldPath<T>[];
 }) {
-  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => DisplayText | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
-  return <Field name={name as string} validators={{ onChange: ({ value }) => syntactic.positive(value) }}>{field => <label>{label}
-    <input type="number" min={min} value={(field.state.value as number | string | null | undefined) ?? ''}
+  const validate = ({ value }: { value: unknown }) => (required ? syntactic.required(value) : undefined) ?? syntactic.positive(value) ?? additional?.(value);
+  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: typeof validate; onChangeListenTo?: string[] }; children: (field: BoundField) => ReactNode }) => ReactNode;
+  return <Field name={name as string} validators={{ onChange: validate, onChangeListenTo: listenTo }}>{field => <label>{label}
+    <input aria-label={label} type="number" min={min} required={required} value={(field.state.value as number | string | null | undefined) ?? ''}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange((event.target.value ? Number(event.target.value) : empty) as never)} />
     <Errors field={field} />
@@ -102,10 +106,16 @@ export function Numeric<T>({ form, name, label, min = 1, empty = null }: {
 
 /** A numeric field native models as a decimal string, kept as a string so no
  * precision is lost in the browser. */
-export function NumericText<T>({ form, name, label }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string }) {
-  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: (props: { value: unknown }) => DisplayText | undefined }; children: (field: BoundField) => ReactNode }) => ReactNode;
-  return <Field name={name as string} validators={{ onChange: ({ value }) => syntactic.positive(value) }}>{field => <label>{label}
-    <input type="number" min={1} value={(field.state.value as string | null | undefined) ?? ''}
+export function NumericText<T>({ form, name, label, required = false }: { form: TypedUnitForm<T>; name: FieldPath<T>; label: string; required?: boolean }) {
+  const validate = ({ value }: { value: unknown }) => {
+    if (required && syntactic.required(value)) return syntactic.required(value);
+    if (value === undefined || value === null || value === '') return undefined;
+    return /^[1-9][0-9]*$/.test(String(value)) && BigInt(String(value)) <= 18446744073709551615n
+      ? undefined : message('settings:validation.positive-integer');
+  };
+  const Field = form.Field as unknown as (props: { name: string; validators: { onChange: typeof validate }; children: (field: BoundField) => ReactNode }) => ReactNode;
+  return <Field name={name as string} validators={{ onChange: validate }}>{field => <label>{label}
+    <input aria-label={label} type="number" min={1} required={required} value={(field.state.value as string | null | undefined) ?? ''}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange((event.target.value || null) as never)} />
     <Errors field={field} />

@@ -28,7 +28,7 @@ use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 10;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 11;
 
 /// Resolved policies and Root profile within one published configuration.
 ///

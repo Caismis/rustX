@@ -1,0 +1,101 @@
+import { expect, test } from '@playwright/test';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { startDogfood } from './dogfood-server';
+import { routeWorkspaceHost } from './workspace-host';
+import { choose, connectRemote, openEmptySession, openSettingsPage } from './shell-actions';
+import { captureEvidence } from './screenshot';
+
+for (const width of [1440, 390]) test(`provider-only setup stays editable and adds its first native model at ${width}px`, async ({ page }) => {
+  const fixture = await startDogfood();
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error' || message.type() === 'warning') errors.push(message.text()); });
+  try {
+    writeFileSync(fixture.settings, '# Model setup starts without a provider or model.\n');
+    await page.setViewportSize({ width, height: 1000 });
+    await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await openSettingsPage(page, 'Models');
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await settings.getByRole('button', { name: '+ Add Provider', exact: true }).click();
+    const name = page.getByRole('dialog', { name: 'Add Provider', exact: true });
+    await name.getByLabel('New Provider identity').fill('custom');
+    await name.getByRole('button', { name: 'Continue', exact: true }).click();
+    const provider = settings.getByRole('form', { name: 'Provider custom' });
+    await provider.getByLabel('Base URL', { exact: true }).fill(fixture.providerUrl + '/v1');
+    await provider.getByLabel('API Key', { exact: true }).fill('fixture-only');
+    await choose(provider, 'API format', 'OpenAI Responses (/v1/responses)');
+    await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeDisabled();
+    await provider.getByRole('button', { name: 'Save Provider custom', exact: true }).click();
+    await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeDisabled();
+    await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeEnabled();
+    await expect(settings.getByRole('alert')).toHaveCount(0);
+    await expect(settings.getByText('No models configured yet. Add a model to use this provider in conversations.')).toBeVisible();
+    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await expect(settings.getByRole('alert')).toHaveCount(0);
+    await captureEvidence(settings, `provider-only-${width}`);
+
+    await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
+    const model = page.getByRole('dialog', { name: 'Add Model', exact: true });
+    await expect(model.getByRole('button', { name: /API format$/ })).toHaveCount(0);
+    await model.getByLabel('Model ID', { exact: true }).fill('first-model');
+    await expect(model.getByLabel('Model ID', { exact: true })).toBeFocused();
+    await model.getByLabel('Context window', { exact: true }).fill('1000');
+    await model.getByRole('button', { name: 'Save Add Model', exact: true }).click();
+    await expect(model.getByRole('alert')).toContainText('Maximum output tokens must be smaller than the context window.');
+    expect(readFileSync(fixture.settings, 'utf8')).not.toContain('[models.');
+    await model.getByLabel('Context window', { exact: true }).fill('128000');
+    await expect(model.getByRole('alert')).toHaveCount(0);
+    await captureEvidence(model, `add-model-${width}`);
+    await model.getByRole('button', { name: 'Save Add Model', exact: true }).click();
+    await expect(model).toHaveCount(0);
+    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toBeVisible();
+    await expect(settings.getByRole('alert')).toHaveCount(0);
+    expect(readFileSync(fixture.settings, 'utf8')).toContain('first-model');
+    expect(readFileSync(fixture.settings, 'utf8').split('[models.')[1]).not.toContain('protocol =');
+    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toContainText('openai_responses');
+    await choose(provider, 'API format', 'OpenAI Chat Completions (/v1/chat/completions)');
+    await provider.getByRole('button', { name: 'Save Provider custom', exact: true }).click();
+    await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeDisabled();
+    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toContainText('openai_chat_completions');
+
+
+    await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
+    await model.getByLabel('Model ID', { exact: true }).fill('first-model');
+    await expect(model.getByRole('alert')).toContainText('This configuration name already exists.');
+    await model.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
+    await expect(model.getByLabel('Model ID', { exact: true })).toHaveValue('');
+    await model.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+    await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await settings.getByRole('button', { name: 'Default model for new Sessions', exact: true }).click();
+    const defaults = settings.getByRole('form', { name: 'Default model', exact: true });
+    await choose(defaults, 'Model', 'custom/first-model');
+    await defaults.getByRole('button', { name: 'Save Default model', exact: true }).click();
+    await expect(defaults.getByRole('button', { name: 'Save Default model', exact: true })).toBeDisabled();
+    await expect.poll(() => readFileSync(fixture.settings, 'utf8')).toContain('model = "custom/first-model"');
+    const sessionId = await openEmptySession(page, fixture, 'Workspace A');
+    expect(sessionId).toBeTruthy();
+    await expect(page.locator('[data-model-select]')).toContainText('custom/first-model');
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    if (width === 1440) {
+      await openSettingsPage(page, 'General');
+      await choose(settings, 'Language', '中文');
+      const chinese = page.getByRole('region', { name: '设置', exact: true });
+      await chinese.getByRole('tab', { name: '模型', exact: true }).click();
+      await captureEvidence(chinese, 'models-zh-desktop');
+      await chinese.getByRole('button', { name: '+ 添加模型', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: '添加模型', exact: true });
+      await dialog.getByLabel('模型 ID', { exact: true }).fill('deepseek-flash');
+      await dialog.getByRole('button', { name: '高级配置', exact: true }).click();
+      await captureEvidence(dialog, 'add-model-zh-desktop');
+      await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    }
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
+});

@@ -4227,5 +4227,47 @@
       [34, 349, [77, 77, 79, 255], [78, 78, 80, 255]],
       [34, 447, [77, 77, 79, 255], [78, 78, 80, 255]]
     ]
+  },
+  {
+    "reference": "settings-conflict-light-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 FULL CI run 42239006386, job 127967664835, artifact 13516078875 and a strict local reproduction have byte-identical stable captures. Exactly ten glyph-edge pixels differ from the unchanged reference: x 243 at y841-845 and y896-900, each [255,255,251,255] to [255,255,255,255] (blue-channel delta 4). They border the collapsed React Aria Disclosure triangle spans for All Models and Default Model for new Sessions; CI/local Settings DOM is identical after normalizing only generated React Aria ID prefixes (four form values and nineteen selected-state annotations retained), and all 132 stylesheet text blocks match. The inspected strict local run independently reproduced this reference mismatch. Each actual coordinate has its own 1x1/budget 1/delta 4 region; no neighboring pixels or global threshold are allowed. Internal Chromium causes are not established. An additional pinned 1.63.0 Linux stable capture has exactly two different opaque right-panel-edge pixels, at (1004,410) with red-channel delta 5 and (1004,417) with delta 10. All other pixels, including the earlier ten triangle sites, match the unchanged main reference. Rendering sources are unchanged from main; internal browser causes are unestablished. This policy is the disjoint union of the earlier ten-site observation and the additional two-site observation, not one twelve-pixel capture. The additional raw PNG, hashes and both observations are retained below.",
+    "referenceSha256": "5177ff397f8e2fc1b2d57885832a3857ef5f0d87451af08a64857d73ecae8103",
+    "actualSha256": "04748ce6f02a24e7e1b1ead8fe10d790248ec3ce7ca13b4fa7c39dfb05f7e14a",
+    "domSha256": "115c2efb6c97ebc7b14068e06729f104d8d732f04cb35d2d95bf2cca6b4c923b",
+    "stylesheetTextSha256": "ee4e0147422d8db04fce6be2e2b546c7970ab5c2396ecdd5baa3fedabe4b4f4f",
+    "regions": [
+      {"label":"Disclosure triangle edge coverage","x":243,"y":841,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":842,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":843,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":844,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":845,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":896,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":897,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":898,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":899,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Disclosure triangle edge coverage","x":243,"y":900,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":4},
+      {"label":"Measured provider panel right-edge site","x":1004,"y":410,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":5},
+      {"label":"Measured provider panel right-edge site","x":1004,"y":417,"width":1,"height":1,"maxChangedPixels":1,"maxChannelDelta":10}
+    ],
+    "pixels": [
+      [243,841,[255,255,251,255],[255,255,255,255]],
+      [243,842,[255,255,251,255],[255,255,255,255]],
+      [243,843,[255,255,251,255],[255,255,255,255]],
+      [243,844,[255,255,251,255],[255,255,255,255]],
+      [243,845,[255,255,251,255],[255,255,255,255]],
+      [243,896,[255,255,251,255],[255,255,255,255]],
+      [243,897,[255,255,251,255],[255,255,255,255]],
+      [243,898,[255,255,251,255],[255,255,255,255]],
+      [243,899,[255,255,251,255],[255,255,255,255]],
+      [243,900,[255,255,251,255],[255,255,255,255]],
+      [1004,410,[255,255,255,255],[250,255,255,255]],
+      [1004,417,[255,255,255,255],[245,255,255,255]]
+    ],
+    "captureSha256": "c37e05cdaf293f4b1f39b1e960c69291cf04e0d56f5f8c9cb97284c7226fc67e",
+    "capture": "settings-conflict-light-noise-linux.png",
+    "captures": [
+      {"evidence":"Pinned Playwright 1.63.0 FULL CI run 42239006386, job 127967664835, artifact 13516078875 and a strict local reproduction have byte-identical stable captures. Exactly ten glyph-edge pixels differ from the unchanged reference: x 243 at y841-845 and y896-900, each [255,255,251,255] to [255,255,255,255] (blue-channel delta 4). They border the collapsed React Aria Disclosure triangle spans for All Models and Default Model for new Sessions; CI/local Settings DOM is identical after normalizing only generated React Aria ID prefixes (four form values and nineteen selected-state annotations retained), and all 132 stylesheet text blocks match. The inspected strict local run independently reproduced this reference mismatch. Each actual coordinate has its own 1x1/budget 1/delta 4 region; no neighboring pixels or global threshold are allowed. Internal Chromium causes are not established.","pixels":[[243,841,[255,255,251,255],[255,255,255,255]],[243,842,[255,255,251,255],[255,255,255,255]],[243,843,[255,255,251,255],[255,255,255,255]],[243,844,[255,255,251,255],[255,255,255,255]],[243,845,[255,255,251,255],[255,255,255,255]],[243,896,[255,255,251,255],[255,255,255,255]],[243,897,[255,255,251,255],[255,255,255,255]],[243,898,[255,255,251,255],[255,255,255,255]],[243,899,[255,255,251,255],[255,255,255,255]],[243,900,[255,255,251,255],[255,255,255,255]]]},
+      {"file":"settings-conflict-light-noise-linux.png","pngSha256":"c37e05cdaf293f4b1f39b1e960c69291cf04e0d56f5f8c9cb97284c7226fc67e","pixels":[[1004,410,[255,255,255,255],[250,255,255,255]],[1004,417,[255,255,255,255],[245,255,255,255]]]}
+    ]
   }
 ]

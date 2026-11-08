@@ -1409,7 +1409,7 @@ fn ext259_todo_is_rejected_on_every_ordinary_selection_surface() {
     use rustx::capabilities::AgentActivation as Selection;
 
     // Root configuration.
-    let config = r#"schema_version = 10
+    let config = r#"schema_version = 11
 agent_id = "agent-ext259"
 
 [context]

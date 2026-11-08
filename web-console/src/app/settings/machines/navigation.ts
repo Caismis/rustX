@@ -2,7 +2,7 @@ import { message, type DisplayText } from '../../../locale/translation';
 import { assign, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
-import type { SourceTarget } from '../../../../../protocol/app-server/v75';
+import type { SourceTarget } from '../../../../../protocol/app-server/v76';
 import type { RepairIdentity } from '../../repair-notices';
 import {
   settingsTargetKey, userSettingsTarget, workspaceSettingsTarget,
@@ -31,7 +31,7 @@ export interface PageFocus {
   general: never;
   /** `provider` on a Model records which Provider detail it was opened from,
    * so leaving the Model returns to that Provider rather than the bare list. */
-  models: { kind: 'provider'; id: string } | { kind: 'model'; id: string; provider?: string };
+  models: { kind: 'provider'; id: string; creating?: true } | { kind: 'model'; id: string; provider?: string };
   agent: never;
   tools: never;
   mcp: { kind: 'mcp'; name?: string; mode?: 'json' | 'permissions' };

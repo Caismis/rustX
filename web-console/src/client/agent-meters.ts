@@ -1,4 +1,4 @@
-import type { AgentStatistics, AttachmentTarget, RuntimeClientAgent } from '../../../protocol/app-server/v75';
+import type { AgentStatistics, AttachmentTarget, RuntimeClientAgent } from '../../../protocol/app-server/v76';
 
 /** Native observations invalidate a read; they never supply usage evidence. */
 export const meterDemand = (agent: RuntimeClientAgent) => JSON.stringify([

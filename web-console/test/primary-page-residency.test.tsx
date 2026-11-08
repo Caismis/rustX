@@ -1,7 +1,7 @@
 import {threadFor} from '../../protocol/app-server/testing.ts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { Request } from '../../protocol/app-server/v75';
+import type { Request } from '../../protocol/app-server/v76';
 import { App } from '../src/app/App';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 import { Server, boundedSettings, snapshot } from './fixture';

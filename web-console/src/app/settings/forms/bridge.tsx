@@ -2,7 +2,7 @@ import { useTranslation } from '../../../locale/react';
 import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
 import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
-import type { SourceMutation } from '../../../../../protocol/app-server/v75';
+import type { SourceMutation } from '../../../../../protocol/app-server/v76';
 import { Button } from '../../../presentation/primitives/Button';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
@@ -154,6 +154,9 @@ export interface UnitEditing<T> {
 }
 
 export interface UnitOptions<T> {
+  /** An actor-owned creation draft has a stable identity before its native
+   * resource name is chosen. Only its submitted mutation names the resource. */
+  draftKey?: string;
   /** The exact value this scope authors for this unit, or `undefined` when it
    * authors none or native parsed none. Call sites pass the native projection
    * without a fallback. */
@@ -178,7 +181,7 @@ export interface UnitOptions<T> {
   redacted?: boolean;
 }
 
-export function useUnitEditing<T>({ authored, authoredPresent = authored !== undefined, blank, revision, mutation, inherited = value => value as T, redacted = false }: UnitOptions<T>): UnitEditing<T> {
+export function useUnitEditing<T>({ authored, authoredPresent = authored !== undefined, blank, revision, mutation, inherited = value => value as T, redacted = false, draftKey }: UnitOptions<T>): UnitEditing<T> {
   const actor = useSettingsActor();
   const source = useContext(SourceContext);
   const scope = source?.target.kind ?? 'user';
@@ -190,7 +193,7 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   // The lower-scope definition a whole-identity resource would shadow. It is
   // native authored fact of another document, projected without secrets.
   const shadowed = ownership === 'identity' ? shadowedDefinition(source, scope, unitMutation) : undefined;
-  const identity = JSON.stringify(unitMutation);
+  const identity = draftKey ?? JSON.stringify(unitMutation);
   const selector = revisionSelector(unitMutation);
   // The unit's live transaction, owned by the Settings authority actor.
   // `undefined` is exactly "this browser authored nothing for the unit and
@@ -285,10 +288,11 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
  *
  * The frame renders the actions; it never owns them. Every one of them is a
  * message to the unit's transaction actor. */
-function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, children, presentation, onCancel }: {
+function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, children, presentation, onCancel, onSubmit }: {
   title: string; unit: UnitEditing<T>; redacted?: boolean; removable: boolean;
   removalNotice?: ReactNode; children: ReactNode;
   presentation?: 'resource' | 'dialog'; onCancel?: () => void;
+  onSubmit?: () => void;
 }) {
   const tx = useTranslation();
   // Portaled editors do not inherit the page fieldset's disabled state.
@@ -329,7 +333,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
             settle={card} onConfirm={() => unit.submit(true)} /></span>);
   return <UnitReset.Provider value={unit.resets}><form ref={card} tabIndex={-1} aria-label={title} className={`${css.unit}${presentation ? ` ${presentation === 'dialog' ? css.unitDialog : css.unitResource}` : ''}`} data-definition={unit.definition} data-draft={unit.draft || undefined}
     data-authored-value={unit.definition === 'authored' ? unit.unparsed ? 'unparsed' : 'parsed' : undefined}
-    onSubmit={event => { event.preventDefault(); unit.submit(); }}>
+    onSubmit={event => { event.preventDefault(); if (onSubmit) onSubmit(); else unit.submit(); }}>
     <fieldset disabled={unit.busy || unavailable}><legend>{title}</legend>
       <div className={presentation === 'dialog' ? css.unitBody : undefined}>
       {presentation === 'dialog' && availability && <p role={availability === 'loading' ? 'status' : 'alert'} className={css.hint}>{tx(`settings:models.authority-${availability}`)}</p>}
@@ -338,7 +342,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
         {unit.facts.effective.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.native-effective-resolution-failed')}{' '}{unit.facts.effective.diagnostic}</p>}
       </>}
       {redacted && <p className={css.hint}>{tx('settings:bridge.the-authored-value-is-never-projected-to-the-browser-saving-repl')}</p>}
-      {unit.definition && <DefinitionNotice unit={unit} owner={owner} />}
+      {unit.definition && (!presentation || unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit} owner={owner} />}
       {/* Inspecting an inherited definition shows its safe native facts in the
           same fields, and none of them is writable until the explicit
           override transition. */}
@@ -360,7 +364,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           definitively committed, and the authoritative reread that settles it
           has been observed. Neither is ever presented as the other. Both sit
           above the actions, which close the card. */}
-      {unit.committed && <p role="status">{tx('settings:bridge.saved-native-application-proceeds-automatically')}</p>}
+      {unit.committed && presentation !== 'resource' && <p role="status">{tx('settings:bridge.saved-native-application-proceeds-automatically')}</p>}
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       {presentation === 'dialog' && removal && <div className={css.unitRemoval}>{removal}</div>}
       </div>
@@ -467,10 +471,10 @@ export function UnitForm<T>({ title, children, removable = true, removalNotice, 
  *    the transaction owns; this component never calls a native operation.
  *
  * There is therefore exactly one value called the draft, and the actor owns it. */
-export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, presentation, onCancel, ...options }: UnitOptions<T> & {
+export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, presentation, onCancel, onSaved, ...options }: UnitOptions<T> & {
   title: string; children: (form: TypedUnitForm<T>) => ReactNode;
   removable?: boolean; removalNotice?: ReactNode;
-  presentation?: 'resource' | 'dialog'; onCancel?: () => void;
+  presentation?: 'resource' | 'dialog'; onCancel?: () => void; onSaved?: () => void;
 }) {
   const unit = useUnitEditing(options);
   // The value this form last pushed into the transaction actor. Comparing the
@@ -480,8 +484,15 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
   // The latest unit facts, for the change listener the form instance holds.
   const current = useRef(unit);
   current.current = unit;
+  const submitted = useRef(false);
   const form = useForm({
     defaultValues: unit.displayed,
+    onSubmit: () => {
+      const owner = current.current;
+      if (!owner.draft || !owner.admitted || owner.busy || owner.awaitingObservation) return;
+      submitted.current = true;
+      owner.submit();
+    },
     listeners: {
       onChange: ({ formApi }) => {
         const { writable, displayed, edit } = current.current;
@@ -497,6 +508,12 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
     },
   }) as TypedUnitForm<T>;
   useEffect(() => {
+    if (submitted.current && unit.committed && !unit.awaitingObservation) {
+      submitted.current = false;
+      onSaved?.();
+    }
+  }, [unit.committed, unit.awaitingObservation, onSaved]);
+  useEffect(() => {
     if (sameValue(reflected.current, unit.displayed)) return;
     // The actor's value moved for a reason that is not this form's editing:
     // a discarded draft, a reviewed revision, or a confirmed commit dropping
@@ -504,7 +521,8 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
     reflected.current = unit.displayed;
     form.reset(unit.displayed);
   }, [form, unit.displayed]);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} presentation={presentation} onCancel={onCancel}>
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} presentation={presentation} onCancel={onCancel}
+    onSubmit={() => { void form.handleSubmit(); }}>
     {children(form)}
   </UnitShell>;
 }

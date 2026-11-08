@@ -7,7 +7,7 @@ import { useMcpProbes } from './mcp/useMcpProbes';
 import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v75';
+import type { SourceScope } from '../../../../protocol/app-server/v76';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -224,7 +224,7 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
       </div>
       <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>
     </div>}>
-    <section className={`${css.settings} ${css.page}`} aria-busy={busy}>
+    <section className={`${css.settings} ${css.page}`} data-settings-section={current} aria-busy={busy}>
       {/* Target-wide facts, each reported as itself: a read failure, a
           convergence report, an unknown save outcome and a maintenance
           failure are separate alerts, and none of them hides another. */}

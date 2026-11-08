@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { useEffect, useState } from 'react';
-import type { WorkflowToolChoice } from '../../../../../../../protocol/app-server/v75';
+import type { WorkflowToolChoice } from '../../../../../../../protocol/app-server/v76';
 import { useTranslation } from '../../../../../locale/react';
 import { IconChevronDownOutline14 } from '../../../../../presentation/primitives/icons';
 import { Switch } from '../../../../../presentation/primitives/Switch';

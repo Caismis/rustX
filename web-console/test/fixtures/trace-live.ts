@@ -1,4 +1,4 @@
-import type { Request } from '../../../protocol/app-server/v75';
+import type { Request } from '../../../protocol/app-server/v76';
 import { checkpoint, type Server } from '../fixture';
 import { nativeTraceFixture } from '../native-trace-fixture';
 import { requestDetail, traceRecord, traceTool } from '../trace-fixture';

@@ -3,7 +3,7 @@ import { displayText, translator } from '../src/locale/translation';
 import { workspaceApprovalBlock, approvalIdentity, approvalMutation } from '../src/app/new-conversation/approval';
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v75';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v76';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { applicationCurrent, applicationKnown, observationUnavailable, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
@@ -2002,7 +2002,7 @@ function scriptedClient() {
 
 const PROVIDER_SECRET = 'R26-PROVIDER-SECRET';
 const providerIdentity = JSON.stringify({ kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: null } });
-const providerWrite = { base_url: 'https://native.invalid', credential: { kind: 'literal', value: PROVIDER_SECRET } } as const;
+const providerWrite = { protocol: 'openai_responses', base_url: 'https://native.invalid', credential: { kind: 'literal', value: PROVIDER_SECRET } } as const;
 const providerMutation: SourceMutation = { kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: providerWrite } };
 const retainedBy = (system: ConfigurationSystem) => JSON.stringify(system.transactionOwners().map(owner => owner.retainedState()));
 

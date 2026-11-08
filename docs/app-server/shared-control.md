@@ -4,7 +4,7 @@ This is the implementation contract for issue #532. The implementation base is
 `4ecd28b8834d91566404ccc24a601ba7cf2e9b7d`. The reference is OpenAI Codex
 `rust-v0.166.0`, resolved to immutable commit
 `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`.
-The public protocol is App Server v75, with Runtime Client v84, Session catalog
+The public protocol is App Server v76, with Runtime Client v84, Session catalog
 v19, SQLite v86 and Runtime Manifest v5. Earlier protocols and storage layouts
 are rejected; there is no compatibility reader or alternate gateway.
 
@@ -68,7 +68,7 @@ network credential flags are rejected for stdio. Initialize does not authenticat
   `now >= nbf - skew`. Additional role/scope/Thread claims grant no permission tier.
 
 A native client sends `Authorization: Bearer <credential>`. A browser offers
-`rustx.app-server.v75` and `rustx-token.<base64url-no-pad(credential bytes)>`. Encode the ASCII bearer bytes
+`rustx.app-server.v76` and `rustx-token.<base64url-no-pad(credential bytes)>`. Encode the ASCII bearer bytes
 with RFC 4648 URL-safe Base64 and omit padding; native Authorization sends the
 original bytes. There is no raw-token subprotocol alternative. Both reach the same verifier.
 The server selects only the normal protocol, never echoes the secret, and rejects
@@ -205,8 +205,8 @@ cargo run --all-features --bin rustx -- app-server --listen ws://127.0.0.1:8787 
 node examples/app-server/connect.mjs ws://127.0.0.1:8787/ /absolute/socket-token
 ```
 
-It connects, initializes v75 and prints the read-only `server/info` result. It is
-not an SDK or a second demo application. Rust-derived `v75.schema.json`, `v75.ts`
+It connects, initializes v76 and prints the read-only `server/info` result. It is
+not an SDK or a second demo application. Rust-derived `v76.schema.json`, `v76.ts`
 and fixtures are generated together; product clients validate server output apart
 from the generic client-response envelope so arbitrary callback results cannot
 weaken native server-response validation.
@@ -224,7 +224,7 @@ consumes only that submission's text/files, and TUI settles the retained operati
 Absent proofs and failed reads preserve uncertainty. Recovery never resends input
 or upgrades durable acceptance into execution completion.
 
-## Thread runtime status (v75 amendment)
+## Thread runtime status (v76 amendment)
 
 The public vocabulary follows the pinned Codex
 [Thread status source](https://github.com/openai/codex/blob/6ff1e1ca3b30fc8b914720681fcf5fe62e95f856/codex-rs/app-server/src/thread_status.rs).

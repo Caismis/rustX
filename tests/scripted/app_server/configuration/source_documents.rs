@@ -865,6 +865,7 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
             .await
             .unwrap();
         let provider = crate::local_runtime::configuration::settings::ProviderWrite {
+            protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
             base_url: fixture.provider.url("/v2"),
             credential: crate::local_runtime::configuration::settings::CredentialEdit::Retain,
         };
@@ -1019,7 +1020,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
             native,
             "{\"seed\":9007199254740993}",
             1,
-        ) + "\n[providers.extra]\nbase_url = \"https://example.invalid/v1\"\napi_key = \"sk-SECRET_NEIGHBOR\"\n";
+        ) + "\n[providers.extra]\nprotocol = \"openai_responses\"\nbase_url = \"https://example.invalid/v1\"\napi_key = \"sk-SECRET_NEIGHBOR\"\n";
         std::fs::write(&path, &unsafe_text).unwrap();
         let broken = f.manager.source_settings(&target).await.unwrap();
         assert!(broken.user.authored.is_none());

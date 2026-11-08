@@ -756,7 +756,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v75.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v76.ts"),
         )
         .unwrap();
         for domain in [

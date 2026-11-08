@@ -10,7 +10,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/errors';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v75';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v76';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -419,7 +419,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
     if (op.method === 'configuration/sourcesRead' && failReads) throw new Error('authoritative read unavailable');
     if (op.method === 'configuration/sourceWrite') {
       // Native commits the literal credential and reports it redacted.
-      source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
+      source.workspace!.authored = { providers: { secret: { protocol: 'openai_responses', base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
     }
   });
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
@@ -500,8 +500,8 @@ it('S1-14 a confirmed MCP environment-reference save drops the submitted payload
 // Workspace override, without the browser merging two documents.
 function inheritedCatalog(s: ReturnType<typeof cfg3Client>) {
   s.source.resolved = {
-    providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } } },
-    models: { main: { provider: 'transport', id: 'wire', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false } } },
+    providers: { transport: { protocol: 'openai_responses', base_url: 'https://user.invalid', credential: { type: 'literal' } } },
+    models: { main: { provider: 'transport', id: 'wire', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false } } },
   } as never;
   s.source.provenance = {
     'providers.transport': { kind: 'user', document: '/bound/rustx.toml', base: '/bound' },
@@ -526,9 +526,11 @@ it('S1-15 an inherited User Provider and Model are discoverable in the Workspace
   fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
   const models = within(screen.getByRole('grid', { name: 'All Models' }));
   expect(within(models.getByRole('row', { name: 'main' })).getByText('Inherited from User')).toBeTruthy();
+  await openResourceRow('transport');
   fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
-  fireEvent.change(screen.getByLabelText('New Model identity'), { target: { value: 'main' } });
-  expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'wire' } });
+  fireEvent.submit(screen.getByRole('form', { name: 'Add Model' }));
+  await screen.findByText('This configuration name already exists.');
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -565,9 +567,10 @@ it('S1-15 an explicit Workspace Provider override authors only that unit and nev
   await settingsReady();
   await openResourceRow('transport');
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
+  await chooseOption('Credential source', 'Read it from an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
-  await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } }));
+  await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } }));
   // Exactly one unit is authored, and the authored credential is the one the
   // user entered — never a copy or reconstruction of the shadowed User one.
   expect(writes(s)).toHaveLength(1);
@@ -645,7 +648,7 @@ async function heldSecretSave(s: ReturnType<typeof cfg3Client>) {
 }
 /** Native commits the literal credential and projects it redacted. */
 const commitsProvider = async (op: { method: string }, source: SourceSettings) => {
-  if (op.method === 'configuration/sourceWrite') source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
+  if (op.method === 'configuration/sourceWrite') source.workspace!.authored = { providers: { secret: { protocol: 'openai_responses', base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
 };
 
 it('S1-16 a definitive acknowledgement outlives the whole Settings surface and retires the submitted secret-bearing transaction', async () => {
