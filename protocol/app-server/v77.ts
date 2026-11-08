@@ -9956,6 +9956,7 @@ export interface McpAuthoring {
  * via the `definition` "ProviderWrite".
  */
 export interface ProviderWrite {
+  icon?: string | null;
   protocol: ModelProtocol;
   base_url: string;
   credential: CredentialEdit;
@@ -18578,6 +18579,7 @@ export interface RuntimeLayer {
  * via the `definition` "ProviderView".
  */
 export interface ProviderView {
+  icon?: string | null;
   protocol: ModelProtocol;
   base_url: string;
   credential: CredentialSourceView;

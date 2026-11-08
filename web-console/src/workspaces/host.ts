@@ -1,6 +1,6 @@
-import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v76.ts';
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v76.ts';
-import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v76.ts';
+import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v77.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v77.ts';
+import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v77.ts';
 import type { WorkflowEdit, WorkflowSource } from '../../../protocol/app-server/workflow-documents.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';

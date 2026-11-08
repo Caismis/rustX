@@ -25582,6 +25582,12 @@
     "ProviderView": {
       "type": "object",
       "properties": {
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "protocol": {
           "$ref": "#/$defs/ModelProtocol"
         },
@@ -38890,6 +38896,12 @@
     "ProviderWrite": {
       "type": "object",
       "properties": {
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "protocol": {
           "$ref": "#/$defs/ModelProtocol"
         },

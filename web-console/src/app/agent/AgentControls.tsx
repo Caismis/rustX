@@ -3,7 +3,7 @@ import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { sourceObservation } from '../../../../protocol/app-server/source-observation';
-import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v76';
+import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v77';
 import { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain } from '../../client/errors';
 import type { SessionView } from '../../client/contracts';
@@ -76,7 +76,9 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    ++epoch.current; setBlocked(true); setBusy(false); setError(''); setSelectionError(''); guard.current = false;
    if(!draft&&view?.observationState!=='checkpointLoading'&&view?.observationState!=='subscribePending')load(true);
    return () => { ++epoch.current; };
- }, [target?.attachment_id, generation, view?.snapshot?.resources?.revision, view?.snapshot?.model_status?.binding_revision]);
+ // Attachment IDs and revisions are local to a native Session. Switching to
+ // another Session must reread even when those local counters are identical.
+ }, [scope, view?.snapshot?.resources?.revision, view?.snapshot?.model_status?.binding_revision]);
  useEffect(()=>{if(!draft&&view?.observationState==='following'&&blocked)load();},[view?.observationState]);
  const mutate = async (operation: () => Promise<unknown>, requested: SessionModelConfig) => {
    if (pending || guard.current || blocked || busy || !attached || selection.current?.scope === scope) return false;

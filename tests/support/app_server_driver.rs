@@ -333,7 +333,7 @@ pub async fn socket(
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     try_socket(
         url,
-        &format!("rustx.app-server.v76, {}", credential_offer(TOKEN)),
+        &format!("rustx.app-server.v77, {}", credential_offer(TOKEN)),
     )
     .await
     .unwrap()
@@ -354,7 +354,7 @@ pub async fn try_socket(
     let (socket, response) = tokio_tungstenite::connect_async(request).await?;
     assert_eq!(
         response.headers()["sec-websocket-protocol"],
-        "rustx.app-server.v76",
+        "rustx.app-server.v77",
         "the response selects only the public subprotocol, never a secret"
     );
     Ok(socket)
@@ -362,7 +362,7 @@ pub async fn try_socket(
 pub async fn websocket(url: &str) -> Driver {
     websocket_offering(
         url,
-        &format!("rustx.app-server.v76, {}", credential_offer(TOKEN)),
+        &format!("rustx.app-server.v77, {}", credential_offer(TOKEN)),
     )
     .await
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { RuntimeClientProjectionHeadView, TraceText } from '../../../../protocol/app-server/v76';
+import type { RuntimeClientProjectionHeadView, TraceText } from '../../../../protocol/app-server/v77';
 import type { AppServerClient } from '../../client/app-server';
 import { useTranslation } from '../../locale/react';
 import { CompactionMessage } from '../../presentation/agent/Message';

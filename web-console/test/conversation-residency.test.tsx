@@ -15,7 +15,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v76';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v77';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 
 // These spies execute the actual functions, including their hooks. Calls count

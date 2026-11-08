@@ -29,7 +29,7 @@ async fn granted_connection(
             .await
         });
         let offered = format!(
-            "rustx.app-server.v76, {}",
+            "rustx.app-server.v77, {}",
             driver::credential_offer(driver::TOKEN)
         );
         (driver::websocket_offering(&url, &offered).await, server)

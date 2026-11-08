@@ -28,6 +28,11 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await provider.getByLabel('Base URL', { exact: true }).fill(fixture.providerUrl + '/v1');
     await provider.getByLabel('API Key', { exact: true }).fill('fixture-only');
     await choose(provider, 'API format', 'OpenAI Responses (/v1/responses)');
+    await provider.getByRole('button', { name: 'Choose provider icon', exact: true }).click();
+    const icons = page.getByRole('dialog', { name: 'Choose provider icon', exact: true });
+    await icons.getByRole('searchbox', { name: 'Search icons' }).fill('deepseek');
+    await icons.getByRole('row', { name: 'DeepSeek', exact: true }).click();
+    await expect(icons).toHaveCount(0);
     await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeDisabled();
     await provider.getByRole('button', { name: 'Save Provider custom', exact: true }).click();
     await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeDisabled();
@@ -36,6 +41,8 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await expect(settings.getByText('No models configured yet. Add a model to use this provider in conversations.')).toBeVisible();
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     await expect(settings.getByRole('alert')).toHaveCount(0);
+    expect(readFileSync(fixture.settings, 'utf8')).toContain('icon = "deepseek"');
+    await expect(settings.getByRole('row', { name: 'custom', exact: true }).locator('[data-provider-icon="deepseek"] img')).toHaveJSProperty('complete', true);
     await captureEvidence(settings, `provider-only-${width}`);
 
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
@@ -98,5 +105,13 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
     }
     expect(errors).toEqual([]);
+  } catch (error) {
+    await test.info().attach('native-diagnostics', { body: JSON.stringify(fixture.diagnostics(), null, 2), contentType: 'application/json' });
+    const details = page.getByRole('button', { name: 'Show details', exact: true });
+    if (await details.isVisible()) {
+      await details.click();
+      await test.info().attach('connection-details', { body: await page.locator('body').innerText(), contentType: 'text/plain' });
+    }
+    throw error;
   } finally { await fixture.stop(false); }
 });

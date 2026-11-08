@@ -31,12 +31,16 @@ Settings is organized by product task into seven sections:
 | Page | What it holds |
 | --- | --- |
 | **General** | Browser-owned preferences: Appearance (theme) and Language (English / 中文). Explicit User Settings opens here; the primary Settings item resumes its previous section. |
-| **Models** | Provider list → Provider detail (Base URL, shared API format, API Key and its Models; credential source under Connection options) → one Model dialog (identity, limits, then capabilities and Model Profiles under Advanced). All Models and the default model for new Sessions follow the Provider panel. |
+| **Models** | Provider list → Provider detail (icon, Base URL, shared API format, API Key and its Models; credential source under Connection options) → one Model dialog (identity, limits, then capabilities and Model Profiles under Advanced). All Models and the default model for new Sessions follow the Provider panel. |
 | **Agent** | Root identity, description, instructions and project guidance. |
 | **Tools & Permissions** | Approval mode, Native Tools, Tool-source selections, Skill visibility, the Agent and Workflow delegation allowlists, and per-Tool/MCP policies under **Advanced Tool policies**. |
 | **MCP Servers** | Native MCP source definitions, permissions and observation for the exact Settings owner. |
 | **Extensions** | One searchable inventory of Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Built-in**. |
 | **Advanced** | Context limits, timeouts, concurrent subagent limits, environment variables and **Rescan configuration files**. **Auto Repair** appears for a repair receipt, a malformed document or an explicit inspection request. **Connection** is a sub-surface of Advanced, not a separate Settings section. |
+
+Provider icons can be searched and selected from the locally bundled LobeHub catalog.
+The icon is saved with the Provider, follows the same Save/discard and scope rules,
+and changes presentation only. The default icon clears that optional selection.
 
 A Provider without Models is valid setup in progress. Save its connection before
 adding Models. The Model dialog owns the complete creation draft and validates
@@ -172,6 +176,7 @@ stdio. Ordinary edits preserve that authored omission and retained credentials.
 These captures come from the real App Server/provider-emulator acceptance suite:
 
 - [Provider settings, Chinese dark desktop](images/settings-models.png)
+- [LobeHub provider icon picker, dark desktop](images/settings-provider-icons.png)
 - [Add Model dialog, Chinese dark desktop](images/settings-add-model.png)
 
 ## Harness integration

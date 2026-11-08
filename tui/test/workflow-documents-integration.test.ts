@@ -9,7 +9,7 @@ import { AppServerHost } from '../src/app-server/host.ts';
 import { AppServerRequestError } from '../src/app-server/client.ts';
 import { JSONL_MAX_RECORD_BYTES } from '../src/protocol/jsonl.ts';
 import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
-import type { WorkflowFileDocument } from '../../protocol/app-server/v76.ts';
+import type { WorkflowFileDocument } from '../../protocol/app-server/v77.ts';
 import { TempFixture } from './support/temp-fixture.ts';
 
 const binary = process.env.RUSTX_BINARY ?? fileURLToPath(new URL('../../target/debug/rustx', import.meta.url));

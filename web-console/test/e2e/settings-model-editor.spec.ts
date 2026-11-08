@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openSettingsPage } from './shell-actions';
-import { expectStableScreenshot } from './screenshot';
+import { captureEvidence, expectStableScreenshot } from './screenshot';
 
 const fixture = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/settings.html`;
 const provider = 'enterprise-inference-gateway-eu-central-primary-with-an-exceptionally-long-provider-identity';
@@ -69,6 +69,40 @@ test('authority replacement hides a retained model dialog and releases its focus
 });
 
 for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) {
+  test(`${theme} ${width}: provider icons are searchable, keyboard accessible and remain a draft until Save`, async ({page}) => {
+    const errors = await start(page, theme, width);
+    await openSettingsPage(page, 'Models');
+    await settings(page).getByRole('row', {name:provider, exact:true}).click();
+    const form = settings(page).getByRole('form', {name:'Provider '+provider, exact:true});
+    const trigger = form.getByRole('button', {name:'Choose provider icon', exact:true});
+    await trigger.click();
+    const picker = page.getByRole('dialog', {name:'Choose provider icon', exact:true});
+    const search = picker.getByRole('searchbox', {name:'Search icons', exact:true});
+    await expect(search).toBeFocused();
+    await captureEvidence(picker, `provider-icons-${theme.toLowerCase()}-${width}`);
+    const accessibility = await new AxeBuilder({page}).include('[role="dialog"][aria-label="Choose provider icon"]').withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
+    expect(accessibility.violations).toEqual([]);
+    await search.fill('no-such-vendor');
+    await expect(picker.getByText('No matching icons.')).toBeVisible();
+    await search.fill('openai');
+    await expect(picker.getByRole('row')).toHaveCount(1);
+    await captureEvidence(picker, `provider-monochrome-${theme.toLowerCase()}-${width}`);
+    await page.keyboard.press('Tab');
+    await expect(picker.getByRole('row', {name:'OpenAI', exact:true})).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(picker).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveText('OpenAI');
+    expect(await writes(page)).toBe(0);
+    await form.getByRole('button', {name:'Discard', exact:true}).click();
+    await expect(trigger).toHaveText('Default icon');
+    await trigger.click();
+    await page.keyboard.press('Escape');
+    await expect(picker).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    expect(errors).toEqual([]);
+  });
   test(`${theme} ${width}: appearance stays on one row, model basic/advanced and footer remain usable`, async ({page}) => {
     const errors = await start(page, theme, width);
     const appearance = settings(page).getByRole('group', {name:'Appearance'});

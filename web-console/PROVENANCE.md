@@ -1,3 +1,22 @@
+## Provider brand icons (2026-11-08)
+
+Provider list, detail and searchable icon picker use the exact pinned
+`@lobehub/icons-static-svg` 1.102.0 package from LobeHub lobe-icons
+(`989535d6c13da2dec5a2937fe2789d4af4fdd8e0`, MIT). The upstream license is
+retained under licenses and in the production notices. The generated catalog
+selects 357 standalone brand symbols, preferring their color variants; wordmarks
+and alternate marks are excluded. SVG assets are bundled locally, with no CDN
+or Iconify API requests. Monochrome marks use the current theme's text color.
+The default Package glyph comes from the pinned Lucide/Iconify set (ISC).
+
+As in ZCode's ProviderLogo, an explicit provider field selects an asset; provider
+identity and protocol do not infer a logo. The optional native `icon` slug is
+carried through source read/write, redaction and TOML serialization, and omitted
+at the inference catalog boundary. App Server v77 is the mandatory contract;
+no old protocol path is retained. The picker uses existing Base UI modal and
+React Aria grid/search controls. Browser plugin is unavailable in this session;
+validation uses the repository's pinned Playwright/Chromium runner.
+
 ## Settings information density (2026-11-08)
 
 Compared ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` SettingsPage,
@@ -5619,3 +5638,21 @@ Explicit Model-dialog Cancel discards the whole unsaved Model unit through its
 existing transaction actor, including Profile membership and reasoning order.
 Close and navigation retain that draft for later editing; no transaction state
 or native configuration action is added.
+
+## Session model control scope (2026-11-08)
+
+Model catalog/configuration reads now follow the full existing attachment scope,
+including Session and Conversation identities, rather than just a runtime-local
+attachment counter and revisions. This prevents A → B → A navigation from
+clearing a deferred model label without issuing its authoritative reread. A
+component regression reproduces identical local counters and binding revisions;
+real-process browser coverage switches two native Sessions repeatedly without
+opening the picker or sending a model mutation.
+
+The narrow dark Model context input reproduced the light theme's previously
+measured one-level corner variance at (34,237). Independent stable captures
+reproduce both complete PNG variants with every other RGBA byte identical. The
+original dark reference is retained; both raw variants and their hashes are
+frozen with the comparator. Only that one dark-reference pixel now admits the
+measured delta of 1. Regression tests reject adjacent pixels, larger changes and
+other references; no global screenshot threshold changed.

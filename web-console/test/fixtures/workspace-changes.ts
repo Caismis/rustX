@@ -1,5 +1,5 @@
 import type { Server } from '../fixture';
-import type { ChangesSummary, RuntimeClientSnapshot } from '../../../protocol/app-server/v76';
+import type { ChangesSummary, RuntimeClientSnapshot } from '../../../protocol/app-server/v77';
 
 export function workspaceChangesFixture(server:Server,current:RuntimeClientSnapshot) {
   const completed=structuredClone(current);

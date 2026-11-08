@@ -865,6 +865,7 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
             .await
             .unwrap();
         let provider = crate::local_runtime::configuration::settings::ProviderWrite {
+            icon: None,
             protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
             base_url: fixture.provider.url("/v2"),
             credential: crate::local_runtime::configuration::settings::CredentialEdit::Retain,

@@ -1,5 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "models.icon": "Icon",
+  "models.choose-icon": "Choose provider icon",
+  "models.icon-default": "Default icon",
+  "models.icon-unavailable": "Icon unavailable",
+  "models.search-icons": "Search icons",
+  "models.no-icons": "No matching icons.",
   "forms.reset-default": "Reset to default",
   "forms.restore-help": "Use the global setting for this workspace.",
   "forms.reset-help": "Remove this customization and use the default setting.",
@@ -660,6 +666,12 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "models.icon": "图标",
+  "models.choose-icon": "选择供应商图标",
+  "models.icon-default": "默认图标",
+  "models.icon-unavailable": "图标不可用",
+  "models.search-icons": "搜索图标",
+  "models.no-icons": "没有匹配的图标。",
   "forms.reset-default": "恢复默认",
   "forms.restore-help": "此工作区将使用全局设置。",
   "forms.reset-help": "移除此项自定义设置，恢复默认值。",

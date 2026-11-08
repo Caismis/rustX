@@ -903,6 +903,12 @@
         "base_url": {
           "type": "string"
         },
+        "icon": {
+          "description": "Presentation-only LobeHub icon slug. Never participates in model resolution.",
+          "type": [
+            "string"
+          ]
+        },
         "protocol": {
           "$ref": "#/$defs/ModelProtocol"
         }

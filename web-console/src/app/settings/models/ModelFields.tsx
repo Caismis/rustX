@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
 import { useContext, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import type { Model, Modality } from '../../../../../protocol/app-server/v76';
+import type { Model, Modality } from '../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../locale/react';
 import { message } from '../../../locale/translation';
 import { Button } from '../../../presentation/primitives/Button';

@@ -553,6 +553,7 @@ fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() 
             mutation: ConfigMutation::Provider {
                 id: "transport".into(),
                 authored: Some(ProviderWrite {
+                    icon: None,
                     protocol: rustx::model::ModelProtocol::OpenAiResponses,
                     base_url: "https://higher.invalid/v1".into(),
                     credential: CredentialEdit::Retain,
@@ -1129,4 +1130,90 @@ fn each_scope_enables_only_the_workflow_files_it_owns() {
     )
     .unwrap();
     assert!(enabled(), "the Workspace enables its own file");
+}
+
+#[test]
+fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secrets() {
+    use rustx::local_runtime::configuration::settings::{
+        ConfigMutation, CredentialEdit, ProviderWrite, SettingsError, SourceMutation,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
+    let (owner, input) = request.session_input(&host).unwrap();
+    let target = rustx_target(&input.cwd);
+    for icon in [Some("deepseek"), Some("openai"), None] {
+        let before = owner.read_source_settings(&target).unwrap();
+        owner
+            .write_source_settings(
+                &target,
+                &before.workspace.as_ref().unwrap().revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::Provider {
+                        id: "transport".into(),
+                        authored: Some(ProviderWrite {
+                            icon: icon.map(str::to_owned),
+                            protocol: rustx::model::ModelProtocol::OpenAiResponses,
+                            base_url: "https://workspace.invalid/v1".into(),
+                            credential: CredentialEdit::Literal {
+                                value: "private-icon-fixture".into(),
+                            },
+                        }),
+                    },
+                },
+            )
+            .unwrap();
+        let after = owner.read_source_settings(&target).unwrap();
+        let authored = after.workspace.as_ref().unwrap().authored.as_ref().unwrap();
+        assert_eq!(
+            authored.providers.as_ref().unwrap()["transport"]
+                .icon
+                .as_deref(),
+            icon
+        );
+        assert!(
+            !serde_json::to_string(&after)
+                .unwrap()
+                .contains("private-icon-fixture")
+        );
+        assert!(analyze(&request, &host).is_ok());
+        let bytes = std::fs::read_to_string(input.cwd.join("rustx.toml")).unwrap();
+        assert_eq!(bytes.contains("icon ="), icon.is_some());
+    }
+    for icon in [
+        "",
+        "https://example.com/icon.svg",
+        "../openai",
+        "OpenAI",
+        "-openai",
+        "openai-",
+        &"a".repeat(65),
+    ] {
+        let before = owner.read_source_settings(&target).unwrap();
+        let bytes = std::fs::read(input.cwd.join("rustx.toml")).unwrap();
+        let result = owner.write_source_settings(
+            &target,
+            &before.workspace.as_ref().unwrap().revision,
+            SourceMutation::Config {
+                mutation: ConfigMutation::Provider {
+                    id: "transport".into(),
+                    authored: Some(ProviderWrite {
+                        icon: Some(icon.into()),
+                        protocol: rustx::model::ModelProtocol::OpenAiResponses,
+                        base_url: "https://workspace.invalid/v1".into(),
+                        credential: CredentialEdit::Retain,
+                    }),
+                },
+            },
+        );
+        assert!(matches!(result, Err(SettingsError::Invalid)), "{icon}");
+        assert_eq!(std::fs::read(input.cwd.join("rustx.toml")).unwrap(), bytes);
+    }
+    // Manual source edits obey the same native validation as managed writes.
+    std::fs::write(
+        input.cwd.join("rustx.toml"),
+        format!("{PROVIDER}icon = '../openai'\n"),
+    )
+    .unwrap();
+    let invalid = owner.read_source_settings(&target).unwrap();
+    assert!(invalid.workspace.as_ref().unwrap().diagnostic.is_some());
 }

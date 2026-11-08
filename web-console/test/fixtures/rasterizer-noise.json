@@ -35,6 +35,41 @@
     "captureSha256": "7dacbb124b7b1c11615c7cb877ec9e7f1ab60fbc10d91a2fb9b9ef2e248b8600"
   },
   {
+    "reference": "model-advanced-dark-390-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 Chromium on 2026-11-08: the original checked-in reference and two independent strict captures are byte-identical (SHA256 ea234621a30bc4d02c840c064ebc556fa7be309d9c1f521b268a2a5ee1473871). An intentional stable reference capture and a separate repeat-each run reproduce the other stable variant (SHA256 143613d3cf574a802652c34a027587056eb73be614e0c87caec7acb5a9818a19). Both complete RGBA images differ only at (34,237), one RGB level at the same context input corner previously measured in the light theme. The three-repeat investigation also ran six real provider/model creation flows, all passing. The original reference is retained unchanged. Both raw PNG variants are frozen under test/fixtures/screenshot-comparator/settings-model-advanced-dark-390-{baseline,noise}-linux.png. The Chromium cause is not established. Only this measured 1x1 site and delta are admitted; adjacent pixels, larger deltas and other references remain strict.",
+    "regions": [
+      {
+        "label": "Context input corner coverage",
+        "x": 34,
+        "y": 237,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      }
+    ],
+    "pixels": [
+      [
+        34,
+        237,
+        [
+          77,
+          77,
+          79,
+          255
+        ],
+        [
+          78,
+          78,
+          80,
+          255
+        ]
+      ]
+    ],
+    "baselineSha256": "ea234621a30bc4d02c840c064ebc556fa7be309d9c1f521b268a2a5ee1473871",
+    "captureSha256": "143613d3cf574a802652c34a027587056eb73be614e0c87caec7acb5a9818a19"
+  },
+  {
     "reference": "workflow-editor-linux.png",
     "evidence": "Pinned Playwright 1.63.0 FULL CI captures: run 42193746361, job 127814031930, artifact 13494105808 differs at 547 pixels; run 42229926383, job 127936183721, artifact 13513095611 differs at 602 pixels. The second adds 92 measured sites and exceeds 192 prior per-site bounds. All three graph screenshot checkpoints in the second trace (36286,36291,36295), the first capture and the strict passing local trace have byte-identical serialized graph DOM (SHA256 4dd88f424c85838ec552a68dd847042bea37c16301ef972160d4935636929e25); all five CSS resources match. Paths, geometry, transforms, selection and paint order are unchanged. A third stable FULL CI capture, run 42313212047, job 128221304207, artifact 13550724145, differs at 608 pixels: 19 new sites and 63 larger prior per-site observations. Its three graph checkpoints (17948,17953,17957) are byte-identical to one another. Relative to main, the full graph DOM differs only in sibling order of five of seven invisible edge-insertion portals (opacity 0, no shown class, identical content/coordinate sets); sorting only those portal siblings makes the complete graph byte-identical. The serialized SVG paths and their paint order, node DOM, geometry, transforms, selection and visible content remain exact. The WorkflowEditor CSS and three shared CSS resources are byte-identical; the index CSS differs only in unrelated preview, Files, empty-home, streaming and composer module rules absent from the graph. Full and normalized graph hashes, trace hash and all five current CSS hashes are recorded with this third capture. The internal Chromium cause is not established. The 658 disjoint 1x1 regions are exactly the three-capture measured union. Each bound is the largest delta actually observed at that coordinate (maximum 32); each top-level pixel tuple is an actual maximum-delta exemplar from one capture. All three complete raw observations and PNG hashes are retained; the third unchanged raw PNG is checked in as well. No rectangle or global threshold applies. A fourth stable FULL CI capture, run 42371118714, job 128400590333, artifact 13575455373, differs at 746 pixels: 121 new sites and 216 larger prior per-site observations. Its complete React Flow DOM at checkpoints 31111, 31115 and 31120 is byte-identical to the third capture at checkpoints 17948, 17953 and 17957, without portal sorting; all five CSS resources are byte-identical. The unchanged raw PNG, trace hashes, subtree hash, CSS hashes and all 746 raw RGBA observations are retained. The current policy is exactly the four-capture union of 779 disjoint 1x1 sites, with each bound the maximum actually observed there (maximum 35). The earlier 658-site/32 bounds above describe the preceding three captures. No reference PNG, rectangle, whole-image threshold or unobserved pixel is changed.",
     "referenceSha256": "0289fc15fbcc7b77de5af83c1f647bb98f713c8e0c946f81ddb7c8b2f7bc84e4",

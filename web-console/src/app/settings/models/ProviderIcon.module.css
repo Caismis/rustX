@@ -1,0 +1,19 @@
+.icon { flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--dsw-alias-label-primary); }
+.icon img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.monochrome { display: block; width: 100%; height: 100%; background: currentColor; mask-size: contain; mask-position: center; mask-repeat: no-repeat; }
+.field { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--dsw-alias-label-secondary); }
+.field .trigger { display: inline-flex; gap: 8px; height: 36px; border-radius: 8px; max-width: 70%; }
+.trigger > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overlay { position: fixed; inset: 0; z-index: 1250; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; background: var(--dsw-alias-bg-mask-1); backdrop-filter: var(--dsw-mask-blur); }
+.picker { width: min(576px, 100%); max-height: min(640px, calc(100dvh - 32px)); display: flex; flex-direction: column; gap: 16px; box-sizing: border-box; padding: 20px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l3); border-radius: 16px; box-shadow: var(--dsw-elevation-prominent); outline: none; }
+.header { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.header h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.header button { padding: 0; width: 28px; height: 28px; }
+.grid { min-height: 100px; display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; overflow: auto; overscroll-behavior: contain; padding: 3px; margin: -3px; list-style: none; }
+.option { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-width: 0; min-height: 82px; padding: 8px 4px; box-sizing: border-box; border: 1px solid transparent; border-radius: 10px; font-size: 12px; cursor: pointer; outline: none; }
+.option span:last-child { text-align: center; overflow-wrap: anywhere; }
+.option[data-hovered], .option[data-selected] { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-border-l4); }
+.option[data-focus-visible] { outline: 2px solid var(--dsw-alias-label-primary); outline-offset: 1px; }
+.credit { align-self: flex-end; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+.empty { text-align: center; font-size: 13px; color: var(--dsw-alias-label-secondary); }
+@media (max-width: 480px) { .picker { padding: 16px; } }

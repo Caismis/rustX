@@ -15,7 +15,6 @@
 .provider[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
 .provider[data-selected] { border-color: var(--dsw-alias-border-l4); background: var(--dsw-alias-interactive-bg-hover); }
 .provider[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
-.providerIcon { flex: none; font-size: 20px; }
 .providerName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .providerDot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-border-l4); }
 .providerDot[data-authored=true] { background: var(--dsw-alias-state-success-primary); }

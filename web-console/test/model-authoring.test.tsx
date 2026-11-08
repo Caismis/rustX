@@ -149,3 +149,39 @@ it('switching credential modes removes the previous mode and its secret from the
   expect(JSON.stringify(writes(subject))).not.toContain('DISCARDED_FIXTURE_SECRET');
   expect(JSON.stringify(writes(subject))).not.toContain('"value"');
 });
+
+it('provider icons share the native save and discard lifecycle, and preserve saved credentials', async () => {
+  const subject = cfg3Client(async (operation, source) => {
+    if (operation.method !== 'configuration/sourceWrite') return;
+    const mutation = operation.params.mutation;
+    if (mutation.kind === 'config' && mutation.mutation.unit === 'provider' && mutation.mutation.authored) {
+      const value = mutation.mutation.authored;
+      source.user.authored!.providers![mutation.mutation.id] = { icon: value.icon, protocol: value.protocol, base_url: value.base_url, credential: { type: 'literal' } };
+    }
+  });
+  await openModels(subject);
+  const form = screen.getByRole('form', { name: 'Provider transport' });
+  fireEvent.click(within(form).getByRole('button', { name: 'Choose provider icon' }));
+  let dialog = within(screen.getByRole('dialog', { name: 'Choose provider icon' }));
+  fireEvent.click(dialog.getByRole('row', { name: 'Default icon' }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Choose provider icon' })).toBeNull());
+  expect(writes(subject)).toHaveLength(0);
+  fireEvent.click(within(form).getByRole('button', { name: 'Choose provider icon' }));
+  dialog = within(screen.getByRole('dialog', { name: 'Choose provider icon' }));
+  fireEvent.change(dialog.getByRole('searchbox'), { target: { value: 'deepseek' } });
+  expect(dialog.getAllByRole('row')).toHaveLength(1);
+  fireEvent.click(dialog.getByRole('row', { name: 'DeepSeek' }));
+  expect(writes(subject)).toHaveLength(0);
+  expect(within(form).getByRole('button', { name: 'Choose provider icon' }).textContent).toBe('DeepSeek');
+  fireEvent.click(within(form).getByRole('button', { name: /Discard/ }));
+  expect(within(form).getByRole('button', { name: 'Choose provider icon' }).textContent).toBe('Default icon');
+  fireEvent.click(within(form).getByRole('button', { name: 'Choose provider icon' }));
+  dialog = within(screen.getByRole('dialog', { name: 'Choose provider icon' }));
+  fireEvent.click(dialog.getByRole('row', { name: /^OpenAI$/ }));
+  fireEvent.click(within(form).getByRole('button', { name: 'Save Provider transport' }));
+  await waitFor(() => expect(writes(subject)).toHaveLength(1));
+  const operation = writes(subject)[0][0];
+  if (operation.method !== 'configuration/sourceWrite') throw new Error('write required');
+  expect(operation.params.mutation).toMatchObject({ kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { icon: 'openai', credential: { kind: 'retain' } } } });
+  await waitFor(() => expect(screen.getByRole('row', { name: 'transport' }).querySelector('[data-provider-icon="openai"]')).not.toBeNull());
+});

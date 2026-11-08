@@ -1,8 +1,8 @@
 import { domainReceipt } from './fixture';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v76';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v77';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { ComposerDraft } from '../src/app/composer/draft';
 import { localeController } from '../src/locale/controller';
@@ -513,7 +513,7 @@ it('a late acknowledgement for the current-model gesture cannot report success a
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
  * Profile is itself, an absent one follows the catalog's current default. */
-function profileFixture(configured: import('../../protocol/app-server/v76').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
+function profileFixture(configured: import('../../protocol/app-server/v77').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
   const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });
@@ -950,4 +950,33 @@ it.each(['reply', 'expired'] as const)('revalidates a deferred selection when th
  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('other');
  expect(count('session/setModel')).toBe(1);
+});
+
+it('rereads the current Session model when switching between attachments with the same local sequence', async () => {
+ modelFixture();
+ const models = new Map(['A', 'B'].map(id => {
+   const model = structuredClone(server.snapshots.get('A')!.model!);
+   model.configured.model = model.effective!.model = id === 'A' ? 'exact/model' : 'other';
+   return [id, model];
+ }));
+ for (const id of ['A', 'B']) server.snapshots.set(id, { ...snapshot(id), model_status: { available: true, body_deferred: true, binding_revision: '1' } });
+ await server.attached('A', 'B');
+ // Native Attachment IDs are local to each Session's runtime host.
+ const state = server.client.getSnapshot();
+ const views = Object.fromEntries(Object.entries(state.views).map(([id, view]) => [id, { ...view, target: { ...view.target!, attachment_id: 'attachment-1' } }]));
+ vi.spyOn(server.client, 'getSnapshot').mockReturnValue({ ...state, views });
+ vi.spyOn(server.client, 'isAttachmentControlCurrent').mockReturnValue(true);
+ const catalog = vi.spyOn(server.client.reads, 'modelCatalogRead').mockResolvedValue({catalog:{models:[]},page:domainReceipt('model_catalog.models',[]).page});
+ const modelRead = vi.spyOn(server.client.reads, 'modelRead').mockImplementation(async target => models.get(target.session_id)!);
+ function Selected({id}: {id:string}) { return <AgentControls client={server.client} view={server.client.getSnapshot().views[id]}/>; }
+ const ui = render(<Selected id="A"/>);
+ const trigger = () => screen.getByRole('button', {name:'Model and thinking effort'});
+ await waitFor(() => expect(trigger().textContent).toContain('exact/model'));
+ ui.rerender(<Selected id="B"/>);
+ await waitFor(() => expect(trigger().textContent).toContain('other'));
+ ui.rerender(<Selected id="A"/>);
+ await waitFor(() => expect(trigger().textContent).toContain('exact/model'));
+ expect(catalog).toHaveBeenCalledTimes(3);
+ expect(modelRead.mock.calls.map(([target]) => target.session_id)).toEqual(['A','B','A']);
+ expect(count('session/setModel')).toBe(0);
 });

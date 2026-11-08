@@ -129,6 +129,28 @@ pub(in crate::local_runtime) fn catalog_document(
 pub(in crate::local_runtime) fn source_semantics(
     layer: &RuntimeLayer,
 ) -> Result<(), SemanticFailure> {
+    for provider in layer
+        .providers
+        .iter()
+        .flat_map(|providers| providers.values())
+    {
+        if let Some(icon) = &provider.icon
+            && (icon.is_empty()
+                || icon.len() > 64
+                || !icon
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                || icon.starts_with('-')
+                || icon.ends_with('-'))
+        {
+            return Err(SemanticFailure::new(
+                "providers.*.icon",
+                "invalid provider icon",
+                "use a LobeHub icon slug of 1–64 lowercase letters, digits or internal hyphens"
+                    .into(),
+            ));
+        }
+    }
     if let Some(policy) = &layer.app_server {
         policy.validate().map_err(|detail| {
             SemanticFailure::new("app_server", "invalid App Server process policy", detail)

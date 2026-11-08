@@ -145,7 +145,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v76.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v77.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -581,7 +581,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         case 'write': {
           // The native write is the linearization point; its reread is a
           // separate fact that can fail without undoing the commit.
-          const commit = (edit: import('../../protocol/app-server/v76.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
+          const commit = (edit: import('../../protocol/app-server/v77.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
           const acknowledgement = operation.edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, operation.edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(operation.edit);
           let reread: WorkflowReread;
           try {

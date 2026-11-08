@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v76';
+import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v77';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -987,6 +987,7 @@ it('S2-12 React Aria and TanStack Form stay bounded to their declared interactio
   expect(importers('react-aria-components')).toEqual([
     'src/app/scheduler/TimingEditor.tsx',
     'src/app/settings/models/ModelsPage.tsx',
+    'src/app/settings/models/ProviderIcon.tsx',
     'src/app/settings/primitives/aria.tsx',
     'src/presentation/settings/SettingsRoot.tsx',
   ]);

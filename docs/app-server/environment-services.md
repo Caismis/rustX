@@ -1,11 +1,11 @@
-# App Server environment and management services (v76)
+# App Server environment and management services (v77)
 
 Issue #533 extends the shared-control foundation in #532 / PR #540. The branch
 starts at dependency-complete `origin/main`,
 `57447d2e825f914e80bbfecc68d373fcab487446`. The fixed Codex reference remains
 `rust-v0.166.0` / `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`.
 
-The public contract is the Rust-derived v76 schema and TypeScript in
+The public contract is the Rust-derived v77 schema and TypeScript in
 `protocol/app-server`. v74 artifacts and transport negotiation are replaced.
 Existing Web and TUI presentation uses the new generated imports and version;
 these services add no controls, layouts or alternative client package.

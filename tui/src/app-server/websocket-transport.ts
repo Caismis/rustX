@@ -4,13 +4,13 @@ import {credentialSubprotocol} from '../../../protocol/app-server/auth.ts';
  *
  * ```text
  * ws(s)://host:port/  +  subprotocols
- *     rustx.app-server.v76
+ *     rustx.app-server.v77
  *     rustx-token.<base64url-no-pad of the bearer bytes>
  * ```
  *
  * The admission contract is the server's (`src/app_server/transport/
  * websocket.rs`): path `/` with no query, both subprotocol offers present, and
- * the server selecting only `rustx.app-server.v76` in its response. Failed
+ * the server selecting only `rustx.app-server.v77` in its response. Failed
  * admission is HTTP 401 and the credential is never echoed. This client
  * therefore invents no authentication of its own — it presents the dedicated
  * transport secret the trusted host gave it, exactly the way a browser can.
@@ -37,7 +37,7 @@ import {
 } from "./transport.ts";
 
 /** The only subprotocol the App Server selects. */
-export const APP_SERVER_SUBPROTOCOL = "rustx.app-server.v76";
+export const APP_SERVER_SUBPROTOCOL = "rustx.app-server.v77";
 
 export interface WebSocketTransportOptions {
   /** A `ws://` or `wss://` endpoint. The server requires path `/`. */

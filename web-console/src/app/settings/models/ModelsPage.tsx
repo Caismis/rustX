@@ -4,7 +4,7 @@ import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState } from 'react';
 import { GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v76';
+import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v77';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
@@ -15,6 +15,7 @@ import { Advanced, Choice, ResourceList, Search, type ResourceRow } from '../pri
 import { catalogEntries, provenanceLabel, sourceView, type CatalogEntry, observedResult, observedResultLabel, unitApplication } from '../projection';
 import type { PageFocus } from '../machines/navigation';
 import { ModelFields } from './ModelFields';
+import { ProviderIcon, ProviderIconField } from './ProviderIcon';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
 
@@ -75,7 +76,7 @@ export function ModelsPage({ source, scope, revision, models, profiles, focus, o
         <GridList className={cards.providers} aria-label={tx('settings:models-page.providers')} selectionMode="single" selectedKeys={selected ? [selected] : []}
           onAction={id => onFocus(focus?.kind === 'provider' && focus.creating && id === focus.id ? focus : { kind: 'provider', id: String(id) })}>
           {navigation.map(entry => <GridListItem id={entry.id} key={entry.id} textValue={entry.id} aria-label={entry.id} className={cards.provider}>
-            <span aria-hidden="true" className={cards.providerIcon}><IconApiOutline14 size={18}/></span>
+            <ProviderIcon icon={(entry.authored ?? entry.effective)?.icon}/>
             <span className={cards.providerLabel}><span className={cards.providerName} title={entry.id}>{entry.id}</span>
               {!entry.authored && !entry.effective ? <small>{tx('settings:models.unsaved-provider')}</small>
                 : scope === 'workspace' && entry.origin.state === 'known' && <small>{provenanceLabel(tx, entry.origin)}</small>}
@@ -151,10 +152,10 @@ function ProviderDetail({ source, scope, revision, id, onBack, onModel, onAddMod
   const owned = catalogEntries<Model>(source, scope, 'models').filter(entry => (entry.authored ?? entry.effective)?.provider === id);
   return <section aria-label={tx('settings:models-page.provider-value', { p0: id })} className={cards.detail}>
     <Button size="sm" className={cards.back} onClick={onBack}>{tx('settings:models-page.models-2')}</Button>
-    <h3 aria-label={tx('settings:models-page.provider-value', { p0: id })} title={id}><IconApiOutline14 size={20}/>{id}</h3>
+    <h3 aria-label={tx('settings:models-page.provider-value', { p0: id })} title={id}><ProviderIcon icon={(authored ?? inherited)?.icon} size={24}/>{id}</h3>
     {inherited && <p className={css.hint}>{tx('settings:forms.using-global')}</p>}
     <TypedUnitForm<ProviderWrite> key={`provider:${id}`} title={tx('settings:models-page.provider-value', { p0: id })}
-      authored={authored && { protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } }} blank={{ protocol: inherited?.protocol ?? 'openai_chat_completions', base_url: '', credential: { kind: 'literal', value: '' } }}
+      authored={authored && { icon: authored.icon, protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } }} blank={{ icon: inherited?.icon, protocol: inherited?.protocol ?? 'openai_chat_completions', base_url: '', credential: { kind: 'literal', value: '' } }}
       inherited={() => undefined} revision={revision} presentation="resource"
       removalNotice={<p>{tx('settings:models-page.models-that-name-this-provider-identity-are-not-changed-and-no-s')}</p>}
       mutation={value => ({ kind: 'config', mutation: { unit: 'provider', id, authored: value } })}>
@@ -171,6 +172,7 @@ function ProviderFields({ form }: { form: TypedForm<ProviderWrite> }) {
   const tx = useTranslation();
   const Credential = form.Field as unknown as (props: { name: 'credential'; children: (field: { state: { value: ProviderWrite['credential'] }; handleChange: (value: ProviderWrite['credential']) => void }) => React.ReactNode }) => React.ReactNode;
   return <>
+    <form.Field name="icon">{field => <ProviderIconField value={field.state.value} onChange={field.handleChange}/>}</form.Field>
     <Text form={form} name="base_url" label={tx('settings:models-page.endpoint')} required url placeholder={/* i18n-raw: exact example API endpoint */ 'https://api.example.com/v1'}
       validate={value => {
         try {

@@ -116,6 +116,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         providers: BTreeMap::from([(
             provider.into(),
             Provider {
+                icon: None,
                 protocol,
                 base_url: request.endpoint.clone(),
                 api_key: crate::model::catalog::CredentialSource::parse(

@@ -67,6 +67,8 @@ impl SourceTarget {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProviderView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub protocol: crate::model::ModelProtocol,
     pub base_url: String,
     pub credential: CredentialSourceView,
@@ -74,6 +76,7 @@ pub struct ProviderView {
 impl From<Provider> for ProviderView {
     fn from(provider: Provider) -> Self {
         Self {
+            icon: provider.icon,
             protocol: provider.protocol,
             base_url: provider.base_url,
             credential: provider.api_key.view(),
@@ -108,6 +111,8 @@ pub enum CredentialEdit {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderWrite {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     pub protocol: crate::model::ModelProtocol,
     pub base_url: String,
     pub credential: CredentialEdit,
@@ -612,6 +617,7 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
                         return Err(SettingsError::Invalid);
                     }
                     Ok(Provider {
+                        icon: authored.icon,
                         protocol: authored.protocol,
                         base_url: authored.base_url,
                         api_key: credential,
@@ -742,6 +748,8 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
 fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     #[derive(Serialize)]
     struct PrivateProvider {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
         protocol: crate::model::ModelProtocol,
         base_url: String,
         api_key: String,
@@ -754,6 +762,7 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     // its literal values here; only the wire projection redacts them.
     let document = document.project(
         |provider| PrivateProvider {
+            icon: provider.icon,
             protocol: provider.protocol,
             base_url: provider.base_url,
             api_key: match provider.api_key {

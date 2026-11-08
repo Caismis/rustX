@@ -1,6 +1,6 @@
 import { duplicateFragment } from '../src/app/workflows/document/clipboard';
 import { expect, it } from 'vitest';
-import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowEditorMetadata } from '../../protocol/app-server/v76';
+import type { WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowEditorMetadata } from '../../protocol/app-server/v77';
 import { WorkflowAnalysisSession, type AnalysisInput } from '../src/app/workflows/document/analysis';
 import { CommandRejected, renameNode } from '../src/app/workflows/document/commands';
 import { renameNodePresentation } from '../src/app/workflows/document/presentation';
