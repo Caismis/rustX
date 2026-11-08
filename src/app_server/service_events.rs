@@ -3,7 +3,7 @@ use super::protocol::{JsonRpcVersion, Notification, NotificationMethod};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-pub(super) struct Event {
+pub(crate) struct Event {
     pub notification: Notification,
     pub emitted: oneshot::Sender<()>,
     pub fence: Option<CancellationToken>,
@@ -11,16 +11,16 @@ pub(super) struct Event {
 pub(super) struct Events {
     sender: mpsc::Sender<Event>,
     receiver: tokio::sync::Mutex<mpsc::Receiver<Event>>,
-    pub closed: CancellationToken,
+    pub closed: crate::runtime::CancellationSignal,
     pub overloaded: CancellationToken,
 }
 impl Default for Events {
     fn default() -> Self {
-        Self::new(CancellationToken::new())
+        Self::new(crate::runtime::CancellationSignal::new())
     }
 }
 impl Events {
-    pub fn new(closed: CancellationToken) -> Self {
+    pub fn new(closed: crate::runtime::CancellationSignal) -> Self {
         let (sender, receiver) = mpsc::channel(32);
         Self {
             sender,

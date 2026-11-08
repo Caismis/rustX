@@ -33,16 +33,16 @@ These exclusions do not waive required in-scope behavior.
 | Check | Current result |
 | --- | --- |
 | Provider emulator locked Python 3.12 environment / pytest | 55 passed |
-| Real command/PTY/filesystem/Skills/MCP protocol boundaries | 21 passed, including literal/reference HTTP/stdio credential echo, ready-gated PTY signals and missing-status settlement, atomic replacement deferred identity checks, unread-retirement cancellation, post-cap output termination, descriptor-bound watch ABA, canonical PTY EOF, PTY descriptor isolation, Host drain, native cleanup failure and instance-capacity cases; macOS adds its native child/capacity boundary in FULL CI |
+| Real command/PTY/filesystem/Skills/MCP protocol boundaries | 24 passed, including native START/revocation arbitration, watch terminal ordering/identity reuse, literal/reference HTTP/stdio credential echo, ready-gated PTY signals and missing-status settlement, atomic replacement deferred identity checks, unread-retirement cancellation, post-cap output termination, descriptor-bound watch ABA, canonical PTY EOF, PTY descriptor isolation, Host drain, native cleanup failure and instance-capacity cases; macOS adds its native child/capacity boundary in FULL CI |
 | Native file fault/race/CAS tests | 6 passed in the full run |
 | Rust formatting and all-target/all-feature Clippy (`-D warnings`) | Passed |
-| Complete local Rust all-target/all-feature regression | Typed-boundary source `cd9a792f4`: 6061 passed / zero failed / 20 existing ignored across 22 targets. Subsequent Proxy-Authorization repair: 153 MCP tests and all 21 environment boundaries passed. Earlier 6036-test and focused 207-test results below remain historical. The final-head FULL run must validate the platform/target matrix. |
+| Complete local Rust all-target/all-feature regression | Native START/watch follow-up: 6065 passed / zero failed / 20 existing ignored across 22 targets. This includes all current MCP and 24 environment boundaries. After the equivalent START-state enum refactor, all 18 native runner tests and 24 environment boundaries passed again. Earlier complete/focused results below remain historical. The final-head FULL run must validate the platform/target matrix. |
 | CI lane coverage | Passed; Linux FULL and FAST selectors cover their required tests |
 | Generated protocol/schema/fixtures and existing client typechecks | Generated-artifact drift check and all four package typechecks passed |
 | TUI, dev and Web deterministic suites | dev: 43 passed; TUI: 1349 passed / 1 native skip; Web: 4204 passed / 4 existing skips |
 | Browser acceptance | Full local pinned run: 660 passed / 7 expectation timeouts on the shared host. Focused diagnostics reproduced intermittent timing failures; native 34-Turn history preparation passed on untouched base and candidate, and the original browser assertions passed with temporary logging (removed). No assertion, timeout or screenshot baseline was relaxed. Final-head FULL browser acceptance is required in the PR. |
 | Minimal external-client smoke | Real authenticated v75 initialize/server-info passed from outside the repository |
-| Independent code review | Initial/shutdown/watch/EOF/descriptor findings repaired. Subsequent literal-credential, PTY-signal and busy-watch findings, redaction expansion/diagnostic caps, unread-retirement cancellation and actor fairness were independently re-reviewed: no remaining P1/P2 or weakened assertions. |
+| Independent code review | Initial/shutdown/watch/EOF/descriptor findings repaired. Subsequent credential, PTY-signal, busy-watch, output-fairness, native START and terminal-watch findings were independently re-reviewed: no remaining P1/P2 or weakened assertions. |
 | Final-head FULL CI, including macOS and both browser shards | Pending at capture time; required on the final PR head. The PR description tracks its exact SHA, run and verdict. |
 | Performance/resource measurements | Seven source-identified baseline/candidate pairs and seven native environment captures are retained below. The latest captures identify proxy-authentication source `ec0759b26`; every source/binary digest and raw sample count was independently verified. |
 
@@ -702,3 +702,73 @@ idle peer does not establish saturation behavior; native bounded-output tests
 cover that contract. Observed resource return is a cardinality fact, not a
 general workload/capacity guarantee. The PR records the final-head FULL CI
 verdict separately, after this evidence-only commit.
+
+### Native START and watch termination follow-up
+
+Source review of `5c9a42d80e8fe7f95138d76f00e3ebef387b6b2a` identified
+two reachable concurrency gaps. The root preflight check did not arbitrate with
+the runner's actual START write, and an already validated native watch callback
+could publish an ordinary hint after automatic retirement. Both were reproduced
+against the old production implementation using deterministic real-supervisor
+and native-callback barriers. The START regression observed a real business
+spawn (`ShellGroup` evidence) after root revocation; the watch regression observed
+an ordinary event after its terminal notice while the terminal receipt remained
+pending, preventing the old stop fence from hiding the race.
+
+The existing cancellation primitive now carries Host, connection and command
+ancestry through one shared commit gate. Native START writes acquire the separate
+root grant and that invocation-family grant exactly once. Tokio's owned socket
+halves select write readiness alongside existing reads, cancellation, deadlines
+and containment; they share the same descriptor. Only a nonblocking complete
+five-byte frame commits START. WouldBlock returns to readiness selection; a short
+write or other write failure closes the write half without
+appending TERMINATE, while the read half and original native owner continue to
+prove settlement. Host admission closure and environment cancellation commit
+together; connection environment closure cancels its family before registry
+cleanup.
+
+Each watch now has a short ordinary-publication gate, shared by both normal and
+WouldBlock/resync callback paths. Automatic retirement closes it before native
+Drop and the terminal notice. The terminal transport fence stays separate until
+acceptance or explicit withdrawal. Unwatch/close shut the old publication gate
+and fence before removing its registry identity, so a new incarnation cannot
+race with an old still-authorized callback. No metadata, native Drop or receipt
+wait holds the publication gate.
+
+Real boundary tests cover both START/revocation orderings, pipe and PTY, and
+root removal/connection close/Host drain: twelve scenarios with native spawn
+evidence, side-effect markers, PID absence, direct-child reaping and zero request
+owners. A separate unit injects actual zero-to-four-byte START writes and checks
+failure, no business spawn, no TERMINATE send/receive and physical reaping.
+Native watch tests hold a callback after identity validation, withhold the
+retirement receipt until a subsequent queue barrier, and require no ordinary
+event after terminal. Pure unwatch and automatic-retirement/unwatch both reuse
+the same ID before the old callback resumes, then prove successor observations
+and all 32 physical permits returned. All 24 environment boundaries passed. The complete local all-target/all-feature
+run passed 6,065 tests across 22 targets, with zero failures and 20 existing
+ignored tests; independent read-only review found no remaining P1/P2 or weakened
+assertions.
+
+[FULL #1780](https://github.com/Caismis/rustX/actions/runs/42440895870) passed
+Linux's complete 6,061 tests (20 existing ignored) and all 667 discovered browser
+tests with zero skips, along with TUI, Web/Host/launchers, generated protocol and
+macOS Desktop/Host. Its native macOS unit/boundary step failed one watch-contention
+liveness guard (4,212 passed, one failed, eight ignored), so Merge verification
+correctly failed. The log lacked the waiting call site and does not identify the
+precise stalled phase.
+
+Source inspection additionally identified a reachable test synchronization race:
+an earlier deferred check could pass the pre-lock notification before the test
+registered its next observer, then wait on the test's I/O holder while that holder
+waited for another start notification. The test now installs a barrier while I/O
+is held, then pauses the actual native check inside its acquired `with_paths`
+grant. Unwatch/disconnect/drain still happen while that check owns I/O and
+physical capacity; the original pending-settlement and 32-permit assertions and
+initial rename-before-fsync barrier remain. The unchanged 180-second hang guard
+now reports its calling location. This removes the identified test race without
+claiming it was necessarily the wait that timed out in #1780. The repaired source
+passed the complete local regression above, strict all-target/all-feature Clippy
+and formatting. The equivalent START-state enum refactor then passed all 18
+native runner tests and 24 environment boundaries. Source-identified captures
+and final-head FULL CI remain required; historical successes above do not
+substitute for that verdict.

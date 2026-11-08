@@ -1,5 +1,17 @@
 //! Actual standalone process, PTY and filesystem protocol boundaries.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn automatic_watch_retirement_is_the_last_visible_event_of_its_incarnation() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::concurrency::watch_terminal_order()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revocation_before_native_start_never_executes_an_independent_command() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::concurrency::revocation_before_start()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unwatched_callback_cannot_interfere_with_an_immediate_identity_successor() {
+    Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::concurrency::watch_immediate_successor()).await;
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_signals_preserve_program_handlers_and_settle_default_or_lost_owners() {
     Box::pin(crate::local_runtime::session_runtime_manager::tests::protocol::environment::review::terminal_signals()).await;
 }

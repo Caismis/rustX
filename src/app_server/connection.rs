@@ -392,6 +392,23 @@ impl AppServerConnection {
     pub(crate) fn watch_retirement_for_test(&self, id: &str) -> tokio::sync::oneshot::Receiver<()> {
         self.watches.observe_retirement(id)
     }
+    #[cfg(test)]
+    pub(crate) async fn environment_event_for_test(&self) -> super::service_events::Event {
+        self.service_events.next().await
+    }
+    #[cfg(test)]
+    pub(crate) fn environment_barrier_for_test(&self) {
+        self.service_events
+            .emit(super::protocol::NotificationMethod::FsChanged(
+                super::filesystem::Changed {
+                    watch_id: "publication-barrier".into(),
+                    changed_paths: Vec::new(),
+                    resync_required: true,
+                    retired: false,
+                },
+            ))
+            .expect("healthy environment queue");
+    }
 
     /// Bind transport lifetime to the same ordinary API eligibility. Closing
     /// this carrier fences its pending publications and connection resources.
@@ -509,9 +526,9 @@ impl AppServerConnection {
     }
 
     pub(super) fn close_environment(&self) {
+        self.service_events.closed.cancel();
         self.commands.close();
         self.watches.close();
-        self.service_events.closed.cancel();
     }
 
     #[cfg(test)]

@@ -151,7 +151,7 @@ impl Commands {
             .process_id
             .clone()
             .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
-        let cancellation = CancellationSignal::new();
+        let cancellation = events.closed.child();
         let (control, controls) = mpsc::channel(2);
         let mut state = self.0.lock().expect("connection commands");
         if state.closed || state.active.len() >= 4 || state.active.contains_key(&process_id) {
@@ -534,8 +534,9 @@ async fn run(
         cwd_identity,
     };
     let (mut runner, mut stdout, mut stderr) =
-        SupervisedCommandRunner::spawn_program(&spec, None, Some(&invocation))
+        SupervisedCommandRunner::spawn_program(&spec, start_control(&cwd), Some(&invocation))
             .map_err(|_| domain(ErrorData::OperationFailed))?;
+    runner.guard_start(root_retired.clone());
     let settlement = tokio::spawn(async move { runner.settle().await });
     tokio::pin!(settlement);
     let mut input: Option<tokio::net::UnixStream> = None;
@@ -707,6 +708,39 @@ async fn run(
         stdout_truncated: stdout_output.truncated,
         stderr_truncated: stderr_output.truncated,
     })
+}
+
+#[cfg(not(test))]
+fn start_control(
+    _cwd: &std::path::Path,
+) -> Option<crate::runtime::process_runner::RunnerTestControl> {
+    None
+}
+#[cfg(test)]
+fn start_control(
+    cwd: &std::path::Path,
+) -> Option<crate::runtime::process_runner::RunnerTestControl> {
+    START_CONTROLS.lock().unwrap().remove(cwd)
+}
+#[cfg(test)]
+static START_CONTROLS: std::sync::LazyLock<
+    Mutex<BTreeMap<PathBuf, crate::runtime::process_runner::RunnerTestControl>>,
+> = std::sync::LazyLock::new(Mutex::default);
+#[cfg(test)]
+pub(crate) fn hold_start(
+    cwd: PathBuf,
+    trace: PathBuf,
+) -> (
+    crate::runtime::process_runner::RunnerStartHold,
+    crate::runtime::process_runner::RunnerLifecycleHook,
+) {
+    let mut control = crate::runtime::process_runner::RunnerTestControl::new();
+    let hold = crate::runtime::process_runner::RunnerStartHold::new();
+    control.start_hold = Some(hold.clone());
+    control.diagnostics.trace = Some(trace);
+    let lifecycle = control.lifecycle.clone();
+    START_CONTROLS.lock().unwrap().insert(cwd, control);
+    (hold, lifecycle)
 }
 
 #[cfg(test)]

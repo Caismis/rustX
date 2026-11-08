@@ -485,6 +485,41 @@ pub(crate) struct RunnerTerminalHold {
     release_rx: tokio::sync::watch::Receiver<bool>,
 }
 
+/// Pauses a real ready supervisor immediately before the START transaction.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct RunnerStartHold {
+    entered: tokio::sync::watch::Sender<bool>,
+    released: tokio::sync::watch::Sender<bool>,
+}
+#[cfg(test)]
+impl RunnerStartHold {
+    pub(crate) fn new() -> Self {
+        Self {
+            entered: tokio::sync::watch::channel(false).0,
+            released: tokio::sync::watch::channel(false).0,
+        }
+    }
+    pub(crate) async fn await_entered(&self) {
+        self.entered
+            .subscribe()
+            .wait_for(|entered| *entered)
+            .await
+            .unwrap();
+    }
+    pub(crate) fn release(&self) {
+        self.released.send_replace(true);
+    }
+    async fn pause(&self) {
+        self.entered.send_replace(true);
+        self.released
+            .subscribe()
+            .wait_for(|released| *released)
+            .await
+            .unwrap();
+    }
+}
+
 #[cfg(test)]
 impl RunnerTerminalHold {
     pub(crate) fn new() -> Self {
@@ -676,6 +711,10 @@ pub(crate) struct RunnerTestControl {
     #[cfg(test)]
     pub(crate) terminal_hold: Option<RunnerTerminalHold>,
     #[cfg(test)]
+    pub(crate) start_hold: Option<RunnerStartHold>,
+    #[cfg(test)]
+    pub(crate) start_write_limit: Option<usize>,
+    #[cfg(test)]
     pub(crate) channel_eof: Option<RunnerChannelEofHook>,
     /// Overrides the process-global nested containment authority for this
     /// one invocation (Issue #145).
@@ -715,6 +754,8 @@ impl RunnerTestControl {
             anchor_pid_file: None,
             recorded_signals: Arc::new(Mutex::new(Vec::new())),
             terminal_hold: None,
+            start_hold: None,
+            start_write_limit: None,
             channel_eof: None,
         }
     }
@@ -757,9 +798,13 @@ impl RunnerTestControl {
 /// intent. The child is reaped by the runner.
 pub(crate) struct SupervisedCommandRunner {
     child: tokio::process::Child,
-    stream: tokio::net::UnixStream,
+    stream: tokio::net::unix::OwnedWriteHalf,
+    incoming: tokio::net::unix::OwnedReadHalf,
     event_reader: SupervisorEventReader,
     cancellation: CancellationSignal,
+    /// A separate native authority, such as the standalone command's root.
+    start_guard: Option<CancellationSignal>,
+    start_write: StartWrite,
     timeout: Option<Duration>,
     start: tokio::time::Instant,
     lifecycle: ProcessLifecycle,
@@ -782,7 +827,56 @@ pub(crate) struct SupervisedCommandRunner {
     control: Option<RunnerTestControl>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartWrite {
+    Idle,
+    Pending,
+}
+
 impl SupervisedCommandRunner {
+    /// Bind an independently owned authority to the native START transaction.
+    /// It must not be a child of this invocation's cancellation family: that
+    /// family already shares one commit mutex and is acquired exactly once.
+    pub(crate) fn guard_start(&mut self, authority: CancellationSignal) {
+        self.start_guard = Some(authority);
+    }
+
+    fn try_start(&self) -> Option<std::io::Result<usize>> {
+        let frame = [1u8, 0, 0, 0, MSG_START];
+        #[cfg(test)]
+        let count = self
+            .control
+            .as_ref()
+            .and_then(|control| control.start_write_limit)
+            .unwrap_or(frame.len());
+        #[cfg(not(test))]
+        let count = frame.len();
+        let write = || {
+            self.cancellation
+                .with_active(|| self.stream.try_write(&frame[..count]))
+        };
+        // Root and invocation are distinct native owners. No registry, Host
+        // or environment-I/O lock is acquired under these short grants.
+        match &self.start_guard {
+            Some(authority) => authority.with_active(write).flatten(),
+            None => write(),
+        }
+    }
+
+    fn fail_start(&mut self, message: String) {
+        use std::os::fd::AsRawFd;
+        // A short frame is not a START grant. Never append TERMINATE to a
+        // partial prefix. EOF closes the gate while the read half and child
+        // owner continue to collect physical settlement proof.
+        let _ = nix::sys::socket::shutdown(
+            self.stream.as_ref().as_raw_fd(),
+            nix::sys::socket::Shutdown::Write,
+        );
+        self.failure = Some(message);
+        self.terminate_sent = true;
+        self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
+    }
+
     fn trace_event(&mut self, event: crate::tools::native::bash_supervisor::diagnostics::Event) {
         if let Some(trace) = &mut self.trace {
             trace.record(event);
@@ -856,6 +950,9 @@ impl SupervisedCommandRunner {
         .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?;
         let stream = tokio::net::UnixStream::from_std(stream_a)
             .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?;
+        // Tokio's owned halves share this socket; no descriptor or process
+        // owner is duplicated. Read and write readiness can be selected together.
+        let (incoming, stream) = stream.into_split();
 
         let supervisor_path = supervisor_binary();
         let mut supervisor = tokio::process::Command::new(&supervisor_path);
@@ -939,8 +1036,11 @@ impl SupervisedCommandRunner {
             Self {
                 child,
                 stream,
+                incoming,
                 event_reader: SupervisorEventReader::default(),
                 cancellation: spec.cancellation.clone(),
+                start_guard: None,
+                start_write: StartWrite::Idle,
                 timeout: spec.timeout,
                 start: tokio::time::Instant::now(),
                 lifecycle: ProcessLifecycle::PreOwnership,
@@ -1020,7 +1120,7 @@ impl SupervisedCommandRunner {
                     self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
-                event = self.event_reader.read(&mut self.stream), if self.supervisor_channel == SupervisorChannel::Connected => match event {
+                event = self.event_reader.read(&mut self.incoming), if self.supervisor_channel == SupervisorChannel::Connected => match event {
                     Ok(Some(SupervisorEvent::AnchorReady { pgid })) => {
                         if pgid <= 0 || self.lifecycle != ProcessLifecycle::PreOwnership {
                             self.failure = Some("invalid Bash ownership anchor transition".to_owned());
@@ -1180,9 +1280,7 @@ impl SupervisedCommandRunner {
                 anchored = self.anchor_gate.settle_offer(), if self.anchor_gate.is_pending() => {
                     match anchored {
                         Ok(()) => {
-                            if let Err(error) = send_start(&mut self.stream).await {
-                                self.failure = Some(error);
-                            }
+                            self.start_write = StartWrite::Pending;
                         }
                         Err(error) => {
                             // The unit never crossed its START gate, so no
@@ -1200,6 +1298,29 @@ impl SupervisedCommandRunner {
                                 );
                             }
                         }
+                    }
+                }
+                ready = self.stream.writable(), if self.start_write == StartWrite::Pending && !self.terminate_sent => {
+                    if let Err(error) = ready {
+                        self.start_write = StartWrite::Idle;
+                        self.fail_start(format!("cannot prepare the ownership gate: {error}"));
+                        continue;
+                    }
+                    #[cfg(test)]
+                    if let Some(hold) = self.control.as_ref().and_then(|control| control.start_hold.as_ref()) {
+                        hold.pause().await;
+                    }
+                    match self.try_start() {
+                        Some(Ok(5)) => self.start_write = StartWrite::Idle,
+                        Some(Err(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {},
+                        None => {
+                            self.start_write = StartWrite::Idle;
+                            self.cancellation.cancel();
+                        },
+                        Some(result) => {
+                            self.start_write = StartWrite::Idle;
+                            self.fail_start(format!("cannot commit the ownership gate: {result:?}"));
+                        },
                     }
                 }
                 () = wait_for_terminal_release(self.control.as_ref()), if self.terminal_event_held => {
@@ -2047,6 +2168,67 @@ mod tests {
             harness.releases.try_recv().is_err(),
             "no duplicate or unowned release"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn incomplete_start_frames_fail_closed_and_physically_settle() {
+        use crate::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+        for bytes in 0..5 {
+            let directory = tempfile::tempdir().unwrap();
+            let marker = directory.path().join("business-started");
+            let trace = directory.path().join("trace");
+            let mut command = spec("touch business-started", CancellationSignal::new());
+            command.cwd = directory.path().to_owned();
+            let mut control = RunnerTestControl::new();
+            control.start_write_limit = Some(bytes);
+            control.diagnostics.trace = Some(trace.clone());
+            let lifecycle = control.lifecycle.clone();
+            let result = tokio::time::timeout(
+                Duration::from_secs(15),
+                RunnerBackedProcessRunner::default().run(command, Some(control)),
+            )
+            .await
+            .expect("a failed START must retain physical settlement")
+            .unwrap();
+            assert!(matches!(
+                result.intent,
+                ProcessOutcomeIntent::ProcessControlFailed(_)
+            ));
+            tokio::time::timeout(
+                Duration::from_secs(15),
+                lifecycle.await_direct_child_reaped(),
+            )
+            .await
+            .unwrap();
+            assert!(
+                !marker.exists(),
+                "{bytes}-byte prefix never authorizes execution"
+            );
+            let entries: Vec<Entry> = std::fs::read_to_string(trace)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert!(
+                !entries
+                    .iter()
+                    .any(|entry| matches!(entry.event, Event::ShellGroup { .. })),
+                "a partial START never spawns business work"
+            );
+            assert!(
+                !entries
+                    .iter()
+                    .any(|entry| matches!(entry.event, Event::TerminateReceived)),
+                "no TERMINATE may be appended to a partial frame"
+            );
+            assert!(
+                !entries
+                    .iter()
+                    .any(|entry| matches!(entry.event, Event::TerminateSent { .. })),
+                "a partial START closes the writer instead of sending TERMINATE"
+            );
+        }
     }
 
     #[cfg(unix)]

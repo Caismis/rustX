@@ -4,6 +4,7 @@ use crate::app_server::command::{ExecParams, ExecStatus, WriteParams};
 use base64::Engine as _;
 use std::path::Path;
 use std::sync::Arc;
+pub(crate) mod concurrency;
 pub(crate) mod review;
 
 fn parameters(fixture: &Fixture, command: &[&str]) -> ExecParams {

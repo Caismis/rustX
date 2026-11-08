@@ -14,7 +14,11 @@ async fn input(connection: &AppServerConnection, id: &str, bytes: &[u8]) {
     .await;
 }
 
-async fn through_marker(connection: &AppServerConnection, id: &str, marker: &[u8]) -> Vec<u8> {
+pub(super) async fn through_marker(
+    connection: &AppServerConnection,
+    id: &str,
+    marker: &[u8],
+) -> Vec<u8> {
     bounded(async {
         let mut bytes = Vec::new();
         loop {
@@ -264,9 +268,7 @@ pub(crate) async fn watch_recheck() {
         }
     }
     let (scheduled, recheck) = tokio::sync::oneshot::channel();
-    let (started, checking) = tokio::sync::oneshot::channel();
     crate::app_server::filesystem::observe_recheck(directory.clone(), scheduled);
-    crate::app_server::filesystem::observe_recheck_started(directory.clone(), started);
     let (held, locked) = tokio::sync::oneshot::channel();
     let (release, unlocked) = std::sync::mpsc::channel();
     let native = fixture.manager.environment.clone();
@@ -279,8 +281,21 @@ pub(crate) async fn watch_recheck() {
         })
     });
     bounded(locked).await.unwrap();
+    let (started, checking) = tokio::sync::oneshot::channel();
+    let (finish_check, finish_native) = std::sync::mpsc::channel();
+    // Install only while I/O is held, so no physical check can have passed
+    // this checkpoint. Its own I/O grant stays held through unwatch/drain.
+    crate::app_server::filesystem::hold_recheck(
+        directory.clone(),
+        Box::new(move || {
+            let _ = started.send(());
+            let _ = finish_native.recv();
+        }),
+    );
     std::fs::write(&next, b"pending recheck").unwrap();
     bounded(recheck).await.unwrap();
+    release.send(()).unwrap();
+    bounded(lock).await.unwrap().unwrap();
     bounded(checking).await.unwrap();
     call(
         &connection,
@@ -297,8 +312,7 @@ pub(crate) async fn watch_recheck() {
         settled.as_mut().now_or_never().is_none(),
         "a blocked native recheck retains physical observer capacity after unwatch/disconnect"
     );
-    release.send(()).unwrap();
-    bounded(lock).await.unwrap().unwrap();
+    finish_check.send(()).unwrap();
     bounded(settled).await;
     let returned = bounded(capacity.acquire_many(32)).await.unwrap();
     drop(returned);

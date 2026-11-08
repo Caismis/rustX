@@ -71,8 +71,19 @@ its independent commands on disconnect and shutdown; accepted Agent work retains
 its existing server-owned lifetime. Host drain cancels connection environment
 resources before waiting for their counted request owners, so a long command's
 execution deadline cannot hold graceful shutdown open. Cancellation observed
-during directory preflight refuses a new process launch; an already launched
-process retains admission until native physical settlement.
+during directory preflight refuses a new process launch.
+
+The actual native START frame is the authorization boundary for business work.
+Root revocation and the Host/connection/command cancellation family arbitrate
+with that write through their existing short native commit gates. Readiness is
+selected alongside cancellation, deadlines and supervisor events; only the
+nonblocking five-byte write holds the grants. No Host admission, root registry
+or environment-I/O lock covers that write. Revocation that wins the grant
+prevents business spawn even if a gated supervisor already exists. START that
+wins retains the ordinary cancellation and physical-settlement contract. A
+partial frame closes the control write half and reports process-control failure;
+no termination frame is appended to its prefix. The read half, retained anchor
+and child owner remain alive until physical settlement is proven.
 
 The native Bash supervisor's direct-argv path shares its startup gate, process
 membership, timeout/cancellation arbitration, containment and reap proof. Command
@@ -204,7 +215,16 @@ slots across the host. The native callback/retirement lifetime retains its slot.
 shutdown retire the native watcher. Graceful process shutdown waits for native
 callback destruction and returned observation capacity after transport teardown;
 dropping a notify handle alone is not a physical-settlement proof. Delayed retirement is fenced by exact watch
-incarnation, and queued old hints are discarded after unwatch. Events contain at
+incarnation, and queued old hints are discarded after unwatch. Automatic
+retirement closes a per-incarnation publication gate
+before dropping the native watcher and queuing its terminal notice. Ordinary
+callback admission and queue publication share that short gate, so the terminal
+notice is the incarnation's last visible event, including callbacks that passed
+identity validation earlier. Closing ordinary publication does not withdraw the
+terminal transport fence; unwatch/disconnect can still withdraw that notice.
+Unwatch closes the old gate and fence under the registry's identity-removal
+boundary before another watch can reuse the ID. Metadata inspection, native
+Drop and receipt waits stay outside the publication gate. Events contain at
 most 16 paths. Native overflow, unavailable coherent inspection or replacement
 requires authoritative reads. Events are not a canonical file journal; reconnect
 always requires a reread and fresh watch registration, never mutation replay.

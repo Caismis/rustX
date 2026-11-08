@@ -54,7 +54,7 @@ struct HostInner {
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
-    environment_stop: tokio_util::sync::CancellationToken,
+    environment_stop: crate::runtime::CancellationSignal,
     /// A finite chain of admitted intent jobs. The host request limit bounds
     /// these owners; completion order, rather than reply polling, orders clocks.
     submission_intent_tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
@@ -239,8 +239,8 @@ impl AppServerHost {
     pub(crate) fn file_observers(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.file_observers.clone()
     }
-    pub(crate) fn environment_stop(&self) -> tokio_util::sync::CancellationToken {
-        self.0.environment_stop.child_token()
+    pub(crate) fn environment_stop(&self) -> crate::runtime::CancellationSignal {
+        self.0.environment_stop.child()
     }
     pub(crate) fn authority_id(&self) -> &str {
         &self.0.authority_id
@@ -270,7 +270,7 @@ impl AppServerHost {
             manager,
             state: Mutex::default(),
             requests: watch::channel(0).0,
-            environment_stop: tokio_util::sync::CancellationToken::new(),
+            environment_stop: crate::runtime::CancellationSignal::new(),
             submission_intent_tail: Mutex::new(None),
             upload_operations: watch::channel(0).0,
             transport: Arc::default(),
@@ -394,11 +394,13 @@ impl AppServerHost {
             if state.lifecycle == ServerLifecycle::Accepting {
                 state.lifecycle = ServerLifecycle::Draining;
             }
+            // START grants and observable Host admission closure share the
+            // same cancellation boundary. No process I/O holds this mutex.
+            self.0.environment_stop.cancel();
             initializations
         };
         // Independent commands retain request admission through physical
         // settlement. Cancel them before drain waits for those same owners.
-        self.0.environment_stop.cancel();
         // Native cancellation arbitrates with recovery under its own
         // coordinator. Neither host nor registry locks cover durable work.
         for initialization in initializations {

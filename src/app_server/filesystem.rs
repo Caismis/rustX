@@ -19,9 +19,17 @@ pub struct Changed {
 struct Entry {
     watcher: Option<native::Watcher>,
     stop: CancellationToken,
+    publishing: Arc<Mutex<bool>>,
     generation: Arc<()>,
     #[cfg(test)]
     retirement_queued: Option<tokio::sync::oneshot::Sender<()>>,
+}
+impl Entry {
+    fn stop_publication(&self) {
+        let mut active = self.publishing.lock().expect("watch publication");
+        *active = false;
+        self.stop.cancel();
+    }
 }
 #[derive(Default)]
 struct State {
@@ -46,20 +54,25 @@ impl Watches {
     pub fn close(&self) {
         let mut state = self.0.lock().expect("filesystem watches");
         state.closed = true;
+        for entry in state.active.values() {
+            entry.stop_publication();
+        }
         let active = std::mem::take(&mut state.active);
         drop(state);
-        for (_, entry) in active {
-            entry.stop.cancel();
-        }
+        drop(active);
     }
     pub fn unwatch(&self, watch_id: &str) -> Result<(), RpcError> {
         let mut state = self.0.lock().expect("filesystem watches");
-        let entry = state
+        state
             .active
-            .remove(watch_id)
-            .ok_or_else(|| domain(ErrorData::EnvironmentResourceNotFound))?;
+            .get(watch_id)
+            .ok_or_else(|| domain(ErrorData::EnvironmentResourceNotFound))?
+            .stop_publication();
+        // Reusing the identity is possible only after the old publication
+        // gate and transport fence have both closed. Native Drop stays outside.
+        let entry = state.active.remove(watch_id);
         drop(state);
-        entry.stop.cancel();
+        drop(entry);
         Ok(())
     }
     pub async fn watch(
@@ -89,6 +102,8 @@ impl Watches {
                 let root_retired = root.cancelled.clone();
                 let source_retired = CancellationToken::new();
                 let stop = CancellationToken::new();
+                let publishing = Arc::new(Mutex::new(true));
+                let publication = publishing.clone();
                 let stopped = stop.clone();
                 let identity = watch_id.clone();
                 let output = events.clone();
@@ -127,11 +142,13 @@ impl Watches {
                             pending_recheck.notify_one();
                             #[cfg(test)]
                             recheck_scheduled(&authorized);
-                            let _=output.emit_fenced(NotificationMethod::FsChanged(Changed {watch_id:identity.clone(),changed_paths:Vec::new(),resync_required:true,retired:false}),Some(stopped.clone()));
+                            publish_change(&publication, &stopped, &output, Changed {watch_id:identity.clone(),changed_paths:Vec::new(),resync_required:true,retired:false});
                             return;
                         },
                         _=> {invalidated.cancel();return;},
                     }
+                    #[cfg(test)]
+                    let publication_completed = before_publication(&authorized);
                     let (changed_paths, resync_required) = match event {
                         Ok(event) => {
                             let rescan = event.need_rescan() || event.paths.len() > 16 || event.paths.iter().any(|path|path.to_str().is_none() || !path.starts_with(&authorized));
@@ -139,7 +156,9 @@ impl Watches {
                         },
                         Err(_) => (Vec::new(), true),
                     };
-                    let _ = output.emit_fenced(NotificationMethod::FsChanged(Changed { watch_id: identity.clone(), changed_paths, resync_required, retired: false }),Some(stopped.clone()));
+                    publish_change(&publication, &stopped, &output, Changed { watch_id: identity.clone(), changed_paths, resync_required, retired: false });
+                    #[cfg(test)]
+                    if let Some(completed) = publication_completed { let _ = completed.send(()); }
                 }, #[cfg(target_os = "macos")] environment.watch_files.clone())?;
                 #[cfg(test)]
                 registration_phase(absolute, 2);
@@ -150,7 +169,7 @@ impl Watches {
                 let mut state = owner.0.lock().expect("filesystem watches");
                 if state.closed || events.closed.is_cancelled() { return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "connection closed")); }
                 if state.active.len() >= 8 || state.active.contains_key(&watch_id) { return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "watch capacity or identity conflict")); }
-                state.active.insert(watch_id.clone(), Entry { watcher: Some(watcher), stop: stop.clone(), generation:generation.clone(), #[cfg(test)] retirement_queued: None });
+                state.active.insert(watch_id.clone(), Entry { watcher: Some(watcher), stop: stop.clone(), publishing: publishing.clone(), generation:generation.clone(), #[cfg(test)] retirement_queued: None });
                 drop(state);
                 armed.store(true,Ordering::Release);
                 let root_retired = root.cancelled.clone();
@@ -164,7 +183,7 @@ impl Watches {
                         () = source_retired.cancelled() => {},
                         () = source_identity_lost(recheck_environment, recheck_path, recheck_identity, recheck, capacity) => {},
                     }
-                    retire_watch(registry, watch_id, generation, stop, events).await;
+                    retire_watch(registry, watch_id, generation, publishing, stop, events).await;
                 });
                 Ok(())
             }).map_err(super::connection::environment_error)
@@ -172,13 +191,31 @@ impl Watches {
     }
 }
 
+fn publish_change(
+    publishing: &Mutex<bool>,
+    stop: &CancellationToken,
+    events: &super::service_events::Events,
+    change: Changed,
+) {
+    let active = publishing.lock().expect("watch publication");
+    if *active && !stop.is_cancelled() {
+        // Keep the short gate through queue publication. Retirement closes
+        // this gate before its final notice; existing events remain FIFO.
+        let _ = events.emit_fenced(NotificationMethod::FsChanged(change), Some(stop.clone()));
+    }
+}
+
 async fn retire_watch(
     registry: std::sync::Weak<Watches>,
     watch_id: String,
     generation: Arc<()>,
+    publishing: Arc<Mutex<bool>>,
     stop: CancellationToken,
     events: Arc<super::service_events::Events>,
 ) {
+    // Closing callback publication is separate from withdrawing the terminal
+    // transport fence. Native Drop and receipt waits never hold this gate.
+    *publishing.lock().expect("watch publication") = false;
     if let Some(owner) = registry.upgrade() {
         let watcher = {
             let mut state = owner.0.lock().expect("filesystem watches");
@@ -255,9 +292,9 @@ async fn source_identity_lost(
             // A cancelled observer still owns this physical check until it
             // returns; Host teardown waits for the same capacity permit.
             let _retained = retained;
-            #[cfg(test)]
-            recheck_phase(&path, 1);
             native.with_paths(&[path.to_str().expect("validated UTF-8 path")], |paths| {
+                #[cfg(test)]
+                recheck_locked(&path);
                 crate::local_runtime::environment::files::metadata(&paths[0].1, &paths[0].2)
             })
         })
@@ -274,40 +311,73 @@ fn relevant(event: &notify::Event) -> bool {
 }
 
 #[cfg(test)]
-type RecheckHooks = BTreeMap<std::path::PathBuf, [Option<tokio::sync::oneshot::Sender<()>>; 2]>;
+struct PublicationPause {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    completed: tokio::sync::oneshot::Sender<()>,
+}
+#[cfg(test)]
+static PUBLICATIONS: std::sync::LazyLock<Mutex<BTreeMap<std::path::PathBuf, PublicationPause>>> =
+    std::sync::LazyLock::new(Mutex::default);
+#[cfg(test)]
+pub(crate) fn pause_publication(
+    path: std::path::PathBuf,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    let (entered, at_publication) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let (completed, after_publication) = tokio::sync::oneshot::channel();
+    PUBLICATIONS.lock().unwrap().insert(
+        path,
+        PublicationPause {
+            entered,
+            release: released,
+            completed,
+        },
+    );
+    (at_publication, release, after_publication)
+}
+#[cfg(test)]
+fn before_publication(path: &std::path::Path) -> Option<tokio::sync::oneshot::Sender<()>> {
+    let pause = PUBLICATIONS.lock().unwrap().remove(path)?;
+    let _ = pause.entered.send(());
+    // Dropping a failed test's sender also releases the physical callback.
+    let _ = pause.release.recv();
+    Some(pause.completed)
+}
+
+#[cfg(test)]
+type RecheckHooks = BTreeMap<std::path::PathBuf, tokio::sync::oneshot::Sender<()>>;
 #[cfg(test)]
 static RECHECKS: std::sync::LazyLock<Mutex<RecheckHooks>> =
     std::sync::LazyLock::new(Mutex::default);
 #[cfg(test)]
 pub(crate) fn observe_recheck(path: std::path::PathBuf, sender: tokio::sync::oneshot::Sender<()>) {
-    RECHECKS.lock().unwrap().entry(path).or_default()[0] = Some(sender);
-}
-#[cfg(test)]
-pub(crate) fn observe_recheck_started(
-    path: std::path::PathBuf,
-    sender: tokio::sync::oneshot::Sender<()>,
-) {
-    RECHECKS.lock().unwrap().entry(path).or_default()[1] = Some(sender);
+    RECHECKS.lock().unwrap().insert(path, sender);
 }
 #[cfg(test)]
 fn recheck_scheduled(path: &std::path::Path) {
-    recheck_phase(path, 0);
-}
-#[cfg(test)]
-fn recheck_phase(path: &std::path::Path, phase: usize) {
-    let sender = {
-        let mut hooks = RECHECKS.lock().unwrap();
-        let sender = hooks.get_mut(path).and_then(|hooks| hooks[phase].take());
-        if hooks
-            .get(path)
-            .is_some_and(|hooks| hooks.iter().all(Option::is_none))
-        {
-            hooks.remove(path);
-        }
-        sender
-    };
+    let sender = RECHECKS.lock().unwrap().remove(path);
     if let Some(sender) = sender {
         let _ = sender.send(());
+    }
+}
+
+#[cfg(test)]
+static RECHECK_LOCKED: std::sync::LazyLock<Mutex<BTreeMap<std::path::PathBuf, RegistrationHook>>> =
+    std::sync::LazyLock::new(Mutex::default);
+#[cfg(test)]
+pub(crate) fn hold_recheck(path: std::path::PathBuf, hook: RegistrationHook) {
+    RECHECK_LOCKED.lock().unwrap().insert(path, hook);
+}
+#[cfg(test)]
+fn recheck_locked(path: &std::path::Path) {
+    let hook = RECHECK_LOCKED.lock().unwrap().remove(path);
+    if let Some(hook) = hook {
+        hook();
     }
 }
 
