@@ -466,3 +466,101 @@ physical-device I/O; summed process-tree RSS repeats shared pages. The paused
 idle peer does not prove saturation behavior, which remains covered by native
 bounded-output and physical-settlement regressions. Resource return is an
 observed cardinality fact, not a general workload/capacity guarantee.
+
+### Typed credential boundary follow-up
+
+The external follow-up review of `1ff65c8fbaaa5d95c546890ef04338d2fd701e63`
+confirmed the PTY signal/settlement and watch retirement repairs, then found two
+remaining credential defects. An Authorization header's complete value was
+masked while its Bearer token could still be echoed. Blanket redaction of the
+finished catalog/status also altered native DTO keys and connection-generation
+facts when an ordinary literal value was `name`, `tools`, `e` or `1`.
+
+The connection owner now collects full Authorization values and Bearer tokens
+through the same rule for literal and referenced headers. Catalog projection
+redacts explicit peer fields and arbitrary schema JSON before composing native
+DTOs. ErrorData messages/data, protocol evidence, task IDs and MRTR diagnostics
+are sanitized before escaping, truncation or native framing. Native error codes,
+server identity, generations, counts and fixed protocol fields remain accurate.
+Opaque transport errors retain category, transport type and operation phase
+without replaying potentially escaped peer text. Stderr capture must already be
+complete and unclipped before it can enter a diagnostic; optional capture never
+delays physical settlement. The original 64 KiB catalog and 1 KiB diagnostic
+limits remain enforced.
+
+Real HTTP catalog tests obtain the actual Authorization header at the peer and
+return both the complete value and independently extracted token in all three
+catalog kinds and nested schema keys/values. Literal/reference configurations
+also retain ordinary `name`, `tools`, `e` and `1` headers. Real HTTP transport
+failure echoes quoted/backslash credentials through a response Content-Type;
+real stdio failures cover escaped JSON and a credential clipped at the capture
+limit. The original recovery fixture's literal `1` and both strict generation
+assertions remain unchanged. An attempted uncommitted fixture-only workaround
+was withdrawn before this product repair and supplies no validation evidence.
+
+[FULL #1778](https://github.com/Caismis/rustX/actions/runs/42428879869) on the
+reviewed head failed those two recovery assertions. It also exposed an existing
+Host lifetime test that waited only for projection-worker exit while the
+independent admission worker could still own a temporary runtime upgrade. The
+test now gates that exact interleaving and waits for both existing native exit
+receipts before asserting weak runtime release; its original assertions and
+30-second bound remain. A browser chrome test sampled a sidebar's running
+opening transform and observed a fractional width. It now waits for the existing
+animation to finish before the unchanged exact geometry assertions. Product
+WebUI/TUI code, screenshot references, retries and timeouts are unchanged.
+
+The earlier local results and measurements above apply only to their identified
+historical sources. This follow-up requires its own local checks, independent
+review, fresh source-identified captures and final-head FULL CI. The exact final
+SHA, run and verdict are tracked in the PR; this evidence does not claim that
+#1778 or an earlier source is green.
+
+The same #1778 macOS full lane still failed the unchanged raw-PTY duplex test:
+actor-turn `yield_now` does not guarantee consumer scheduling. Native short PTY
+reads could therefore fill the 32-event queue before an active client resumed.
+The command actor now retains at most one 8 KiB pending batch per output stream.
+First bytes and acknowledged short tails flush promptly; unacknowledged small
+reads become full batches. EOF and reaching the retention cap force tails out,
+including the original empty truncation marker when required. Receipt polling
+shares the actor select with stdin, controls, output and physical settlement;
+no output receipt blocks input. The original 32-event `try_send` overload and
+final transport-acceptance fence remain. Four deterministic real-Events tests
+cover 131,072 one-byte reads with no consumer progress, exact reconstruction,
+32-slot overload, exact-cap tails and cap-triggered overload without EOF or an
+acknowledgement. The original macOS duplex, pipe/PTY post-cap termination and
+slow-consumer assertions remain unchanged.
+
+A subsequent full local run exposed an existing archive-test completion race:
+its deliberate Unavailable observation wakes a status-recovery reader, which
+can contend with the archive's conservative native `try_lock` claim after the
+main cross-Thread assertions have passed. Test-only gates now park that reader
+and the empty admission pass outside Coordinator, then observe the existing
+shutdown boundary to prove the first archive claim succeeded before releasing
+them. Production claim semantics and the original success, cross-Thread,
+metadata, zero-model and timeout assertions remain unchanged. Independent review
+found no remaining P1/P2 or weakened assertions in these synchronization repairs.
+
+The external protocol-negotiation target also exposed fixture inputs that used
+the peer's expected revision as a literal credential value. Peer-advertised and
+legacy-negotiated revision strings remain sanitized; the locally offered SDK
+revision set remains native. Negotiation fixtures now receive explicit peer
+revision parameters independently of credential inputs, with descriptive
+presence-only mode flags. The obsolete legacy revision environment override is
+removed. Both original exact-version and compatibility-classification assertions
+remain. A real stdio regression separately covers modern/legacy peers returning
+quoted/backslash credentials as their revision, through literal/reference
+configuration, and long nonsecret revisions. It checks native client revisions,
+secret masking, the final 1 KiB diagnostic budget and physical peer reaping.
+Final compatibility errors and appended complete stderr share that same budget;
+no final blanket redaction is reintroduced. Recovery's original literal `1` and
+its strict generation assertions remain unchanged.
+
+The final local all-target/all-feature Rust run completed 22 targets with
+6,061 passed, zero failed and 20 existing ignored tests (library: 5,350 passed,
+ten ignored). Strict all-target/all-feature Clippy, formatting, whitespace,
+the all-feature executable build and the authenticated standalone Node example
+also passed. The four original browser chrome geometry cases passed with the
+existing exact assertions after animation completion. Independent read-only
+review found no remaining P1/P2 or assertion weakening. Native macOS and the
+complete browser matrix still require a new exact-head FULL CI run; these local
+results do not change the failed verdict of historical run #1778.

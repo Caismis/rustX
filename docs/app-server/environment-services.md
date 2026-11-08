@@ -117,7 +117,12 @@ failure. Natural nonzero exit is still completed with its real exit code. Signal
 may have no numeric exit code. Native inability to prove physical cleanup is never
 converted into successful settlement. Capacity remains with the physical owner,
 including after loss of the RPC waiter. A connection admits at most four independent
-commands; control retains its reserved lane. Output queues are bounded; a saturated
+commands; control retains its reserved lane. Streaming output uses bounded 8 KiB
+batches: first bytes are published promptly, short reads accumulate while a
+notification awaits acceptance, and acceptance progress flushes short tails.
+EOF and the retention cap force pending tails out; stdin, cancellation and
+settlement remain active in the same actor select. Per-process observation
+sequences describe emitted batches. Output queues are bounded; a saturated
 consumer is retired, and its processes are cancelled and drained by the same
 native owner. The I/O actor cooperates between completed turns, including after
 the capture cap, so a continuously ready PTY cannot fill the queue entirely
@@ -238,9 +243,21 @@ are never labeled complete. Tool, resource and template descriptions are
 credential-redacted, and business invocation is unavailable through this API.
 The native connection owner includes every accepted literal environment/header
 value and every resolved sensitive reference in one private redaction set.
-Redaction covers nested schema keys and values, and the final redacted projection
-must still fit the same 64 KiB bound. Neither private redaction values nor resolved
-credentials enter serialized or debug configuration views.
+Authorization Bearer inputs contribute both the complete header value and the
+token component, for literal and referenced headers alike. Redaction applies to
+typed peer-owned catalog fields and arbitrary schema JSON keys and strings.
+Native envelope keys, catalog kinds, capabilities, error codes, connection
+generations and counts retain their original values. The final redacted catalog
+must still fit the same 64 KiB bound.
+
+Peer error messages and JSON data are redacted before escaping, formatting or
+truncation. Opaque transport diagnostics report their native category, transport
+type and operation phase without replaying potentially escaped peer text.
+Diagnostics retain the existing 1 KiB bound. A stderr preview is eligible only
+after complete, unclipped capture is already proven; incomplete capture is
+omitted without waiting for optional pipe EOF after physical settlement.
+Neither private redaction values nor resolved credentials enter serialized or
+debug configuration views.
 Catalog kind is `tools`, `resources` or `templates`; `expected_revision` binds
 the authored MCP source before and after native discovery.
 Probe/catalog native tasks retain counted host admission through physical close

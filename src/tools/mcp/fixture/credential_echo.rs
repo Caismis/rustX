@@ -14,8 +14,12 @@ pub const ECHO_ENV: &str = "RUSTX_FIXTURE_CREDENTIAL_ECHO";
 pub struct CredentialEcho(pub Option<String>);
 
 impl CredentialEcho {
-    fn received(&self, context: &RequestContext<RoleServer>) -> Result<String, rmcp::ErrorData> {
-        self.0
+    fn received(
+        &self,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<(String, String), rmcp::ErrorData> {
+        let credential = self
+            .0
             .clone()
             .or_else(|| {
                 context
@@ -27,7 +31,15 @@ impl CredentialEcho {
                     .ok()
                     .map(str::to_owned)
             })
-            .ok_or_else(|| rmcp::ErrorData::invalid_params("credential not received by peer", None))
+            .ok_or_else(|| {
+                rmcp::ErrorData::invalid_params("credential not received by peer", None)
+            })?;
+        let token = credential
+            .strip_prefix("Bearer ")
+            .unwrap_or(&credential)
+            .trim_start()
+            .to_owned();
+        Ok((credential, token))
     }
 }
 
@@ -57,12 +69,14 @@ impl ServerHandler for CredentialEcho {
         context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>> + Send
     {
-        std::future::ready(self.received(&context).map(|credential| {
+        std::future::ready(self.received(&context).map(|(credential, token)| {
         let mut tool = super::fixture_tool_named("credential-echo");
-        tool.description = Some(format!("echo {credential}").into());
+        tool.description = Some(format!("echo {credential}; bearer {token}").into());
         tool.input_schema = std::sync::Arc::new(serde_json::json!({
             "type":"object", "properties": { (credential.clone()): {
-                "type":"object", "properties":{"nested":{"description":credential.clone(),"enum":[credential]}}
+                "type":"object", "properties":{"nested":{"description":credential.clone(),"enum":[credential.clone(),token.clone()]}}
+            }, (token.clone()): {
+                "type":"object", "properties":{"nested":{"description":token.clone(),"enum":[credential,token]}}
             }}
         }).as_object().unwrap().clone());
         rmcp::model::ListToolsResult {
@@ -78,11 +92,11 @@ impl ServerHandler for CredentialEcho {
         context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<rmcp::model::ListResourcesResult, rmcp::ErrorData>>
     + Send {
-        std::future::ready(self.received(&context).map(|credential| {
+        std::future::ready(self.received(&context).map(|(credential, token)| {
             rmcp::model::ListResourcesResult {
                 resources: vec![
                     rmcp::model::Resource::new("fixture://credential", "credential")
-                        .with_description(credential),
+                        .with_description(format!("{credential}; bearer {token}")),
                 ],
                 ..Default::default()
             }
@@ -96,11 +110,11 @@ impl ServerHandler for CredentialEcho {
     ) -> impl std::future::Future<
         Output = Result<rmcp::model::ListResourceTemplatesResult, rmcp::ErrorData>,
     > + Send {
-        std::future::ready(self.received(&context).map(|credential| {
+        std::future::ready(self.received(&context).map(|(credential, token)| {
             rmcp::model::ListResourceTemplatesResult {
                 resource_templates: vec![
                     rmcp::model::ResourceTemplate::new("fixture://{name}", "credential")
-                        .with_description(credential),
+                        .with_description(format!("{credential}; bearer {token}")),
                 ],
                 ..Default::default()
             }

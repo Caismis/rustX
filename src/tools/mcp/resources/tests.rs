@@ -425,7 +425,7 @@ async fn replacement_capability_removal_updates_existing_catalog_and_refuses_res
     reason = "one transport matrix checks protocol negotiation and all three resource operations"
 )]
 async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
-    if fixture::legacy::serve_if_legacy_fixture_mode().await
+    if fixture::legacy::serve_if_legacy_fixture_mode(fixture::legacy::LEGACY_FIXTURE_REVISION).await
         || fixture::serve_if_fixture_mode(FixtureServer::from_env()).await
     {
         return;
@@ -773,15 +773,98 @@ fn credentials(secret: &str) -> crate::credentials::SourceCredentials {
 }
 
 #[tokio::test]
+async fn opaque_http_diagnostics_never_replay_debug_escaped_response_headers() {
+    let secret = "PR533_HTTP_\"CONTENT\\TYPE";
+    let seen = Arc::new(AtomicBool::new(false));
+    let observed = seen.clone();
+    let router = axum::Router::new().fallback(move |headers: http::HeaderMap| {
+        let observed = observed.clone();
+        async move {
+            let credential = headers.get(http::header::AUTHORIZATION).unwrap().clone();
+            assert_eq!(credential.to_str().unwrap(), secret);
+            observed.store(true, Ordering::SeqCst);
+            (
+                [(http::header::CONTENT_TYPE, credential)],
+                "not an MCP response",
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000534");
+    for reference in [false, true] {
+        seen.store(false, Ordering::SeqCst);
+        let mut source_credentials = crate::credentials::SourceCredentials::default();
+        let mut headers = BTreeMap::new();
+        if reference {
+            source_credentials = serde_json::from_value(
+                serde_json::json!({"headers":{"Authorization":"$HTTP_ERROR_KEY"}}),
+            )
+            .unwrap();
+            source_credentials.capture(crate::credentials::CredentialSnapshot::new([(
+                "HTTP_ERROR_KEY".into(),
+                secret.into(),
+            )]));
+        } else {
+            headers.insert("Authorization".into(), secret.into());
+        }
+        let connection = McpConnection::lazy(
+            McpServerId::new("http-error"),
+            McpServerBinding {
+                credentials: source_credentials,
+                transport: McpTransportConfig::StreamableHttp {
+                    endpoint: endpoint.clone(),
+                    headers,
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+            },
+            tools.workspace().clone(),
+            Arc::default(),
+            crate::runtime::CancellationSignal::new(),
+        );
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            connection.discover_catalog(),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            seen.load(Ordering::SeqCst),
+            "the peer must receive the actual credential"
+        );
+        let crate::tools::mcp::McpError::Discovery(detail) = &error else {
+            panic!("the HTTP handshake must fail discovery: {error}");
+        };
+        assert!(
+            !error.to_string().contains("PR533_HTTP_"),
+            "escaped peer header leaked: {error}"
+        );
+        assert!(detail.len() <= 1024);
+        assert!(
+            detail.contains("Transport") && detail.contains("send discover request"),
+            "the native transport category and handshake phase must remain: {detail}"
+        );
+    }
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() {
     use crate::capabilities::ToolSourceId;
     use crate::tools::mcp::{
         McpResourceBinding, McpRuntimeGeneration, McpRuntimeRetirementRegistry,
     };
     let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000533");
-    let secret = "FINAL_DIAGNOSTIC_SENTINEL_533";
-    let error =
-        rmcp::ErrorData::invalid_params(format!("HTTP533 {secret} {}", "e".repeat(2048)), None);
+    let secret = "FINAL_DIAGNOSTIC_\"SENTINEL\\533";
+    let error = rmcp::ErrorData::invalid_params(
+        format!("HTTP533 {secret} {}", "e".repeat(2048)),
+        Some(serde_json::json!({(secret): {"nested":[secret]}})),
+    );
     let mut peer = HttpPeer::start(FixtureServer {
         resources_supported: true,
         call_error: Some(error.clone()),
@@ -851,6 +934,26 @@ async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() 
 }
 
 fn assert_redacted(result: &ToolExecutionResult, secret: &str) {
+    fn inspect(value: &serde_json::Value, secret: &str) {
+        match value {
+            serde_json::Value::String(text) => assert!(!text.contains(secret)),
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    inspect(value, secret);
+                }
+            }
+            serde_json::Value::Object(values) => {
+                for (key, value) in values {
+                    assert!(!key.contains(secret));
+                    inspect(value, secret);
+                }
+            }
+            _ => {}
+        }
+    }
+    inspect(&serde_json::to_value(result).unwrap(), secret);
+    let escaped = serde_json::to_string(secret).unwrap();
+    let escaped = &escaped[1..escaped.len() - 1];
     for rendered in [
         serde_json::to_string(result).unwrap(),
         result.model_facing_projection().as_text(),
@@ -858,6 +961,10 @@ fn assert_redacted(result: &ToolExecutionResult, secret: &str) {
         assert!(
             !rendered.contains(secret),
             "credential leaked in tool result"
+        );
+        assert!(
+            !rendered.contains(escaped),
+            "JSON-escaped credential leaked in tool result"
         );
     }
     if let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =

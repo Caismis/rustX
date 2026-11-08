@@ -14,6 +14,82 @@ impl Drop for ReleasePause {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn malformed_stdio_redacts_json_escaped_credentials_before_rendering() {
+    if raw::serve_if_raw_fixture_mode().await {
+        return;
+    }
+    assert_malformed_stdio_redaction(
+        "PR533_ESCAPED_\"CREDENTIAL\\_TOKEN",
+        "tools::mcp::connection::catalog_tests::redaction::malformed_stdio_redacts_json_escaped_credentials_before_rendering",
+    ).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn incomplete_stderr_capture_cannot_publish_a_clipped_credential() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let tools = ConversationToolRuntime::new(
+        ConversationId::new("conv_14dafca7-8c38-7c20-8ac1-caa3300d9533"),
+        workspace,
+        temp.path().join("artifacts"),
+    )
+    .unwrap();
+    let pid = temp.path().join("peer.pid");
+    let secret = "PR533_STDERR_CREDENTIAL_MUST_NOT_BE_CLIPPED";
+    let mut credentials: SourceCredentials = serde_json::from_value(serde_json::json!({
+        "environment":{"RUSTX_STDERR_CREDENTIAL":"$STDERR_SECRET"}
+    }))
+    .unwrap();
+    credentials.capture(CredentialSnapshot::new([(
+        "STDERR_SECRET".into(),
+        secret.into(),
+    )]));
+    let binding = McpServerBinding {
+        credentials,
+        transport: McpTransportConfig::Stdio {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                format!(
+                    "printf '%s' $$ > {}; printf '%065530d' 0 >&2; printf '%s' \"$RUSTX_STDERR_CREDENTIAL\" >&2",
+                    pid.display()
+                ),
+            ],
+            cwd: None,
+            environment: std::collections::BTreeMap::new(),
+        },
+        policy: crate::tools::types::ToolInvocationPolicy::default(),
+    };
+    let connection = McpConnection::lazy(
+        McpServerId::new("stderr-owner"),
+        binding,
+        tools.workspace().clone(),
+        Arc::default(),
+        CancellationSignal::new(),
+    );
+    let error = tokio::time::timeout(WAIT, connection.discover_catalog())
+        .await
+        .unwrap()
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("incomplete stderr capture omitted"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("PR533_"),
+        "the clipped prefix must not escape: {error}"
+    );
+    assert!(!error.contains(secret));
+    let pid: i32 = std::fs::read_to_string(pid).unwrap().parse().unwrap();
+    assert_eq!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+        Err(nix::errno::Errno::ESRCH)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn malformed_stdio_after_listing_redacts_pre_dispatch_failure_and_model_projection() {
     if raw::serve_if_raw_fixture_mode().await {
         return;
@@ -248,9 +324,8 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
         panic!("the invalid frame must fail before dispatch");
     };
     assert!(error.contains("MCP protocol violation"));
-    // The fixture's literal corruption selector is itself write-only. Its
-    // value also appears in this diagnostic's fixed text and is redacted.
-    assert!(error.contains("structurally <redacted> stdio"), "{error}");
+    // The literal selector "invalid" does not alter native diagnosis text.
+    assert!(error.contains("structurally invalid stdio"), "{error}");
     assert!(error.contains("method"));
     let projection = result.model_facing_projection().as_text();
     let health = runtime.unusable_reason().unwrap();
@@ -264,8 +339,8 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
         ("bounded framing evidence", recorded.as_str()),
     ] {
         assert!(
-            !diagnostic.contains(raw::CORRUPTION_INVALID),
-            "{name} leaked a literal environment value: {diagnostic}"
+            !diagnostic.contains("structurally <redacted> stdio"),
+            "{name} lost the native diagnosis: {diagnostic}"
         );
         assert!(!diagnostic.contains(secret), "{name} leaked the credential");
         assert!(

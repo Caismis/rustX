@@ -401,9 +401,12 @@ struct PendingInput {
     close: bool,
     receipt: oneshot::Sender<Result<(), RpcError>>,
 }
+const OUTPUT_CHUNK_BYTES: usize = 8192;
+
 #[derive(Default)]
 struct Output {
     bytes: Vec<u8>,
+    pending: Vec<u8>,
     total: usize,
     truncated: bool,
 }
@@ -422,28 +425,57 @@ impl Output {
         let newly_truncated = !self.truncated && bytes.len() > available;
         self.truncated |= newly_truncated;
         self.total = self.total.saturating_add(bytes.len());
-        if params.tty || params.stream_stdout_stderr {
-            if retained.is_empty() && !newly_truncated {
-                return Ok(None);
-            }
-            *sequence += 1;
-            events
-                .emit(NotificationMethod::CommandOutputDelta(OutputDelta {
-                    process_id: params
-                        .process_id
-                        .clone()
-                        .expect("validated streaming identity"),
-                    sequence: *sequence,
-                    stream,
-                    delta_base64: base64::engine::general_purpose::STANDARD.encode(retained),
-                    cap_reached: newly_truncated,
-                }))
-                .map(Some)
-                .map_err(|()| domain(ErrorData::ConnectionClosed))
-        } else {
+        if !(params.tty || params.stream_stdout_stderr) {
             self.bytes.extend_from_slice(retained);
-            Ok(None)
+            return Ok(None);
         }
+        // Once a notification is in flight, accumulate small OS reads into
+        // bounded chunks. Short reads must not consume one queue slot each.
+        let mut remaining = retained;
+        let mut receipt = None;
+        while !remaining.is_empty() {
+            let count = remaining.len().min(OUTPUT_CHUNK_BYTES - self.pending.len());
+            self.pending.extend_from_slice(&remaining[..count]);
+            remaining = &remaining[count..];
+            let cap_reached = remaining.is_empty() && newly_truncated;
+            let flush_tail = remaining.is_empty() && self.total >= cap;
+            if self.pending.len() == OUTPUT_CHUNK_BYTES || flush_tail {
+                receipt = self.flush(cap_reached, stream, params, events, sequence)?;
+            }
+        }
+        if retained.is_empty() && newly_truncated {
+            receipt = self.flush(true, stream, params, events, sequence)?;
+        }
+        Ok(receipt)
+    }
+
+    fn flush(
+        &mut self,
+        cap_reached: bool,
+        stream: OutputStream,
+        params: &ExecParams,
+        events: &super::service_events::Events,
+        sequence: &mut u64,
+    ) -> Result<Option<oneshot::Receiver<()>>, RpcError> {
+        if self.pending.is_empty() && !cap_reached {
+            return Ok(None);
+        }
+        *sequence += 1;
+        let delta_base64 = base64::engine::general_purpose::STANDARD.encode(&self.pending);
+        self.pending.clear();
+        events
+            .emit(NotificationMethod::CommandOutputDelta(OutputDelta {
+                process_id: params
+                    .process_id
+                    .clone()
+                    .expect("validated streaming identity"),
+                sequence: *sequence,
+                stream,
+                delta_base64,
+                cap_reached,
+            }))
+            .map(Some)
+            .map_err(|()| domain(ErrorData::ConnectionClosed))
     }
 }
 
@@ -515,16 +547,43 @@ async fn run(
     let mut sequence = 0;
     let mut last_receipt = None;
     let mut output_failed = false;
-    let mut buffer = vec![0u8; 8192];
-    let mut error_buffer = vec![0u8; 8192];
-    let mut terminal_buffer = vec![0u8; 8192];
+    let mut delivery_failed = false;
+    let mut buffer = vec![0u8; OUTPUT_CHUNK_BYTES];
+    let mut error_buffer = vec![0u8; OUTPUT_CHUNK_BYTES];
+    let mut terminal_buffer = vec![0u8; OUTPUT_CHUNK_BYTES];
     let cap = params.output_bytes_cap.unwrap_or(64 * 1024);
     let mut terminal_eof = terminal.is_none();
     loop {
-        if termination.is_some() && stdout.is_none() && stderr.is_none() && terminal_eof {
+        let finished =
+            termination.is_some() && stdout.is_none() && stderr.is_none() && terminal_eof;
+        if last_receipt.is_none() || finished {
+            // Flush short batches promptly after consumer progress, including
+            // the first READY bytes, and flush every tail before the final fence.
+            for (output, stream) in [
+                (&mut stdout_output, OutputStream::Stdout),
+                (&mut stderr_output, OutputStream::Stderr),
+            ] {
+                match output.flush(false, stream, &params, &events, &mut sequence) {
+                    Ok(Some(receipt)) => last_receipt = Some(receipt),
+                    Ok(None) => {}
+                    Err(_) => {
+                        delivery_failed = true;
+                        cancellation.cancel();
+                    }
+                }
+            }
+        }
+        if finished {
             break;
         }
         tokio::select! {
+            receipt = async { last_receipt.as_mut().expect("output receipt").await }, if last_receipt.is_some() => {
+                last_receipt.take();
+                if receipt.is_err() {
+                    delivery_failed = true;
+                    cancellation.cancel();
+                }
+            },
             result = &mut settlement, if termination.is_none() => {
                 termination = Some(result.map_err(|_| domain(ErrorData::OutcomeUnknown))?);
                 if let Some(terminal) = &mut terminal { terminal.slave.take(); }
@@ -542,21 +601,21 @@ async fn run(
             read = async { stdout.as_mut().expect("stdout").read(&mut buffer).await }, if stdout.is_some() => {
                 match read {
                     Ok(0) => { stdout.take(); },
-                    Ok(count) => match stdout_output.push(&buffer[..count], cap, OutputStream::Stdout, &params, &events, &mut sequence) { Ok(Some(receipt)) => last_receipt = Some(receipt), Ok(None) => {}, Err(_) => { output_failed = true; cancellation.cancel(); } },
+                    Ok(count) => match stdout_output.push(&buffer[..count], cap, OutputStream::Stdout, &params, &events, &mut sequence) { Ok(Some(receipt)) => last_receipt = Some(receipt), Ok(None) => {}, Err(_) => { delivery_failed = true; cancellation.cancel(); } },
                     Err(_) => { stdout.take(); output_failed = true; cancellation.cancel(); },
                 }
             },
             read = async { stderr.as_mut().expect("stderr").read(&mut error_buffer).await }, if stderr.is_some() => {
                 match read {
                     Ok(0) => { stderr.take(); },
-                    Ok(count) => match stderr_output.push(&error_buffer[..count], cap, OutputStream::Stderr, &params, &events, &mut sequence) { Ok(Some(receipt)) => last_receipt = Some(receipt), Ok(None) => {}, Err(_) => { output_failed = true; cancellation.cancel(); } },
+                    Ok(count) => match stderr_output.push(&error_buffer[..count], cap, OutputStream::Stderr, &params, &events, &mut sequence) { Ok(Some(receipt)) => last_receipt = Some(receipt), Ok(None) => {}, Err(_) => { delivery_failed = true; cancellation.cancel(); } },
                     Err(_) => { stderr.take(); output_failed = true; cancellation.cancel(); },
                 }
             },
             read = async { terminal.as_ref().expect("terminal").read(&mut terminal_buffer).await }, if !terminal_eof => {
                 match read {
                     Ok(0) => terminal_eof = true,
-                    Ok(count) => match stdout_output.push(&terminal_buffer[..count], cap, OutputStream::Stdout, &params, &events, &mut sequence) { Ok(Some(receipt)) => last_receipt = Some(receipt), Ok(None) => {}, Err(_) => { output_failed = true; cancellation.cancel(); } },
+                    Ok(count) => match stdout_output.push(&terminal_buffer[..count], cap, OutputStream::Stdout, &params, &events, &mut sequence) { Ok(Some(receipt)) => last_receipt = Some(receipt), Ok(None) => {}, Err(_) => { delivery_failed = true; cancellation.cancel(); } },
                     Err(_) => { terminal_eof = true; output_failed = true; cancellation.cancel(); },
                 }
             },
@@ -626,6 +685,9 @@ async fn run(
             .await
             .map_err(|()| domain(ErrorData::ConnectionClosed))?;
     }
+    if delivery_failed {
+        return Err(domain(ErrorData::ConnectionClosed));
+    }
     let termination = termination.expect("native process settled");
     let status = if output_failed {
         ExecStatus::ProcessControlFailed
@@ -646,3 +708,6 @@ async fn run(
         stderr_truncated: stderr_output.truncated,
     })
 }
+
+#[cfg(test)]
+mod tests;

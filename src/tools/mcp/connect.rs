@@ -135,10 +135,7 @@ impl McpServerRuntime {
             binding: &binding,
             ..request
         };
-        let credentials = binding.credentials.clone();
-        Self::connect_admitted(request)
-            .await
-            .map_err(|error| error.redacted(&credentials))
+        Self::connect_admitted(request).await
     }
 
     #[allow(clippy::too_many_lines)] // one existing transport ownership and settlement boundary
@@ -230,6 +227,7 @@ impl McpServerRuntime {
                 };
                 let Some(stdout) = stdout else {
                     return Err(settle_connect_failure(
+                        &binding.credentials,
                         Some(&process),
                         McpError::Discovery("stdio stdout unavailable".to_owned()),
                     )
@@ -241,6 +239,7 @@ impl McpServerRuntime {
                 };
                 let Some(stdin) = stdin else {
                     return Err(settle_connect_failure(
+                        &binding.credentials,
                         Some(&process),
                         McpError::Discovery("stdio stdin unavailable".to_owned()),
                     )
@@ -278,7 +277,7 @@ impl McpServerRuntime {
                     () = cancellation.cancelled() => Err(McpError::Discovery(
                         "MCP connection cancelled during the handshake".to_owned(),
                     )),
-                    started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id)) => started,
+                    started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id), &binding.credentials) => started,
                 };
                 let service = match started {
                     Ok(service) => {
@@ -289,6 +288,7 @@ impl McpServerRuntime {
                         // peer-only traffic.
                         if let Some(violation) = protocol_violation.violation() {
                             return Err(settle_connect_failure(
+                                &binding.credentials,
                                 Some(&process),
                                 protocol_violation_error(server_id, &violation),
                             )
@@ -301,7 +301,12 @@ impl McpServerRuntime {
                             Some(violation) => protocol_violation_error(server_id, &violation),
                             None => error,
                         };
-                        return Err(settle_connect_failure(Some(&process), error).await);
+                        return Err(settle_connect_failure(
+                            &binding.credentials,
+                            Some(&process),
+                            error,
+                        )
+                        .await);
                     }
                 };
                 (service, Some(process))
@@ -366,7 +371,7 @@ impl McpServerRuntime {
                     () = cancellation.cancelled() => Err(McpError::Discovery(
                         "MCP connection cancelled during the handshake".to_owned(),
                     )),
-                    started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id)) => started,
+                    started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id), &binding.credentials) => started,
                 };
                 let service = match service {
                     Ok(service) => service,
@@ -387,7 +392,11 @@ impl McpServerRuntime {
             .ok_or_else(|| McpError::Discovery("MCP handshake returned no peer info".to_owned()))
         {
             Ok(info) => info,
-            Err(error) => return Err(settle_connect_failure(process.as_ref(), error).await),
+            Err(error) => {
+                return Err(
+                    settle_connect_failure(&binding.credentials, process.as_ref(), error).await,
+                );
+            }
         };
         // rmcp's discover lifecycle already rejects a peer with no shared
         // revision, but the legacy `initialize` handshake lets a server echo
@@ -396,13 +405,13 @@ impl McpServerRuntime {
         let supported = supported_protocol_versions();
         if !supported.contains(&info.protocol_version) {
             return Err(
-                settle_connect_failure(
+                settle_connect_failure(&binding.credentials,
                     process.as_ref(),
-                    McpError::ProtocolCompatibility(format!(
-                        "server negotiated MCP revision {}, which rustX does not speak (rustX speaks {})",
-                        info.protocol_version,
-                        joined_versions(&supported)
-                    )),
+                    McpError::ProtocolCompatibility(bound_error(&format!(
+                        "rustX speaks {}; server negotiated MCP revision {}, which rustX does not speak",
+                        joined_versions(&supported),
+                        binding.credentials.redact(&info.protocol_version.to_string())
+                    ))),
                 )
                 .await,
             );
@@ -512,6 +521,7 @@ async fn start_client_service<T, E, A>(
     // rustX-materialized managed package uses `Discover` and never issues a
     // second, collidable handshake request.
     lifecycle: rmcp::ClientLifecycleMode,
+    credentials: &crate::credentials::SourceCredentials,
 ) -> Result<RunningService<RoleClient, McpClientHandler>, McpError>
 where
     T: rmcp::transport::IntoTransport<RoleClient, E, A>,
@@ -520,20 +530,16 @@ where
     let service = handler
         .serve_with_lifecycle(transport, lifecycle)
         .await
-        .map_err(|error| match error {
-            rmcp::service::ClientInitializeError::NoCompatibleProtocolVersion {
-                client_supported,
-                server_supported,
-            } => McpError::ProtocolCompatibility(bound_error(&format!(
-                "rustX speaks {}; the server speaks {}",
-                joined_versions(&client_supported),
-                if server_supported.is_empty() {
-                    "no revision it disclosed".to_owned()
-                } else {
-                    joined_versions(&server_supported)
-                }
-            ))),
-            error => McpError::Discovery(bound_error(&error.to_string())),
+        .map_err(|error| {
+            let detail = super::diagnostics::initialize_error(&error, credentials);
+            if matches!(
+                error,
+                rmcp::service::ClientInitializeError::NoCompatibleProtocolVersion { .. }
+            ) {
+                McpError::ProtocolCompatibility(detail)
+            } else {
+                McpError::Discovery(detail)
+            }
         })?;
     disable_sdk_response_cache(service.peer()).await;
     Ok(service)
@@ -588,6 +594,7 @@ async fn disable_sdk_response_cache(peer: &rmcp::service::Peer<RoleClient>) {
 /// process settlement proof before it returns, or conversation quiescence
 /// could miss this detached physical owner.
 async fn settle_connect_failure(
+    credentials: &crate::credentials::SourceCredentials,
     process: Option<&Arc<tokio::sync::Mutex<SupervisedInteractiveProcess>>>,
     error: McpError,
 ) -> McpError {
@@ -599,17 +606,18 @@ async fn settle_connect_failure(
         process.request_shutdown();
         process.wait_for_settlement().await
     };
-    let preview = process.lock().await.stderr_preview();
     match settlement {
-        Ok(()) => append_server_stderr(error, &preview),
-        Err(reason) => {
-            let mut detail = format!("{error}; physical settlement failed: {reason}");
-            if !preview.is_empty() {
-                detail.push_str("; server stderr: ");
-                detail.push_str(&preview);
-            }
-            McpError::PhysicalSettlement(detail)
+        Ok(()) => {
+            let preview = process.lock().await.complete_stderr_preview();
+            let preview = preview.map_or_else(
+                || "<incomplete stderr capture omitted>".into(),
+                |preview| bound_error(&credentials.redact(&preview)),
+            );
+            append_server_stderr(error, &preview)
         }
+        Err(reason) => McpError::PhysicalSettlement(bound_error(&format!(
+            "{error}; physical settlement failed: {reason}"
+        ))),
     }
 }
 
@@ -619,19 +627,19 @@ fn append_server_stderr(error: McpError, preview: &str) -> McpError {
     }
     match error {
         McpError::Discovery(message) => {
-            McpError::Discovery(format!("{message}; server stderr: {preview}"))
+            McpError::Discovery(bound_error(&format!("{message}; server stderr: {preview}")))
         }
-        McpError::ProtocolCompatibility(message) => {
-            McpError::ProtocolCompatibility(format!("{message}; server stderr: {preview}"))
-        }
-        McpError::ProtocolViolation(message) => {
-            McpError::ProtocolViolation(format!("{message}; server stderr: {preview}"))
-        }
+        McpError::ProtocolCompatibility(message) => McpError::ProtocolCompatibility(bound_error(
+            &format!("{message}; server stderr: {preview}"),
+        )),
+        McpError::ProtocolViolation(message) => McpError::ProtocolViolation(bound_error(&format!(
+            "{message}; server stderr: {preview}"
+        ))),
         error => error,
     }
 }
 
-fn joined_versions(versions: &[ProtocolVersion]) -> String {
+pub(super) fn joined_versions(versions: &[ProtocolVersion]) -> String {
     versions
         .iter()
         .map(ProtocolVersion::as_str)
@@ -654,4 +662,31 @@ fn resolve_workspace_cwd(workspace: &Workspace, cwd: Option<&Path>) -> Result<Pa
         ));
     }
     Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitized_error_and_complete_stderr_share_one_final_diagnostic_budget() {
+        for error in [
+            McpError::Discovery(format!("native discovery: {}", "x".repeat(900))),
+            McpError::ProtocolCompatibility(format!("native versions: {}", "x".repeat(900))),
+            McpError::ProtocolViolation(format!("native protocol: {}", "x".repeat(900))),
+        ] {
+            let kind = std::mem::discriminant(&error);
+            let result = append_server_stderr(error, &"é".repeat(500));
+            assert_eq!(std::mem::discriminant(&result), kind);
+            let (McpError::Discovery(detail)
+            | McpError::ProtocolCompatibility(detail)
+            | McpError::ProtocolViolation(detail)) = result
+            else {
+                panic!("original diagnostic classification")
+            };
+            assert!(detail.len() <= 1024);
+            assert!(detail.starts_with("native "));
+            assert!(detail.ends_with('é'));
+        }
+    }
 }

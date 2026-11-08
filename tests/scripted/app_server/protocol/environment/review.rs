@@ -353,6 +353,7 @@ pub(crate) async fn catalog_credentials() {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
+    use std::fmt::Write as _;
     let service = StreamableHttpService::<
         fixture::credential_echo::CredentialEcho,
         LocalSessionManager,
@@ -369,106 +370,136 @@ pub(crate) async fn catalog_credentials() {
             .unwrap();
     });
     let secret = "catalog-secret-sentinel-533";
-    for http in [true, false] {
+    for (http, bearer) in [(true, false), (true, true), (false, false)] {
         for reference in [false, true] {
-            let fixture = Fixture::with_session_count(None, 0).await;
-            let transport = if http {
-                format!(
-                    "url = {endpoint:?}\n{} = {{ Authorization = {:?} }}\n",
-                    if reference {
-                        "sensitive_headers"
-                    } else {
-                        "headers"
-                    },
-                    if reference {
-                        "$RUSTX_CATALOG_REGRESSION_KEY"
-                    } else {
-                        secret
-                    }
-                )
+            let options: &[Option<&str>] = if bearer {
+                &[None, Some("name"), Some("tools"), Some("e"), Some("1")]
             } else {
-                let args = fixture::fixture_spawn_args(
-                    "boundary_suites::app_server_environment::mcp_catalog_redacts_literal_and_reference_http_and_stdio_credentials",
-                );
-                let env = if reference {
-                    format!(
-                        "env = {{ {} = \"1\" }}\nsensitive_env = {{ {} = \"$RUSTX_CATALOG_REGRESSION_KEY\" }}\n",
-                        fixture::FIXTURE_MODE_ENV,
-                        fixture::credential_echo::ECHO_ENV
-                    )
-                } else {
-                    format!(
-                        "env = {{ {} = \"1\", {} = {secret:?} }}\n",
-                        fixture::FIXTURE_MODE_ENV,
-                        fixture::credential_echo::ECHO_ENV
-                    )
-                };
-                format!(
-                    "command = {:?}\nargs = {args:?}\n{env}",
-                    std::env::current_exe().unwrap().display().to_string()
-                )
+                &[None]
             };
-            let text = format!("[mcp_servers.echo]\n{transport}");
-            let root = fixture
-                .manager
-                .configuration
-                .resource_root(&SourceTarget::User);
-            std::fs::create_dir_all(&root).unwrap();
-            std::fs::write(root.join("mcp.toml"), &text).unwrap();
-            let revision = crate::local_runtime::settings::revision(Some(text.as_bytes()));
-            let connection = AppServerConnection::new(fixture.host.clone());
-            initialize(&connection).await;
-            for kind in [
-                CatalogKind::Tools,
-                CatalogKind::Resources,
-                CatalogKind::Templates,
-            ] {
-                let response = call(
-                    &connection,
-                    1,
-                    Method::McpCatalog {
-                        target: SourceTarget::User,
-                        id: crate::runtime::identity::McpServerId::new("echo"),
-                        expected_revision: revision.clone(),
-                        kind,
-                    },
-                )
-                .await;
-                let MethodResult::McpProbe { result } = response else {
-                    panic!("catalog response")
+            for option in options {
+                let fixture = Fixture::with_session_count(None, 0).await;
+                let authorization = if bearer {
+                    format!("Bearer {secret}")
+                } else {
+                    secret.to_owned()
                 };
-                assert_eq!(
-                    result.outcome,
-                    crate::local_runtime::mcp_probe::McpProbeOutcome::Reachable,
-                    "http={http}, reference={reference}, kind={kind:?}"
-                );
-                let page = result.page.expect("real peer catalog");
-                let projected = serde_json::to_string(&page).unwrap();
-                assert!(
-                    !projected.contains(secret),
-                    "credential escaped http={http}, reference={reference}, kind={kind:?}"
-                );
-                assert!(
-                    projected.contains("<redacted>"),
-                    "peer must actually echo the received credential"
-                );
-                if kind == CatalogKind::Tools {
-                    let properties = page.tools[0].input_schema.get("properties").unwrap();
+                let transport = if http {
+                    let extra = option
+                        .map(|value| format!(", \"X-Option\" = {value:?}"))
+                        .unwrap_or_default();
+                    let mut transport = format!(
+                        "url = {endpoint:?}\n{} = {{ Authorization = {:?}{} }}\n",
+                        if reference {
+                            "sensitive_headers"
+                        } else {
+                            "headers"
+                        },
+                        if reference {
+                            if bearer {
+                                "$RUSTX_CATALOG_BEARER_REGRESSION_KEY"
+                            } else {
+                                "$RUSTX_CATALOG_REGRESSION_KEY"
+                            }
+                        } else {
+                            &authorization
+                        },
+                        if reference { "" } else { &extra }
+                    );
+                    if reference && let Some(option) = option {
+                        // Keep ordinary transport controls in the complete secret
+                        // set while native DTO keys and enum facts stay intact.
+                        writeln!(transport, "headers = {{ \"X-Option\" = {option:?} }}").unwrap();
+                    }
+                    transport
+                } else {
+                    let args = fixture::fixture_spawn_args(
+                        "boundary_suites::app_server_environment::mcp_catalog_redacts_literal_and_reference_http_and_stdio_credentials",
+                    );
+                    let env = if reference {
+                        format!(
+                            "env = {{ {} = \"1\" }}\nsensitive_env = {{ {} = \"$RUSTX_CATALOG_REGRESSION_KEY\" }}\n",
+                            fixture::FIXTURE_MODE_ENV,
+                            fixture::credential_echo::ECHO_ENV
+                        )
+                    } else {
+                        format!(
+                            "env = {{ {} = \"1\", {} = {secret:?} }}\n",
+                            fixture::FIXTURE_MODE_ENV,
+                            fixture::credential_echo::ECHO_ENV
+                        )
+                    };
+                    format!(
+                        "command = {:?}\nargs = {args:?}\n{env}",
+                        std::env::current_exe().unwrap().display().to_string()
+                    )
+                };
+                let text = format!("[mcp_servers.echo]\n{transport}");
+                let root = fixture
+                    .manager
+                    .configuration
+                    .resource_root(&SourceTarget::User);
+                std::fs::create_dir_all(&root).unwrap();
+                std::fs::write(root.join("mcp.toml"), &text).unwrap();
+                let revision = crate::local_runtime::settings::revision(Some(text.as_bytes()));
+                let connection = AppServerConnection::new(fixture.host.clone());
+                initialize(&connection).await;
+                for kind in [
+                    CatalogKind::Tools,
+                    CatalogKind::Resources,
+                    CatalogKind::Templates,
+                ] {
+                    let response = call(
+                        &connection,
+                        1,
+                        Method::McpCatalog {
+                            target: SourceTarget::User,
+                            id: crate::runtime::identity::McpServerId::new("echo"),
+                            expected_revision: revision.clone(),
+                            kind,
+                        },
+                    )
+                    .await;
+                    let MethodResult::McpProbe { result } = response else {
+                        panic!("catalog response")
+                    };
+                    assert_eq!(
+                        result.outcome,
+                        crate::local_runtime::mcp_probe::McpProbeOutcome::Reachable,
+                        "http={http}, bearer={bearer}, reference={reference}, option={option:?}, kind={kind:?}"
+                    );
+                    let page = result.page.expect("real peer catalog");
+                    assert_eq!(page.kind, kind, "native catalog kind is not peer text");
+                    assert!(page.capabilities.tools && page.capabilities.resources);
+                    let projected = serde_json::to_string(&page).unwrap();
                     assert!(
-                        properties.get("<redacted>").is_some(),
-                        "nested schema keys must be redacted"
+                        !projected.contains(secret),
+                        "credential escaped http={http}, reference={reference}, kind={kind:?}"
                     );
                     assert!(
-                        properties["<redacted>"]["properties"]["nested"]["enum"][0]
-                            .as_str()
-                            .unwrap()
-                            .contains("<redacted>")
+                        projected.contains("<redacted>"),
+                        "peer must actually echo the received credential"
                     );
+                    if kind == CatalogKind::Tools && *option != Some("e") {
+                        let properties = page.tools[0].input_schema.get("properties").unwrap();
+                        assert!(
+                            properties.get("<redacted>").is_some(),
+                            "nested schema keys must be redacted"
+                        );
+                        for index in 0..2 {
+                            assert!(
+                                properties["<redacted>"]["properties"]["nested"]["enum"][index]
+                                    .as_str()
+                                    .unwrap()
+                                    .contains("<redacted>")
+                            );
+                        }
+                    }
                 }
+                assert_eq!(fixture.manager.diagnostics().loaded, 0);
+                connection.close();
+                assert!(bounded(fixture.host.drain()).await.is_empty());
             }
-            assert_eq!(fixture.manager.diagnostics().loaded, 0);
-            connection.close();
-            assert!(bounded(fixture.host.drain()).await.is_empty());
         }
     }
     server.abort();

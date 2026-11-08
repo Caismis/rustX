@@ -60,7 +60,12 @@ async fn first_request(fixture: &Fixture, session: &SessionSnapshot, expected: &
         .map(|tool| tool["function"]["name"].as_str().unwrap())
         .collect();
     names.sort_unstable();
-    assert_eq!(names, expected);
+    assert_eq!(
+        names,
+        expected,
+        "native capability availability: {:?}",
+        runtime.capability().availability()
+    );
     if expected.contains(&TOOL) {
         assert_eq!(tool_schema(&bodies[0]).as_deref(), Some("string"));
     }

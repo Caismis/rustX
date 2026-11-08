@@ -134,39 +134,45 @@ impl McpServerRuntime {
             }
             cursor = Some(next);
         }
-        // Even a peer echoing its own credentials cannot turn management
-        // observations into credential readback. Recurse through JSON strings
-        // without ever splicing secret bytes into JSON syntax.
-        let mut value = serde_json::to_value(page)
-            .map_err(|_| McpError::Discovery("invalid MCP catalog".into()))?;
-        redact(&mut value, &self.credentials);
-        if !crate::bounded_file::json_fits(&value, 65_536) {
+        // Only peer-owned fields cross the credential boundary. Native DTO
+        // keys, capability flags and kind remain accurate even when a literal
+        // input happens to equal "name", "tools" or a single character.
+        for tool in &mut page.tools {
+            tool.name = self.credentials.redact(&tool.name);
+            tool.description = self.credentials.redact(&tool.description);
+            super::diagnostics::peer_json(&mut tool.input_schema, &self.credentials);
+            if let Some(schema) = &mut tool.output_schema {
+                super::diagnostics::peer_json(schema, &self.credentials);
+            }
+        }
+        for resource in &mut page.resources {
+            resource.uri = self.credentials.redact(&resource.uri);
+            resource.name = self.credentials.redact(&resource.name);
+            redact_optional(&mut resource.description, &self.credentials);
+            redact_optional(&mut resource.mime_type, &self.credentials);
+        }
+        for template in &mut page.templates {
+            template.uri_template = self.credentials.redact(&template.uri_template);
+            template.name = self.credentials.redact(&template.name);
+            redact_optional(&mut template.description, &self.credentials);
+            redact_optional(&mut template.mime_type, &self.credentials);
+        }
+        if !crate::bounded_file::json_fits(&page, 65_536) {
             return Err(McpError::Discovery(
                 "redacted MCP inventory exceeds bounds".into(),
             ));
         }
-        serde_json::from_value(value).map_err(|_| McpError::Discovery("invalid MCP catalog".into()))
+        Ok(page)
     }
 }
-fn redact(value: &mut serde_json::Value, credentials: &crate::credentials::SourceCredentials) {
-    match value {
-        serde_json::Value::String(text) => *text = credentials.redact(text),
-        serde_json::Value::Array(values) => {
-            for value in values {
-                redact(value, credentials);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            let old = std::mem::take(values);
-            for (key, mut value) in old {
-                redact(&mut value, credentials);
-                values.insert(credentials.redact(&key), value);
-            }
-        }
-        _ => {}
+fn redact_optional(
+    value: &mut Option<String>,
+    credentials: &crate::credentials::SourceCredentials,
+) {
+    if let Some(value) = value {
+        *value = credentials.redact(value);
     }
 }
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -180,7 +186,7 @@ mod tests {
         )]));
         credentials.resolve().unwrap();
         let mut value = serde_json::json!({"source-secret-sentinel":{"description":"echo source-secret-sentinel","schema":["source-secret-sentinel"]}});
-        super::redact(&mut value, &credentials);
+        super::super::diagnostics::peer_json(&mut value, &credentials);
         assert!(!value.to_string().contains("source-secret-sentinel"));
         assert!(value.to_string().contains("redacted"));
     }

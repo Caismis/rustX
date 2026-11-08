@@ -115,7 +115,7 @@ impl McpConnection {
         match &mut result.status {
             ToolExecutionStatus::Failed { error }
             | ToolExecutionStatus::OutcomeUnknown { detail: error } => {
-                *error = bound_error(&runtime.credentials.redact(error));
+                *error = bound_error(error);
             }
             _ => {}
         }
@@ -149,8 +149,13 @@ impl McpServerRuntime {
                         translate_resource_error(error, &self.credentials, context, started)
                     }
                     Err(error) => {
-                        self.resource_unknown(&error.to_string(), context, generation, started)
-                            .await
+                        self.resource_unknown(
+                            &super::diagnostics::service_error(&error, &self.credentials),
+                            context,
+                            generation,
+                            started,
+                        )
+                        .await
                     }
                 },
                 McpResponseOutcome::ChannelEnded => {
@@ -175,13 +180,14 @@ impl McpServerRuntime {
     ) -> ToolExecutionResult {
         let detail = self.poisoned_protocol_violation().await.unwrap_or_else(|| {
             format!(
-                "MCP resource request produced no correlated remote response ({}): {error}",
-                self.generation_tag(generation)
+                "MCP resource request produced no correlated remote response ({}): {}",
+                self.generation_tag(generation),
+                error
             )
         });
         mcp_empty_terminal(
             ToolExecutionStatus::OutcomeUnknown {
-                detail: bound_error(&self.credentials.redact(&detail)),
+                detail: bound_error(&detail),
             },
             context,
             started,
@@ -193,13 +199,12 @@ impl McpServerRuntime {
 /// split them. Only protocol error data is sanitized; successful remote JSON
 /// keeps its ordinary data semantics, including keys named `artifactId`.
 fn translate_resource_error(
-    mut error: rmcp::ErrorData,
+    error: rmcp::ErrorData,
     credentials: &crate::credentials::SourceCredentials,
     context: &ToolExecutionContext<'_>,
     started: Instant,
 ) -> ToolExecutionResult {
-    error.message = credentials.redact(&error.message).into();
-    error.data = error.data.map(|data| redact_error_data(data, credentials));
+    let error = super::diagnostics::protocol_error(error, credentials);
     let mut result = failed_mcp(&error.to_string(), context, started);
     let data = error
         .data
@@ -210,33 +215,6 @@ fn translate_resource_error(
         }),
     });
     result
-}
-
-fn redact_error_data(
-    value: serde_json::Value,
-    credentials: &crate::credentials::SourceCredentials,
-) -> serde_json::Value {
-    match value {
-        serde_json::Value::String(value) => credentials.redact(&value).into(),
-        serde_json::Value::Array(values) => serde_json::Value::Array(
-            values
-                .into_iter()
-                .map(|value| redact_error_data(value, credentials))
-                .collect(),
-        ),
-        serde_json::Value::Object(values) => serde_json::Value::Object(
-            values
-                .into_iter()
-                .map(|(key, value)| {
-                    (
-                        credentials.redact(&key),
-                        redact_error_data(value, credentials),
-                    )
-                })
-                .collect(),
-        ),
-        value => value,
-    }
 }
 
 fn cancelled(context: &ToolExecutionContext<'_>, started: Instant) -> ToolExecutionResult {

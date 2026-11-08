@@ -24,10 +24,15 @@ async fn mcp_catalog_redacts_literal_and_reference_http_and_stdio_credentials() 
         .ok()
         .as_deref()
         != Some("catalog-secret-sentinel-533")
+        || std::env::var("RUSTX_CATALOG_BEARER_REGRESSION_KEY")
+            .ok()
+            .as_deref()
+            != Some("Bearer catalog-secret-sentinel-533")
     {
         let child = tokio::process::Command::new(std::env::current_exe().unwrap())
             .args(fixture::fixture_spawn_args("boundary_suites::app_server_environment::mcp_catalog_redacts_literal_and_reference_http_and_stdio_credentials"))
             .env("RUSTX_CATALOG_REGRESSION_KEY", "catalog-secret-sentinel-533")
+            .env("RUSTX_CATALOG_BEARER_REGRESSION_KEY", "Bearer catalog-secret-sentinel-533")
             .kill_on_drop(true).output().await.unwrap();
         assert!(
             child.status.success(),
