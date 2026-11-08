@@ -372,7 +372,9 @@ impl McpServerBinding {
                     values.push(crate::model::catalog::ResolvedCredential::new(value));
                     // The scheme is framing; a peer authenticates with the
                     // token and may echo it without the complete field value.
-                    if name.eq_ignore_ascii_case(http::header::AUTHORIZATION.as_str()) {
+                    if name.eq_ignore_ascii_case(http::header::AUTHORIZATION.as_str())
+                        || name.eq_ignore_ascii_case(http::header::PROXY_AUTHORIZATION.as_str())
+                    {
                         let mut parts = value.split_ascii_whitespace();
                         if parts
                             .next()

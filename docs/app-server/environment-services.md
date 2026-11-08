@@ -243,8 +243,9 @@ are never labeled complete. Tool, resource and template descriptions are
 credential-redacted, and business invocation is unavailable through this API.
 The native connection owner includes every accepted literal environment/header
 value and every resolved sensitive reference in one private redaction set.
-Authorization Bearer inputs contribute both the complete header value and the
-token component, for literal and referenced headers alike. Redaction applies to
+Authorization and Proxy-Authorization Bearer inputs contribute both the complete
+header value and the token component, for literal and referenced headers alike.
+Redaction applies to
 typed peer-owned catalog fields and arbitrary schema JSON keys and strings.
 Native envelope keys, catalog kinds, capabilities, error codes, connection
 generations and counts retain their original values. The final redacted catalog

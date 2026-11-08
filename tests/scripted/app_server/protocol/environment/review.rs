@@ -370,7 +370,13 @@ pub(crate) async fn catalog_credentials() {
             .unwrap();
     });
     let secret = "catalog-secret-sentinel-533";
-    for (http, bearer) in [(true, false), (true, true), (false, false)] {
+    for (header, bearer) in [
+        (Some("Authorization"), false),
+        (Some("Authorization"), true),
+        (Some("pRoXy-AuThOrIzAtIoN"), true),
+        (None, false),
+    ] {
+        let http = header.is_some();
         for reference in [false, true] {
             let options: &[Option<&str>] = if bearer {
                 &[None, Some("name"), Some("tools"), Some("e"), Some("1")]
@@ -380,16 +386,16 @@ pub(crate) async fn catalog_credentials() {
             for option in options {
                 let fixture = Fixture::with_session_count(None, 0).await;
                 let authorization = if bearer {
-                    format!("Bearer {secret}")
+                    format!("bEaReR {secret}")
                 } else {
                     secret.to_owned()
                 };
-                let transport = if http {
+                let transport = if let Some(header) = header {
                     let extra = option
                         .map(|value| format!(", \"X-Option\" = {value:?}"))
                         .unwrap_or_default();
                     let mut transport = format!(
-                        "url = {endpoint:?}\n{} = {{ Authorization = {:?}{} }}\n",
+                        "url = {endpoint:?}\n{} = {{ {header:?} = {:?}{} }}\n",
                         if reference {
                             "sensitive_headers"
                         } else {
@@ -466,7 +472,7 @@ pub(crate) async fn catalog_credentials() {
                     assert_eq!(
                         result.outcome,
                         crate::local_runtime::mcp_probe::McpProbeOutcome::Reachable,
-                        "http={http}, bearer={bearer}, reference={reference}, option={option:?}, kind={kind:?}"
+                        "header={header:?}, bearer={bearer}, reference={reference}, option={option:?}, kind={kind:?}"
                     );
                     let page = result.page.expect("real peer catalog");
                     assert_eq!(page.kind, kind, "native catalog kind is not peer text");

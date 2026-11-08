@@ -36,7 +36,7 @@ These exclusions do not waive required in-scope behavior.
 | Real command/PTY/filesystem/Skills/MCP protocol boundaries | 21 passed, including literal/reference HTTP/stdio credential echo, ready-gated PTY signals and missing-status settlement, atomic replacement deferred identity checks, unread-retirement cancellation, post-cap output termination, descriptor-bound watch ABA, canonical PTY EOF, PTY descriptor isolation, Host drain, native cleanup failure and instance-capacity cases; macOS adds its native child/capacity boundary in FULL CI |
 | Native file fault/race/CAS tests | 6 passed in the full run |
 | Rust formatting and all-target/all-feature Clippy (`-D warnings`) | Passed |
-| Complete local Rust all-target/all-feature regression | Final typed-boundary source: 6061 passed / zero failed / 20 existing ignored across 22 targets. Earlier 6036-test and focused 207-test results below remain historical. The final-head FULL run must validate the platform matrix. |
+| Complete local Rust all-target/all-feature regression | Typed-boundary source `cd9a792f4`: 6061 passed / zero failed / 20 existing ignored across 22 targets. Subsequent Proxy-Authorization repair: 153 MCP tests and all 21 environment boundaries passed. Earlier 6036-test and focused 207-test results below remain historical. The final-head FULL run must validate the platform/target matrix. |
 | CI lane coverage | Passed; Linux FULL and FAST selectors cover their required tests |
 | Generated protocol/schema/fixtures and existing client typechecks | Generated-artifact drift check and all four package typechecks passed |
 | TUI, dev and Web deterministic suites | dev: 43 passed; TUI: 1349 passed / 1 native skip; Web: 4204 passed / 4 existing skips |
@@ -618,3 +618,32 @@ native bounded-output and physical-settlement tests. Observed resource return
 is a cardinality fact, not a general workload/capacity guarantee. These captures
 supplement the local checks above; final-head FULL CI is recorded separately in
 the PR so historical evidence is not relabeled as a later CI verdict.
+
+### Proxy authentication credential follow-up
+
+External review of `93dae00f6` accepted the Authorization, typed catalog,
+generation attribution, diagnostic and command-output repairs, then identified
+one further accepted standard header: Proxy-Authorization retained its complete
+value but omitted the Bearer token component. The same native collector now
+handles both standard authentication fields, case-insensitively, for literal
+and resolved reference inputs. Full values and tokens both enter the existing
+private redaction set.
+
+The real HTTP peer obtains either header from the actual request and independently
+extracts its Bearer token. The existing matrix now performs 72 catalog calls
+(66 HTTP, six stdio), including 30 Proxy-Authorization calls, literal/reference
+inputs, mixed-case field/scheme spelling, full-value/token echo in all three
+catalog kinds and nested schema keys/values, and ordinary `name`, `tools`, `e`
+and `1` transport values. Native structure, zero loaded sessions and final host
+drain assertions remain. Independent read-only review found no remaining P1/P2
+or assertion weakening. Earlier captures and #1779 identify their own historical
+sources; this repair requires new source-identified evidence and exact-head FULL
+CI before completion.
+
+Local follow-up verification passed all 153 MCP unit tests and all 21 real
+environment boundaries, including the expanded 72-call matrix, with zero
+failures or ignored tests. Strict all-target/all-feature Clippy, formatting,
+whitespace, all-feature binary build and authenticated standalone Node example
+checks passed. The earlier 6,061-test complete local run identifies
+the preceding typed-boundary source; the new final-head FULL run must validate
+the complete target/platform matrix after this small collector extension.

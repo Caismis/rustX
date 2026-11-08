@@ -9,7 +9,7 @@ use rmcp::{RoleServer, ServerHandler};
 pub const ECHO_ENV: &str = "RUSTX_FIXTURE_CREDENTIAL_ECHO";
 
 /// `Some` echoes a received process environment value; `None` echoes the
-/// Authorization header from the real HTTP request context.
+/// Authorization or Proxy-Authorization header from the real HTTP request context.
 #[derive(Clone)]
 pub struct CredentialEcho(pub Option<String>);
 
@@ -22,11 +22,10 @@ impl CredentialEcho {
             .0
             .clone()
             .or_else(|| {
-                context
-                    .extensions
-                    .get::<http::request::Parts>()?
-                    .headers
-                    .get(http::header::AUTHORIZATION)?
+                let headers = &context.extensions.get::<http::request::Parts>()?.headers;
+                headers
+                    .get(http::header::AUTHORIZATION)
+                    .or_else(|| headers.get(http::header::PROXY_AUTHORIZATION))?
                     .to_str()
                     .ok()
                     .map(str::to_owned)
@@ -34,11 +33,16 @@ impl CredentialEcho {
             .ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("credential not received by peer", None)
             })?;
-        let token = credential
-            .strip_prefix("Bearer ")
-            .unwrap_or(&credential)
-            .trim_start()
-            .to_owned();
+        let mut parts = credential.split_ascii_whitespace();
+        let token = if parts
+            .next()
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("Bearer"))
+        {
+            parts.next().unwrap_or(&credential)
+        } else {
+            &credential
+        }
+        .to_owned();
         Ok((credential, token))
     }
 }
