@@ -1,5 +1,9 @@
 # CFG3 configuration
 
+## App Server environment roots (#533)
+
+User/Host `[app_server].environment_roots` grants absolute directories for the ordinary command and filesystem API families. The default empty list grants no roots. Workspace authorship cannot widen process authority. Root removal applies through the existing automatic process-policy application boundary; a replacement inode requires explicit retirement and a new grant. See [environment authority and management](app-server/environment-services.md).
+
 `rustx.toml` owns authored configuration. `.agents` owns resource definitions.
 Defining a resource does not grant the Root Agent permission to use it. Rust
 parses, validates, overlays and resolves these sources; clients present native

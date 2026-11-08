@@ -33,7 +33,9 @@ use crate::skills::package::{SkillDiscoveryOutcome, SkillPackage};
 
 /// One model-visible Skill catalog entry: standard metadata plus the host
 /// location of the primary instructions file.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct SkillCatalogEntry {
     /// The validated standard Skill name.
     pub name: String,

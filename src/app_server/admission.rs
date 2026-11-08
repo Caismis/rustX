@@ -32,7 +32,9 @@ impl RequestLane {
             | Method::SessionRead { .. }
             | Method::SettingsRead { .. }
             | Method::SessionCreate { .. } => Self::Metadata,
-            Method::AuxiliaryCancel { .. }
+            Method::CommandTerminate { .. }
+            | Method::FsUnwatch { .. }
+            | Method::AuxiliaryCancel { .. }
             | Method::AgentObserveCancel { .. }
             | Method::DeliveryCancel { .. }
             | Method::TurnCancel { .. }

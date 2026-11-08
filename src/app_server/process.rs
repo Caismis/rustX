@@ -416,6 +416,7 @@ async fn run(options: Request) -> Result<(), String> {
                 Err(error) => transport_failure = Some(error.to_string()),
             }
         }
+        host.settle_file_observers().await;
         if !failures.is_empty() {
             return Err(format!(
                 "runtime settlement failed: {}",

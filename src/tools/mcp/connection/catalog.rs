@@ -300,7 +300,7 @@ impl McpConnection {
             // A mismatch revokes this frozen invocation, not the live observation.
             return Err(McpError::Discovery(format!(
                 "MCP tool '{}' differs from the current live catalog; the frozen invocation cannot dispatch",
-                expected.name
+                transport.runtime().peer_diagnostic(&expected.name)
             )));
         }
         #[cfg(test)]

@@ -11,7 +11,7 @@ import {tmpdir,arch,cpus} from 'node:os';
 import {join,resolve} from 'node:path';
 import {once} from 'node:events';
 import {createInterface} from 'node:readline';
-import {createServer,connect,type Socket} from 'node:net';
+import {counters,slowProxy} from './process.mts';
 import {AppServerHost} from '../../tui/src/app-server/host.ts';
 import type {AppServerSession} from '../../tui/src/app-server/session.ts';
 import {ProviderEmulator} from '../../tui/test/support/provider-emulator.ts';
@@ -19,26 +19,6 @@ const binary=resolve(process.env.RUSTX_BINARY??'target/debug/rustx'),turns=20;
 assert.equal(process.platform,'linux','This measurement reads Linux /proc process counters.');
 assert.ok(existsSync(binary),'Build the actual binary first.');
 const ticksPerSecond=Number(execFileSync('getconf',['CLK_TCK'],{encoding:'utf8'}).trim());
-function counters(pid:number) {
-  const stat=readFileSync(`/proc/${pid}/stat`,'utf8');
-  const fields=stat.slice(stat.lastIndexOf(')')+2).trim().split(/\s+/);
-  const io=Object.fromEntries(readFileSync(`/proc/${pid}/io`,'utf8').trim().split('\n').map(line=>{const[k,v]=line.split(':');return[k,Number(v.trim())];}));
-  const status=readFileSync(`/proc/${pid}/status`,'utf8');
-  return {cpuTicks:Number(fields[11])+Number(fields[12]),writeCalls:io.syscw,writtenBytes:io.write_bytes,writtenCharacters:io.wchar,
-    residentKiB:Number(status.match(/^VmRSS:\s+(\d+)/m)![1]),peakResidentKiB:Number(status.match(/^VmHWM:\s+(\d+)/m)![1])};
-}
-async function slowProxy(endpoint:string) {
-  const url=new URL(endpoint),links:Array<{client:Socket;server:Socket}>=[];
-  const listener=createServer(client=>{
-    const server=connect(Number(url.port),url.hostname);client.pipe(server);server.pipe(client);
-    client.on('error',()=>server.destroy());server.on('error',()=>client.destroy());
-    client.on('close',()=>server.destroy());server.on('close',()=>client.destroy());links.push({client,server});
-  });
-  listener.listen(0,'127.0.0.1');await once(listener,'listening');
-  const address=listener.address();assert.ok(address&&typeof address==='object');
-  return {endpoint:`ws://127.0.0.1:${address.port}/`,pause:()=>{for(const link of links){link.server.unpipe(link.client);link.server.pause();}},
-    resume:()=>{for(const link of links){link.server.pipe(link.client);link.server.resume();}},close:async()=>{for(const link of links){link.client.destroy();link.server.destroy();}await new Promise<void>(resolve=>listener.close(()=>resolve()));}};
-}
 function settled(session:AppServerSession,previousTurnId:string|undefined):Promise<void> {
   const done=()=>session.state.attempt!==undefined&&session.state.attempt.attemptId!==previousTurnId&&session.state.attempt.phase.type==='settled';
   if(done())return Promise.resolve();
@@ -138,7 +118,7 @@ chat_reasoning_replay="omit"
     }
   }
 }
-const sourcePaths=execFileSync('git',['ls-files','-z','src','Cargo.toml','Cargo.lock','protocol/app-server','tui/src/app-server','test-support/fake-provider/src/fake_provider/scenarios/app_server.py','benchmarks/app-server/measure.mts'],{encoding:'utf8'}).split('\0').filter(Boolean).filter(path=>existsSync(path));
+const sourcePaths=execFileSync('git',['ls-files','-z','src','Cargo.toml','Cargo.lock','protocol/app-server','tui/src/app-server','test-support/fake-provider/src/fake_provider/scenarios/app_server.py','benchmarks/app-server/measure.mts','benchmarks/app-server/process.mts'],{encoding:'utf8'}).split('\0').filter(Boolean).filter(path=>existsSync(path));
 const codeHash=createHash('sha256');for(const path of sourcePaths)codeHash.update(path).update('\0').update(readFileSync(path)).update('\0');
 const output=resolve(globalThis.process.argv[2]??'/tmp/rustx-app-server-measurements.json');
 writeFileSync(output,JSON.stringify({revision:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),workingTree:true,measuredSourceSha256:codeHash.digest('hex'),binarySha256:createHash('sha256').update(readFileSync(binary)).digest('hex'),binaryProfile:'debug --all-features',

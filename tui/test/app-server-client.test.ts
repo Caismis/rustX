@@ -112,7 +112,7 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 74);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 75);
     assert.equal(params.protocol_version, APP_SERVER_PROTOCOL_VERSION);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
@@ -141,7 +141,7 @@ describe("initialization", () => {
     assert.ok(transport.closed, "failed initialization releases its physical transport");
   });
 
-  it("refuses a v56 server before using the v74 protocol contract", async () => {
+  it("refuses a v56 server before using the v75 protocol contract", async () => {
     const transport = new FakeTransport();
     const pending = AppServerClient.initialize({ transport });
     const [request] = await transport.log.awaitMethod("initialize");
@@ -150,7 +150,7 @@ describe("initialization", () => {
       protocol_version: 56,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 56, this client speaks 74/);
+    await assert.rejects(pending, /negotiated protocol 56, this client speaks 75/);
     assert.equal(transport.log.count("initialize"), 1);
     assert.ok(transport.closed, "invalid initialization does not retain a listener slot");
   });
@@ -1045,7 +1045,7 @@ it('T13 a lost native read-only MCP probe preserves connection-failure classific
 });
 
 it("derives parameter-sensitive Goal reads and lanes from the one shared method policy", () => {
-  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v74.ts").Request1;
+  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v75.ts").Request1;
   assert.equal(requestEffect(goal("show")), "read");
   assert.equal(requestEffect(goal("mutate")), "side_effecting");
   for (const [method, policy] of Object.entries(METHOD_POLICY)) {
@@ -1073,6 +1073,8 @@ it('the shared method policy has exactly the native admission special lanes', ()
     'session/read': 'metadata',
     'session/settings': 'metadata',
     'thread/start': 'metadata',
+    'command/exec/terminate': 'control',
+    'fs/unwatch': 'control',
     'auxiliary/cancel': 'control',
     'agent/observeCancel': 'control',
     'delivery/cancel': 'control',

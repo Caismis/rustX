@@ -1,7 +1,7 @@
 import {RpcFailure} from '../src/client/errors';
 import {afterEach,expect,it} from 'vitest';
 import {Server,snapshot} from './fixture';
-import type {ThreadStatusEntry} from '../../protocol/app-server/v74';
+import type {ThreadStatusEntry} from '../../protocol/app-server/v75';
 import {ThreadStatusNotifications} from '../../protocol/app-server/thread-status';
 const servers:Server[]=[];
 const server=()=>{const s=new Server();servers.push(s);return s;};

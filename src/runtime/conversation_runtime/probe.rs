@@ -355,6 +355,17 @@ impl ConversationRuntime {
         Arc::downgrade(&self.inner)
     }
 
+    /// Observes admission-worker exit independently of projection-worker exit.
+    #[cfg(test)]
+    pub(crate) fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
+        *self
+            .inner
+            .wake
+            .worker_exit
+            .lock()
+            .expect("worker exit probe lock poisoned") = Some(sender);
+    }
+
     /// Installs one test-only pre-tool policy for the next runtime-created
     /// attempt. Production derives the policy from the admitted effective
     /// `ApprovalMode`; this hook exists solely to exercise the real

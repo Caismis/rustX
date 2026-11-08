@@ -95,7 +95,7 @@ impl McpServerRuntime {
         match &mut result.status {
             ToolExecutionStatus::Failed { error }
             | ToolExecutionStatus::OutcomeUnknown { detail: error } => {
-                *error = self.credentials.redact(error);
+                *error = bound_error(error);
             }
             _ => {}
         }
@@ -265,7 +265,8 @@ impl McpServerRuntime {
         // Whole-payload validation before anything is published: a mixed
         // supported/unsupported request set fails here, never half-way
         // through a prompt.
-        let plan = match mrtr::plan_round(input_required.input_requests.as_ref()) {
+        let plan = match mrtr::plan_round(&self.credentials, input_required.input_requests.as_ref())
+        {
             Ok(plan) => plan,
             Err(error) => return unsupported(&error.diagnostic),
         };
@@ -351,7 +352,7 @@ impl McpServerRuntime {
                 return unsupported(&detail);
             }
         };
-        let input_responses = match plan.responses(&response) {
+        let input_responses = match plan.responses(&self.credentials, &response) {
             Ok(responses) => responses,
             Err(error) => return unsupported(&error),
         };
@@ -640,12 +641,21 @@ impl McpServerRuntime {
             // A JSON-RPC error answering this request id is a correlated
             // remote response: the remote produced a terminal outcome and it
             // is a known failure, not an ambiguity.
-            Err(rmcp::service::ServiceError::McpError(error)) => McpRoundOutcome::terminal(
-                failed_mcp(&bound_error(&error.to_string()), context, started),
-            ),
+            Err(rmcp::service::ServiceError::McpError(error)) => {
+                McpRoundOutcome::terminal(failed_mcp(
+                    &bound_error(
+                        &super::diagnostics::protocol_error(error, &self.credentials).to_string(),
+                    ),
+                    context,
+                    started,
+                ))
+            }
             Err(error) => {
                 if is_transport_loss(&error) && !terminated_local_request {
-                    self.note_transport_loss(&error.to_string());
+                    self.note_transport_loss(&super::diagnostics::service_error(
+                        &error,
+                        &self.credentials,
+                    ));
                 }
                 // The observation tee ends the stream on a confirmed
                 // violation, so a violation surfaced mid-call can land here.
@@ -664,8 +674,9 @@ impl McpServerRuntime {
                     ToolExecutionStatus::OutcomeUnknown {
                         detail: bound_error(&format!(
                             "the dispatched MCP tools/call produced no correlated remote \
-                             response ({}): {error}",
-                            self.generation_tag(generation)
+                             response ({}): {}",
+                            self.generation_tag(generation),
+                            super::diagnostics::service_error(&error, &self.credentials)
                         )),
                     },
                     context,

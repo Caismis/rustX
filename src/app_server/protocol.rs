@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v74 envelope and method vocabulary.
+//! Rust authority for the App Server v75 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 74;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 75;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -116,6 +116,99 @@ pub use crate::local_runtime::session::uploads::UserInputBlock;
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Wire commands are short-lived and bounded by the transport frame.
 pub enum Method {
+    #[serde(rename = "mcp/catalog")]
+    McpCatalog {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::identity::McpServerId,
+        expected_revision: String,
+        kind: crate::tools::mcp::catalog::CatalogKind,
+    },
+    #[serde(rename = "skills/list")]
+    SkillsList {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        offset: usize,
+        limit: usize,
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "skills/read")]
+    SkillsRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        name: String,
+        kind: crate::local_runtime::skill_management::SkillContentKind,
+        offset: u64,
+        max_bytes: usize,
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "command/exec")]
+    CommandExec(super::command::ExecParams),
+    #[serde(rename = "command/exec/write")]
+    CommandWrite(super::command::WriteParams),
+    #[serde(rename = "command/exec/resize")]
+    CommandResize {
+        #[serde(rename = "processId")]
+        process_id: String,
+        size: super::command::TerminalSize,
+    },
+    #[serde(rename = "command/exec/terminate")]
+    CommandTerminate {
+        #[serde(rename = "processId")]
+        process_id: String,
+    },
+    #[serde(rename = "fs/readFile")]
+    FsReadFile {
+        path: String,
+        offset: u64,
+        #[serde(rename = "maxBytes")]
+        max_bytes: usize,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "fs/writeFile")]
+    FsWriteFile {
+        path: String,
+        #[serde(rename = "dataBase64")]
+        data_base64: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "fs/readDirectory")]
+    FsReadDirectory {
+        path: String,
+        offset: usize,
+        limit: usize,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "fs/getMetadata")]
+    FsGetMetadata { path: String },
+    #[serde(rename = "fs/createDirectory")]
+    FsCreateDirectory { path: String, recursive: bool },
+    #[serde(rename = "fs/remove")]
+    FsRemove {
+        path: String,
+        recursive: bool,
+        force: bool,
+    },
+    #[serde(rename = "fs/copy")]
+    FsCopy {
+        #[serde(rename = "sourcePath")]
+        source_path: String,
+        #[serde(rename = "destinationPath")]
+        destination_path: String,
+        recursive: bool,
+    },
+    #[serde(rename = "fs/watch")]
+    FsWatch {
+        #[serde(rename = "watchId")]
+        watch_id: String,
+        path: String,
+    },
+    #[serde(rename = "fs/unwatch")]
+    FsUnwatch {
+        #[serde(rename = "watchId")]
+        watch_id: String,
+    },
+
     #[serde(rename = "thread/read")]
     ThreadRead {
         #[serde(rename = "threadId")]
@@ -1036,7 +1129,13 @@ impl Method {
     pub(crate) const fn may_commit(&self) -> bool {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
-            Self::ThreadRead { .. }
+            Self::McpCatalog { .. }
+            | Self::SkillsList { .. }
+            | Self::SkillsRead { .. }
+            | Self::FsReadFile { .. }
+            | Self::FsReadDirectory { .. }
+            | Self::FsGetMetadata { .. }
+            | Self::ThreadRead { .. }
             | Self::ThreadList { .. }
             | Self::ThreadLoadedList { .. }
             | Self::InboundSubmissionLookup { .. }
@@ -1130,7 +1229,17 @@ impl Method {
             | Self::SettingsValueRead { .. }
             | Self::SessionConfiguration { .. }
             | Self::SessionApplicationValueRead { .. } => false,
-            Self::ThreadName { .. }
+            Self::CommandExec(..)
+            | Self::CommandWrite(..)
+            | Self::CommandResize { .. }
+            | Self::CommandTerminate { .. }
+            | Self::FsWriteFile { .. }
+            | Self::FsCreateDirectory { .. }
+            | Self::FsRemove { .. }
+            | Self::FsCopy { .. }
+            | Self::FsWatch { .. }
+            | Self::FsUnwatch { .. }
+            | Self::ThreadName { .. }
             | Self::ThreadArchive { .. }
             | Self::ThreadUnarchive { .. }
             | Self::AuxiliaryClassify { .. }
@@ -1182,6 +1291,10 @@ impl Method {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    ConnectionClosed,
+    EnvironmentUnauthorized,
+    EnvironmentResourceNotFound,
+    EnvironmentCapacityOrConflict,
     Auxiliary {
         reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
     },
@@ -1440,6 +1553,13 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    Skills { page: crate::local_runtime::skill_management::SkillPage },
+    SkillContent { content: crate::local_runtime::skill_management::SkillContent },
+    CommandExec { result: super::command::ExecResult },
+    EnvironmentAccepted {},
+    FileChunk { chunk: crate::local_runtime::environment::files::FileChunk },
+    FileMetadata { metadata: crate::local_runtime::environment::files::FileMetadata },
+    DirectoryPage { page: crate::local_runtime::environment::files::DirectoryPage },
     Thread { thread: super::thread_status::Thread },
     Threads { data: Vec<super::thread_status::ThreadSummary>, next_offset: Option<usize> },
     LoadedThreads { data: Vec<super::thread_status::ThreadStatusEntry>, next_offset: Option<usize> },
@@ -1757,6 +1877,10 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    #[serde(rename = "command/exec/outputDelta")]
+    CommandOutputDelta(super::command::OutputDelta),
+    #[serde(rename = "fs/changed")]
+    FsChanged(super::filesystem::Changed),
     #[serde(rename = "thread/status/changed")]
     ThreadStatusChanged(super::thread_status::ThreadStatusEntry),
     #[serde(rename = "thread/status/resyncRequired")]

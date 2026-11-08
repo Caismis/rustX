@@ -245,6 +245,7 @@
         },
         "lifecycle": "Accepting",
         "policy": {
+          "environment_roots": [],
           "max_resident_runtimes": 8,
           "max_connections": 32,
           "max_external_attachments": 64,
@@ -286,7 +287,7 @@
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 74,
+      "protocol_version": 75,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -304,7 +305,7 @@
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 74,
+      "protocol_version": 75,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -4526,6 +4527,225 @@
           }
         }
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-0",
+    "method": "command/exec",
+    "params": {
+      "command": [
+        "/usr/bin/printf",
+        "%s",
+        "literal"
+      ],
+      "cwd": "/workspace",
+      "env": {},
+      "processId": "process-fixture",
+      "tty": false,
+      "streamStdin": true,
+      "streamStdoutStderr": true,
+      "outputBytesCap": 65536,
+      "timeoutMs": 60000,
+      "size": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-1",
+    "method": "command/exec/write",
+    "params": {
+      "processId": "process-fixture",
+      "deltaBase64": "AP8=",
+      "closeStdin": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-2",
+    "method": "command/exec/resize",
+    "params": {
+      "processId": "process-fixture",
+      "size": {
+        "rows": 24,
+        "cols": 80
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-3",
+    "method": "command/exec/terminate",
+    "params": {
+      "processId": "process-fixture"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-4",
+    "method": "fs/readFile",
+    "params": {
+      "path": "/workspace/file",
+      "offset": "0",
+      "maxBytes": 65536,
+      "expectedRevision": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-5",
+    "method": "fs/writeFile",
+    "params": {
+      "path": "/workspace/file",
+      "dataBase64": "aGk=",
+      "expectedRevision": "native-revision"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-6",
+    "method": "fs/getMetadata",
+    "params": {
+      "path": "/workspace/file"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-7",
+    "method": "fs/readDirectory",
+    "params": {
+      "path": "/workspace",
+      "offset": 0,
+      "limit": 32,
+      "expectedRevision": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-8",
+    "method": "fs/createDirectory",
+    "params": {
+      "path": "/workspace/new",
+      "recursive": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-9",
+    "method": "fs/copy",
+    "params": {
+      "sourcePath": "/workspace/file",
+      "destinationPath": "/workspace/copy",
+      "recursive": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-10",
+    "method": "fs/remove",
+    "params": {
+      "path": "/workspace/file",
+      "recursive": false,
+      "force": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-11",
+    "method": "fs/watch",
+    "params": {
+      "watchId": "watch-fixture",
+      "path": "/workspace"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-12",
+    "method": "fs/unwatch",
+    "params": {
+      "watchId": "watch-fixture"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-13",
+    "method": "skills/list",
+    "params": {
+      "target": {
+        "kind": "workspace",
+        "directory": "/workspace"
+      },
+      "offset": 0,
+      "limit": 32,
+      "expected_revision": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-14",
+    "method": "skills/read",
+    "params": {
+      "target": {
+        "kind": "workspace",
+        "directory": "/workspace"
+      },
+      "name": "example",
+      "kind": "instructions",
+      "offset": "0",
+      "max_bytes": 65536,
+      "expected_revision": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-15",
+    "method": "mcp/catalog",
+    "params": {
+      "target": {
+        "kind": "workspace",
+        "directory": "/workspace"
+      },
+      "id": "example",
+      "expected_revision": "source-revision",
+      "kind": "resources"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "command-final",
+    "result": {
+      "type": "command_exec",
+      "result": {
+        "exitCode": 0,
+        "status": "completed",
+        "stdoutBase64": "",
+        "stderrBase64": "",
+        "stdoutTruncated": false,
+        "stderrTruncated": false
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "command/exec/outputDelta",
+    "params": {
+      "processId": "process-fixture",
+      "sequence": "9007199254740993",
+      "stream": "stdout",
+      "deltaBase64": "AP8=",
+      "capReached": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "fs/changed",
+    "params": {
+      "watchId": "watch-fixture",
+      "changedPaths": [
+        "/workspace/file"
+      ],
+      "resyncRequired": true,
+      "retired": false
     }
   }
 ]

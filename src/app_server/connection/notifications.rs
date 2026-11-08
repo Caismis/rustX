@@ -109,7 +109,10 @@ impl AppServerConnection {
     /// permit. Re-addressing an admitted source changes nothing it delivers.
     pub(super) async fn observe_repair_source(&self, method: &Method) {
         let directory = match method {
-            Method::SourcesRead { target }
+            Method::McpCatalog { target, .. }
+            | Method::SkillsList { target, .. }
+            | Method::SkillsRead { target, .. }
+            | Method::SourcesRead { target }
             | Method::SourcesWrite { target, .. }
             | Method::ConfigurationReconcile { target }
             | Method::McpProbe { target, .. } => target
@@ -164,7 +167,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v74 notice reaches only a connection that negotiated v74.
+        // A v75 notice reaches only a connection that negotiated v75.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -324,7 +327,14 @@ impl AppServerConnection {
     /// Panics if a connection routing mutex is poisoned.
     pub async fn next_notification(&self) -> Notification {
         loop {
-            let (notification, publication) = self.next_notification_candidate().await;
+            let (notification, publication) = tokio::select! {
+                event = self.service_events.next() => {
+                    if event.fence.as_ref().is_some_and(tokio_util::sync::CancellationToken::is_cancelled) { continue; }
+                    let _ = event.emitted.send(());
+                    return event.notification;
+                },
+                candidate = self.next_notification_candidate() => candidate,
+            };
             if let Some(publication) = publication {
                 let record = crate::app_server::transport::serialize_record(&notification)
                     .expect("bounded native notification");

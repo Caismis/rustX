@@ -83,9 +83,24 @@ pub(crate) struct Outbound {
     association: Option<super::admission::Association>,
     retirement: Option<Arc<Mutex<bool>>>,
     callback: Option<super::callbacks::Publication>,
+    service_emitted: Option<tokio::sync::oneshot::Sender<()>>,
+    service_fence: Option<CancellationToken>,
 }
 
 impl Outbound {
+    fn service(event: super::service_events::Event) -> io::Result<Self> {
+        Ok(Self {
+            record: serialize_record(&event.notification)?,
+            publication: None,
+            registration: None,
+            association: None,
+            retirement: None,
+            callback: None,
+            service_emitted: Some(event.emitted),
+            service_fence: event.fence,
+        })
+    }
+
     fn server_message(message: super::callbacks::Queued) -> io::Result<Self> {
         Ok(Self {
             record: serialize_record(&message.message)?,
@@ -94,6 +109,8 @@ impl Outbound {
             association: None,
             retirement: None,
             callback: message.publication,
+            service_emitted: None,
+            service_fence: None,
         })
     }
     pub(crate) fn notification(
@@ -128,6 +145,8 @@ impl Outbound {
                 association: None,
                 retirement: None,
                 callback: None,
+                service_emitted: None,
+                service_fence: None,
             }),
             Err(error) if error.kind() == io::ErrorKind::FileTooLarge => {
                 let (
@@ -162,6 +181,8 @@ impl Outbound {
                     association: None,
                     retirement: None,
                     callback: None,
+                    service_emitted: None,
+                    service_fence: None,
                 })
             }
             Err(error) => Err(error),
@@ -223,13 +244,19 @@ impl Outbound {
             registration: reply.registration,
             retirement: None,
             callback: None,
+            service_emitted: None,
+            service_fence: None,
         })
     }
 
     pub(super) fn discarded(&self, cx: &std::task::Context<'_>) -> bool {
-        self.callback
+        self.service_fence
             .as_ref()
-            .is_some_and(|callback| callback.discarded(cx))
+            .is_some_and(CancellationToken::is_cancelled)
+            || self
+                .callback
+                .as_ref()
+                .is_some_and(|callback| callback.discarded(cx))
             || self
                 .retirement
                 .as_ref()
@@ -256,6 +283,13 @@ impl Outbound {
         // Carrier teardown and physical acceptance share this finite fence.
         // Pending releases it immediately; a positive acceptance precedes any
         // concurrent teardown, whose caller then finishes the owned record.
+        if self
+            .service_fence
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Poll::Ready(Ok((String::new(), None)));
+        }
         let retirement = self.retirement.clone();
         let retired = retirement
             .as_ref()
@@ -311,6 +345,9 @@ impl Outbound {
             // Stdio record completion is physical work, not another admission
             // lifetime. An ongoing read worker keeps its own reservation clone.
             drop(association.take());
+            if let Some(emitted) = self.service_emitted.take() {
+                let _ = emitted.send(());
+            }
         }
         outcome
     }
@@ -351,6 +388,8 @@ fn enqueue(sender: &mpsc::Sender<Outbound>, value: &impl Serialize) -> io::Resul
             registration: None,
             retirement: None,
             callback: None,
+            service_emitted: None,
+            service_fence: None,
         },
     )
 }
@@ -404,8 +443,11 @@ async fn enqueue_notification(sender: &Outbox, connection: &AppServerConnection)
         .reserve()
         .await
         .map_err(|_| failure("outbound writer closed"))?;
-    let candidate = connection.next_notification_candidate().await;
-    sender.send(permit, Outbound::notification(candidate)?);
+    let outbound = tokio::select! {
+        candidate = connection.next_notification_candidate() => Outbound::notification(candidate)?,
+        event = connection.service_events.next() => Outbound::service(event)?,
+    };
+    sender.send(permit, outbound);
     Ok(())
 }
 
@@ -645,6 +687,7 @@ where
             biased;
             () = shutdown.cancelled() => {
                 outgoing.retire(&retirement, || {
+                    connection.close_environment();
                     if connection.server_draining() {
                         // Semantic owners are supervised separately. Only a
                         // physically accepted record survives carrier retirement.
@@ -659,6 +702,7 @@ where
                 return write.await;
             },
             () = connection.callback_overloaded() => { break failure("slow callback consumer"); },
+            () = connection.service_events.overloaded.cancelled() => { break failure("slow environment consumer"); },
             result = &mut write => return result,
             // Ready protocol replies formerly enqueued in the input arm.
             // Preserve that ordering before considering the next observation.
@@ -1052,5 +1096,55 @@ mod tests {
         std::io::Write::write_all(&mut record, &vec![0; MAX_MESSAGE_BYTES]).unwrap();
         assert!(std::io::Write::write_all(&mut record, &[0]).is_err());
         assert_eq!(record.0.len(), MAX_MESSAGE_BYTES);
+    }
+}
+
+#[cfg(test)]
+mod service_event_tests {
+    use super::*;
+    fn hint() -> crate::app_server::protocol::NotificationMethod {
+        crate::app_server::protocol::NotificationMethod::FsChanged(
+            crate::app_server::filesystem::Changed {
+                watch_id: "same".into(),
+                changed_paths: Vec::new(),
+                resync_required: true,
+                retired: false,
+            },
+        )
+    }
+    #[tokio::test]
+    async fn output_receipt_waits_for_physical_acceptance() {
+        let events = crate::app_server::service_events::Events::default();
+        let mut receipt = events.emit(hint()).unwrap();
+        let mut outbound = Outbound::service(events.next().await).unwrap();
+        assert!(matches!(
+            receipt.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(outbound.poll_hand_off::<()>(|_| Poll::Pending).is_pending());
+        assert!(matches!(
+            receipt.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(outbound.poll_hand_off(|_| Poll::Ready(Ok(()))).is_ready());
+        receipt.await.unwrap();
+    }
+    #[tokio::test]
+    async fn unwatch_discards_queued_old_incarnations_and_queue_is_finite() {
+        let events = crate::app_server::service_events::Events::default();
+        let stop = CancellationToken::new();
+        let receipt = events.emit_fenced(hint(), Some(stop.clone())).unwrap();
+        let mut outbound = Outbound::service(events.next().await).unwrap();
+        stop.cancel();
+        assert!(
+            matches!(outbound.poll_hand_off::<()>(|_|panic!("retired watch must never publish")),Poll::Ready(Ok((record,None))) if record.is_empty())
+        );
+        drop(outbound);
+        assert!(receipt.await.is_err());
+        for _ in 0..32 {
+            events.emit(hint()).unwrap();
+        }
+        assert!(events.emit(hint()).is_err());
+        assert!(events.overloaded.is_cancelled());
     }
 }

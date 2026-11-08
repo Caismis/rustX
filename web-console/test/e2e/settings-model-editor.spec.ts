@@ -80,7 +80,15 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     expect(Math.max(...choices.map(item=>item.width))-Math.min(...choices.map(item=>item.width))).toBeLessThan(1);
     await expectStableScreenshot(appearance, `appearance-${theme.toLowerCase()}-${width}.png`);
     await openSettingsPage(page, 'Models');
-    await settings(page).getByRole('row', {name:provider, exact:true}).click();
+    const providerRow = settings(page).getByRole('row', {name:provider, exact:true});
+    await providerRow.click();
+    await expect(providerRow).toHaveAttribute('aria-selected', 'true');
+    await expect(providerRow).toBeFocused();
+    // Click can reveal a partially clipped row. Capture the strip from its
+    // explicit origin while retaining the selected row and its focus.
+    const providers = settings(page).getByRole('grid', {name:'Providers', exact:true});
+    await providers.evaluate(element => { element.scrollLeft = 0; });
+    await expect(providers).toHaveJSProperty('scrollLeft', 0);
     await expectStableScreenshot(settings(page), `providers-${theme.toLowerCase()}-${width}.png`);
     await settings(page).getByRole('row', {name:model, exact:true}).click();
     const modal = editor(page);

@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v74.ts';
+import type { Request1 } from './v75.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -40,6 +40,22 @@ interface MethodPolicy {
 }
 
 export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.freeze({
+  'command/exec': { effect: 'side_effecting', unbounded: true },
+  'command/exec/write': { effect: 'side_effecting' },
+  'command/exec/resize': { effect: 'connection_local' },
+  'command/exec/terminate': { effect: 'connection_local', lane: 'control' },
+  'fs/readFile': { effect: 'read' },
+  'fs/getMetadata': { effect: 'read' },
+  'fs/readDirectory': { effect: 'read' },
+  'fs/writeFile': { effect: 'side_effecting' },
+  'fs/createDirectory': { effect: 'side_effecting' },
+  'fs/remove': { effect: 'side_effecting' },
+  'fs/copy': { effect: 'side_effecting' },
+  'fs/watch': { effect: 'connection_local' },
+  'fs/unwatch': { effect: 'connection_local', lane: 'control' },
+  'skills/list': { effect: 'read' },
+  'skills/read': { effect: 'read' },
+  'mcp/catalog': { effect: 'read', unbounded: true },
   // Native admission gives only agent/observe the separate observation lane.
   // These historical reads share ordinary capacity with transcript/projections.
   'conversation/changes': { effect: 'read' },

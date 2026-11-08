@@ -22,8 +22,64 @@ impl AppServerConnection {
 
     /// Serve one admitted configuration request.
     #[allow(clippy::too_many_lines)] // One arm per configuration method.
-    pub(super) async fn configuration(&self, method: Method) -> Result<MethodResult, RpcError> {
+    pub(super) async fn configuration(
+        &self,
+        method: Method,
+        request_owner: crate::app_server::host::ServerOperation,
+    ) -> Result<MethodResult, RpcError> {
         match method {
+            Method::McpCatalog {
+                target,
+                id,
+                expected_revision,
+                kind,
+            } => {
+                let result = self
+                    .host
+                    .manager()
+                    .mcp_catalog(target, id, expected_revision, kind, request_owner)
+                    .await
+                    .map_err(source_error)?;
+                Ok(MethodResult::McpProbe { result })
+            }
+            Method::SkillsList {
+                target,
+                offset,
+                limit,
+                expected_revision,
+            } => {
+                let page = self
+                    .host
+                    .manager()
+                    .skill_page(target, offset, limit, expected_revision, request_owner)
+                    .await
+                    .map_err(source_error)?;
+                Ok(MethodResult::Skills { page })
+            }
+            Method::SkillsRead {
+                target,
+                name,
+                kind,
+                offset,
+                max_bytes,
+                expected_revision,
+            } => {
+                let content = self
+                    .host
+                    .manager()
+                    .skill_read(
+                        target,
+                        name,
+                        kind,
+                        offset,
+                        max_bytes,
+                        expected_revision,
+                        request_owner,
+                    )
+                    .await
+                    .map_err(source_error)?;
+                Ok(MethodResult::SkillContent { content })
+            }
             Method::ConfigurationReconcile { target } => {
                 let application = self
                     .host
@@ -155,7 +211,7 @@ impl AppServerConnection {
                 let result = self
                     .host
                     .manager()
-                    .probe_mcp(target, id, expected_revision)
+                    .probe_mcp(target, id, expected_revision, request_owner)
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::McpProbe { result })

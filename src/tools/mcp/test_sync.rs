@@ -65,6 +65,17 @@ impl CloseProbe {
         }
     }
 
+    pub(crate) fn parking_with_failure(diagnostic: &str) -> Self {
+        Self {
+            state: Mutex::new(CloseState {
+                parks: true,
+                failure: Some(diagnostic.to_owned()),
+                ..CloseState::default()
+            }),
+            ..Self::default()
+        }
+    }
+
     /// Whether `close` has been entered on the probed runtime.
     pub(crate) fn was_entered(&self) -> bool {
         self.state.lock().expect("close probe lock").entered

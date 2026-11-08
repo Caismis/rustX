@@ -425,7 +425,7 @@ async fn replacement_capability_removal_updates_existing_catalog_and_refuses_res
     reason = "one transport matrix checks protocol negotiation and all three resource operations"
 )]
 async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
-    if fixture::legacy::serve_if_legacy_fixture_mode().await
+    if fixture::legacy::serve_if_legacy_fixture_mode(fixture::legacy::LEGACY_FIXTURE_REVISION).await
         || fixture::serve_if_fixture_mode(FixtureServer::from_env()).await
     {
         return;
@@ -772,7 +772,188 @@ fn credentials(secret: &str) -> crate::credentials::SourceCredentials {
     credentials
 }
 
+#[tokio::test]
+async fn opaque_http_diagnostics_never_replay_debug_escaped_response_headers() {
+    let secret = "PR533_HTTP_\"CONTENT\\TYPE";
+    let seen = Arc::new(AtomicBool::new(false));
+    let observed = seen.clone();
+    let router = axum::Router::new().fallback(move |headers: http::HeaderMap| {
+        let observed = observed.clone();
+        async move {
+            let credential = headers.get(http::header::AUTHORIZATION).unwrap().clone();
+            assert_eq!(credential.to_str().unwrap(), secret);
+            observed.store(true, Ordering::SeqCst);
+            (
+                [(http::header::CONTENT_TYPE, credential)],
+                "not an MCP response",
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000534");
+    for reference in [false, true] {
+        seen.store(false, Ordering::SeqCst);
+        let mut source_credentials = crate::credentials::SourceCredentials::default();
+        let mut headers = BTreeMap::new();
+        if reference {
+            source_credentials = serde_json::from_value(
+                serde_json::json!({"headers":{"Authorization":"$HTTP_ERROR_KEY"}}),
+            )
+            .unwrap();
+            source_credentials.capture(crate::credentials::CredentialSnapshot::new([(
+                "HTTP_ERROR_KEY".into(),
+                secret.into(),
+            )]));
+        } else {
+            headers.insert("Authorization".into(), secret.into());
+        }
+        let connection = McpConnection::lazy(
+            McpServerId::new("http-error"),
+            McpServerBinding {
+                credentials: source_credentials,
+                transport: McpTransportConfig::StreamableHttp {
+                    endpoint: endpoint.clone(),
+                    headers,
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+            },
+            tools.workspace().clone(),
+            Arc::default(),
+            crate::runtime::CancellationSignal::new(),
+        );
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            connection.discover_catalog(),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            seen.load(Ordering::SeqCst),
+            "the peer must receive the actual credential"
+        );
+        let crate::tools::mcp::McpError::Discovery(detail) = &error else {
+            panic!("the HTTP handshake must fail discovery: {error}");
+        };
+        assert!(
+            !error.to_string().contains("PR533_HTTP_"),
+            "escaped peer header leaked: {error}"
+        );
+        assert!(detail.len() <= 1024);
+        assert!(
+            detail.contains("Transport") && detail.contains("send discover request"),
+            "the native transport category and handshake phase must remain: {detail}"
+        );
+    }
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() {
+    use crate::capabilities::ToolSourceId;
+    use crate::tools::mcp::{
+        McpResourceBinding, McpRuntimeGeneration, McpRuntimeRetirementRegistry,
+    };
+    let (_directory, tools) = runtime("conv_35b88810-b47f-733a-8000-000000000533");
+    let secret = "FINAL_DIAGNOSTIC_\"SENTINEL\\533";
+    let error = rmcp::ErrorData::invalid_params(
+        format!("HTTP533 {secret} {}", "e".repeat(2048)),
+        Some(serde_json::json!({(secret): {"nested":[secret]}})),
+    );
+    let mut peer = HttpPeer::start(FixtureServer {
+        resources_supported: true,
+        call_error: Some(error.clone()),
+        resource_state: fixture::resources::ResourceFixtureState {
+            error: Some(error),
+            ..Default::default()
+        },
+        ..FixtureServer::default()
+    })
+    .await;
+    peer.binding.credentials = credentials(secret);
+    let McpTransportConfig::StreamableHttp { headers, .. } = &mut peer.binding.transport else {
+        unreachable!()
+    };
+    // This short literal also occurs in the redaction marker. Reprocessing a
+    // safe diagnostic must not grow its final status beyond the original cap.
+    headers.insert("X-Short-Value".into(), "e".into());
+    let connection = peer.connect_as(&tools, "bounded").await;
+    let catalog = connection.discover_catalog().await.unwrap();
+    let retirement = McpRuntimeRetirementRegistry::new();
+    let generation = McpRuntimeGeneration::from_connection(
+        McpServerId::new("bounded"),
+        connection.clone(),
+        None,
+        tokio::runtime::Handle::current(),
+        &retirement,
+    );
+    let ordinary = crate::tools::mcp::executor::definitions_owned(
+        &McpServerId::new("bounded"),
+        peer.binding.policy,
+        &generation.binding(),
+        catalog,
+    );
+    let resource = crate::tools::mcp::resource_definitions(BTreeMap::from([(
+        ToolSourceId::Mcp(McpServerId::new("bounded")),
+        McpResourceBinding::new(
+            generation.binding(),
+            crate::tools::types::ToolApprovalPolicy::Never,
+        ),
+    )]));
+    for (entry, arguments) in [
+        (&ordinary[0], serde_json::json!({})),
+        (
+            &resource[2],
+            serde_json::json!({"server":"bounded", "uri":"fixture://error"}),
+        ),
+    ] {
+        let result = run_helper(entry, arguments, &tools).await;
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("correlated peer error must fail: {result:?}")
+        };
+        assert!(
+            error.len() <= 1024,
+            "final diagnostic escaped its existing byte budget: {}",
+            error.len()
+        );
+        assert!(
+            error.contains("HTTP533"),
+            "the correlated peer error must reach the final status"
+        );
+        assert_redacted(&result, secret);
+    }
+    assert_eq!(peer.fixture.resource_state.reads.load(Ordering::SeqCst), 1);
+    assert!(generation.retire_and_close().await.is_none());
+    assert!(retirement.settle_all().await.is_empty());
+    peer.close(&connection).await;
+}
+
 fn assert_redacted(result: &ToolExecutionResult, secret: &str) {
+    fn inspect(value: &serde_json::Value, secret: &str) {
+        match value {
+            serde_json::Value::String(text) => assert!(!text.contains(secret)),
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    inspect(value, secret);
+                }
+            }
+            serde_json::Value::Object(values) => {
+                for (key, value) in values {
+                    assert!(!key.contains(secret));
+                    inspect(value, secret);
+                }
+            }
+            _ => {}
+        }
+    }
+    inspect(&serde_json::to_value(result).unwrap(), secret);
+    let escaped = serde_json::to_string(secret).unwrap();
+    let escaped = &escaped[1..escaped.len() - 1];
     for rendered in [
         serde_json::to_string(result).unwrap(),
         result.model_facing_projection().as_text(),
@@ -780,6 +961,10 @@ fn assert_redacted(result: &ToolExecutionResult, secret: &str) {
         assert!(
             !rendered.contains(secret),
             "credential leaked in tool result"
+        );
+        assert!(
+            !rendered.contains(escaped),
+            "JSON-escaped credential leaked in tool result"
         );
     }
     if let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
@@ -1037,4 +1222,38 @@ fn resource_blob_identity_is_typed_and_remote_artifact_id_metadata_is_ordinary_d
             format!("resource-blob-{index}").into_bytes()
         );
     }
+}
+
+#[tokio::test]
+async fn management_catalog_reads_bounded_pages_without_business_calls() {
+    let peer = HttpPeer::start(FixtureServer {
+        resources_supported: true,
+        tools_empty: true,
+        ..FixtureServer::default()
+    })
+    .await;
+    let (_directory, tools) = runtime("conv_01900000-0000-7000-8000-000000000533");
+    let connection = peer.connect(&tools).await;
+    let transport = connection.acquire().await.unwrap();
+    let page = transport
+        .runtime()
+        .catalog_inventory(crate::tools::mcp::catalog::CatalogKind::Resources)
+        .await
+        .unwrap();
+    assert!(page.capabilities.resources);
+    assert!(!page.resources.is_empty());
+    assert_eq!(peer.fixture.resource_state.lists.load(Ordering::SeqCst), 2);
+    assert_eq!(page.resources.len(), 2);
+    assert_eq!(peer.fixture.resource_state.reads.load(Ordering::SeqCst), 0);
+    let templates = transport
+        .runtime()
+        .catalog_inventory(crate::tools::mcp::catalog::CatalogKind::Templates)
+        .await
+        .unwrap();
+    assert_eq!(templates.templates[0].uri_template, "fixture://{name}");
+    assert_eq!(
+        peer.fixture.resource_state.templates.load(Ordering::SeqCst),
+        2
+    );
+    peer.close(&connection).await;
 }

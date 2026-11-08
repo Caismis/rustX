@@ -24,9 +24,9 @@ use super::outcome::{
 use super::progress::{McpProgressLease, drain_remote_progress, report_remote_progress};
 use super::result::failed_mcp;
 use super::runtime::McpServerRuntime;
+use super::streamable_http;
 #[cfg(test)]
 use super::test_sync;
-use super::{bound_error, streamable_http};
 
 impl McpServerRuntime {
     /// Dispatches **one** physical MCP request under every ownership rule of
@@ -153,14 +153,15 @@ impl McpServerRuntime {
                 // crossed and this is an ordinary failure. The generation
                 // itself is proven unusable.
                 self.note_transport_loss(&format!(
-                    "the MCP service of '{}' is gone: {error}",
-                    self.server_id
+                    "the MCP service of '{}' is gone: {}",
+                    self.server_id,
+                    super::diagnostics::service_error(&error, &self.credentials)
                 ));
                 let detail = format!(
                     "the MCP request was refused before dispatch and never reached the \
                      transport ({}): {}",
                     self.generation_tag(generation),
-                    bound_error(&error.to_string())
+                    super::diagnostics::service_error(&error, &self.credentials)
                 );
                 return McpPhysicalOutcome::Refused {
                     result: Box::new(failed_mcp(&detail, context, started)),
@@ -298,7 +299,10 @@ impl McpServerRuntime {
         // evidence. Later local termination must not explain it away.
         match &response {
             Ok(Err(error)) if is_transport_loss(error) => {
-                self.note_transport_loss(&error.to_string());
+                self.note_transport_loss(&super::diagnostics::service_error(
+                    error,
+                    &self.credentials,
+                ));
             }
             Err(_) => self.note_transport_loss(
                 "the MCP response channel ended without a correlated response",
@@ -484,7 +488,10 @@ impl McpServerRuntime {
                             if let Err(error) = answered.as_ref()
                                 && is_transport_loss(error)
                             {
-                                self.note_transport_loss(&error.to_string());
+                                self.note_transport_loss(&super::diagnostics::service_error(
+                                    error,
+                                    &self.credentials,
+                                ));
                             }
                         }
                         Some(McpResponseOutcome::ChannelEnded) => {
@@ -565,7 +572,7 @@ impl McpServerRuntime {
                 }
                 outcome = &mut cancel => break match outcome {
                     Ok(()) => RemoteCancellation::Sent,
-                    Err(error) => RemoteCancellation::Failed(bound_error(&error.to_string())),
+                    Err(error) => RemoteCancellation::Failed(super::diagnostics::service_error(&error, &self.credentials)),
                 },
                 // The local ownership plane reached its terminal decision
                 // first, so the best-effort remote control send is abandoned

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import type { CheckpointPage, CheckpointReadCut, TraceRecord, TraceToolDefinition } from '../../protocol/app-server/v74';
+import type { CheckpointPage, CheckpointReadCut, TraceRecord, TraceToolDefinition } from '../../protocol/app-server/v75';
 import { completeTools, readRequestPredecessor } from '../src/client/request-system';
 import type { TraceFieldReader } from '../src/client/trace';
 import { traceRecord, requestDetail } from './trace-fixture';

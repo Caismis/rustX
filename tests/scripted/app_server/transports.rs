@@ -550,7 +550,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v74, {}",
+                "rustx.app-server.v75, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()
@@ -963,7 +963,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v74, {}",
+                "rustx.app-server.v75, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()

@@ -293,6 +293,8 @@ impl SessionRuntimeManager {
         resident: &Arc<super::ResidentRuntime>,
     ) -> Option<impl Future<Output = ()> + Send + 'static> {
         let runtime = resident.shutdown_runtime()?;
+        #[cfg(test)]
+        let probe = self.probe(resident.identity.conversation_id());
         let mut changes = runtime.activity_changes();
         let wake = resident.status_wake.clone();
         let resident = Arc::downgrade(resident);
@@ -337,6 +339,8 @@ impl SessionRuntimeManager {
                         // separately so pure RPCs fail promptly and execution
                         // can finish the lock holder. This worker is the retry
                         // wake even when that holder changed no activity fact.
+                        #[cfg(test)]
+                        probe.status_before_recovery.park().await;
                         let Some(recovering) = resident.upgrade() else {
                             return;
                         };

@@ -8048,6 +8048,121 @@
         {
           "type": "object",
           "properties": {
+            "page": {
+              "$ref": "#/$defs/SkillPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "skills"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "content": {
+              "$ref": "#/$defs/SkillContent"
+            },
+            "type": {
+              "type": "string",
+              "const": "skill_content"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "content"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "result": {
+              "$ref": "#/$defs/ExecResult"
+            },
+            "type": {
+              "type": "string",
+              "const": "command_exec"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "environment_accepted"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "chunk": {
+              "$ref": "#/$defs/FileChunk"
+            },
+            "type": {
+              "type": "string",
+              "const": "file_chunk"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "chunk"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "metadata": {
+              "$ref": "#/$defs/FileMetadata"
+            },
+            "type": {
+              "type": "string",
+              "const": "file_metadata"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "metadata"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/DirectoryPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "directory_page"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "thread": {
               "$ref": "#/$defs/Thread"
             },
@@ -10031,6 +10146,777 @@
             "projection"
           ]
         }
+      ]
+    },
+    "SkillPage": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillDescriptor"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SkillDiagnostic"
+          }
+        },
+        "diagnostics_truncated": {
+          "type": "boolean"
+        },
+        "next_offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "data",
+        "diagnostics",
+        "diagnostics_truncated",
+        "revision"
+      ]
+    },
+    "SkillDescriptor": {
+      "type": "object",
+      "properties": {
+        "catalog": {
+          "$ref": "#/$defs/SkillCatalogEntry"
+        },
+        "provenance": {
+          "$ref": "#/$defs/SkillProvenance"
+        },
+        "metadata_revision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "catalog",
+        "provenance",
+        "metadata_revision"
+      ]
+    },
+    "SkillCatalogEntry": {
+      "description": "One model-visible Skill catalog entry: standard metadata plus the host\nlocation of the primary instructions file.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The validated standard Skill name.",
+          "type": "string"
+        },
+        "description": {
+          "description": "The validated standard Skill description.",
+          "type": "string"
+        },
+        "location": {
+          "description": "The canonical absolute host path of the package's `SKILL.md`. The\nmodel passes it to Read, and resolves the Skill's own relative\nreferences against its parent directory.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "location"
+      ]
+    },
+    "SkillProvenance": {
+      "description": "The provenance record of one effective Skill identity.\n\nThis is generation/inspection metadata. It deliberately never enters the\nmodel-facing catalog: a Skill's instructions are not improved by knowing\nwhich root won it.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The effective logical Skill identity.",
+          "type": "string"
+        },
+        "source": {
+          "description": "The source that owns the effective package.",
+          "$ref": "#/$defs/SkillSource"
+        },
+        "location": {
+          "description": "The effective package's `SKILL.md` location.",
+          "type": "string"
+        },
+        "shadowed": {
+          "description": "Valid same-identity packages that lost the merge, in canonical order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ShadowedSkill"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "location",
+        "shadowed"
+      ]
+    },
+    "SkillSource": {
+      "description": "One Skill source authority.\n\nThe declaration order **is** the precedence order: a later variant wins\nthe same logical Skill identity against an earlier one.",
+      "oneOf": [
+        {
+          "description": "`<home>/rustx/.agents/skills`.",
+          "type": "string",
+          "const": "user"
+        },
+        {
+          "description": "`<workspace>/.agents/skills`.",
+          "type": "string",
+          "const": "workspace"
+        }
+      ]
+    },
+    "ShadowedSkill": {
+      "description": "One valid package that a higher-precedence source shadowed.",
+      "type": "object",
+      "properties": {
+        "source": {
+          "description": "The source whose package was shadowed.",
+          "$ref": "#/$defs/SkillSource"
+        },
+        "location": {
+          "description": "The shadowed package's `SKILL.md` location.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "location"
+      ]
+    },
+    "SkillDiagnostic": {
+      "description": "One typed generation-scoped Skill discovery fact.\n\nThe variant declaration order, followed by the field order, **is** the\ncanonical diagnostic order: the derived [`Ord`] is the only sort key, so\nno consumer can observe a filesystem-enumeration-dependent ordering.",
+      "oneOf": [
+        {
+          "description": "A fixed User or Workspace source root does not exist. This is the normal\nstate of a machine without User Skills and is never a failure.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "The source whose root is absent.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "root": {
+              "description": "The resolved root path.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "source_root_missing"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "root"
+          ]
+        },
+        {
+          "description": "A fixed User or Workspace source root exists but cannot be used as a\nSkill collection directory. It contributes no packages. An unreadable\nWorkspace collection also withholds lower User candidates because their\nshadow status cannot be established.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "The source whose root is unusable.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "root": {
+              "description": "The resolved root path.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "source_root_invalid"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "root"
+          ]
+        },
+        {
+          "description": "One fixed User or Workspace collection exceeded its candidate budget.\nEnumeration is bounded before package validation. The collection contributes\nnothing; an over-budget Workspace collection also withholds lower candidates\nwhose shadow status cannot be established.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "The source whose cumulative budget was exhausted.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "roots": {
+              "description": "The fixed collection root, represented in canonical order.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "candidates": {
+              "description": "The source's total candidate count.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "limit": {
+              "description": "The source's cumulative candidate budget.",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "kind": {
+              "type": "string",
+              "const": "source_budget_exceeded"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "roots",
+            "candidates",
+            "limit"
+          ]
+        },
+        {
+          "description": "One candidate package failed Agent Skills validation and is excluded.\nUnrelated valid packages in the same source still publish.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "The source the candidate was found under.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "package": {
+              "description": "The candidate package directory.",
+              "type": "string"
+            },
+            "cause": {
+              "description": "The preserved typed validation cause.",
+              "$ref": "#/$defs/SkillPackageError"
+            },
+            "kind": {
+              "type": "string",
+              "const": "package_invalid"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "package",
+            "cause"
+          ]
+        },
+        {
+          "description": "One candidate canonicalized outside the source root that offered it.\nSources are bounded authorities, so the candidate is excluded rather\nthan silently admitted under the wrong authority.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "The source that offered the candidate.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "package": {
+              "description": "The candidate package directory as offered.",
+              "type": "string"
+            },
+            "root": {
+              "description": "The canonical source root the candidate left.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "package_escapes_source"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "package",
+            "root"
+          ]
+        },
+        {
+          "description": "Two or more distinct packages in the **same** scope resolve to one\nlogical Skill identity. Every conflicting definition is excluded;\ndiscovery never picks a winner by enumeration order.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "The scope that defines the identity more than once.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "name": {
+              "description": "The contested logical Skill identity.",
+              "type": "string"
+            },
+            "packages": {
+              "description": "Every conflicting package root, in canonical order.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "duplicate_identity"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "name",
+            "packages"
+          ]
+        },
+        {
+          "description": "A valid package lost the same logical identity to a valid package\nfrom a higher-precedence source. This is intentional shadowing, not\nan error.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The contested logical Skill identity.",
+              "type": "string"
+            },
+            "effective_source": {
+              "description": "The source that owns the effective package.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "effective_location": {
+              "description": "The effective package's `SKILL.md` location.",
+              "type": "string"
+            },
+            "shadowed_source": {
+              "description": "The source whose package was shadowed.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "shadowed_location": {
+              "description": "The shadowed package's `SKILL.md` location.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "shadowed"
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "effective_source",
+            "effective_location",
+            "shadowed_source",
+            "shadowed_location"
+          ]
+        }
+      ]
+    },
+    "SkillPackageError": {
+      "description": "A parsing/validation failure of **one** Skill package.\n\nEvery variant identifies the responsible candidate. A failure here\nexcludes exactly that candidate and is preserved verbatim inside\n[`SkillDiagnostic::PackageInvalid`]; it never fails discovery, and it\nnever suppresses an unrelated valid package.",
+      "oneOf": [
+        {
+          "description": "The package name violates the Agent Skills naming rules.",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "invalid_name"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "The frontmatter `name` does not match the parent directory name.",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "name_directory_mismatch"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "The candidate directory contains no `SKILL.md`.",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "missing_skill_markdown"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "The `SKILL.md` entry is not an ordinary regular file (or is a\nsymlink).",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "skill_markdown_not_regular_file"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "The `SKILL.md` frontmatter is malformed YAML or violates the\nstandard shape.",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "malformed_frontmatter"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "The standard description is empty or exceeds the length bound.",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "invalid_description"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "The standard `compatibility` field exceeds its length bound.",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "invalid_compatibility"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "The `metadata` field is not a string-to-string map.",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "malformed_metadata"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "A rustX dependency declaration is malformed or unsupported.",
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "invalid_dependency_declaration"
+            }
+          },
+          "required": [
+            "cause",
+            "directory"
+          ]
+        },
+        {
+          "description": "A symlinked package root was found. Internal resources are validated\nby the Tool that actually opens them, never by discovery.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "unsupported_symlink"
+            }
+          },
+          "required": [
+            "cause",
+            "path"
+          ]
+        },
+        {
+          "description": "The canonical package root is not losslessly representable as UTF-8,\nso it cannot be published as a model-visible location.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "unrepresentable_root"
+            }
+          },
+          "required": [
+            "cause",
+            "path"
+          ]
+        },
+        {
+          "description": "A filesystem failure while reading the package.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "cause": {
+              "type": "string",
+              "const": "io"
+            }
+          },
+          "required": [
+            "cause",
+            "path"
+          ]
+        }
+      ]
+    },
+    "SkillContent": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "$ref": "#/$defs/SkillDescriptor"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/SkillContentKind"
+        },
+        "data_base64": {
+          "type": "string"
+        },
+        "next_offset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "skill",
+        "revision",
+        "kind",
+        "data_base64"
+      ]
+    },
+    "SkillContentKind": {
+      "type": "string",
+      "enum": [
+        "instructions",
+        "metadata"
+      ]
+    },
+    "ExecResult": {
+      "type": "object",
+      "properties": {
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "status": {
+          "$ref": "#/$defs/ExecStatus"
+        },
+        "stdoutBase64": {
+          "type": "string"
+        },
+        "stderrBase64": {
+          "type": "string"
+        },
+        "stdoutTruncated": {
+          "type": "boolean"
+        },
+        "stderrTruncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "stdoutBase64",
+        "stderrBase64",
+        "stdoutTruncated",
+        "stderrTruncated"
+      ]
+    },
+    "ExecStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "timedOut",
+        "terminated",
+        "processControlFailed"
+      ]
+    },
+    "FileChunk": {
+      "type": "object",
+      "properties": {
+        "dataBase64": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "nextOffset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "metadata": {
+          "$ref": "#/$defs/FileMetadata"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dataBase64",
+        "offset",
+        "metadata"
+      ]
+    },
+    "FileMetadata": {
+      "type": "object",
+      "properties": {
+        "isDirectory": {
+          "type": "boolean"
+        },
+        "isFile": {
+          "type": "boolean"
+        },
+        "isSymlink": {
+          "type": "boolean"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "identity": {
+          "type": "string"
+        },
+        "modifiedAtMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "isDirectory",
+        "isFile",
+        "isSymlink",
+        "size",
+        "revision",
+        "identity"
+      ]
+    },
+    "DirectoryPage": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DirectoryEntry"
+          }
+        },
+        "nextOffset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entries",
+        "revision"
+      ]
+    },
+    "DirectoryEntry": {
+      "type": "object",
+      "properties": {
+        "fileName": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/FileMetadata"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "fileName",
+        "metadata"
       ]
     },
     "Thread": {
@@ -12498,6 +13384,15 @@
     "AppServerPolicy": {
       "type": "object",
       "properties": {
+        "environment_roots": {
+          "description": "Instance-wide native roots for standalone commands and filesystem RPCs.\nEmpty denies these operations. Only User/Host configuration owns grants.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "default": []
+        },
         "max_resident_runtimes": {
           "type": "integer",
           "format": "uint",
@@ -20082,70 +20977,6 @@
       "description": "A configured MCP source or a canonical Managed Python package.\nNamespace parsing happens only at the authoring boundary; runtime dispatch\nmatches these variants, never display strings.",
       "type": "string"
     },
-    "SkillProvenance": {
-      "description": "The provenance record of one effective Skill identity.\n\nThis is generation/inspection metadata. It deliberately never enters the\nmodel-facing catalog: a Skill's instructions are not improved by knowing\nwhich root won it.",
-      "type": "object",
-      "properties": {
-        "name": {
-          "description": "The effective logical Skill identity.",
-          "type": "string"
-        },
-        "source": {
-          "description": "The source that owns the effective package.",
-          "$ref": "#/$defs/SkillSource"
-        },
-        "location": {
-          "description": "The effective package's `SKILL.md` location.",
-          "type": "string"
-        },
-        "shadowed": {
-          "description": "Valid same-identity packages that lost the merge, in canonical order.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ShadowedSkill"
-          }
-        }
-      },
-      "required": [
-        "name",
-        "source",
-        "location",
-        "shadowed"
-      ]
-    },
-    "SkillSource": {
-      "description": "One Skill source authority.\n\nThe declaration order **is** the precedence order: a later variant wins\nthe same logical Skill identity against an earlier one.",
-      "oneOf": [
-        {
-          "description": "`<home>/rustx/.agents/skills`.",
-          "type": "string",
-          "const": "user"
-        },
-        {
-          "description": "`<workspace>/.agents/skills`.",
-          "type": "string",
-          "const": "workspace"
-        }
-      ]
-    },
-    "ShadowedSkill": {
-      "description": "One valid package that a higher-precedence source shadowed.",
-      "type": "object",
-      "properties": {
-        "source": {
-          "description": "The source whose package was shadowed.",
-          "$ref": "#/$defs/SkillSource"
-        },
-        "location": {
-          "description": "The shadowed package's `SKILL.md` location.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "source",
-        "location"
-      ]
-    },
     "ExtensionInspection": {
       "type": "object",
       "properties": {
@@ -20734,433 +21565,6 @@
           },
           "required": [
             "status"
-          ]
-        }
-      ]
-    },
-    "SkillDiagnostic": {
-      "description": "One typed generation-scoped Skill discovery fact.\n\nThe variant declaration order, followed by the field order, **is** the\ncanonical diagnostic order: the derived [`Ord`] is the only sort key, so\nno consumer can observe a filesystem-enumeration-dependent ordering.",
-      "oneOf": [
-        {
-          "description": "A fixed User or Workspace source root does not exist. This is the normal\nstate of a machine without User Skills and is never a failure.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "description": "The source whose root is absent.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "root": {
-              "description": "The resolved root path.",
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "source_root_missing"
-            }
-          },
-          "required": [
-            "kind",
-            "source",
-            "root"
-          ]
-        },
-        {
-          "description": "A fixed User or Workspace source root exists but cannot be used as a\nSkill collection directory. It contributes no packages. An unreadable\nWorkspace collection also withholds lower User candidates because their\nshadow status cannot be established.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "description": "The source whose root is unusable.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "root": {
-              "description": "The resolved root path.",
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "source_root_invalid"
-            }
-          },
-          "required": [
-            "kind",
-            "source",
-            "root"
-          ]
-        },
-        {
-          "description": "One fixed User or Workspace collection exceeded its candidate budget.\nEnumeration is bounded before package validation. The collection contributes\nnothing; an over-budget Workspace collection also withholds lower candidates\nwhose shadow status cannot be established.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "description": "The source whose cumulative budget was exhausted.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "roots": {
-              "description": "The fixed collection root, represented in canonical order.",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "candidates": {
-              "description": "The source's total candidate count.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "limit": {
-              "description": "The source's cumulative candidate budget.",
-              "type": "integer",
-              "format": "uint",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "kind": {
-              "type": "string",
-              "const": "source_budget_exceeded"
-            }
-          },
-          "required": [
-            "kind",
-            "source",
-            "roots",
-            "candidates",
-            "limit"
-          ]
-        },
-        {
-          "description": "One candidate package failed Agent Skills validation and is excluded.\nUnrelated valid packages in the same source still publish.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "description": "The source the candidate was found under.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "package": {
-              "description": "The candidate package directory.",
-              "type": "string"
-            },
-            "cause": {
-              "description": "The preserved typed validation cause.",
-              "$ref": "#/$defs/SkillPackageError"
-            },
-            "kind": {
-              "type": "string",
-              "const": "package_invalid"
-            }
-          },
-          "required": [
-            "kind",
-            "source",
-            "package",
-            "cause"
-          ]
-        },
-        {
-          "description": "One candidate canonicalized outside the source root that offered it.\nSources are bounded authorities, so the candidate is excluded rather\nthan silently admitted under the wrong authority.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "description": "The source that offered the candidate.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "package": {
-              "description": "The candidate package directory as offered.",
-              "type": "string"
-            },
-            "root": {
-              "description": "The canonical source root the candidate left.",
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "package_escapes_source"
-            }
-          },
-          "required": [
-            "kind",
-            "source",
-            "package",
-            "root"
-          ]
-        },
-        {
-          "description": "Two or more distinct packages in the **same** scope resolve to one\nlogical Skill identity. Every conflicting definition is excluded;\ndiscovery never picks a winner by enumeration order.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "description": "The scope that defines the identity more than once.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "name": {
-              "description": "The contested logical Skill identity.",
-              "type": "string"
-            },
-            "packages": {
-              "description": "Every conflicting package root, in canonical order.",
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "kind": {
-              "type": "string",
-              "const": "duplicate_identity"
-            }
-          },
-          "required": [
-            "kind",
-            "source",
-            "name",
-            "packages"
-          ]
-        },
-        {
-          "description": "A valid package lost the same logical identity to a valid package\nfrom a higher-precedence source. This is intentional shadowing, not\nan error.",
-          "type": "object",
-          "properties": {
-            "name": {
-              "description": "The contested logical Skill identity.",
-              "type": "string"
-            },
-            "effective_source": {
-              "description": "The source that owns the effective package.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "effective_location": {
-              "description": "The effective package's `SKILL.md` location.",
-              "type": "string"
-            },
-            "shadowed_source": {
-              "description": "The source whose package was shadowed.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "shadowed_location": {
-              "description": "The shadowed package's `SKILL.md` location.",
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "shadowed"
-            }
-          },
-          "required": [
-            "kind",
-            "name",
-            "effective_source",
-            "effective_location",
-            "shadowed_source",
-            "shadowed_location"
-          ]
-        }
-      ]
-    },
-    "SkillPackageError": {
-      "description": "A parsing/validation failure of **one** Skill package.\n\nEvery variant identifies the responsible candidate. A failure here\nexcludes exactly that candidate and is preserved verbatim inside\n[`SkillDiagnostic::PackageInvalid`]; it never fails discovery, and it\nnever suppresses an unrelated valid package.",
-      "oneOf": [
-        {
-          "description": "The package name violates the Agent Skills naming rules.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "invalid_name"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "The frontmatter `name` does not match the parent directory name.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "name_directory_mismatch"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "The candidate directory contains no `SKILL.md`.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "missing_skill_markdown"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "The `SKILL.md` entry is not an ordinary regular file (or is a\nsymlink).",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "skill_markdown_not_regular_file"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "The `SKILL.md` frontmatter is malformed YAML or violates the\nstandard shape.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "malformed_frontmatter"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "The standard description is empty or exceeds the length bound.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "invalid_description"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "The standard `compatibility` field exceeds its length bound.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "invalid_compatibility"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "The `metadata` field is not a string-to-string map.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "malformed_metadata"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "A rustX dependency declaration is malformed or unsupported.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "invalid_dependency_declaration"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
-          "description": "A symlinked package root was found. Internal resources are validated\nby the Tool that actually opens them, never by discovery.",
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "unsupported_symlink"
-            }
-          },
-          "required": [
-            "cause",
-            "path"
-          ]
-        },
-        {
-          "description": "The canonical package root is not losslessly representable as UTF-8,\nso it cannot be published as a model-visible location.",
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "unrepresentable_root"
-            }
-          },
-          "required": [
-            "cause",
-            "path"
-          ]
-        },
-        {
-          "description": "A filesystem failure while reading the package.",
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "io"
-            }
-          },
-          "required": [
-            "cause",
-            "path"
           ]
         }
       ]
@@ -26759,6 +27163,16 @@
         },
         "outcome": {
           "$ref": "#/$defs/McpProbeOutcome"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogPage"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -26776,6 +27190,150 @@
         "timed_out",
         "cancelled",
         "settlement_failed"
+      ]
+    },
+    "CatalogPage": {
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/McpNegotiatedCapabilities"
+        },
+        "kind": {
+          "$ref": "#/$defs/CatalogKind"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CanonicalMcpTool"
+          }
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceDescriptor"
+          }
+        },
+        "templates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TemplateDescriptor"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "capabilities",
+        "kind",
+        "tools",
+        "resources",
+        "templates"
+      ]
+    },
+    "McpNegotiatedCapabilities": {
+      "description": "Capability facts captured by one successful server handshake.",
+      "type": "object",
+      "properties": {
+        "tools": {
+          "description": "The server accepts ordinary MCP tool operations.",
+          "type": "boolean"
+        },
+        "resources": {
+          "description": "The server accepts the standard read-only Resource operations.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "tools",
+        "resources"
+      ]
+    },
+    "CatalogKind": {
+      "type": "string",
+      "enum": [
+        "tools",
+        "resources",
+        "templates"
+      ]
+    },
+    "CanonicalMcpTool": {
+      "description": "A canonicalized MCP tool definition at the adapter boundary.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Remote model-facing name.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Remote description, normalized to a string.",
+          "type": "string"
+        },
+        "input_schema": {
+          "description": "Canonical JSON schema."
+        },
+        "output_schema": {
+          "description": "The declared schema of the tool's `structuredContent`, when it has one."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema"
+      ]
+    },
+    "ResourceDescriptor": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "uri",
+        "name"
+      ]
+    },
+    "TemplateDescriptor": {
+      "type": "object",
+      "properties": {
+        "uri_template": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mime_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "uri_template",
+        "name"
       ]
     },
     "SourceFieldPage": {
@@ -29421,6 +29979,58 @@
         {
           "type": "object",
           "properties": {
+            "kind": {
+              "type": "string",
+              "const": "connection_closed"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "environment_unauthorized"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "environment_resource_not_found"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "environment_capacity_or_conflict"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
             "reason": {
               "$ref": "#/$defs/AuxiliaryFailure"
             },
@@ -30221,6 +30831,38 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "command/exec/outputDelta"
+            },
+            "params": {
+              "$ref": "#/$defs/OutputDelta"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/changed"
+            },
+            "params": {
+              "$ref": "#/$defs/Changed"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "thread/status/changed"
             },
             "params": {
@@ -30583,6 +31225,69 @@
         }
       ]
     },
+    "OutputDelta": {
+      "type": "object",
+      "properties": {
+        "processId": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "stream": {
+          "$ref": "#/$defs/OutputStream"
+        },
+        "deltaBase64": {
+          "type": "string"
+        },
+        "capReached": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "processId",
+        "sequence",
+        "stream",
+        "deltaBase64",
+        "capReached"
+      ]
+    },
+    "OutputStream": {
+      "type": "string",
+      "enum": [
+        "stdout",
+        "stderr"
+      ]
+    },
+    "Changed": {
+      "type": "object",
+      "properties": {
+        "watchId": {
+          "type": "string"
+        },
+        "changedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resyncRequired": {
+          "type": "boolean"
+        },
+        "retired": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "watchId",
+        "changedPaths",
+        "resyncRequired",
+        "retired"
+      ]
+    },
     "AuxiliarySegment": {
       "oneOf": [
         {
@@ -30825,6 +31530,522 @@
       ],
       "unevaluatedProperties": false,
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "mcp/catalog"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "id": {
+                  "$ref": "#/$defs/McpServerId"
+                },
+                "expected_revision": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/CatalogKind"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "id",
+                "expected_revision",
+                "kind"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "skills/list"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "expected_revision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "offset",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "skills/read"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/SkillContentKind"
+                },
+                "offset": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+                },
+                "max_bytes": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "expected_revision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "name",
+                "kind",
+                "offset",
+                "max_bytes"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "command/exec"
+            },
+            "params": {
+              "$ref": "#/$defs/ExecParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "command/exec/write"
+            },
+            "params": {
+              "$ref": "#/$defs/WriteParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "command/exec/resize"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "processId": {
+                  "type": "string"
+                },
+                "size": {
+                  "$ref": "#/$defs/TerminalSize"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "processId",
+                "size"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "command/exec/terminate"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "processId": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "processId"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/readFile"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "offset": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+                },
+                "maxBytes": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "expectedRevision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "offset",
+                "maxBytes"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/writeFile"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "dataBase64": {
+                  "type": "string"
+                },
+                "expectedRevision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "dataBase64"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/readDirectory"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "expectedRevision": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "offset",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/getMetadata"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/createDirectory"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "recursive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "recursive"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/remove"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "recursive": {
+                  "type": "boolean"
+                },
+                "force": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "recursive",
+                "force"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/copy"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "sourcePath": {
+                  "type": "string"
+                },
+                "destinationPath": {
+                  "type": "string"
+                },
+                "recursive": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "sourcePath",
+                "destinationPath",
+                "recursive"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/watch"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "watchId": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "watchId",
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "fs/unwatch"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "watchId": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "watchId"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -35807,6 +37028,127 @@
             "params"
           ]
         }
+      ]
+    },
+    "ExecParams": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default": {}
+        },
+        "processId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tty": {
+          "type": "boolean",
+          "default": false
+        },
+        "streamStdin": {
+          "type": "boolean",
+          "default": false
+        },
+        "streamStdoutStderr": {
+          "type": "boolean",
+          "default": false
+        },
+        "outputBytesCap": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 1,
+          "maximum": 262144
+        },
+        "timeoutMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1,
+          "maximum": 3600000
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "cwd"
+      ]
+    },
+    "TerminalSize": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rows",
+        "cols"
+      ]
+    },
+    "WriteParams": {
+      "type": "object",
+      "properties": {
+        "processId": {
+          "type": "string"
+        },
+        "deltaBase64": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closeStdin": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "processId"
       ]
     },
     "ClassificationSubmission": {

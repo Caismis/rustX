@@ -146,7 +146,10 @@ impl McpServerRuntime {
                         &format!(
                             "the MCP task failed ({}): {}",
                             self.generation_tag(generation),
-                            bound_error(&error.to_string())
+                            bound_error(
+                                &super::diagnostics::protocol_error(*error, &self.credentials)
+                                    .to_string()
+                            )
                         ),
                         context,
                         started,
@@ -226,7 +229,7 @@ impl McpServerRuntime {
         // A self-contradictory snapshot fails *this* invocation and nothing
         // else: the peer answered, so the transport is healthy and unrelated
         // calls on this generation stay healthy too.
-        task.observe(&snapshot)
+        task.observe(&self.credentials, &snapshot)
             .map_err(|violation| TaskDriveFailure::AbandonAddressable(violation.diagnostic))
     }
 
@@ -294,7 +297,7 @@ impl McpServerRuntime {
         // Whole-payload validation before anything is published: a mixed
         // supported/unsupported request set fails here, never half-way
         // through a prompt.
-        let plan = match mrtr::plan_round(Some(requests)) {
+        let plan = match mrtr::plan_round(&self.credentials, Some(requests)) {
             Ok(Some(plan)) => plan,
             // Unreachable: an empty request map is refused as a contradictory
             // snapshot before this function is reached.
@@ -355,7 +358,7 @@ impl McpServerRuntime {
                 return Err(unsupported(&detail));
             }
         };
-        let input_responses = match plan.responses(&response) {
+        let input_responses = match plan.responses(&self.credentials, &response) {
             Ok(responses) => responses,
             Err(error) => return Err(unsupported(&error)),
         };
@@ -443,13 +446,16 @@ impl McpServerRuntime {
                     Err(rmcp::service::ServiceError::McpError(error)) => {
                         McpTaskAnswer::Malformed(format!(
                             "{method} was answered with a protocol error: {}",
-                            bound_error(&error.to_string())
+                            bound_error(
+                                &super::diagnostics::protocol_error(error, &self.credentials)
+                                    .to_string()
+                            )
                         ))
                     }
                     Err(error) => {
                         let detail = format!(
                             "{method} produced no correlated remote response: {}",
-                            bound_error(&error.to_string())
+                            super::diagnostics::service_error(&error, &self.credentials)
                         );
                         if is_transport_loss(&error) && !terminated_local_request {
                             self.note_transport_loss(&detail);
@@ -609,7 +615,7 @@ impl McpServerRuntime {
                 detail: bound_error(&format!(
                     "the MCP tool materialized remote task {} and its outcome could not be \
                      established ({}): {detail}",
-                    bounded_task_id(task_id),
+                    bounded_task_id(&self.credentials.redact(task_id)),
                     self.generation_tag(generation)
                 )),
             },

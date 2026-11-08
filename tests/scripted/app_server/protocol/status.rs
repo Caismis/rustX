@@ -279,6 +279,10 @@ async fn archive_idle_probe_never_holds_registry_while_another_thread_is_observe
         let f = Fixture::with_session_count(None, 2).await;
         let a_id = f.id(0).await;
         let b_id = f.id(1).await;
+        let probe = f.manager.probe(&a_id);
+        // Arm before observer startup so even an initial recovery cannot pass
+        // the gate and become a later unaccounted Coordinator lock contender.
+        probe.status_before_recovery.arm();
         let a = f.load(0).await.unwrap().unwrap();
         let b = f.load(1).await.unwrap().unwrap();
         let connection = AppServerConnection::new(f.host.clone());
@@ -286,15 +290,20 @@ async fn archive_idle_probe_never_holds_registry_while_another_thread_is_observe
         assert_eq!(read(&connection, &a_id).await.status, ThreadStatus::Idle);
         assert_eq!(read(&connection, &b_id).await.status, ThreadStatus::Idle);
 
+        let native = a.inspect_runtime().unwrap();
+        let admission = std::sync::Arc::new(Gate::default());
+        native.install_admission_gate(admission.clone());
+        let release_admission = admission.arm_scoped();
+        native.wake_admission_for_test();
+        super::super::gate_entered(&admission).await;
+        probe.before_shutdown.arm();
         let gate = std::sync::Arc::new(Gate::default());
         let release_native = gate.arm_scoped();
         let holding = gate.clone();
-        let native = a.inspect_runtime().unwrap();
         let held = tokio::task::spawn_blocking(move || {
             native.with_activity_coordinator_lock_for_test(|| holding.enter());
         });
         super::super::gate_entered(&gate).await;
-        let probe = f.manager.probe(&a_id);
         let release_archive = probe.archive_before_idle.arm_scoped();
         let manager = f.manager.clone();
         let id = a_id.clone();
@@ -339,9 +348,17 @@ async fn archive_idle_probe_never_holds_registry_while_another_thread_is_observe
         );
         assert!(!archiving.is_finished());
         assert!(f.provider.request_bodies().is_empty());
+        // The deliberate Unavailable observation wakes a recovery reader.
+        // Keep it and the empty admission pass outside Coordinator while the
+        // first archive claim runs; contention may legitimately refuse a claim.
+        probe.status_before_recovery.entered().await;
         drop(release_native);
         held.await.unwrap();
         drop(release_archive);
+        probe.before_shutdown.entered().await;
+        drop(release_admission);
+        probe.status_before_recovery.release();
+        probe.before_shutdown.release();
         assert!(archiving.await.unwrap().unwrap().archived);
         assert_eq!(read(&connection, &b_id).await.status, ThreadStatus::Idle);
         drop((a, b));

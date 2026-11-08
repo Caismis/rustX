@@ -1,4 +1,4 @@
-import type { WorkflowFileDocument } from '../../protocol/app-server/v74';
+import type { WorkflowFileDocument } from '../../protocol/app-server/v75';
 import type { WorkflowSource } from '../../protocol/app-server/workflow-documents.ts';
 import { exampleSource } from './workflow-fixtures';
 
