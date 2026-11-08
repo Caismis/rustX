@@ -36,7 +36,7 @@ These exclusions do not waive required in-scope behavior.
 | Real command/PTY/filesystem/Skills/MCP protocol boundaries | 21 passed, including literal/reference HTTP/stdio credential echo, ready-gated PTY signals and missing-status settlement, atomic replacement deferred identity checks, unread-retirement cancellation, post-cap output termination, descriptor-bound watch ABA, canonical PTY EOF, PTY descriptor isolation, Host drain, native cleanup failure and instance-capacity cases; macOS adds its native child/capacity boundary in FULL CI |
 | Native file fault/race/CAS tests | 6 passed in the full run |
 | Rust formatting and all-target/all-feature Clippy (`-D warnings`) | Passed |
-| Complete local Rust all-target/all-feature regression | Initial implementation: 6036 passed / 20 existing ignored. Latest native-owner follow-up: all 207 relevant credential, process runner, interactive/Bash supervisor, MCP, native file/probe and environment-boundary tests passed. The final-head FULL run must validate the entire target matrix. |
+| Complete local Rust all-target/all-feature regression | Final typed-boundary source: 6061 passed / zero failed / 20 existing ignored across 22 targets. Earlier 6036-test and focused 207-test results below remain historical. The final-head FULL run must validate the platform matrix. |
 | CI lane coverage | Passed; Linux FULL and FAST selectors cover their required tests |
 | Generated protocol/schema/fixtures and existing client typechecks | Generated-artifact drift check and all four package typechecks passed |
 | TUI, dev and Web deterministic suites | dev: 43 passed; TUI: 1349 passed / 1 native skip; Web: 4204 passed / 4 existing skips |
@@ -44,7 +44,7 @@ These exclusions do not waive required in-scope behavior.
 | Minimal external-client smoke | Real authenticated v75 initialize/server-info passed from outside the repository |
 | Independent code review | Initial/shutdown/watch/EOF/descriptor findings repaired. Subsequent literal-credential, PTY-signal and busy-watch findings, redaction expansion/diagnostic caps, unread-retirement cancellation and actor fairness were independently re-reviewed: no remaining P1/P2 or weakened assertions. |
 | Final-head FULL CI, including macOS and both browser shards | Pending at capture time; required on the final PR head. The PR description tracks its exact SHA, run and verdict. |
-| Performance/resource measurements | Five source-identified baseline/candidate pairs and five native environment captures are retained below. The latest captures identify native-owner source `4903a216b`; every source/binary digest and raw sample count was verified. |
+| Performance/resource measurements | Six source-identified baseline/candidate pairs and six native environment captures are retained below. The latest captures identify typed-boundary source `cd9a792f4`; every source/binary digest and raw sample count was independently verified. |
 
 Native commit points, physical settlement and resource limits are specified in the
 service contract above. Lost responses never authorize command/mutation replay.
@@ -564,3 +564,57 @@ existing exact assertions after animation completion. Independent read-only
 review found no remaining P1/P2 or assertion weakening. Native macOS and the
 complete browser matrix still require a new exact-head FULL CI run; these local
 results do not change the failed verdict of historical run #1778.
+
+### Final typed-boundary source and measurements
+
+The sixth sequential capture pair follows product commit
+`cd9a792f4f44608c8a763b37710d888df9df01d7`, with no concurrent test or compile
+work from this task. The unchanged baseline remains
+`57447d2e825f914e80bbfecc68d373fcab487446`. All executables use the debug
+all-feature build. The raw files retain every sample and the harness's
+`workingTree: true` marker; the relevant working files were independently
+compared with their identified committed Git objects.
+
+| Capture | Measured-source SHA-256 | Binary SHA-256 |
+| --- | --- | --- |
+| [Baseline Turn](baseline-typed-redaction-measurements.json) | `9698a4826d8c1f7f65e9d729b41aaa7ff5ade3b8c5179646c2fe416caa53fc22` | `c2532fa4c9560388e4b67190f8da2555d40dcf0dd15a257746ce3c7ed8f0ac19` |
+| [Candidate Turn](candidate-typed-redaction-measurements.json) | `68b0e0a60c0c5ab12f88d450de239afab9ffa963b03f0e50f9f2d809918b6b83` | `f3a4a50c844e9ff7b73704b55829025657d2eb62fcf4c2ec2552edb0eace5c39` |
+| [Candidate environment](environment-typed-redaction-measurements.json) | `2d7fb8b70c2eb073fbfcdd118ab67317dfb3809d7296f1022f92f3f2b873fc21` | `f3a4a50c844e9ff7b73704b55829025657d2eb62fcf4c2ec2552edb0eace5c39` |
+
+Each Turn mode completed twenty actual settled native Turns, with twenty
+provider requests without Host Tools and forty with Host Tools. Values below
+are baseline / candidate; p50/p95 use the original twenty raw samples.
+
+| Mode | CPU ms | RSS after MiB | Write calls | Kernel written MiB | Latency p50 ms | Latency p95 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| no-host-tools | 7180 / 4870 | 324.4 / 321.1 | 30855 / 30697 | 62.03 / 61.97 | 1438.4 / 150.6 | 4908.2 / 165.7 |
+| host-one-client | 18260 / 17360 | 341.9 / 340.8 | 70647 / 70378 | 142.99 / 142.59 | 725.8 / 552.4 | 999.0 / 590.7 |
+| host-three-clients | 20240 / 23290 | 341.2 / 348.3 | 70925 / 70767 | 143.21 / 143.01 | 672.0 / 557.0 | 1607.8 / 605.3 |
+| host-three-clients-one-paused | 22610 / 21720 | 345.6 / 348.1 | 70693 / 70802 | 143.05 / 143.10 | 655.4 / 559.1 | 717.5 / 796.4 |
+| host-three-resident-sessions | 23630 / 23600 | 359.5 / 358.8 | 60169 / 60120 | 123.12 / 123.19 | 601.1 / 662.0 | 708.6 / 978.9 |
+
+The three-client candidate used more CPU and RSS, while its latency decreased.
+Paused-client p95 and resident-session p50/p95 increased. Baseline no-Host raw
+latency includes an 8834.2 ms maximum and 4908.2 ms p95; both remain in the
+capture. These fixed-order shared-host debug observations do not establish
+causation, statistical significance, zero overhead or production throughput.
+
+All four environment modes completed twenty cycles, with zero Host Tools/model
+requests. All eighty descriptor samples retained their original 19/21 count.
+Four admitted commands and eight watches reached 75/77 descriptors and thirteen
+processes; cleanup returned to 19/21 descriptors and one server process.
+
+| Environment mode | Parent / reaped-child CPU ms | RSS after MiB | Cycle p50 / p95 ms | Write calls | Kernel written MiB | Descriptors before / peak / cleanup |
+| --- | --- | --- | --- | --- | --- | --- |
+| environment-one-client | 490 / 90 | 153.3 | 43.6 / 45.3 | 548 | 0.08 | 19 / 75 / 19 |
+| environment-three-clients | 440 / 90 | 156.7 | 43.9 / 46.3 | 595 | 0.08 | 21 / 77 / 21 |
+| environment-three-sessions | 520 / 80 | 161.5 | 42.3 / 45.8 | 522 | 0.08 | 21 / 77 / 21 |
+| environment-one-idle-paused-client | 480 / 90 | 157.0 | 43.3 / 46.2 | 604 | 0.08 | 21 / 77 / 21 |
+
+Setup/peak work is excluded from cycle CPU/write deltas. Kernel counters do not
+measure physical-device I/O; summed process-tree RSS repeats shared pages. The
+paused idle peer does not prove saturation behavior, which remains covered by
+native bounded-output and physical-settlement tests. Observed resource return
+is a cardinality fact, not a general workload/capacity guarantee. These captures
+supplement the local checks above; final-head FULL CI is recorded separately in
+the PR so historical evidence is not relabeled as a later CI verdict.
