@@ -43,8 +43,8 @@ These exclusions do not waive required in-scope behavior.
 | Browser acceptance | Full local pinned run: 660 passed / 7 expectation timeouts on the shared host. Focused diagnostics reproduced intermittent timing failures; native 34-Turn history preparation passed on untouched base and candidate, and the original browser assertions passed with temporary logging (removed). No assertion, timeout or screenshot baseline was relaxed. Final-head FULL browser acceptance is required in the PR. |
 | Minimal external-client smoke | Real authenticated v75 initialize/server-info passed from outside the repository |
 | Independent code review | Initial/shutdown/watch/EOF/descriptor findings repaired. Subsequent literal-credential, PTY-signal and busy-watch findings, redaction expansion/diagnostic caps, unread-retirement cancellation and actor fairness were independently re-reviewed: no remaining P1/P2 or weakened assertions. |
-| Final-head FULL CI, including macOS and both browser shards | Required on the final PR head; exact SHA, run and verdict are recorded in the PR description |
-| Performance/resource measurements | Historical source-identified baseline/candidate pairs and native environment captures are retained below. The latest native-owner follow-up requires fresh captures identified by its committed source and binary. |
+| Final-head FULL CI, including macOS and both browser shards | Pending at capture time; required on the final PR head. The PR description tracks its exact SHA, run and verdict. |
+| Performance/resource measurements | Five source-identified baseline/candidate pairs and five native environment captures are retained below. The latest captures identify native-owner source `4903a216b`; every source/binary digest and raw sample count was verified. |
 
 Native commit points, physical settlement and resource limits are specified in the
 service contract above. Lost responses never authorize command/mutation replay.
@@ -401,7 +401,68 @@ regressions observe the cap notification before requesting prompt termination.
 All of these repairs remain inside the existing native owners. WebUI/TUI
 presentation, screenshot references, retry policies and timeouts are unchanged.
 Independent read-only review of the implementation and incremental lifecycle
-changes found no remaining P1/P2 issues or weakened assertions. The fresh source
-identity, corresponding measurements and final exact-head FULL verdict must be
-verified after this product-source follow-up; earlier captures above remain
-historical evidence for their explicitly identified sources.
+changes found no remaining P1/P2 issues or weakened assertions. All 207 relevant
+native regression tests passed, as did the strengthened HTTP peer-origin test,
+strict all-target/all-feature Clippy, formatting, production binary build and
+authenticated standalone Node example. Earlier captures above remain historical
+evidence for their explicitly identified sources. At capture time the final-head
+FULL run remains pending; after pushing the final head its exact SHA, run and
+verdict must be tracked in the PR, independently of these local checks.
+
+### Measurements after the native-owner repairs
+
+Product source is `4903a216b93625967b9b7962160ce4e53cb51cb6`. After all local
+compilation and regression work ended, the unchanged harnesses ran baseline,
+candidate, then environment modes sequentially on the same shared host:
+[baseline](baseline-review-measurements.json),
+[candidate](candidate-review-measurements.json) and
+[environment](environment-review-measurements.json). Earlier samples were retained.
+
+The baseline remains prerequisite `57447d2e825f914e80bbfecc68d373fcab487446`
+with binary SHA-256
+`c2532fa4c9560388e4b67190f8da2555d40dcf0dd15a257746ce3c7ed8f0ac19`.
+The candidate binary SHA-256 is
+`9ebcb1ffb4b9ca650bd12c7882ac79cadc51faa2264834e163afa4d348ae976d`;
+Turn/environment measured-source SHA-256 values are respectively
+`f5d8c3f195d91516a8ec7afaa21cecad93cd50115917ba2918dcd3d7c95f8e5c` and
+`a2ac4337104083c68c7aed2d181388851c616645c1fcf2c79a400c0b182077d8`.
+The recorded revisions, source digests and actual binaries were checked against
+the unchanged committed source in each checkout. `workingTree: true` remains the
+harness's fixed capture marker; it does not replace those identities.
+
+Every Turn mode completed twenty actual settled native Turns with twenty model
+requests without Host Tools or forty with Host Tools. Values show
+**baseline / repaired candidate**:
+
+| Mode | CPU ms | RSS after MiB | Write calls | Kernel written MiB | Latency p50 ms | Latency p95 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| no-host-tools | 6950 / 4610 | 326.7 / 318.5 | 30908 / 30542 | 62.14 / 61.92 | 333.5 / 146.5 | 5751.2 / 165.4 |
+| host-one-client | 18290 / 16610 | 340.3 / 337.8 | 70721 / 70623 | 142.95 / 143.08 | 762.5 / 529.3 | 1063.8 / 615.2 |
+| host-three-clients | 23580 / 23490 | 347.5 / 349.8 | 70739 / 70672 | 143.20 / 142.91 | 746.7 / 560.8 | 967.1 / 594.0 |
+| host-three-clients-one-paused | 21650 / 21810 | 346.6 / 347.5 | 70684 / 70776 | 143.06 / 143.05 | 562.8 / 555.5 | 587.5 / 602.0 |
+| host-three-resident-sessions | 23140 / 22730 | 361.3 / 363.2 | 60216 / 60203 | 123.11 / 123.09 | 534.9 / 535.5 | 574.2 / 570.0 |
+
+Regressions remain visible: paused-client CPU increased from 21,650 to 21,810 ms
+and p95 from 587.5 to 602.0 ms. RSS increased in the three-client, paused-client
+and resident-session modes, while other CPU/timing observations moved in both
+directions. The baseline no-Host p95 of 5751.2 ms is another large shared-host
+outlier, retained in full. These debug samples do not establish causation,
+statistical significance, zero overhead or production throughput.
+
+All four environment modes completed twenty cycles, with zero Host Tools/model
+requests. Every one of the eighty descriptor samples retained its original
+19/21 count. Four admitted commands/eight watches reached 75/77 descriptors and
+thirteen OS processes; cleanup returned to 19/21 descriptors and one process.
+
+| Environment mode | Parent / reaped-child CPU ms | RSS after MiB | Cycle p50 / p95 ms | Write calls | Kernel written MiB | Descriptors before / peak / cleanup |
+| --- | --- | --- | --- | --- | --- | --- |
+| environment-one-client | 260 / 50 | 156.1 | 33.0 / 34.7 | 706 | 0.08 | 19 / 75 / 19 |
+| environment-three-clients | 420 / 80 | 157.3 | 41.2 / 43.5 | 678 | 0.08 | 21 / 77 / 21 |
+| environment-three-sessions | 530 / 90 | 161.1 | 42.1 / 44.7 | 583 | 0.08 | 21 / 77 / 21 |
+| environment-one-idle-paused-client | 440 / 90 | 157.3 | 42.0 / 46.6 | 611 | 0.08 | 21 / 77 / 21 |
+
+Setup/peak work is excluded from cycle CPU/write deltas. Kernel counters are not
+physical-device I/O; summed process-tree RSS repeats shared pages. The paused
+idle peer does not prove saturation behavior, which remains covered by native
+bounded-output and physical-settlement regressions. Resource return is an
+observed cardinality fact, not a general workload/capacity guarantee.
