@@ -141,6 +141,38 @@ def openai_responses_streamed_turn() -> Scenario:
     )
 
 
+def responses_chat_responses_switch() -> Scenario:
+    """Keep a mixed-protocol history, including a real tool turn, usable."""
+    return Scenario(
+        "responses_chat_responses_switch",
+        Step(
+            Expect(protocol=OPENAI_RESPONSES, model=RESPONSES_MODEL,
+                   body_contains=(TURN_ONE,)),
+            Stream(Reasoning("Responses plan"), Text("Responses answer"), Finish()),
+        ),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                   body_contains=(TURN_ONE, "Responses answer", TURN_TWO)),
+            Stream(Reasoning("Chat tool plan"),
+                   ToolCall("call-switch-read", "read", f'{{"path":"{NOTE_PATH}"}}'),
+                   Finish("tool_calls")),
+        ),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                   body_contains=("call-switch-read", NOTE_MARKER)),
+            Stream(Reasoning("Chat final plan"), Text("Chat answer"), Finish()),
+        ),
+        Step(
+            Expect(protocol=OPENAI_RESPONSES, model=RESPONSES_MODEL,
+                   body_contains=(TURN_ONE, "Responses plan", "Responses answer",
+                                  TURN_TWO, "Chat tool plan", "call-switch-read",
+                                  NOTE_MARKER, "Chat final plan", "Chat answer", TURN_THREE),
+                   body_excludes=("previous_response_id", "reasoning_content")),
+            Stream(Reasoning("Back on Responses plan"), Text("Back on Responses"), Finish()),
+        ),
+    )
+
+
 def anthropic_streamed_turn() -> Scenario:
     return _text_turn(
         "anthropic_streamed_turn", ANTHROPIC_MESSAGES, ANTHROPIC_MODEL, TURN_ONE
@@ -726,12 +758,16 @@ def image_coverage_growth(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, na
              Stream(Text("coverage reconciled"), Finish("stop"))))
 
 
-def image_coverage_missing_replay() -> Scenario:
-    return Scenario("image_coverage_missing_replay",
+def image_coverage_stored_reasoning() -> Scenario:
+    return Scenario("image_coverage_stored_reasoning",
         Step(Expect(protocol=OPENAI_RESPONSES, model="responses-image", tools_include=("read_image",)),
              Stream(*(ToolCall(f"first-image-{i}", "read_image", '{"path":"{workspace}/sample.png"}') for i in range(16)), Finish("tool_calls"))),
         Step(Expect(protocol=OPENAI_RESPONSES, model="responses-image", body_contains=("image/png",)),
-             Stream(Reasoning("stored reasoning requires unavailable native replay"), ToolCall("seventeenth-image", "read_image", '{"path":"{workspace}/sample.png"}'), Finish("tool_calls"))))
+             Stream(Reasoning("stored response reasoning"), ToolCall("seventeenth-image", "read_image", '{"path":"{workspace}/sample.png"}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_RESPONSES, model="responses-image",
+                    body_contains=("image/png", "Image artifact", "stored response reasoning", "seventeenth-image"),
+                    body_excludes=("previous_response_id",)),
+             Stream(Text("stored reasoning history continued"), Finish())))
 
 
 def image_coverage_overflow_retry() -> Scenario:
@@ -753,8 +789,9 @@ def image_coverage_overflow_retry() -> Scenario:
 
 
 SCENARIOS = {
+    "responses_chat_responses_switch": responses_chat_responses_switch,
     "image_coverage_overflow_retry": image_coverage_overflow_retry,
-    "image_coverage_missing_replay": image_coverage_missing_replay,
+    "image_coverage_stored_reasoning": image_coverage_stored_reasoning,
     "image_coverage_growth": image_coverage_growth,
     "image_coverage_growth_responses": lambda: image_coverage_growth(OPENAI_RESPONSES, "responses-image", "image_coverage_growth_responses"),
     "image_budget_chat": lambda: image_budget_continuation(OPENAI_CHAT_COMPLETIONS, "chat-image", "image_budget_chat"),

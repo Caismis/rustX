@@ -892,6 +892,98 @@ fn body_text(request: &serde_json::Value) -> String {
 // Scenario A — a normal streamed turn, on every supported protocol
 // ---------------------------------------------------------------------------
 
+/// Changing protocols affects request serialization, never accepted history.
+/// Exercise the reported Responses -> Chat Completions -> Responses sequence
+/// through `ModelSet`, durable admission, preflight, tools and real HTTP/SSE.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn responses_chat_responses_switch_preserves_history_and_tool_results() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join(NOTE_PATH), NOTE_MARKER).unwrap();
+    let Some(emulator) =
+        ProviderEmulator::start_with_workspace("responses_chat_responses_switch", Some(&workspace))
+            .await
+    else {
+        return;
+    };
+    let responses = format!("emulator/{RESPONSES_MODEL}");
+    let driver = Driver::start_in(root, &emulator, &Setup::new(&responses)).await;
+
+    for (model, prompt) in [
+        (responses.as_str(), TURN_ONE),
+        ("emulator/chat-model", TURN_TWO),
+        (responses.as_str(), TURN_THREE),
+    ] {
+        let previous_history = driver.canonical_history();
+        driver
+            .model_set(SessionModelConfig::of(ModelRef::parse(model).unwrap()))
+            .await
+            .expect("select protocol for the next attempt");
+        driver.submit(prompt);
+        let (_, outcome) = driver.settle().await;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{model}: {outcome:?}"
+        );
+        assert!(
+            driver.canonical_history().starts_with(&previous_history),
+            "switching does not rewrite accepted reasoning or tool identities"
+        );
+    }
+
+    let requests = emulator.requests().await;
+    assert_eq!(
+        requests.len(),
+        4,
+        "three user turns and one real tool continuation"
+    );
+    let input = requests[3]["body"]["input"].as_array().unwrap();
+    let mut text = Vec::new();
+    for item in input {
+        if item["type"] == "message" && item["role"] == "assistant" {
+            for part in item["content"].as_array().unwrap() {
+                assert_eq!(part["type"], "output_text");
+                text.push(part["text"].as_str().unwrap());
+            }
+        }
+    }
+    assert_eq!(
+        text,
+        [
+            "Responses plan",
+            "Responses answer",
+            "Chat tool plan",
+            "Chat final plan",
+            "Chat answer"
+        ]
+    );
+    assert!(
+        !input.iter().any(|item| item["type"] == "reasoning"),
+        "readable thoughts do not become fabricated native reasoning items"
+    );
+    assert_eq!(
+        input
+            .iter()
+            .filter(|item| item["type"] == "function_call" && item["call_id"] == "call-switch-read")
+            .count(),
+        1
+    );
+    assert_eq!(
+        input
+            .iter()
+            .filter(|item| item["type"] == "function_call_output"
+                && item["call_id"] == "call-switch-read")
+            .count(),
+        1
+    );
+    assert_eq!(
+        driver.committed_assistant_text(),
+        "Responses answerChat answerBack on Responses"
+    );
+    emulator.finish().await;
+}
+
 /// One fixed user input produces exactly one provider request, one canonical
 /// agent commit, and exactly one successful terminal settlement — over each
 /// of the three real provider protocols.
@@ -2614,35 +2706,41 @@ async fn retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_r
 }
 
 #[tokio::test]
-async fn invalidated_stored_reasoning_fails_compatibility_before_any_new_request_start() {
-    let Some((driver, emulator)) =
-        image_coverage_driver("image_coverage_missing_replay", "emulator/responses-image").await
+async fn invalidated_stored_reasoning_replays_readable_history_without_stale_coverage() {
+    let Some((driver, emulator)) = image_coverage_driver(
+        "image_coverage_stored_reasoning",
+        "emulator/responses-image",
+    )
+    .await
     else {
         return;
     };
     driver.submit("Read sixteen images, then one more.");
     let outcome = driver.settle().await.1;
-    let RuntimeClientOutcome::Failed { error, .. } = outcome else {
-        panic!("missing native replay must fail")
-    };
     assert!(
-        format!("{error:?}").contains("native model input compatibility"),
-        "{error:?}"
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
     );
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 3);
+    let body = &requests[2]["body"];
     assert_eq!(
-        emulator.requests().await.len(),
-        2,
-        "failed preflight dispatches no third request"
+        body.get("previous_response_id"),
+        None,
+        "changed coverage retires the stored pointer"
     );
+    let input = body["input"].as_array().unwrap();
+    assert!(!input.iter().any(|item| item["type"] == "reasoning"));
+    assert!(input.iter().any(|item| item["role"] == "assistant"
+        && item["content"][0]
+            == serde_json::json!({"type":"output_text", "text":"stored response reasoning"})));
+    let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
+    assert_eq!(snapshots.len(), 3);
+    assert!(snapshots[1].continuation.is_some());
+    assert!(snapshots[2].continuation.is_none());
     assert_eq!(
-        driver
-            .request_history()
-            .page(None, 32)
-            .unwrap()
-            .snapshots
-            .len(),
-        2,
-        "failed preflight commits no third request start"
+        driver.committed_assistant_text(),
+        "stored reasoning history continued"
     );
     let canonical = driver.canonical_history();
     assert_eq!(
@@ -2657,8 +2755,8 @@ async fn invalidated_stored_reasoning_fails_compatibility_before_any_new_request
             .iter()
             .filter(|m| matches!(m, MessageBlock::Assistant(_)))
             .count(),
-        2,
-        "compatibility failure invents no Assistant output"
+        3,
+        "the fresh request commits one final Assistant output"
     );
     emulator.finish().await;
 }

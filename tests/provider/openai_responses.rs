@@ -112,8 +112,8 @@ async fn plain_text_normalizes() {
 }
 
 /// Fresh requests replay canonical history after a turn or model switch.
-/// Assistant text is output_text even though it is part of the next input;
-/// only the new user prompt is input_text. Stored pointers are not replayed.
+/// Assistant text is `output_text` even though it is part of the next input;
+/// only the new user prompt is `input_text`. Stored pointers are not replayed.
 #[tokio::test]
 async fn canonical_assistant_history_uses_output_text() {
     use rustx::message::types::{AssistantMessageBlock, ReasoningBlock};
@@ -1166,39 +1166,78 @@ async fn http_errors_normalize() {
     }
 }
 
-/// Canonical reasoning text without lossless provider-native state cannot be
-/// reconstructed as an `OpenAI` Responses reasoning item: the request fails
-/// before the network instead of fabricating provider ids, summary structure,
-/// or encrypted content.
+/// Readable history without a native Responses replay unit is assistant text,
+/// as in pi's cross-model conversion. Opaque foreign state and stored response
+/// pointers are not input items, and no reasoning item is fabricated.
 #[tokio::test]
-async fn reasoning_without_provider_state_is_unsupported() {
+async fn reasoning_without_responses_replay_state_is_readable_history() {
+    use rustx::message::types::{AssistantMessageBlock, ReasoningBlock};
+    use rustx::runtime::continuation::AnthropicContinuation;
+    use rustx::runtime::identity::MessageId;
+
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_responses", "plain_text.sse")
     })
     .await;
-    let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi");
-    request.messages.insert(
-        0,
-        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
-            rustx::message::types::AssistantMessageBlock {
-                id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
-                content: vec![AssistantContentBlock::Reasoning(
-                    rustx::message::types::ReasoningBlock {
-                        text: Some("Visible reasoning text.".to_owned()),
-                        provider_state: None,
-                    },
-                )],
-            },
-        )),
-    );
-    let events = collect_events(
-        &adapter(&server),
-        with_storage(request, ResponsesStorageMode::Stored),
-    )
-    .await;
-    assert_eq!(events.len(), 1, "rejected before the network");
-    assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
-    assert_eq!(server.attempt_count(), 0);
+    for (attempt, (text, provider_state)) in [
+        (Some("Visible reasoning text."), None),
+        (
+            Some("Visible reasoning text."),
+            Some(ProviderContinuationState::Anthropic(AnthropicContinuation {
+                opaque: serde_json::json!({"type":"thinking", "thinking":"Visible reasoning text.", "signature":"foreign-signature"}),
+            })),
+        ),
+        (
+            Some("Visible reasoning text."),
+            Some(ProviderContinuationState::OpenAiResponses(
+                OpenAiResponsesContinuation::Stored {
+                    previous_response_id: "resp_old".into(),
+                },
+            )),
+        ),
+        (
+            None,
+            Some(ProviderContinuationState::Anthropic(AnthropicContinuation {
+                opaque: serde_json::json!({"type":"redacted_thinking", "data":"foreign-encrypted-state"}),
+            })),
+        ),
+        (Some(" \n\t"), None),
+        (None, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi");
+        request.messages.insert(
+            0,
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("msg-reasoning"),
+                content: vec![
+                    AssistantContentBlock::Reasoning(ReasoningBlock {
+                        text: text.map(str::to_owned),
+                        provider_state,
+                    }),
+                    AssistantContentBlock::Text(TextBlock { text: "Previous answer".into() }),
+                ],
+            }).into(),
+        );
+        let events = collect_events(&adapter(&server), request).await;
+        assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })), "{events:?}");
+        let body: serde_json::Value = serde_json::from_str(&server.request_body(attempt)).unwrap();
+        let input = body["input"].as_array().unwrap();
+        assert_eq!(input.len(), 2, "one assistant and one user item");
+        assert!(input.iter().all(|item| item["type"] == "message"));
+        let mut expected = Vec::new();
+        if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+            expected.push(serde_json::json!({"type":"output_text", "text":text}));
+        }
+        expected.push(serde_json::json!({"type":"output_text", "text":"Previous answer"}));
+        assert_eq!(input[0]["role"], "assistant");
+        assert_eq!(input[0]["content"], serde_json::json!(expected));
+        assert_eq!(input[1]["content"][0]["type"], "input_text");
+        assert!(body.get("previous_response_id").is_none());
+    }
+    assert_eq!(server.attempt_count(), 6);
 }
 
 /// Reasoning with preserved provider-native stateless items replays those

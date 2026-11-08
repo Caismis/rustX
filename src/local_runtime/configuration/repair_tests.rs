@@ -45,7 +45,7 @@ fn saving_a_provider_before_its_first_model_is_valid_editable_configuration() {
     let mutation = serde_json::from_value(serde_json::json!({
         "kind": "config", "mutation": { "unit": "model", "id": "first/one", "authored": {
             "provider": "first", "id": "one",
-            "context_window": 128000, "max_output_tokens": 8192,
+            "context_window": 128_000, "max_output_tokens": 8192,
             "capabilities": { "input_modalities": ["text"], "output_modalities": ["text"], "json_schema_output": false }
         }}
     })).unwrap();

@@ -709,10 +709,11 @@ pub enum AssistantContentBlock {
 
 /// Model reasoning content.
 ///
-/// Reasoning text is preserved for diagnostics, but reasoning/continuation
-/// state is never flattened into plain text: provider-specific opaque state
-/// survives on the [`ProviderContinuationState`] boundary for later
-/// continuation.
+/// Readable reasoning stays separate from provider-specific opaque state.
+/// Adapters may render the readable text as ordinary assistant history when
+/// the target protocol has no native replay representation. Opaque state is
+/// never flattened: it survives on the [`ProviderContinuationState`] boundary
+/// for native continuation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ReasoningBlock {
     /// The reasoning text, when the provider exposed it.

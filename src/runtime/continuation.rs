@@ -1,6 +1,6 @@
 //! Provider continuation / reasoning state boundary.
 //!
-//! Reasoning and continuation state is never flattened into plain text: the
+//! Opaque reasoning and continuation state is never flattened into plain text: the
 //! canonical layer preserves the provider-specific opaque state a later
 //! adapter needs to continue a generation. Provider SDK-specific Rust types
 //! are forbidden on this boundary; it holds rustX-owned serializable data

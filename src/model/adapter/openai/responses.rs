@@ -1536,32 +1536,21 @@ fn translate_assistant_inputs(
                 }));
             }
             AssistantContentBlock::Reasoning(reasoning) => {
-                // Canonical readable reasoning text is not sufficient evidence
-                // to reconstruct a provider-native reasoning item: provider
-                // ids, summary structure, and encrypted content cannot be
-                // fabricated. Only lossless preserved provider-native state
-                // is replayed; anything else fails explicitly instead of
-                // degrading into a fabricated summary item.
-                match &reasoning.provider_state {
-                    // Stored continuation adds a state-only canonical block even
-                    // when the response contains no reasoning. On a fresh request
-                    // (including a model switch), that pointer is not input content;
-                    // the surrounding canonical text/calls/results are replayed.
-                    Some(ProviderContinuationState::OpenAiResponses(
-                        OpenAiResponsesContinuation::Stored { .. },
-                    )) if reasoning.text.as_deref().is_none_or(str::is_empty) => {}
-                    Some(ProviderContinuationState::OpenAiResponses(
-                        OpenAiResponsesContinuation::Stateless { items: preserved },
-                    )) => {
-                        items.extend(preserved.iter().cloned());
-                    }
-                    _ => {
-                        return Err(unsupported(
-                            "canonical reasoning text alone is not sufficient to reconstruct \
-                             an OpenAI Responses reasoning item; preserved provider-native \
-                             reasoning state is required for replay",
-                        ));
-                    }
+                // Complete native Responses output was validated and returned
+                // above. Other history (Chat reasoning, foreign thinking, or
+                // summaries from stored responses) has no native replay unit.
+                // Like pi's cross-model conversion, carry its readable text as
+                // ordinary assistant output. Never invent a reasoning item or
+                // serialize opaque foreign state / stored response pointers.
+                if let Some(text) = reasoning
+                    .text
+                    .as_deref()
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    message_content.push(serde_json::json!({
+                        "type": "output_text",
+                        "text": text,
+                    }));
                 }
             }
             AssistantContentBlock::ToolCall(call) => {

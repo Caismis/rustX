@@ -457,6 +457,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One native/readable replay matrix shares coverage assertions.
     fn reconciled_coverage_replays_only_complete_native_units() {
         use crate::message::types::{
             AssistantContentBlock, AssistantMessageBlock, MessageBlock, ReasoningBlock,
@@ -478,8 +479,8 @@ mod tests {
                 ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
                     previous_response_id: "accepted-response".into(),
                 }),
-                Some("opaque reasoning unavailable"),
-                false,
+                Some("readable stored reasoning"),
+                true,
             ),
             (
                 ModelProtocol::OpenAiResponses,
@@ -492,6 +493,18 @@ mod tests {
                 ),
                 None,
                 true,
+            ),
+            (
+                ModelProtocol::OpenAiResponses,
+                ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stateless {
+                        items: vec![
+                            serde_json::json!({"type":"reasoning", "id":"rs-incomplete", "summary":[]}),
+                        ],
+                    },
+                ),
+                None,
+                false,
             ),
             (
                 ModelProtocol::AnthropicMessages,
@@ -545,8 +558,11 @@ mod tests {
                 super::validate_prepared_request(&input).unwrap();
             } else {
                 let error = super::validate_prepared_request(&input).unwrap_err();
+                assert_eq!(error.kind, crate::model::ModelErrorKind::Unsupported);
                 assert!(
-                    error.message.contains("preserved provider-native"),
+                    error
+                        .message
+                        .contains("complete supported native replay unit"),
                     "{error:?}"
                 );
             }

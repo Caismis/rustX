@@ -213,6 +213,14 @@ in order and skips opaque blocks that have no Chat representation. These rules
 do not enable thinking or synthesize reasoning request parameters. Profiles
 continue to own the exact provider parameters that control generation.
 
+Switching from Chat Completions back to Responses keeps the conversation's
+answers and tool calls/results. Readable reasoning without a native Responses
+replay unit is sent as ordinary assistant history (`output_text`), following
+pi's cross-model conversion. Foreign opaque state and inactive stored-response
+pointers are not sent. Complete stateless Responses output, including encrypted
+reasoning, remains a validated native replay unit. These wire conversions
+never rewrite the saved conversation.
+
 The bounded endpoint/model rules in `src/model/compat.rs` use `max_tokens` for
 the OpenCode Go API models listed there, following ZCode's built-in catalog.
 Rules are resolved before freezing an invocation, so replay and subprocess

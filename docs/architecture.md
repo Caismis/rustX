@@ -3819,8 +3819,13 @@ adapter-local terminal buffering exists for Anthropic text or thinking.
   items including opaque encrypted reasoning). Anthropic thinking signatures
   and `redacted_thinking.data` are preserved as rustX-owned opaque JSON on
   the reasoning block and replayed verbatim; canonical reasoning text alone
-  is never sufficient to reconstruct a provider reasoning item (OpenAI
-  Responses fails with `Unsupported` instead of fabricating one).
+  is never sufficient to reconstruct a provider reasoning item. For Responses
+  history without a native replay unit (such as a prior Chat Completions turn
+  or a stored response summary), readable reasoning is ordinary assistant
+  `output_text`, following pi's cross-model conversion. Opaque foreign state
+  and inactive stored-response pointers are omitted from the wire. Complete
+  native stateless output is still validated and replayed verbatim; malformed
+  or edited native replay units remain `Unsupported`.
 - Usage is normalized without inventing counts: Anthropic effective input is
   `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
   from the latest cumulative snapshot (never summed over time), reported

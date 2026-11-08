@@ -16564,7 +16564,7 @@
       ]
     },
     "ReasoningBlock": {
-      "description": "Model reasoning content.\n\nReasoning text is preserved for diagnostics, but reasoning/continuation\nstate is never flattened into plain text: provider-specific opaque state\nsurvives on the [`ProviderContinuationState`] boundary for later\ncontinuation.",
+      "description": "Model reasoning content.\n\nReadable reasoning stays separate from provider-specific opaque state.\nAdapters may render the readable text as ordinary assistant history when\nthe target protocol has no native replay representation. Opaque state is\nnever flattened: it survives on the [`ProviderContinuationState`] boundary\nfor native continuation.",
       "type": "object",
       "properties": {
         "text": {

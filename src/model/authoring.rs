@@ -25,7 +25,7 @@ fn version() -> u32 {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
-    /// Presentation-only LobeHub icon slug. Never participates in model resolution.
+    /// Presentation-only `LobeHub` icon slug. Never participates in model resolution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub protocol: ModelProtocol,
