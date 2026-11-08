@@ -838,3 +838,48 @@ process-tree RSS repeats shared pages, and an idle paused peer does not prove
 saturation behavior. Native queue/settlement regression tests cover that
 contract. macOS correctness and the full browser matrix require the final-head
 FULL run recorded in the PR description; these Linux samples do not replace it.
+
+
+### PTY signal-fixture synchronization follow-up
+
+[FULL #1781](https://github.com/Caismis/rustX/actions/runs/42446932933), on
+`f203db4de5c6f6ec7795adb4b010fc3152c571cd`, failed the Linux in-crate
+boundary step with 283 passed, one failed and one ignored. The failed signal
+scenario reached its unchanged 180-second output-notification guard. The new
+calling-location diagnostic identified that output wait, but not its marker.
+An unchanged local complete boundary rerun passed 284 tests; that success did
+not explain or dismiss the CI failure.
+
+A separate real-PTY probe reproduced a reachable synchronization race in the
+Bash business fixture. The syscall trace shows `write("READY")`, kernel SIGINT,
+then `TCGETS` and blocking `read(0)` with no intervening `write("INT")`. Bash can
+defer the pending trap until the read completes, while the client is waiting
+for the trap marker before sending another line. The same window exists after
+`NEXT:alive` before the next read. This trace proves the fixture race; the CI
+log does not establish which marker stalled there.
+
+The handled-signal scenario now writes the real VINTR/VQUIT byte followed by
+an empty canonical line in the same ordered input batch. That line releases
+the pre-read wait so Bash can run its pending trap; it does not supply INT/QUIT
+or the later `alive` input. Both trap markers, both subsequent `NEXT:alive`
+responses and final Completed/exit-0 assertions remain required. Default-signal
+cat cases still receive the single control byte and must terminate naturally;
+missing-owner behavior still requires ProcessControlFailed. The original
+180-second liveness, five-second completion and ten-second command limits are
+unchanged. Marker waits additionally select the actual command result and
+report the expected marker, accumulated bytes and result on premature exit.
+
+With a fresh session/controlling PTY, explicit default SIGQUIT disposition and
+clean environment, the old direct probe failed while waiting for INT on its
+28th sequence. The revised protocol completed 1,000 actual direct-PTY sequences,
+including both signals and subsequent input in each. Independent read-only
+review confirmed the actual test patch and unchanged assertions. The
+complete in-crate boundary run then passed 284 tests with zero failures and one
+existing ignored test using two test threads (221.91 seconds). Final strict
+all-target/all-feature Clippy, formatting and whitespace checks passed. Final-head FULL CI
+is recorded separately; a direct fixture probe is not an App Server/platform
+acceptance substitute.
+
+This follow-up changes test synchronization and diagnostics only. Native product
+sources, binaries and all eight source-identified capture sets above retain
+their stated identities; no new performance claim is inferred from the test fix.

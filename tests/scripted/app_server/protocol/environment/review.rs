@@ -31,6 +31,29 @@ pub(super) async fn through_marker(
     .await
 }
 
+async fn signal_marker(
+    connection: &AppServerConnection,
+    id: &str,
+    marker: &[u8],
+    command: &mut tokio::task::JoinHandle<MethodResult>,
+) {
+    let mut bytes = Vec::new();
+    bounded(async {
+        loop {
+            tokio::select! {
+                chunk = output(connection, id) => {
+                    bytes.extend(chunk);
+                    if bytes.windows(marker.len()).any(|part| part == marker) {
+                        return;
+                    }
+                },
+                result = &mut *command => panic!("command ended before terminal marker {marker:?}: {result:?}; observed {bytes:?}"),
+            }
+        }
+    })
+    .await;
+}
+
 async fn completion(
     connection: &AppServerConnection,
     command: tokio::task::JoinHandle<MethodResult>,
@@ -63,13 +86,17 @@ pub(crate) async fn terminal_signals() {
     params.process_id = Some(id.into());
     params.tty = true;
     let worker = connection.clone();
-    let command = tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
-    through_marker(&connection, id, b"READY").await;
+    let mut command =
+        tokio::spawn(async move { call(&worker, 1, Method::CommandExec(params)).await });
+    signal_marker(&connection, id, b"READY", &mut command).await;
     for (signal, marker) in [(3, b"INT".as_slice()), (28, b"QUIT".as_slice())] {
-        input(&connection, id, &[signal]).await;
-        through_marker(&connection, id, marker).await;
+        // Bash defers a trap received just before read(2) until that read
+        // completes. The empty canonical line wakes that exact pre-read race;
+        // it neither supplies the trap marker nor substitutes for later input.
+        input(&connection, id, &[signal, b'\n']).await;
+        signal_marker(&connection, id, marker, &mut command).await;
         input(&connection, id, b"alive\n").await;
-        through_marker(&connection, id, b"NEXT:alive").await;
+        signal_marker(&connection, id, b"NEXT:alive", &mut command).await;
     }
     input(&connection, id, b"done\n").await;
     let result = completion(&connection, command).await;
@@ -85,11 +112,11 @@ pub(crate) async fn terminal_signals() {
         params.process_id = Some(id.into());
         params.tty = true;
         let worker = connection.clone();
-        let command =
+        let mut command =
             tokio::spawn(async move { call(&worker, 3, Method::CommandExec(params)).await });
         connection.command_admitted_for_test(id).await;
         input(&connection, id, b"READY\n").await;
-        through_marker(&connection, id, b"1\tREADY").await;
+        signal_marker(&connection, id, b"1\tREADY", &mut command).await;
         input(&connection, id, &[signal]).await;
         let result = completion(&connection, command).await;
         assert_eq!(result.status, ExecStatus::Completed);
@@ -112,8 +139,9 @@ pub(crate) async fn terminal_signals() {
     params.process_id = Some(id.into());
     params.tty = true;
     let worker = connection.clone();
-    let command = tokio::spawn(async move { call(&worker, 4, Method::CommandExec(params)).await });
-    through_marker(&connection, id, b"READY").await;
+    let mut command =
+        tokio::spawn(async move { call(&worker, 4, Method::CommandExec(params)).await });
+    signal_marker(&connection, id, b"READY", &mut command).await;
     input(&connection, id, b"crash\n").await;
     let result = completion(&connection, command).await;
     assert_eq!(result.status, ExecStatus::ProcessControlFailed);
