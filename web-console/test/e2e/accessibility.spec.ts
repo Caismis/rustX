@@ -4,7 +4,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { openEmptySession, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
-const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced'];
+const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
 
 for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and editor reachability at ${width}px`, async ({ page }) => {
   const fixture = await startDogfood();
@@ -132,10 +132,13 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await expect(confirmation).toHaveCount(0); await expect(remove).toBeFocused();
     await expect(endpoint).toHaveValue(/\/draft-only$/);
     // The dedicated MCP page and create flow are keyboard reachable.
-    await keyboardPage('MCP servers');
-    await tabTo(settings.getByRole('button', { name: '＋ New', exact: true })); await page.keyboard.press('Enter');
-    await tabTo(settings.getByLabel('Name', { exact: true })); await page.keyboard.type('keyboard-draft');
-    await tabTo(settings.getByLabel('Command', { exact: true })); await page.keyboard.type('inert-draft');
+    await tabTo(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'MCP servers',exact:true}));
+    await page.keyboard.press('Enter');
+    const mcp=page.getByRole('region',{name:'MCP servers',exact:true});
+    await tabTo(mcp.getByRole('tab',{selected:true}));await page.keyboard.press('End');
+    await tabTo(mcp.getByRole('button', { name: '＋ New', exact: true })); await page.keyboard.press('Enter');
+    await tabTo(mcp.getByLabel('Name', { exact: true })); await page.keyboard.type('keyboard-draft');
+    await tabTo(mcp.getByLabel('Command', { exact: true })); await page.keyboard.type('inert-draft');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.locator('main').evaluate(el => getComputedStyle(el.parentElement!).transitionDuration)).toBe('0s');
     await page.screenshot({ path: `test-results/acceptance-keyboard-${width}.png`, fullPage: true });

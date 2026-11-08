@@ -1,3 +1,5 @@
+import {changeJson} from './json-editor-helpers';
+import {openResourceModule} from './settings-harness';
 import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
 import { openMcpContractEditor } from './settings-harness';
@@ -436,7 +438,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   // The write commits and native acknowledges it; the post-write authoritative
   // reread fails, so the transaction cannot settle yet.
   await screen.findByText(/saved\./);
-  await screen.findByText(/Saved, but the authoritative reread failed/);
+  await screen.findAllByText(/Saved, but the authoritative reread failed/);
   expect(writes(s)).toHaveLength(1);
   // Navigating away unmounts the editor; the store survives, and it must no
   // longer hold the submitted authored payload anywhere.
@@ -468,26 +470,23 @@ it('S1-14 a confirmed MCP environment-reference save drops the submitted payload
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await waitForSettingsRevision('workspace-1');
   fireEvent.click(screen.getByRole('tab', { name: 'Extensions' }));
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
-  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
+  await openResourceModule('mcp');
+  fireEvent.click(screen.getByRole('button',{name:'＋ New'}));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
   openMcpContractEditor();
-  fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'search-server' } });
-  const literals = within(screen.getByRole('group', { name: 'Environment references ($VARIABLE)' }));
-  fireEvent.change(literals.getByLabelText('Environment references ($VARIABLE) Name'), { target: { value: 'TOKEN' } });
-  fireEvent.click(literals.getByRole('button', { name: 'Add Environment references ($VARIABLE)' }));
-  fireEvent.change(literals.getByLabelText('TOKEN'), { target: { value: '$TOKEN' } });
+  fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'search-server' } });
+  fireEvent.click(screen.getByText('Environment references (optional)'));
+  const editor=await screen.findByRole('textbox',{name:'Environment variables (JSON)'});
+  changeJson(editor,JSON.stringify({TOKEN:'$TOKEN'}));
   expect(retained(s)).toContain('$TOKEN');
-  failReads = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Save MCP search' }));
-  await screen.findByText(/Saved, but the authoritative reread failed/);
-  fireEvent.click(screen.getByRole('tab', { name: 'Tools & Permissions' }));
-  // The MCP selector settles against the MCP source revision, not the config
-  // one, and it carries no literal environment value to do so.
+  failReads=true;
+  fireEvent.click(screen.getByRole('button',{name:'Save'}));
+  await screen.findAllByText(/Saved, but the authoritative reread failed/);
+  await openSettingsPage('Tools & Permissions');
   expect(retained(s)).not.toContain('$TOKEN');
   expect(retained(s)).toContain('"committed":"mcp-committed"');
-  failReads = false;
-  fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
+  failReads=false;
+  fireEvent.click(screen.getByRole('button',{name:'Reload configuration'}));
   await waitFor(() => expect(retained(s)).not.toContain('"committed"'));
   expect(writes(s)).toHaveLength(1);
 });
@@ -591,23 +590,17 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await settingsReady();
   await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  await openResourceModule('mcp');
   expect(within(screen.getByRole('group', { name: 'Installed' })).getByRole('listitem', { name: 'local' })).toBeTruthy();
-  expect(screen.queryByRole('listitem', { name: 'search' })).toBeNull();
-  // The scope-local management list excludes inherited definitions. Native
-  // detail/override contracts remain inspectable through exact navigation.
-  openMcpContractEditor('search');
-  expect(screen.getByRole('form', { name: 'MCP search' }).getAttribute('data-definition')).toBe('inherited');
-  expect(screen.getByRole('button', { name: 'Override MCP search in this Workspace' })).toBeTruthy();
-  expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(within(screen.getByRole('group',{name:'Available from Global'})).getByRole('listitem',{name:'search'})).toBeTruthy();
   await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
+  await openResourceModule('subagents');
   await openResourceRow('reviewer');
   // The inherited profile is reported as inherited, from the native inventory
   // alone: even without its User document projected it is not "new", so the
   // Workspace editor is inert until an explicit override, which starts empty.
   const reviewer = within(screen.getByRole('region', { name: 'Agent reviewer' }));
-  expect(reviewer.getByText('Inherited from User · no override in this Workspace')).toBeTruthy();
+  expect(reviewer.getByText('Using global settings.')).toBeTruthy();
   expect(screen.getByRole('form', { name: 'Agent reviewer' }).getAttribute('data-definition')).toBe('inherited');
   expect((reviewer.getByLabelText('Description') as HTMLInputElement).value).toBe('');
   expect((reviewer.getByLabelText('Description') as HTMLInputElement).matches(':disabled')).toBe(true);

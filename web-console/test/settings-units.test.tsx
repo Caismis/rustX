@@ -1,3 +1,5 @@
+import {AvailabilityDetail} from '../src/app/resources/shared/AvailabilityDetail';
+import {ResourceAvailability} from '../src/app/resources/shared/ResourceAvailability';
 import { changeJson, readJson, jsonValidity } from './json-editor-helpers';
 import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
@@ -6,7 +8,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/re
 import { ModelsPage } from '../src/app/settings/models/ModelsPage';
 import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
-import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
+import {SubagentDetail} from '../src/app/resources/subagents/SubagentDetail';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
 import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v77';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
@@ -203,18 +205,13 @@ it('authors general Model Profiles as complete presets, moving model parameters 
   expect(write.mock.calls[1][0]).toMatchObject({ mutation: { authored: { default_profile: 'creative', profiles: { creative: { request_params: { temperature: 1.3 } } } } } });
 });
 
-it.each(['all', 'none', 'exact'] as const)('writes exact native %s Skill selection', async mode => {
-  const source = workspaceSource();
-  const { writes: write } = await renderEditor(toolsPage(source, {}, 'workspace', 's1'), { source, context: source });
-  const form = within(screen.getByRole('form', { name: 'Available skills' }));
-  // An explicitly authored empty selection is a value, not the absence of one,
-  // so it is authored by the explicit Override gesture rather than produced by
-  // re-picking the mode the control already displays.
-  if (mode === 'none') fireEvent.click(form.getByRole('button', { name: 'Override Available skills' }));
-  else await chooseOption('Selection', mode === 'all' ? 'All' : 'Exact identities', form);
-  if (mode === 'exact') fireEvent.change(form.getByLabelText('Skills names 1'), { target: { value: 'review' } });
-  fireEvent.click(form.getByRole('button', { name: 'Save Available skills' }));
-  await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['review'] } }, 's1'));
+it.each(['all', 'none', 'exact'] as const)('changes one Skill from native %s membership without changing the others', async mode => {
+ const source=workspaceSource();
+ source.workspace!.authored={agent:{skills:mode==='all'?'all':mode==='none'?[]:['existing']}};
+ source.prospective_resources={definitions:[{family:'skill',name:'review',valid:true,location:{scope:'workspace',path:'/review'}},{family:'skill',name:'existing',valid:true,location:{scope:'workspace',path:'/existing'}}]} as never;
+ const {writes}=await renderEditor(<ResourceAvailability source={source} scope="workspace" revision="s1" family="skill" name="review" valid={true}/>,{source,context:source});
+ fireEvent.click(screen.getByRole('switch'));
+ await waitFor(()=>expect(writes).toHaveBeenCalledWith({kind:'config',mutation:{unit:'skills',authored:mode==='all'?['existing']:mode==='none'?['review']:['existing','review']}},'s1'));
 });
 
 it('keeps automatically composed Agent controls out of settings', async () => {
@@ -243,7 +240,7 @@ it('keeps automatically composed Agent controls out of settings', async () => {
 
 it('writes Native and MCP invocation policies independently, and an empty policy only when explicitly authored', async () => {
   const context = workspaceSource();
-  const { writes: write } = await renderEditor(toolsPage(context, {}, 'workspace', 'p1'), { source: context, context });
+  const { writes: write } = await renderEditor(<>{toolsPage(context, {}, 'workspace', 'p1')}<AvailabilityDetail source={context} scope="workspace" revision="p1" family="mcp" name="search"/></>, { source: context, context });
   // Per-Tool invocation policy is progressively disclosed rather than given a
   // page of its own.
   fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
@@ -253,8 +250,6 @@ it('writes Native and MCP invocation policies independently, and an empty policy
   await chooseOption('approval', 'Always', form);
   fireEvent.click(form.getByRole('button', { name: 'Save bash policy' }));
   await waitFor(() => expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'native_policy', id: 'bash', authored: { execution: 'model_selectable', concurrency: 'parallel', approval: 'always' } } }, 'p1']));
-  fireEvent.change(screen.getByLabelText('MCP policy identity'), { target: { value: 'search' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Edit MCP policy' }));
   const mcp = within(screen.getByRole('form', { name: 'MCP policy search' }));
   // This Workspace authors no `search` policy; opening its editor authors none
   // either, so there is nothing to save until the user says so.
@@ -269,7 +264,7 @@ it('round-trips an independent Agent profile with delegation, guidance and model
   const source = cfg3Source();
   const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', profile: 'deep', max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5, nested: [null] } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-r1', authored } }];
-  const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={['main']} profiles={{}} family="agent" name="reviewer" onFocus={noop} />, { source, context: source });
+  const { writes: write } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={['main']} profiles={{}} name="reviewer" />, { source, context: source });
   // Opening an authored profile authors nothing new, so a no-op Save is
   // unavailable; an edit back to the same text still round-trips every field.
   expect((screen.getByRole('button', { name: 'Save Agent reviewer' }) as HTMLButtonElement).disabled).toBe(true);
@@ -283,7 +278,7 @@ it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection
   const source = workspaceSource();
   source.target = { kind: 'user' };
   const document: RuntimeLayer = { agent: { tools: { sources: { [id]: [] } } } };
-  const { writes: write } = await renderEditor(toolsPage(source, document, 'user', 'tools-r1'), { source, context: source });
+  const { writes: write } = await renderEditor(id==='search'?<AvailabilityDetail source={{...source,user:{...source.user,authored:document}}} scope="user" revision="tools-r1" family="mcp" name="search"/>:toolsPage(source, document, 'user', 'tools-r1'), { source, context: source });
   const form = within(screen.getByRole('form', { name: `Tools: ${id}` }));
   for (const mode of ['all', 'none', 'exact'] as const) {
     await chooseOption('Selection', mode === 'all' ? 'All' : mode === 'none' ? 'None' : 'Exact identities', form);
@@ -336,7 +331,7 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   } else {
     const source = cfg3Source();
     source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
-    ({ writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} family="agent" name="reviewer" onFocus={noop} />, { source, context: source }));
+    ({ writes: write } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} name="reviewer" />, { source, context: source }));
   }
   if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
@@ -382,7 +377,7 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   } else {
     const source = cfg3Source();
     source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
-    ({ writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} family="agent" name="reviewer" onFocus={noop} />, { source, context: source }));
+    ({ writes: write } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} name="reviewer" />, { source, context: source }));
   }
   if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
@@ -464,7 +459,7 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
 it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an Agent with optional profile text omitted: %j', async authored => {
   const source = cfg3Source();
   source.agents = [{ name: 'optional', scope: 'workspace', source: { path: '/agent.toml', revision: 'optional-r1', authored } }];
-  const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={[]} profiles={{}} family="agent" name="optional" onFocus={noop} />, { source, context: source });
+  const { writes: write } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={[]} profiles={{}} name="optional" />, { source, context: source });
   fireEvent.click(screen.getByLabelText('read'));
   expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Save Agent optional' }));

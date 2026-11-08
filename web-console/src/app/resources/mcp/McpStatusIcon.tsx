@@ -1,6 +1,6 @@
 import { useTranslation } from '../../../locale/react';
 import { Tooltip } from '../../../presentation/primitives/Tooltip';
-import { type ExtensionEntry } from '../extensions/inventory';
+import { type ExtensionEntry } from '../shared/inventory';
 import type { ProbeState } from './useMcpProbes';
 import { McpIcon } from './McpIcon';
 import css from './McpPage.module.css';

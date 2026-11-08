@@ -2,9 +2,6 @@ import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
-import { McpIcon } from './mcp/McpIcon';
-import { useMcpProbes } from './mcp/useMcpProbes';
-import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
 import type { SourceScope } from '../../../../protocol/app-server/v77';
@@ -74,7 +71,6 @@ const pageIcons: Record<SettingsPage, () => ReactNode> = {
   models: () => <IconDataOutline16 />,
   agent: () => <IconAgentPresetOutline16 />,
   tools: () => <IconShieldOutline16 />,
-  mcp: () => <McpIcon />,
   extensions: () => <IconPluginPinwheelOutline16 />,
   advanced: () => <IconCodeOutline16 />,
 };
@@ -116,13 +112,11 @@ export function Settings(props: SettingsProps) {
   return (visited || visible) && <SettingsPageContent key={settingsTargetKey(view.target)} {...props} visible={visible} target={view.target} page={view.page} focus={view.focus} />;
 }
 
-function SettingsPageContent({ client, host, associations, theme = 'system', setTheme, connection, navigation, target, page: current, focus, visible = true }: SettingsProps & {
+function SettingsPageContent({ client, host, theme = 'system', setTheme, connection, navigation, target, page: current, focus, visible = true }: SettingsProps & {
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
   const tx = useTranslation();
-  const [mcpTarget, setMcpTarget] = useState(target);
-  // Resource scope selects the native owner without navigating the settings shell.
-  const activeTarget = current === 'mcp' ? mcpTarget : target;
+  const activeTarget = target;
   const [extensionFilter, setExtensionFilter] = useState<ExtensionFilter>('all');
   // The navigation machine admits only pages and details this owner
   // authorizes, so the page and focus are rendered exactly as they are.
@@ -138,7 +132,6 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
   // A View details inspection awaiting this owner's Auto Repair details.
   const inspection = useSelector(navigation, snapshot => snapshot.context.inspection);
   const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
-  const mcpProbes = useMcpProbes(client, host, activeTarget, observed, current === 'mcp' && !focus.mcp, associations);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const convergenceError = useSelector(actor, snapshot => snapshot.context.convergenceError);
   const reconciling = useSelector(actor, snapshot => snapshot.matches({ maintenance: 'reconciling' }));
@@ -187,15 +180,10 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
     {current === 'tools' && (structured
       ? <ToolsPage source={source} document={config.document} scope={scope} revision={config.revision} />
       : <MalformedNotice config={config} />)}
-    {/* Extensions spans several independent native documents. A malformed
-        `rustx.toml` closes the semantic units it authors and says nothing
-        about the MCP or named-Agent documents, each of which is its own
-        authority and reports its own state. */}
-    {current === 'mcp' && <McpPage source={source} scope={scope} revision={structured ? config.revision : undefined}
-      focus={focus.mcp} onFocus={onFocus} probeStates={mcpProbes.states} testConnection={mcpProbes.testConnection} probeAvailable={mcpProbes.available} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
-      scopeControl={<SettingsScopeMenu disabled={!!focus.mcp?.name} userLabel={tx('settings:mcp.user')} target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
+    {/* A malformed configuration closes extension grants, while the native
+        managed-Python inventory remains available for inspection. */}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
-      revision={structured ? config.revision : undefined} models={models} profiles={profiles} focus={focus.extensions} onFocus={onFocus}
+      revision={structured ? config.revision : undefined} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
       scopeControl={<SettingsScopeMenu key={`${transport.endpoint}:${transport.authorityRevision}`} target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'extensions'}); }}/>} />}
     {current === 'advanced' && <AdvancedPage source={source} scope={scope}
@@ -207,7 +195,7 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
       busy={busy} targetValid={targetValid} />}
     {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
         current revision. It exists only while the source contract is invalid. */}
-    {config.state === 'malformed' && current !== 'extensions' && current !== 'mcp' && <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={config.revision} removable={false}
+    {config.state === 'malformed' && current !== 'extensions' && <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={config.revision} removable={false}
       mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
       {(value, change) => <label>{tx('settings:settings.replacement-toml')}<textarea value={value} onChange={event => change(event.target.value)} /></label>}
     </UnitForm>}

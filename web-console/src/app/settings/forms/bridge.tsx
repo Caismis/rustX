@@ -382,7 +382,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
 
 /** What one whole-identity resource definition is in this scope, worded for
  * exactly its lifecycle state. */
-function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
+export function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
   const tx = useTranslation();
   const shadowed = unit.shadowed;
   return <>

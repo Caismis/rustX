@@ -1,10 +1,9 @@
-import type { Translate } from '../../../locale/translation';
 import type {
   RuntimeClientSnapshot, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
 } from '../../../../../protocol/app-server/v77';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
-import { resourceCapability, toolSourceId, type ResourceCapability } from '../capability';
-import type { ExtensionFamily } from '../projection';
+import { resourceCapability, toolSourceId, type ResourceCapability } from '../../settings/capability';
+import type { ExtensionFamily } from '../../settings/projection';
 
 /** How one resource identity relates to the scope currently being edited.
  *
@@ -53,8 +52,6 @@ export interface ExtensionEntry {
 }
 /** A native preparation or admission status, never a presentation state. */
 export type Preparation = SourceInspection['status'] | WorkflowInspection['status'];
-
-export const resourceFamilies: readonly ResourceFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python'];
 
 /** The native observation for this identity, or `undefined` when native
  * published none. Absence stays absence: it is never read as `unprepared`,
@@ -152,16 +149,4 @@ readonly { name: string; path: string; valid?: boolean; diagnostic?: string }[] 
     }));
   }
   return [];
-}
-
-/** Every resource identity of every family this Extensions surface manages. */
-export function allExtensionEntries(source: SourceSettings | undefined, scope: SourceScope): readonly ExtensionEntry[] {
-  return resourceFamilies.flatMap(family => extensionEntries(source, scope, family));
-}
-
-export function relationshipLabel(tx: Translate, entry: ExtensionEntry, scope: SourceScope): string {
-  return entry.relationship === 'authored' ? (scope === 'workspace' ? tx('settings:copy.workspace-definition') : tx('settings:copy.user-definition'))
-    : entry.relationship === 'overriding' ? tx('settings:copy.overrides-the-inherited-definition')
-      : entry.relationship === 'inherited' ? tx('settings:copy.inherited-from-user-no-override-in-this-workspace')
-        : tx('settings:copy.shadowed-by-the-workspace-definition');
 }

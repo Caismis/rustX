@@ -1,22 +1,23 @@
 import { useTranslation } from '../../../locale/react';
 import { useState } from 'react';
 import type {
-  AgentSkillSelection, ApprovalMode, NativePolicyOverrideDocument, NativeTool,
+  ApprovalMode, NativePolicyOverrideDocument, NativeTool,
   RuntimeLayer, SourceScope, SourceSettings, SourceToolSelection,
 } from '../../../../../protocol/app-server/v77';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitForm } from '../forms/bridge';
-import { CheckboxList, Names, Selection, TextField, nativeTools, policyTools } from '../forms/controls';
+import { CheckboxList, Selection, TextField, nativeTools, policyTools } from '../forms/controls';
 import { Advanced, Choice } from '../primitives/aria';
 import { reachableIdentities, sourceView } from '../projection';
+import {PolicyFields} from '../forms/PolicyFields';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** The Tools & Permissions product page.
  *
  * It answers exactly one user question — *what may the root Agent use, and
  * under what policy?* Approval behavior, built-in Tool availability, access to
- * MCP and Managed Python Tool sources, Skill visibility and delegation to
- * named Agents and Workflows are all that question, so they are all here.
+ * Managed Python sources and native Tool policies remain here. MCP, Skills
+ * and named Agents own their availability controls in their resource modules.
  *
  * Every control keeps its exact native identity and its exact native
  * vocabulary. `all`, an explicit list of identities, an explicit empty list and
@@ -33,11 +34,8 @@ export function ToolsPage({ source, document, scope, revision }: {
   const resolved = source.resolved;
   const agent = document.agent;
   const [source_, setSource] = useState('');
-  const [family, setFamily] = useState('mcp');
   const [added, setAdded] = useState<string[]>([]);
-  const [mcpPolicy, setMcpPolicy] = useState('');
-  const [selectedMcpPolicy, selectMcpPolicy] = useState('');
-  const sources = [...new Set([...reachableIdentities(scope, agent?.tools?.sources, resolved?.agent?.tools?.sources), ...added])];
+  const sources = [...new Set([...reachableIdentities(scope, agent?.tools?.sources, resolved?.agent?.tools?.sources), ...added])].filter(id => id.startsWith('python:'));
   return <section aria-label={tx('settings:tools-page.tools-permissions')}>
     <h3>{tx('settings:tools-page.tools-amp-permissions')}</h3>
 
@@ -61,24 +59,9 @@ export function ToolsPage({ source, document, scope, revision }: {
       {(value, change) => <Selection label={id} value={value} change={change} />}
     </UnitForm>)}
     <div className={css.actions}>
-      <Choice label={tx('settings:tools-page.source-family')} value={family} options={[['mcp', 'MCP'], ['python', tx('settings:copy.managed-python')]]} onChange={setFamily} />
       <TextField label={tx('settings:tools-page.source-identity')} value={source_} change={setSource} />
-      <Button disabled={!source_} onClick={() => { setAdded(current => [...current, family === 'python' ? `python:${source_}` : source_]); setSource(''); }}>{tx('settings:tools-page.add-source-selection')}</Button>
+      <Button disabled={!source_} onClick={() => { setAdded(current => [...current, `python:${source_}`]); setSource(''); }}>{tx('settings:tools-page.add-source-selection')}</Button>
     </div>
-
-    <h4>{tx('settings:tools-page.skills')}</h4>
-    <p className={css.hint}>{tx('settings:tools-page.skill-selection-controls-which-skill-descriptions-are-advertised')}</p>
-    <UnitForm<AgentSkillSelection> title={tx('settings:extension-detail.skill-visibility')} authored={agent?.skills ?? undefined} blank={[]} revision={revision}
-      mutation={authored => ({ kind: 'config', mutation: { unit: 'skills', authored } })}>
-      {(value, change) => <Selection label={tx('settings:extension-detail.visible-skills')} value={value} change={change} />}
-    </UnitForm>
-
-    <h4>{tx('settings:tools-page.delegation')}</h4>
-    <UnitForm<string[]> title={tx('settings:extension-detail.agent-allowlist')} authored={agent?.agents ?? undefined} blank={[]} revision={revision}
-      mutation={authored => ({ kind: 'config', mutation: { unit: 'agents', authored } })}>
-      {(value, change) => <Names label={tx('settings:extension-detail.delegated-agents')} value={value} change={change} />}
-    </UnitForm>
-    <p className={css.hint}>{tx('settings:extension-detail.workflow-enabled-in-library')}</p>
 
     <Advanced title={tx('settings:tools-page.advanced-tool-policies')}>
       {policyTools.map(name => <UnitForm<NativePolicyOverrideDocument> key={name} title={tx('settings:tools-page.value-policy', { p0: name })}
@@ -86,29 +69,7 @@ export function ToolsPage({ source, document, scope, revision }: {
         mutation={authored => ({ kind: 'config', mutation: { unit: 'native_policy', id: name as NativeTool, authored } })}>
         {(value, change) => <PolicyFields value={value} change={change} />}
       </UnitForm>)}
-      <label>{tx('settings:tools-page.mcp-policy-identity')}<input list="mcp-policy-identities" value={mcpPolicy} onChange={event => setMcpPolicy(event.target.value)} /></label>
-      <datalist id="mcp-policy-identities">
-        {reachableIdentities(scope, document.mcp_tool_policies, resolved?.mcp_tool_policies).map(id => <option key={id} value={id}>{id}</option>)}
-      </datalist>
-      <Button disabled={!mcpPolicy} onClick={() => selectMcpPolicy(mcpPolicy)}>{tx('settings:tools-page.edit-mcp-policy')}</Button>
-      {selectedMcpPolicy && <UnitForm<NativePolicyOverrideDocument> key={selectedMcpPolicy} title={tx('settings:tools-page.mcp-policy-value', { p0: selectedMcpPolicy })}
-        authored={document.mcp_tool_policies?.[selectedMcpPolicy] ?? undefined} blank={{}} revision={revision}
-        mutation={authored => ({ kind: 'config', mutation: { unit: 'mcp_policy', id: selectedMcpPolicy, authored } })}>
-        {(value, change) => <PolicyFields value={value} change={change} />}
-      </UnitForm>}
     </Advanced>
     {sourceView(source, scope) === undefined && <p role="alert" className={css.error}>{tx('settings:tools-page.this-scope-has-no-source-view')}</p>}
   </section>;
-}
-
-export function PolicyFields({ value, change }: { value: NativePolicyOverrideDocument; change: (value: NativePolicyOverrideDocument) => void }) {
-  const tx = useTranslation();
-  return <>
-    <Choice label={tx('settings:tools-page.execution')} value={value.execution ?? ''} onChange={execution => change({ ...value, execution: (execution || undefined) as NativePolicyOverrideDocument['execution'] })}
-      options={[['', tx('settings:copy.domain-default')], ['foreground_only', tx('settings:policy.foreground_only')], ['background_only', tx('settings:policy.background_only')], ['model_selectable', tx('settings:policy.model_selectable')]]} />
-    <Choice label={tx('settings:tools-page.concurrency')} value={value.concurrency ?? ''} onChange={concurrency => change({ ...value, concurrency: (concurrency || undefined) as NativePolicyOverrideDocument['concurrency'] })}
-      options={[['', tx('settings:copy.domain-default')], ['sequential', tx('settings:policy.sequential')], ['parallel', tx('settings:policy.parallel')]]} />
-    <Choice label={tx('settings:tools-page.approval-2')} value={value.approval ?? ''} onChange={approval => change({ ...value, approval: (approval || undefined) as NativePolicyOverrideDocument['approval'] })}
-      options={[['', tx('settings:copy.domain-default')], ['never', tx('settings:policy.never')], ['always', tx('settings:policy.always')]]} />
-  </>;
 }

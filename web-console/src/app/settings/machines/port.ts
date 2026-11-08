@@ -1,4 +1,4 @@
-import { materializeSource } from '../../../../../protocol/app-server/source-observation';
+import { readSourceSettings } from '../../../../../protocol/app-server/source-observation';
 import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v77';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ClientView } from '../../../client/contracts';
@@ -90,8 +90,7 @@ export function createConfigurationPort({ client, endpoint, workspaceId, host, i
     const scope = applicationScope(target);
     const readSource = async () => {
       const generation = client.getSnapshot().generation;
-      const { projection } = await client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings');
-      return materializeSource(projection, async (reference, offset) => (await client.request({ method: 'configuration/sourceValueRead', params: { target, reference, offset, max_bytes: 65_536 } }, 'source_value_chunk')).chunk,
+      return readSourceSettings(async()=>(await client.request({ method: 'configuration/sourcesRead', params: { target } }, 'source_settings')).projection, async (reference, offset) => (await client.request({ method: 'configuration/sourceValueRead', params: { target, reference, offset, max_bytes: 65_536 } }, 'source_value_chunk')).chunk,
         () => client.getSnapshot().generation === generation);
     };
     return {

@@ -1,3 +1,4 @@
+import {openResourceModule} from './settings-harness';
 import { settingsContext } from './settings-harness';
 import { observedRevision } from './settings-harness';
 import { waitForSettingsRevision } from './settings-harness';
@@ -13,7 +14,7 @@ import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import {
   chooseOption, confirmAction, openResourceRow, openSettingsPage, renderEditor, sameRevision,
-  settingsReady, SettingsSurface,
+  settingsReady, SettingsSurface, newSubagent,
 } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 import { composerPreferences, COMPOSER_PREFERENCE_KEY } from '../src/app/composer/preferences';
@@ -108,11 +109,11 @@ const obsoletePages = ['Overview', 'Providers & Models', 'Default model', 'Tool 
   'Plugins', 'Agents & Workflows', 'Agents', 'MCP', 'Managed Python', 'Skills', 'Workflows',
   'Appearance', 'Connection', 'Server & source diagnostics'];
 
-it('S2-01 global Settings has seven product pages and opens at General', async () => {
+it('S2-01 global Settings has six product pages and opens at General', async () => {
   const subject = cfg3Client();
   render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
   expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
-    'General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced',
+    'General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced',
   ]);
   expect(screen.getByRole('tab', { name: 'General', selected: true })).toBeTruthy();
   for (const gone of obsoletePages) expect(screen.queryByRole('tab', { name: gone })).toBeNull();
@@ -136,7 +137,7 @@ it('S2-01 Workspace Settings is a constrained page set that lands on Models', as
   // General holds client-owned preferences that no native source authors, so a
   // Workspace has no General page at all rather than an empty one.
   expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
-    'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced',
+    'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced',
   ]);
   expect(screen.getByRole('tab', { name: 'Models', selected: true })).toBeTruthy();
   expect(screen.queryByRole('tab', { name: 'General' })).toBeNull();
@@ -233,10 +234,9 @@ it('repairs uncertain writes by rereading and never replays the mutation', async
 
 it('edits an independent named-Agent whole resource with inherited model and extensions off', async () => {
   const subject = cfg3Client(); await open(subject, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
-  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
-  fireEvent.change(await screen.findByLabelText('New Agent identity'), { target: { value: 'researcher' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
+  await openResourceModule('subagents');
+  await newSubagent('researcher');
+  fireEvent.click(screen.getByRole('button',{name:'Extensions and guidance',expanded:false}));
   expect(screen.getByText(/Use the current conversation’s model/)).toBeTruthy();
   expect((screen.getByLabelText('todo') as HTMLInputElement).checked).toBe(false);
   fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Research a topic' } });
@@ -246,20 +246,17 @@ it('edits an independent named-Agent whole resource with inherited model and ext
   await waitFor(() => expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'missing', mutation: { kind: 'agent', name: 'researcher', authored: { description: 'Research a topic', tools: { builtin: ['read', 'read_image'] }, plugins: { todo: { enabled: true } } } } } }));
 });
 
-it('keeps shadowed User resources visible using native shadowing facts', async () => {
-  const subject = cfg3Client();
-  subject.source.prospective_resources = { ...subject.effective.resources, definitions: [{ family: 'skill', name: 'review', valid: false, location: { scope: 'workspace', path: '/workspace/.agents/skills/review/SKILL.md', shadowed: '/home/user/rustx/.agents/skills/review/SKILL.md' } }] };
-  render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
-  await settingsReady();
-  await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Skills' }));
-  // The invalid winning definition is shown as the winner it is; the shadowed
-  // User definition is named, never used to stand in for it.
-  await openResourceRow('review');
-  expect(await screen.findByText(/Shadowed by the Workspace definition/)).toBeTruthy();
-  expect(screen.getByText('/workspace/.agents/skills/review/SKILL.md')).toBeTruthy();
-  expect(screen.getByText('Invalid definition')).toBeTruthy();
-  expect(screen.queryByText('Visible to the root Agent')).toBeNull();
+it('an invalid skill shows the native read error without an editor or an invented healthy definition',async()=>{
+ const subject=cfg3Client(async op=>{if(op.method==='skills/read')throw new Error('Invalid SKILL.md');});
+ subject.source.prospective_resources={...subject.effective.resources,definitions:[{family:'skill',name:'review',valid:false,location:{scope:'user',path:'/home/user/rustx/.agents/skills/review/SKILL.md'}}]};
+ render(<SettingsSurface client={subject.client} target={userSettingsTarget} host={cfg3Host(subject)}/>);
+ await openResourceModule('skills');
+ expect(screen.getByRole('switch',{name:'Allow review for the agent'})).toHaveProperty('disabled',true);
+ await openResourceRow('review');
+ expect((await screen.findByRole('alert')).textContent).toContain('Invalid SKILL.md');
+ expect(screen.queryByRole('textbox')).toBeNull();
+ expect(screen.queryByRole('button',{name:/^(Save|Edit|Delete)/})).toBeNull();
+ expect(subject.request.mock.calls.some(([op])=>op.method==='configuration/sourceWrite')).toBe(false);
 });
 
 it('retains a Workspace draft and its original CAS revision across page navigation and a separate User Settings instance', async () => {
@@ -333,7 +330,7 @@ it('does not equate invalid resource existence with readiness or Root authority'
   fireEvent.click(screen.getByRole('tab', { name: 'Python' }));
   await openResourceRow('unselected');
   // Four independent native facts, four independent renderings.
-  expect(await screen.findByText('Invalid definition')).toBeTruthy();
+  expect(screen.queryByText('Valid definition')).toBeNull();
   expect(screen.getByText('This resource is unavailable. Check its configuration and dependencies.')).toBeTruthy();
   // Native published no root inspection here, so root availability is reported
   // as unobserved. Unobserved is never rendered as "allowed" or as "not

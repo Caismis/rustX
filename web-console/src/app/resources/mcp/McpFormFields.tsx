@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { McpWrite } from '../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
-import { Choice } from '../primitives/aria';
+import { Choice } from '../../settings/primitives/aria';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import { formatArguments, parseArguments, formatReferences, parseReferences } from './form-values';
 import css from './McpPage.module.css';

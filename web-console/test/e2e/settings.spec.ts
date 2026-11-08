@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { choose, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 
 // Model/provider creation and shared API format have their own real-native
 // coverage in model-authoring.spec.ts. This flow covers the other settings.
@@ -29,10 +29,7 @@ test('Workspace settings save permissions and features, and keep configuration r
     await tools.getByLabel('read', { exact: true }).uncheck();
     await tools.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
     await saved('Built-in tools');
-    const skills = settings.getByRole('form', { name: 'Available skills', exact: true });
-    await choose(skills, 'Selection', 'All');
-    await skills.getByRole('button', { name: 'Save Available skills', exact: true }).click();
-    await saved('Available skills');
+    await expect(settings.getByRole('form',{name:'Available skills',exact:true})).toHaveCount(0);
     await expect(settings.getByRole('note', { name: 'Agent controls' })).toHaveCount(0);
 
     await openSettingsPage(page, 'Extensions');

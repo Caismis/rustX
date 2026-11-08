@@ -12,6 +12,10 @@ import { SourceContext } from '../src/app/settings/source-context';
 import { settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from '../src/app/settings/projection';
 import { settingsNavigationMachine, type SettingsNavigationActor, type SettingsPage } from '../src/app/settings/machines/navigation';
 import { Settings, type SettingsProps } from '../src/app/settings/Settings';
+import {ResourceSurface} from '../src/app/resources/ResourceSurface';
+import type {ResourceModule} from '../src/app/resources/types';
+import {WorkspaceAuthority} from '../src/workspaces/authority';
+import {WorkspaceAssociations} from '../src/workspaces/associations';
 import { cfg3Source } from './cfg3-data';
 import { configurationSystem, type SettingsTargetActor } from '../src/app/settings/machines/system';
 
@@ -110,7 +114,8 @@ export function openSettingsNavigation(target: SettingsTarget, page?: SettingsPa
  * Rendering it again with another `target` is the product's decision to open
  * that owner's Settings, so it is delivered to the machine as exactly that
  * `OPEN` event. */
-let contractNavigation: SettingsNavigationActor | undefined;
+let resourceNavigation: ((module:ResourceModule|undefined)=>void)|undefined;
+let resourceModule:ResourceModule|undefined;
 let contractAuthority: (() => SettingsTargetActor) | undefined;
 
 export function SettingsSurface({ target, initialPage, navigation, connection, ...props }: Omit<SettingsProps, 'navigation' | 'connection'> & {
@@ -119,7 +124,10 @@ export function SettingsSurface({ target, initialPage, navigation, connection, .
 }) {
   const [actor] = useState(() => navigation ?? openSettingsNavigation(target, initialPage));
   const [controller] = useState(() => connection ?? new ConnectionController(props.client));
-  useLayoutEffect(() => { contractNavigation = actor; return () => { if (contractNavigation === actor) contractNavigation = undefined; }; }, [actor]);
+  const [module,setModule]=useState<ResourceModule>();
+  const [workspaceAuthority]=useState(()=>new WorkspaceAuthority(props.host!));
+  const [associations]=useState(()=>new WorkspaceAssociations(props.client,workspaceAuthority));
+  useLayoutEffect(()=>{resourceNavigation=setModule;resourceModule=module;return()=>{resourceNavigation=undefined;resourceModule=undefined;};},[module]);
   useLayoutEffect(() => {
     const authority = () => configurationSystem(props.client).settingsTarget(target, () => props.host);
     contractAuthority = authority;
@@ -131,12 +139,14 @@ export function SettingsSurface({ target, initialPage, navigation, connection, .
     opened.current = settingsTargetKey(target);
     actor.send({ type: 'OPEN', target });
   }, [actor, target]);
-  return <Settings {...props} navigation={actor} connection={controller} />;
+  return <><div hidden={!!module}><Settings {...props} visible={props.visible!==false&&!module} navigation={actor} connection={controller}/></div>
+    {(['subagents','mcp','skills'] as const).map(kind=><ResourceSurface key={kind} module={kind} visible={module===kind} client={props.client} host={props.host!} authority={workspaceAuthority} associations={associations} initialWorkspace={target.kind==='workspace'?target.id:undefined}/>)}</>;
 }
 
 /** Move to one primary product page through its actual tab, so a page change
  * in a test is the same interaction a user performs. */
 export async function openSettingsPage(name: string) {
+  await act(async()=>resourceNavigation?.(undefined));
   fireEvent.click(screen.getByRole('tab', { name }));
   await screen.findByRole('tab', { name, selected: true });
   if (name === 'Models') {
@@ -147,6 +157,21 @@ export async function openSettingsPage(name: string) {
   }
 }
 
+export function showSettings() { act(()=>resourceNavigation?.(undefined)); }
+export async function newSubagent(name:string) {
+ fireEvent.click(screen.getByRole('button',{name:'New subagent'}));
+ const dialog=screen.getByRole('dialog',{name:'New subagent'});
+ fireEvent.change(within(dialog).getByLabelText('Name'),{target:{value:name}});
+ fireEvent.click(within(dialog).getByRole('button',{name:'Continue'}));
+ await screen.findByRole('form',{name:`Agent ${name}`});
+}
+
+/** Navigate to an independent module, using its real resource surface. */
+export async function openResourceModule(module:ResourceModule) {
+ await act(async()=>resourceNavigation?.(module));
+ await waitFor(()=>expect(document.querySelector(`[data-resource-module="${module}"][data-lifecycle="ready"]`)).toBeTruthy());
+}
+
 /** Open a detail from a resource list through its actual row, so list/detail
  * navigation in a test is the same interaction a user performs. */
 export async function openResourceRow(name: string) {
@@ -154,15 +179,14 @@ export async function openResourceRow(name: string) {
   fireEvent.click(card ? within(card).getAllByRole('button')[0] : await screen.findByRole('row', { name }));
   const modelDialog = screen.queryByRole('dialog', { name: /^Model / });
   if (modelDialog) fireEvent.click(within(modelDialog).getByRole('button', { name: 'Advanced configuration', expanded: false }));
-  if (contractNavigation?.getSnapshot().context.page === 'mcp') openMcpContractEditor(name);
+  if (resourceModule==='mcp') openMcpContractEditor(name);
 }
 
-/** Existing native-definition contract tests exercise the detailed editor's
- * valid navigation state directly. The removed footer link is not a product
- * workflow; user-facing MCP form/save flows live in mcp-page.test.tsx. */
+/** Open the independent permission units alongside the server definition. */
 export function openMcpContractEditor(name?: string) {
-  const identity = name ?? (screen.getByLabelText('Name') as HTMLInputElement).value;
-  act(() => contractNavigation?.send({type:'FOCUS',focus:{kind:'mcp',name:identity,mode:'permissions'}}));
+  void name;
+  const permissions=screen.queryByRole('button',{name:'Permissions',expanded:false});
+  if(permissions)fireEvent.click(permissions);
 }
 
 /** Wait until the open Settings surface holds a current authoritative

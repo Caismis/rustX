@@ -9,10 +9,10 @@ const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
+import { openResourceModule, returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
 const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
-const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced'];
+const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
 const longProvider = 'enterprise-inference-gateway-eu-central-primary-with-an-exceptionally-long-provider-identity';
 const longModel = 'enterprise-reasoning-model-2026-09-long-context-preview-with-an-exceptionally-long-identity';
 
@@ -84,7 +84,7 @@ async function panelBox(page: Page) {
   });
 }
 
-test('desktop: seven pages share one stable Harness frame, distinct icons and one row vocabulary', async ({ page }) => {
+test('desktop: six pages share one stable Harness frame, distinct icons and one row vocabulary', async ({ page }) => {
   const errors = await start(page);
   await openUserSettings(page);
   const settings = settingsPage(page);
@@ -100,9 +100,9 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
   expect(navigation).toBeGreaterThanOrEqual(210); expect(navigation).toBeLessThanOrEqual(224);
   const cell = await rail.getByRole('tab', { name: 'Models' }).evaluate(el => ({ height: el.getBoundingClientRect().height, radius: getComputedStyle(el).borderTopLeftRadius, font: getComputedStyle(el).fontSize }));
   expect(cell).toEqual({ height: 40, radius: '12px', font: '14px' });
-  // Seven distinct glyphs; the label, not the glyph, names each page.
+  // Six distinct glyphs; the label, not the glyph, names each page.
   const glyphs = await rail.getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.querySelector('svg')!.innerHTML));
-  expect(new Set(glyphs).size).toBe(7);
+  expect(new Set(glyphs).size).toBe(6);
   for (const name of pages) await expect(rail.getByRole('tab', { name, exact: true })).toHaveAccessibleName(name);
 
   const references: Record<string, string> = { General: 'settings-general-light.png', Models: 'settings-models-light.png', Agent: 'settings-agent-light.png', 'Tools & Permissions': 'settings-tools-light.png', Extensions: 'settings-extensions-light.png' };
@@ -335,40 +335,14 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await modelDialog.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(settings.getByRole('heading', { level: 3, name: `Provider ${longProvider}` })).toBeVisible();
 
-  // Workspace resource detail at 390: named Agent list → detail.
-  await returnHome(page);
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await openWorkspaceSettings(page, 'Workspace A');
-  await page.setViewportSize({ width: 390, height: 844 });
-  await openSettingsPage(page, 'Extensions');
-  await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
-  await settings.getByRole('button', { name: 'Agent reviewer', exact: true }).click();
-  await settings.getByRole('form', { name: 'Agent reviewer' }).evaluate(el => el.scrollIntoView({ block: 'start' }));
-  await expect(settings.getByLabel('Description', { exact: true })).toBeVisible();
-  await expect(settings.getByRole('button', { name: '← Extensions', exact: true })).toBeInViewport();
-  await expectNoHorizontalOverflow(page);
-  // The narrow bottom gutter belongs to the viewport, not to the content
-  // padding that disappears as the long Agent card scrolls through it.
-  const gutter = await settings.getByRole('form', { name: 'Agent reviewer' }).evaluate(form => {
-    let pane: HTMLElement | null = form.parentElement;
-    while (pane && getComputedStyle(pane).overflowY !== 'auto') pane = pane.parentElement;
-    if (!pane) throw new Error('Settings scroll owner missing');
-    const panel = form.closest('[data-settings-page]')!.getBoundingClientRect();
-    const gap = () => panel.bottom - pane!.getBoundingClientRect().bottom;
-    const before = gap(), position = pane.scrollTop;
-    pane.scrollTop = pane.scrollHeight;
-    const after = gap(), scrollable = pane.scrollHeight > pane.clientHeight;
-    pane.scrollTop = position;
-    const range = pane.scrollHeight - pane.clientHeight;
-    const margin = pane.style.marginBottom, padding = pane.style.paddingBottom;
-    pane.style.marginBottom = '0px'; pane.style.paddingBottom = '20px';
-    const priorRange = pane.scrollHeight - pane.clientHeight;
-    pane.style.marginBottom = margin; pane.style.paddingBottom = padding;
-    pane.scrollTop = position;
-    return { before, after, scrollable, rangeUnchanged: range === priorRange };
-  });
-  expect(gutter).toEqual({ before: 20, after: 20, scrollable: true, rangeUnchanged: true });
-  await expectStableScreenshot(page, 'settings-agent-narrow-dark.png');
+  // Subagent details now belong to their independent resource module.
+  const agents=await openResourceModule(page,'subagents','Workspace A');
+  await agents.getByRole('listitem',{name:'reviewer',exact:true}).getByRole('button',{name:'reviewer',exact:true}).click();
+  await agents.getByRole('form',{name:'Agent reviewer',exact:true}).evaluate(el=>el.scrollIntoView({block:'start'}));
+  await expect(agents.getByLabel('Description',{exact:true})).toBeVisible();
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await expectStableScreenshot(page,'subagent-narrow-dark.png');
+  await openSettingsPage(page,'Extensions');
 
   // Escape preserves the Settings page when no transient layer is open.
   // Leaving and returning through primary navigation restores its section.
@@ -547,8 +521,8 @@ test('a focused closed section trigger hands the keyboard to the selected rail t
   // Rail navigation continues from there at once: the arrows move between
   // pages, and Escape, with no transient layer open, closes Settings.
   await page.keyboard.press('ArrowUp');
-  await expect(rail.getByRole('tab', { name: 'MCP servers' })).toBeFocused();
-  await expect(rail.getByRole('tab', { name: 'MCP servers' })).toHaveAttribute('aria-selected', 'true');
+  await expect(rail.getByRole('tab', { name: 'Tools & Permissions' })).toBeFocused();
+  await expect(rail.getByRole('tab', { name: 'Tools & Permissions' })).toHaveAttribute('aria-selected', 'true');
   await page.keyboard.press('ArrowDown');
   await expect(extensions).toBeFocused();
   await expect(extensions).toHaveAttribute('aria-selected', 'true');

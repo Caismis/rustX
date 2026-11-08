@@ -1,3 +1,4 @@
+import {openResourceModule} from './settings-harness';
 import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -40,7 +41,7 @@ const fullModel = (): Model => ({
 });
 
 async function user(s: Subject, page?: string) {
-  render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
+  render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
   await settingsReady();
   if (page) await openSettingsPage(page);
 }
@@ -140,7 +141,7 @@ it('S2-04 Agent holds identity and guidance; Tools & Permissions holds what the 
   await user(s, 'Agent');
   expect(forms()).toEqual(['Agent name', 'Description', 'Instructions', 'Project guidance']);
   await openSettingsPage('Tools & Permissions');
-  expect(forms()).toEqual(expect.arrayContaining(['Approval mode', 'Built-in tools', 'Available skills', 'Available subagents']));
+  expect(forms()).toEqual(['Approval mode', 'Built-in tools']);
   // Per-Tool policies are one task deeper, not scattered primary tabs.
   expect(screen.getByRole('button', { name: 'Advanced Tool policies' }).getAttribute('aria-expanded')).toBe('false');
   // The old native-unit tabs do not exist as navigation.
@@ -176,24 +177,24 @@ it('S2-05 resource details show actual errors without healthy inspection metadat
   s.source.prospective_resources = inventory();
   await user(s, 'Extensions');
   const facts = async (name: string) => {
-    await openSettingsPage(['search','broken'].includes(name) || name.endsWith('-mcp') ? 'MCP servers' : 'Extensions');
+    if (['search','broken'].includes(name) || name.endsWith('-mcp')) await openResourceModule('mcp');
+    else if(name==='docs') await openResourceModule('skills');
+    else {await openSettingsPage('Extensions');fireEvent.click(screen.getByRole('tab',{name:'Python'}));}
     await openResourceRow(name);
     const values = screen.getAllByText(/./).map(node => node.textContent);
-    fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+    fireEvent.click(screen.getByRole('button', {name:name==='docs'?'Close':/^(← (Extensions|MCP servers)|Back to list)$/}));
     return values;
   };
-  expect(await facts('search')).toContain('MCP');
+  expect(await facts('search')).toContain('Edit MCP server');
   expect(await facts('search')).not.toContain('Valid definition');
   // Invalid, unprepared and unselected are three facts, not one "broken" state.
-  expect(await facts('broken')).toEqual(expect.arrayContaining(['MCP', 'Invalid definition', 'missing command']));
+  expect(await facts('broken')).toEqual(expect.arrayContaining(['Edit MCP server', 'missing command']));
   // `search` is defined in the same document, and the diagnostic is not its.
   expect(await facts('search')).not.toContain('missing command');
-  expect(await facts('docs')).toEqual(expect.arrayContaining(['Skill']));
-  // A valid Workflow can still be refused admission, and is still not selected.
-  expect(await facts('nightly')).toEqual(expect.arrayContaining(['Workflow', 'This workflow is unavailable. Check its configuration and dependencies in Workflows.']));
-  expect(await facts('analysis')).toEqual(expect.arrayContaining(['Managed Python', 'This resource is unavailable. Check its configuration and dependencies.']));
+  expect(await facts('docs')).toEqual(expect.arrayContaining(['docs']));
+  expect(await facts('analysis')).toEqual(expect.arrayContaining(['analysis', 'This resource is unavailable. Check its configuration and dependencies.']));
   // Disabled MCP entries only read status or release an existing settings connection.
-  expect(methods(s).every(method => ['configuration/sourcesRead'].includes(method))).toBe(true);
+  expect(methods(s).every(method => ['configuration/sourcesRead','skills/list','skills/read'].includes(method))).toBe(true);
 });
 
 /** Two MCP identities authored in one `mcp.toml`, one valid and one not. */
@@ -219,7 +220,7 @@ it('S2-05 a resource diagnostic stays on the identity native attributes it to, n
   const s = cfg3Client();
   s.source.prospective_resources = siblingInventory();
   await user(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  await openResourceModule('mcp');
   const row = (name: string) => within(screen.getByRole('listitem', { name }));
   expect(row('broken').getByText('broken: missing command')).toBeTruthy();
   expect(row('search').queryByText('broken: missing command')).toBeNull();
@@ -234,8 +235,7 @@ it('S2-05 a resource diagnostic stays on the identity native attributes it to, n
   await openResourceRow('search');
   const search = within(screen.getByRole('region', { name: 'MCP search' }));
   expect(search.queryByText(/missing command|MCP catalog exceeds/)).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
-  fireEvent.click(await screen.findByRole('tab', { name: 'MCP servers' }));
+  fireEvent.click(screen.getByRole('button', { name: /^(← (Extensions|MCP servers)|Back to list)$/ }));
   await openResourceRow('broken');
   const broken = within(screen.getByRole('region', { name: 'MCP broken' }));
   expect(broken.getByText('broken: missing command')).toBeTruthy();
@@ -269,10 +269,12 @@ it('S2-05 an identity native published no preparation or admission for is unobse
   s.source.prospective_resources = observationInventory();
   await user(s, 'Extensions');
   const facts = async (name: string) => {
-    await openSettingsPage(['search','broken'].includes(name) || name.endsWith('-mcp') ? 'MCP servers' : 'Extensions');
+    if (['search','broken'].includes(name) || name.endsWith('-mcp')) await openResourceModule('mcp');
+    else if(name==='docs') await openResourceModule('skills');
+    else {await openSettingsPage('Extensions');fireEvent.click(screen.getByRole('tab',{name:'Python'}));}
     await openResourceRow(name);
     const values = screen.getAllByText(/./).map(node => node.textContent);
-    fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+    fireEvent.click(screen.getByRole('button', {name:name==='docs'?'Close':/^(← (Extensions|MCP servers)|Back to list)$/}));
     return values;
   };
   const negative = ['Not prepared', 'Preparation unavailable', 'Not admitted', 'Prepared', 'Admitted'];
@@ -281,20 +283,13 @@ it('S2-05 an identity native published no preparation or admission for is unobse
   expect(await facts('idle-mcp')).not.toContain('Not prepared');
   expect(await facts('down-mcp')).not.toContain('Preparation unavailable');
   expect(await facts('analysis')).not.toContain('Prepared');
-  expect(await facts('admitted')).not.toContain('Admitted');
-  expect(await facts('refused')).toContain('This workflow is unavailable. Check its configuration and dependencies in Workflows.');
   // No observation: unknown, and no status native did not publish.
-  for (const [name, label] of [['unseen-mcp', 'Preparation not observed'], ['unseen-python', 'Preparation not observed'], ['unseen-workflow', 'Admission not observed']]) {
+  for (const [name, label] of [['unseen-mcp', 'Preparation not observed'], ['unseen-python', 'Preparation not observed']]) {
     const observed = await facts(name);
     expect(observed).not.toContain(label);
     for (const status of negative) expect(observed).not.toContain(status);
   }
-  // The detail names the same fact under the same title.
-  fireEvent.click(screen.getByRole('tab', { name: 'Workflows' }));
-  await openResourceRow('unseen-workflow');
-  const detail = within(screen.getByRole('region', { name: 'Workflow unseen-workflow' }));
-  expect(detail.queryByText('Admission not observed')).toBeNull();
-  expect(detail.queryByText('Not admitted')).toBeNull();
+
 });
 
 it('S2-05 Skill discovery diagnostics are the Skills family\'s, never shown on another Skill\'s detail', async () => {
@@ -306,7 +301,7 @@ it('S2-05 Skill discovery diagnostics are the Skills family\'s, never shown on a
     { kind: 'package_invalid', source: 'user', package: '/home/user/rustx/.agents/skills/broken', cause: { cause: 'io', path: '/home/user/rustx/.agents/skills/broken/SKILL.md' } },
   ] as never;
   await user(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Skills' }));
+  await openResourceModule('skills');
   const sources = within(screen.getByRole('region', { name: 'Source diagnostics' }));
   expect(sources.getByRole('button', { name: 'Skill discovery diagnostics (1)' })).toBeTruthy();
   await openResourceRow('docs');
@@ -320,9 +315,9 @@ async function mcpDetail(s: Subject) {
   s.source.user_mcp!.authored = { search: { definition: { type: 'stdio', command: 'search-server', args: [] }, retained_env: [], retained_headers: [] } };
   s.source.prospective_resources = inventory();
   await user(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  await openResourceModule('mcp');
   await openResourceRow('search');
-  fireEvent.change(screen.getByLabelText('MCP command'), { target: { value: 'search-server-2' } });
+  fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'search-server-2' } });
   const selection = screen.getByRole('form', { name: 'Tools: search' });
   await chooseOption('Selection', 'All', within(selection));
 }
@@ -332,7 +327,7 @@ it('S2-06 an uncertain definition save never submits the root selection on its b
   held.promise.catch(() => {});
   const s = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite' && op.params.mutation.kind === 'mcp') return held.promise; });
   await mcpDetail(s);
-  fireEvent.click(screen.getByRole('button', { name: 'Save MCP search' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   await act(async () => { held.reject(new OutcomeUncertain()); await held.promise.catch(() => {}); });
   await screen.findByText(/The save result is unknown/);
@@ -354,18 +349,18 @@ it('S2-06 a rejected definition and a saved selection are reported as two outcom
     if (op.method === 'configuration/sourceWrite' && op.params.mutation.kind === 'mcp') throw new Error('native rejected the MCP definition');
   });
   await mcpDetail(s);
-  fireEvent.click(screen.getByRole('button', { name: 'Save MCP search' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   await screen.findByText(/native rejected the MCP definition/);
   // The rejected definition keeps its draft.
-  expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('search-server-2');
+  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server-2');
   fireEvent.click(screen.getByRole('button', { name: 'Save Tools: search' }));
   await screen.findByText(/Tools: search saved/);
   // The selection's success is not the definition's: the definition is still
   // unsaved, still holds its draft and can still be submitted on its own.
   expect(screen.queryByText(/MCP search saved/)).toBeNull();
-  expect((screen.getByLabelText('MCP command') as HTMLInputElement).value).toBe('search-server-2');
-  expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(false);
+  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server-2');
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false);
   expect(writes(s).map(op => op.params.mutation.kind)).toEqual(['mcp', 'config']);
 });
 
@@ -377,7 +372,7 @@ it('S2-07 Workspace Settings offers only Workspace overrides, with inheritance r
   await workspace(s);
   expect(screen.getAllByRole('tab', { selected: false }).concat(screen.getAllByRole('tab', { selected: true }))
     .filter(tab => tab.closest('[aria-label="Settings pages"]')).map(tab => tab.textContent).sort())
-    .toEqual(['Advanced', 'Agent', 'Extensions', 'MCP servers', 'Models', 'Tools & Permissions']);
+    .toEqual(['Advanced', 'Agent', 'Extensions', 'Models', 'Tools & Permissions']);
   await openResourceRow('transport');
   // The Workspace override is removed to inherit again; it is never "deleted".
   expect(screen.queryByRole('button', { name: 'Remove Provider transport' })).toBeNull();
@@ -448,46 +443,46 @@ const disabled = (element: HTMLElement) => element.matches(':disabled');
 it('S2-07 an inherited MCP definition is inspected read-only; only Override begins a Workspace draft, and Save writes it once', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
-  openMcpContractEditor('search');
+  await openResourceModule('mcp');
+  await openResourceRow('search');
   // Inspecting: the inherited safe facts are shown, nothing is writable, no
   // Workspace draft exists and nothing is written.
-  expect(definitionState('MCP search')).toBe('inherited');
-  expect(within(definition('MCP search')).getByText('Using global settings.')).toBeTruthy();
-  expect(field('MCP command').value).toBe('search-server');
-  expect(disabled(field('MCP command'))).toBe(true);
-  expect((screen.getByRole('button', { name: 'Save MCP search' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(definitionState('Edit MCP server')).toBe('inherited');
+  expect(within(definition('Edit MCP server')).getByText('Using global settings.')).toBeTruthy();
+  expect(field('Command').value).toBe('search-server');
+  expect(disabled(field('Command'))).toBe(true);
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('button', { name: /Use global default MCP search|Remove MCP search/ })).toBeNull();
   // Even an input that reaches the field anyway authors nothing.
-  fireEvent.change(field('MCP command'), { target: { value: 'sneaked-edit' } });
-  await waitFor(() => expect(field('MCP command').value).toBe('search-server'));
+  fireEvent.change(field('Command'), { target: { value: 'sneaked-edit' } });
+  await waitFor(() => expect(field('Command').value).toBe('search-server'));
   expect(retained(s)).not.toContain('search-server');
   expect(retained(s)).not.toContain('sneaked-edit');
   // The withheld literal is named, never shown or retained.
-  expect(within(definition('MCP search')).getByText(/Re-enter these credentials.*LITERAL_TOKEN/)).toBeTruthy();
+  expect(within(definition('Edit MCP server')).getByText(/Re-enter these credentials.*LITERAL_TOKEN/)).toBeTruthy();
   expect(document.body.innerHTML).not.toContain(INHERITED_SECRET);
   expect(writes(s)).toHaveLength(0);
 
   // The explicit transition: a Workspace draft seeded from the inherited
   // definition, still unwritten, carrying no inherited secret.
-  fireEvent.click(screen.getByRole('button', { name: 'Override MCP search in this Workspace' }));
-  expect(definitionState('MCP search')).toBe('overriding');
-  expect(disabled(field('MCP command'))).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Override' }));
+  expect(definitionState('Edit MCP server')).toBe('overriding');
+  expect(disabled(field('Command'))).toBe(false);
   expect(retained(s)).toContain('search-server');
   expect(retained(s)).not.toContain(INHERITED_SECRET);
   expect(retained(s)).not.toContain('LITERAL_TOKEN');
   expect(writes(s)).toHaveLength(0);
 
   // Edit, leave the page and come back: the transaction owner kept the draft.
-  fireEvent.change(field('MCP command'), { target: { value: 'search-workspace' } });
+  fireEvent.change(field('Command'), { target: { value: 'search-workspace' } });
   await openSettingsPage('Models');
-  await openSettingsPage('MCP servers');
-  expect(field('MCP command').value).toBe('search-workspace');
-  expect(definitionState('MCP search')).toBe('overriding');
+  await openResourceModule('mcp');
+  expect(field('Command').value).toBe('search-workspace');
+  expect(definitionState('Edit MCP server')).toBe('overriding');
   // Root availability is a second, independent draft.
   await chooseOption('Selection', 'All', within(screen.getByRole('form', { name: 'Tools: search' })));
 
-  fireEvent.click(screen.getByRole('button', { name: 'Save MCP search' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toEqual({
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'mcp-2',
@@ -497,7 +492,9 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
     } },
   });
   expect(JSON.stringify(writes(s))).not.toContain(INHERITED_SECRET);
-  await waitFor(() => expect(definitionState('MCP search')).toBe('authored'));
+  await screen.findByRole('listitem',{name:'search'});
+  await openResourceRow('search');
+  expect(definitionState('Edit MCP server')).toBe('authored');
   // The definition save did not submit the root selection on its behalf.
   expect(writes(s)).toHaveLength(1);
   await waitFor(() => expect((screen.getByRole('button', { name: 'Save Tools: search' }) as HTMLButtonElement).disabled).toBe(false));
@@ -512,23 +509,25 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
   await confirmAction('Use global default MCP search');
   await waitFor(() => expect(writes(s)).toHaveLength(3));
   expect(writes(s)[2].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'mcp', id: 'search', authored: null } });
-  await waitFor(() => expect(definitionState('MCP search')).toBe('inherited'));
+  await screen.findByRole('listitem',{name:'search'});
+  await openResourceRow('search');
+  expect(definitionState('Edit MCP server')).toBe('inherited');
   expect(s.source.user_mcp!.authored!.search).toBeTruthy();
-  expect(field('MCP command').value).toBe('search-server');
+  expect(field('Command').value).toBe('search-server');
   expect(writes(s).filter(op => op.params.target.kind === 'user')).toHaveLength(0);
 });
 
 it('S2-07 discarding a Workspace MCP override writes nothing and returns to inspection', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
-  openMcpContractEditor('search');
-  fireEvent.click(screen.getByRole('button', { name: 'Override MCP search in this Workspace' }));
-  fireEvent.change(field('MCP command'), { target: { value: 'abandoned' } });
+  await openResourceModule('mcp');
+  await openResourceRow('search');
+  fireEvent.click(screen.getByRole('button', { name: 'Override' }));
+  fireEvent.change(field('Command'), { target: { value: 'abandoned' } });
   fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
-  await waitFor(() => expect(definitionState('MCP search')).toBe('inherited'));
-  expect(field('MCP command').value).toBe('search-server');
-  expect(disabled(field('MCP command'))).toBe(true);
+  await waitFor(() => expect(definitionState('Edit MCP server')).toBe('inherited'));
+  expect(field('Command').value).toBe('search-server');
+  expect(disabled(field('Command'))).toBe(true);
   expect(retained(s)).not.toContain('abandoned');
   expect(writes(s)).toHaveLength(0);
 });
@@ -536,7 +535,7 @@ it('S2-07 discarding a Workspace MCP override writes nothing and returns to insp
 it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Use global default are each one explicit Workspace mutation', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
+  await openResourceModule('subagents');
   await openResourceRow('reviewer');
   expect(definitionState('Agent reviewer')).toBe('inherited');
   expect(field('Description').value).toBe('User reviewer');
@@ -551,7 +550,7 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   expect(retained(s)).toContain('User reviewer');
   expect(writes(s)).toHaveLength(0);
   fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
-  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^(← (Extensions|MCP servers)|Back to list)$/ }));
   await openResourceRow('reviewer');
   expect(field('Description').value).toBe('Workspace reviewer');
 
@@ -577,19 +576,19 @@ it('S2-07 a new Workspace resource and a Workspace-only definition are worded as
   const s = inheritingWorkspace();
   s.source.workspace_mcp!.authored = { local: { definition: { type: 'stdio', command: 'local-server', args: [] }, retained_env: [], retained_headers: [] } };
   await workspace(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  await openResourceModule('mcp');
   fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'fresh' } });
   openMcpContractEditor();
   // Creation is its own explicit gesture: writable at once, no override action.
-  expect(definitionState('MCP fresh')).toBe('new');
-  expect(disabled(field('MCP command'))).toBe(false);
+  expect(definitionState('New MCP server')).toBe('new');
+  expect(disabled(field('Command'))).toBe(false);
   expect(screen.queryByRole('button', { name: /^Override MCP fresh/ })).toBeNull();
   expect(writes(s)).toHaveLength(0);
-  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^(← (Extensions|MCP servers)|Back to list)$/ }));
   await openResourceRow('local');
   // A Workspace definition that shadows nothing is removed, not "inherited again".
-  expect(definitionState('MCP local')).toBe('authored');
+  expect(definitionState('Edit MCP server')).toBe('authored');
   expect(screen.queryByRole('button', { name: 'Use global default MCP local' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Remove MCP local' }).closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
 });
@@ -640,7 +639,7 @@ function agentFiles(files: { user?: 'valid' | 'malformed'; workspace?: 'valid' |
 }
 async function openReviewer(s: Subject, scope: 'user' | 'workspace') {
   await (scope === 'user' ? user : workspace)(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Subagents' }));
+  await openResourceModule('subagents');
   await openResourceRow('reviewer');
 }
 const authoredValue = (title: string) => definition(title).getAttribute('data-authored-value');
@@ -704,8 +703,7 @@ it('S2-07 a malformed Workspace named Agent is the Workspace definition shadowin
   expect(definitionState('Agent reviewer')).toBe('authored');
   expect(authoredValue('Agent reviewer')).toBe('unparsed');
   expect(within(definition('Agent reviewer')).getByText(/This configuration could not be read/)).toBeTruthy();
-  expect(screen.getByText('Overrides the inherited definition')).toBeTruthy();
-  expect(screen.getByText('Invalid definition')).toBeTruthy();
+  expect(screen.getAllByText(INVALID_AGENT).length).toBeGreaterThan(0);
   expect(screen.queryByText(/Inherited from User/)).toBeNull();
   // Nothing is locked behind an Override transition, and nothing is seeded
   // from the User definition: the Workspace one already exists.
@@ -723,7 +721,7 @@ it('S2-07 a malformed Workspace named Agent is the Workspace definition shadowin
   fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
   expect(retained(s)).toContain('"base":"agent-workspace-bad"');
   await openSettingsPage('Models');
-  await openSettingsPage('Extensions');
+  await openResourceModule('subagents');
   expect(field('Description').value).toBe('Workspace reviewer');
   expect(writes(s)).toHaveLength(0);
 
@@ -751,7 +749,7 @@ it('S2-07 using the global default in place of a malformed Workspace named Agent
   // The authoritative reread shows the User definition in effect again,
   // inspected read-only, with no Workspace draft created by the transition.
   await waitFor(() => expect(definitionState('Agent reviewer')).toBe('inherited'));
-  expect(screen.getByText('Inherited from User · no override in this Workspace')).toBeTruthy();
+  expect(screen.getByText('Using global settings.')).toBeTruthy();
   expect(field('Description').value).toBe('User reviewer');
   expect(disabled(field('Description'))).toBe(true);
   expect(s.source.agents.map(agent => agent.scope)).toEqual(['user']);
@@ -778,36 +776,27 @@ it('S2-07 a malformed Workspace-only named Agent is authored by the Workspace an
 
 // ── S2-08 No fictitious authoring ───────────────────────────────────────────
 
-it.each([
-  ['Skills', 'docs', 'Available skills'],
-  ['Python', 'analysis', 'Tools: python:analysis'],
-] as const)('S2-08 %s offer inventory and root selection but no definition mutation', async (filter, name, selectionForm) => {
-  const s = cfg3Client();
-  s.source.prospective_resources = inventory();
-  await user(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: filter }));
-  expect(screen.queryByRole('button', { name: /^Add / })).toBeNull();
-  expect(screen.queryByRole('button', { name: 'New' })).toBeNull();
-  await openResourceRow(name);
-  // The only form is the supported root selection; no Edit, Save or Delete is
-  // offered for the definition itself.
-  expect(forms()).toEqual([selectionForm]);
-  const selection = screen.getByRole('form', { name: selectionForm });
-  const definitionActions = screen.queryAllByRole('button', { name: /^(Edit|Remove|Delete|Save|Author|Override) / })
-    .filter(button => !selection.contains(button));
-  expect(definitionActions).toEqual([]);
+it('S2-08 Skills offer read-only instructions and no definition mutation',async()=>{
+  const s=cfg3Client();s.source.prospective_resources=inventory();
+  await user(s);await openResourceModule('skills');await openResourceRow('docs');
+  expect(screen.getByRole('dialog',{name:'docs'})).toBeTruthy();
+  expect(forms()).toEqual([]);
+  expect(screen.queryByRole('textbox')).toBeNull();
+  expect(screen.queryByRole('button',{name:/^(Edit|Remove|Delete|Save)/})).toBeNull();
   expect(writes(s)).toHaveLength(0);
 });
-
-it('S2-08 a Workflow is enabled on its card in Workflows, not in Settings', async () => {
-  const s = cfg3Client();
-  s.source.prospective_resources = inventory();
-  await user(s, 'Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'Workflows' }));
-  await openResourceRow('nightly');
-  expect(forms()).toEqual([]);
-  expect(screen.getByText(/Enable workflows in the Workflows page/)).toBeTruthy();
+it('S2-08 Python offers inventory and root selection but no definition mutation',async()=>{
+  const s=cfg3Client();s.source.prospective_resources=inventory();await user(s,'Extensions');
+  fireEvent.click(screen.getByRole('tab',{name:'Python'}));await openResourceRow('analysis');
+  expect(forms()).toEqual(['Tools: python:analysis']);
+  const selection=screen.getByRole('form',{name:'Tools: python:analysis'});
+  expect(screen.queryAllByRole('button',{name:/^(Edit|Remove|Delete|Save|Author|Override) /}).filter(button=>!selection.contains(button))).toEqual([]);
   expect(writes(s)).toHaveLength(0);
+});
+it('S2-08 Workflows are no longer listed in Settings',async()=>{
+  const s=cfg3Client();s.source.prospective_resources=inventory();await user(s,'Extensions');
+  expect(screen.queryByRole('tab',{name:'Workflows'})).toBeNull();
+  expect(screen.queryByText('nightly')).toBeNull();expect(writes(s)).toHaveLength(0);
 });
 
 // ── S2-09 Drafts survive navigation, revisions and native errors ────────────
@@ -827,7 +816,7 @@ it('S2-09 a dirty Provider draft survives list/detail, page, filter and revision
   expect(endpoint().value).toBe('https://draft.invalid');
   // Another page, a filter change there, and back: Models restores its focus.
   await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  await openResourceModule('mcp');
   await openSettingsPage('Models');
   expect(screen.getByRole('heading', { name: 'Provider transport' })).toBeTruthy();
   expect(endpoint().value).toBe('https://draft.invalid');
@@ -985,6 +974,7 @@ it('S2-12 no global state framework, router, second design system or form devtoo
 
 it('S2-12 React Aria and TanStack Form stay bounded to their declared interaction owners', () => {
   expect(importers('react-aria-components')).toEqual([
+    'src/app/resources/ResourceSurface.tsx',
     'src/app/scheduler/TimingEditor.tsx',
     'src/app/settings/models/ModelsPage.tsx',
     'src/app/settings/models/ProviderIcon.tsx',

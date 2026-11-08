@@ -72,6 +72,9 @@ import { draftPreparations } from './new-conversation/preparation';
 import { workflowSurfaceMachine, type WorkflowSurfaceActor } from './workflows/machines/surface';
 import { createWorkflowPort } from './workflows/port';
 import { WorkflowsSurface } from './workflows/ui/WorkflowsSurface';
+import { ResourceSurface } from './resources/ResourceSurface';
+import {McpIcon} from './resources/mcp/McpIcon';
+import {IconAgentPresetOutline16,IconCodeOutline16} from '../presentation/primitives/icons';
 import { IconWorkflow } from './workflows/ui/icons';
 import { TaskManagerPage } from './scheduler/TaskManagerPage';
 import { TaskDetail, TaskTabTitle } from './scheduler/TaskDetail';
@@ -337,6 +340,9 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       items={[
         { id: 'home', label: tx('sidebar:navigation.home'), icon: <IconHomeOutline16 size={18}/>, controls: 'home-sidebar', expanded: geometry.sidebarExpanded, select: () => { if (home) geometry.expandSidebar(); else shell.send({ type: 'HOME' }); } },
         { id: 'workflows', label: tx('workflows:nav.label'), icon: <IconWorkflow size={18}/>, select: () => shell.send({ type: 'WORKFLOWS' }) },
+        { id: 'subagents', label: tx('resources:subagents.nav'), icon: <IconAgentPresetOutline16/>, select: () => shell.send({type:'RESOURCES',module:'subagents'}) },
+        { id: 'mcp', label: tx('resources:mcp.title'), icon: <McpIcon/>, select: () => shell.send({type:'RESOURCES',module:'mcp'}) },
+        { id: 'skills', label: tx('resources:skills.title'), icon: <IconCodeOutline16/>, select: () => shell.send({type:'RESOURCES',module:'skills'}) },
         { id: 'schedules', label: tx('sidebar:navigation.schedules'), icon: <IconClockOutline16 size={18}/>, select: () => shell.send({ type: 'SCHEDULES' }) },
       ]}
       settings={{ id: 'settings', label: tx('settings:settings.settings'), icon: <IconSettingsOutline16 size={18}/>, select: () => shell.send({ type: 'SETTINGS' }) }}
@@ -383,6 +389,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     </OverlayScope>
     {primaryRoute.kind === 'schedules' && <TaskManagerPage client={client} newTask={() => createInWorkspace()} openSession={openTaskSession}/>}
     {primaryRoute.kind === 'workflows' && <WorkflowsSurface surface={workflows} authority={workspaceAuthority} />}
+    {(['subagents','mcp','skills'] as const).map(module=><OverlayScope key={`${module}:${state.authorityRevision}`} className="primary-page" active={primaryRoute.kind===module}><ResourceSurface module={module} visible={primaryRoute.kind===module} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} initialWorkspace={workspace}/></OverlayScope>)}
     <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}

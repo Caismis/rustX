@@ -5656,3 +5656,45 @@ original dark reference is retained; both raw variants and their hashes are
 frozen with the comparator. Only that one dark-reference pixel now admits the
 measured delta of 1. Regression tests reject adjacent pixels, larger changes and
 other references; no global screenshot threshold changed.
+
+## Independent resource modules (2026-11-08)
+
+Reference inspected: ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e`,
+`packages/ui/src/settings/{SubagentsSection,McpSettingsSection,SkillsSection}.tsx`
+and the app shell's resource navigation. The local implementation adopts separate
+resource destinations, explicit Global / Workspace scope, searchable installed
+resources, per-resource availability and compact MCP authoring. No ZCode source
+code or dependency is copied into this change.
+
+Subagents, MCP servers and Skills now have independent primary routes. Their
+source reads, drafts, exact revisions and writes reuse the existing native
+configuration actors; scope changes never copy configuration between owners.
+Workspace MCP and Agent definitions inherit read-only until explicitly overridden.
+Removing such an override restores Global configuration. Availability controls
+author the native scope's root selections, independently of definition saves.
+Unlike ZCode's current user-only subagent enablement, rustX supports Workspace
+selection through its existing native delegation allowlist.
+
+Skills use native revision-fenced, paginated discovery and chunked instruction
+reads. They have a read-only Markdown viewer and no file editor, Save or Delete.
+Settings no longer duplicates these resource inventories or their root selection
+controls. Runtime extensions and native Tool policies remain in Settings. Existing
+Harness-derived MCP and catalog materials are moved into `src/app/resources`;
+the inventory retains their upstream attribution and records their new paths.
+
+Validation uses the repository's pinned Chromium container (the Browser plugin
+is unavailable), real native global/workspace files and existing component and
+transaction regressions. Native browser cases cover desktop and narrow layouts,
+paginated skills, separate scopes, explicit MCP override/removal, read-only Skill
+instructions and preserving the Home draft without allocating a hidden Session.
+
+The large Skill catalog regression also exposed a bounded-source read racing
+native application settlement. The shared source reader now restarts a whole
+expired read cut, within three attempts, in both the Web client and Product Host.
+It publishes no partial projection and never resubmits a write. Exhaustion,
+authority replacement and other native failures remain explicit failures.
+
+Current UI references are refreshed for the added primary navigation. The former
+Workflow reference is frozen byte-for-byte in the comparator fixtures so its
+historical CI observations remain independently verifiable. Existing comparison
+policies, regions and deltas are unchanged.

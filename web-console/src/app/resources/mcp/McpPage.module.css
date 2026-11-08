@@ -70,3 +70,10 @@
   .form .footer { flex-wrap:wrap; margin-inline:-12px; margin-bottom:-12px; padding-inline:12px; }
 }
 @media(prefers-reduced-motion:reduce) { .dot[data-status=checking],.iconButton[aria-busy=true] > svg { animation:none; } }
+@media(max-width:600px) {
+  .row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:10px; }
+  .open { grid-column:1 / 3; }
+  .row > :last-child { grid-column:3; grid-row:1; }
+  .connection { grid-column:1; grid-row:2; justify-self:start; }
+  .permissions { grid-column:2 / 4; grid-row:2; justify-self:end; }
+}

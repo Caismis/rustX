@@ -3,7 +3,7 @@ import {afterEach,expect,it} from 'vitest';
 import {act,cleanup,renderHook} from '@testing-library/react';
 import {cfg3Client,cfg3Host} from './cfg3-fixture';
 import {userSettingsTarget,workspaceSettingsTarget,type SettingsTarget} from '../src/app/settings/projection';
-import {useMcpProbes} from '../src/app/settings/mcp/useMcpProbes';
+import {useMcpProbes} from '../src/app/resources/mcp/useMcpProbes';
 import type {McpProbeResult} from '../../protocol/app-server/v77';
 afterEach(cleanup);
 function setup(){

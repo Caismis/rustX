@@ -1,3 +1,4 @@
+import {openResourceModule} from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
@@ -38,21 +39,21 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    let surface=settings;
     expect(await selectedSettingsPage(page)).toBe('General');
     await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     for (const owner of ['Root', 'Agent'] as const) {
-      if (owner === 'Root') { await openSettingsPage(page, 'Models'); await expandModelAuthoring(page); }
+      if (owner === 'Root') { await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);surface=settings; }
       else {
-        await openSettingsPage(page, 'Extensions');
-        await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
-        await settings.getByRole('button', { name: 'Agent optional', exact: true }).click();
+        surface=await openResourceModule(page,'subagents','Workspace A');
+        await surface.getByRole('listitem',{name:'optional',exact:true}).getByRole('button',{name:'optional',exact:true}).click();
       }
       const title = owner === 'Root' ? 'Default model' : 'Agent optional';
-      const form = settings.getByRole('form', { name: title, exact: true });
+      const form = surface.getByRole('form', { name: title, exact: true });
       const save = async () => {
         await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
-        await expect(settings.getByText(`${title} saved.`)).toBeVisible();
+        await expect(surface.getByText(`${title} saved.`)).toBeVisible();
       };
       await choose(form, `${auxiliary} model`, 'summary-b');
       if (owner === 'Agent') {
@@ -70,7 +71,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       // Native writes keep provider-native parameters as JSON strings.
       expect(preserved).toMatch(/request_params = '\{"temperature":0\.2\}'/);
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
-      await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
+      await surface.getByRole('button', { name: owner==='Root'?'Reload configuration':'Refresh', exact: true }).click();
       const nested = form.getByRole('group', { name: `Explicit ${auxiliary} Model settings`, exact: true });
       await expect(nested.getByRole('button', { name: new RegExp(`Profile \\(${auxiliary}\\)$`) })).toContainText('deep');
       await expect(nested.getByLabel(`Output limit (${auxiliary})`)).toHaveValue('2048');
@@ -90,14 +91,13 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       await choose(form, `${auxiliary} model`, 'Follow selected model'); await save();
       await expect(nested).toHaveCount(0);
     }
-    await settings.getByRole('button', { name: '← Extensions', exact: true }).click();
-    await openSettingsPage(page, 'MCP servers');
+    surface=await openResourceModule(page,'mcp','Workspace A');
     for (const transport of ['http', 'stdio'] as const) {
-      await settings.getByRole('button', { name: `MCP implicit-${transport}`, exact: true }).click();
-      await expect(settings).not.toContainText('fixture-header-secret');
-      await expect(settings).not.toContainText('fixture-env-secret');
-      await settings.getByRole('button', { name: 'JSON', exact: true }).click();
-      const editor = settings.getByLabel('Complete configuration',{exact:true});
+      await surface.getByRole('button', { name: `MCP implicit-${transport}`, exact: true }).click();
+      await expect(surface).not.toContainText('fixture-header-secret');
+      await expect(surface).not.toContainText('fixture-env-secret');
+      await surface.getByRole('button', { name: 'JSON', exact: true }).click();
+      const editor = surface.getByLabel('Complete configuration',{exact:true});
       const config = JSON.parse(await editor.innerText());
       const definition = config[`implicit-${transport}`];
       expect(config).not.toHaveProperty('retained_headers');
@@ -105,8 +105,8 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       if (transport === 'http') definition.url = 'https://example.invalid/edited';
       else definition.cwd = fixture.workspaceA;
       await editor.fill(JSON.stringify(config));
-      await settings.getByRole('button', { name: 'Save', exact: true }).click();
-      await expect(settings.getByRole('listitem', { name: `implicit-${transport}`, exact: true })).toBeVisible();
+      await surface.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(surface.getByRole('listitem', { name: `implicit-${transport}`, exact: true })).toBeVisible();
     }
     const mcp = readFileSync(mcpFile, 'utf8');
     expect(mcp).toContain('fixture-header-secret'); expect(mcp).toContain('fixture-env-secret');

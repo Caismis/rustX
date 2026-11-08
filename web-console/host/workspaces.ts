@@ -1,5 +1,5 @@
 import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
-import { materializeSource } from '../../protocol/app-server/source-observation.ts';
+import { readSourceSettings } from '../../protocol/app-server/source-observation.ts';
 import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
 import { OfficeDocuments } from './documents/operation.ts';
@@ -491,8 +491,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     return this.nativeLane(id, async () => (await this.resolveWorkspace(id, endpoint)).cwd, async (client, cwd, current) => {
       const target = { kind: 'workspace' as const, directory: cwd };
       const readSource = async () => {
-        const result = await client.call('configuration/sourcesRead', {target}, 'source_settings');
-        return materializeSource(result.projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
+        return readSourceSettings(async()=>(await client.call('configuration/sourcesRead', {target}, 'source_settings')).projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
       };
       if (operation.kind === 'mcp_probe') {
         const { result } = await client.call('mcp/probe', { target, id: operation.id, expected_revision: operation.expected_revision }, 'mcp_probe');

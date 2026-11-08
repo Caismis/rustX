@@ -4,7 +4,7 @@ import type { AppServerClient } from '../../../client/app-server';
 import { useClientSelector, transportSelection, sameValue } from '../../../client/selectors';
 import type { WorkspaceAssociations } from '../../../workspaces/associations';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
-import { settingsTargetKey, type SettingsTarget } from '../projection';
+import { settingsTargetKey, type SettingsTarget } from '../../settings/projection';
 
 const noSubscribe = () => () => {};
 const noCatalog = () => undefined;

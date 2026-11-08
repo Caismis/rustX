@@ -3,26 +3,27 @@ import type { McpWrite, SourceScope, SourceSettings } from '../../../../../proto
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Button } from '../../../presentation/primitives/Button';
-import { UnitOutcomeNotice, useUnitEditing } from '../forms/bridge';
-import { documentAuthoring } from '../projection';
-import type { PageFocus } from '../machines/navigation';
-import { ExtensionDetail } from '../extensions/ExtensionDetail';
-import { ConfirmAction } from '../primitives/aria';
+import { DefinitionNotice, UnitOutcomeNotice, useUnitEditing } from '../../settings/forms/bridge';
+import { documentAuthoring } from '../../settings/projection';
+import type {McpFocus} from '../types';
+import { AvailabilityDetail } from '../shared/AvailabilityDetail';
+import { Advanced,ConfirmAction } from '../../settings/primitives/aria';
 import { McpFormFields } from './McpFormFields';
 import { formatMcpJson, parseMcpJson } from './json';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
 import css from './McpPage.module.css';
 
 export function McpEditor({ source, scope, revision, focus, scopeControl, close }: {
-  source: SourceSettings; scope: SourceScope; revision?: string; focus: PageFocus['mcp']; scopeControl: ReactNode; close: () => void;
+  source: SourceSettings; scope: SourceScope; revision?: string; focus: McpFocus; scopeControl: ReactNode; close: () => void;
 }) {
   const tx = useTranslation();
+  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={focus.name}/></>;
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
   if (document.state !== 'structured') return <><Button onClick={close}>{tx('settings:catalog.mcp')}</Button><p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p></>;
   return <Editor source={source} scope={scope} revision={revision} focus={focus} scopeControl={scopeControl} close={close} document={document}/>;
 }
-function Editor({ source, scope, revision, focus, scopeControl, close, document }: {
-  source: SourceSettings; scope: SourceScope; revision?: string; focus: PageFocus['mcp']; scopeControl: ReactNode; close: () => void;
+function Editor({ source,scope,revision,focus, scopeControl, close, document }: {
+  source: SourceSettings; scope: SourceScope; revision?: string; focus: McpFocus; scopeControl: ReactNode; close: () => void;
   document: Extract<ReturnType<typeof documentAuthoring<NonNullable<SourceSettings['user_mcp']['authored']>>>, {state:'structured'}>;
 }) {
   const tx = useTranslation();
@@ -43,6 +44,9 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
   const validFields = !Object.values(invalidFields).some(Boolean);
   const value = pendingImport ?? unit.displayed;
   const title = tx(focus.name ? 'settings:mcp.edit' : 'settings:mcp.new');
+  const identityTitle = tx('settings:extension-detail.mcp-value',{p0:name});
+  const restoresInherited = scope === 'workspace' && unit.shadowed !== undefined;
+  const removalLabel = tx(restoresInherited ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value',{p0:identityTitle});
   const duplicate = !focus.name && !!document.document[name] && !(submitted.current && unit.outcome.kind === 'saved');
   const definition = value.definition;
   const complete = !!name && !duplicate && (definition.type === 'http' || definition.url != null
@@ -115,13 +119,13 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
     if (mode === 'json') { pendingSave.current = true; applyJson(); }
     else { submitted.current = true; unit.submit(); }
   };
-  if (focus.mode === 'permissions' && name) return <ExtensionDetail source={source} scope={scope} revision={revision} models={[]} profiles={{}} family="mcp" name={name} backLabel={tx('settings:mcp.back')} onFocus={close}/>;
   return <>
     <div className={css.back}><Button size="sm" variant="ghost" disabled={blocked} onClick={close}>{tx('settings:mcp.back')}</Button></div>
     <div className={css.editorHeader}><div><h3>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
-      <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || !validFields} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
-    <form ref={card} tabIndex={-1} className={css.form} aria-label={title} onSubmit={event => {event.preventDefault();save();}}>
+      <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
+    <form ref={card} tabIndex={-1} className={css.form} aria-label={title} data-definition={unit.definition} onSubmit={event => {event.preventDefault();save();}}>
       <fieldset disabled={blocked} className={css.formBody}>
+        <DefinitionNotice unit={unit}/>
         <div className={css.top}>{mode === 'form' && <label>{tx('settings:mcp.name')}<input value={name} placeholder={tx('settings:mcp.name-placeholder')} disabled={!!focus.name || unit.reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label>}<div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
         {duplicate && <p role="alert" className={css.error}>{tx('settings:mcp.duplicate')}</p>}
         {mode === 'json' ? <>
@@ -132,18 +136,21 @@ function Editor({ source, scope, revision, focus, scopeControl, close, document 
         </> : <fieldset disabled={duplicate || !unit.writable} className={css.formBody}>
           <McpFormFields value={value} change={unit.edit} validity={validity}/>
         </fieldset>}
-        {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
+        {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button type="button" onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
         {unit.reviewNeeded && <div className={css.notice}><p role="status">{tx('settings:mcp.review')}</p><Button onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
-        <UnitOutcomeNotice title={tx('settings:extension-detail.mcp-value',{p0:name})} outcome={unit.outcome}/>
+        {unit.awaitingObservation && <p role="status">{tx('settings:forms.saved-refreshing')}</p>}
+        <UnitOutcomeNotice title={identityTitle} outcome={unit.outcome}/>
         {error && mode !== 'json' && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
       </fieldset>
       <div className={css.footer}>
-        {focus.name && unit.authoredPresent && <ConfirmAction label={tx('settings:mcp.remove')} title={tx('settings:mcp.remove-confirm')} description={tx('settings:mcp.remove-help')} confirm={tx('settings:mcp.remove')} tone="destructive" settle={card} disabled={blocked || !unit.admitted} onConfirm={() => {submitted.current=true;unit.submit(true);}}/>}
+        {focus.name && unit.authoredPresent && <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')} title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})} description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')} confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={blocked || !unit.admitted} onConfirm={() => {submitted.current=true;unit.submit(true);}}/></span>}
         <div className={css.footerButtons}>
           <Button variant="primary" type="submit" disabled={!canSave}>{tx('settings:mcp.save')}</Button>
+          {unit.intent && <Button type="button" disabled={blocked} onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
           <Button type="button" disabled={blocked} onClick={() => {if (!duplicate) unit.discard();close();}}>{tx('settings:mcp.cancel')}</Button>
         </div>
       </div>
     </form>
+    {focus.name&&<Advanced title={tx('resources:mcp.permissions')}><AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={focus.name}/></Advanced>}
   </>;
 }

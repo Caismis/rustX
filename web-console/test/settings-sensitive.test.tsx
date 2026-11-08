@@ -1,3 +1,4 @@
+import {openResourceModule} from './settings-harness';
 import { waitForSettingsRevision } from './settings-harness';
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
@@ -144,11 +145,12 @@ it('S1-15 an MCP literal environment value is never projected back into its edit
   render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
   await settingsReady();
   await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  await openResourceModule('mcp');
   await openResourceRow('search');
   // Native cleared the literal map and named only the identities it retained.
   expect(screen.queryByRole('group', { name: 'Literal environment' })).toBeNull();
-  expect((within(screen.getByRole('group', { name: 'Retain existing environment keys' })).getByRole('textbox', { name: 'Retain existing environment keys 1' }) as HTMLInputElement).value).toBe('TOKEN');
+  expect(s.source.user_mcp.authored?.search.retained_env).toEqual(['TOKEN']);
+  expect(screen.queryByRole('group',{name:'Retain existing environment keys'})).toBeNull();
   expect(document.body.innerHTML).not.toContain(SENTINEL);
   expect(retained(s)).not.toContain(SENTINEL);
 });

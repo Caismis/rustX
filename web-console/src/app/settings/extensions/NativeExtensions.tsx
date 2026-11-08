@@ -6,7 +6,7 @@ import { UnitForm } from '../forms/bridge';
 import { TextField } from '../forms/controls';
 import { Advanced, Choice, Toggle } from '../primitives/aria';
 import { sourceView } from '../projection';
-import { ConfigUnavailable } from './ExtensionDetail';
+import { ConfigUnavailable } from '../forms/ConfigUnavailable';
 
 /** The native extensions: Todo, Goal and Agent Status.
  *

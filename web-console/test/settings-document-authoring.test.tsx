@@ -1,3 +1,4 @@
+import {showSettings,openResourceModule,newSubagent} from './settings-harness';
 // @vitest-environment jsdom
 import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it } from 'vitest';
@@ -12,7 +13,7 @@ afterEach(cleanup);
 const configPages = ['Models', 'Agent', 'Tools & Permissions', 'Advanced'] as const;
 const writes = (s: ReturnType<typeof cfg3Client>) => s.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite').map(([op]) => op as Extract<Request1, { method: 'configuration/sourceWrite' }>);
 const sourcesReads = (s: ReturnType<typeof cfg3Client>) => s.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead');
-const open = (page: string) => fireEvent.click(screen.getByRole('tab', { name: page }));
+const open=(page:string)=>{showSettings();fireEvent.click(screen.getByRole('tab',{name:page}));};
 const filter = (family: string) => fireEvent.click(screen.getByRole('tab', { name: family }));
 const forms = () => screen.queryAllByRole('form').map(form => form.getAttribute('aria-label'));
 const MALFORMED = 'invalid rustx.toml; source was not loaded';
@@ -96,24 +97,22 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   await waitForSettingsRevision('user-1');
   // MCP: its own valid document, its own revision.
   open('Extensions');
-  filter('MCP servers');
+  await openResourceModule('mcp');
   expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
-  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
+  fireEvent.click(screen.getByRole('button', { name: '＋ New' }));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'probe' } });
   openMcpContractEditor();
-  const mcp = within(screen.getByRole('form', { name: 'MCP probe' }));
-  fireEvent.change(mcp.getByLabelText('MCP command'), { target: { value: 'probe-server' } });
-  fireEvent.click(mcp.getByRole('button', { name: 'Save MCP probe' }));
+  const mcp = within(screen.getByRole('form', { name: 'New MCP server' }));
+  fireEvent.change(mcp.getByLabelText('Command'), { target: { value: 'probe-server' } });
+  fireEvent.click(mcp.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'mcp-1', mutation: { kind: 'mcp', id: 'probe' } });
   // Named Agent: a whole resource document of its own.
-  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  await screen.findByRole('button', {name:'＋ New'});
   open('Extensions');
-  filter('Subagents');
+  await openResourceModule('subagents');
   expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
-  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
-  fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
+  await newSubagent('helper');
   const agent = within(screen.getByRole('form', { name: 'Agent helper' }));
   fireEvent.change(agent.getByLabelText('Description'), { target: { value: 'independent' } });
   fireEvent.click(agent.getByRole('button', { name: 'Save Agent helper' }));
@@ -129,9 +128,9 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await waitForSettingsRevision('user-1');
   open('Extensions');
-  filter('MCP servers');
+  await openResourceModule('mcp');
   expect(screen.getByText('invalid MCP document')).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'New' })).toBeNull();
+  expect(screen.getByRole('button',{name:'＋ New'})).toHaveProperty('disabled',true);
   expect(screen.queryByLabelText('New MCP identity')).toBeNull();
   expect(forms()).toEqual([]);
   open('Tools & Permissions');
@@ -167,14 +166,12 @@ async function reachableModels() {
   const root = options(screen.getByRole('form', { name: 'Default model' }), /Model$/);
   open('Extensions');
   open('Extensions');
-  filter('Subagents');
-  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
-  fireEvent.change(screen.getByLabelText('New Agent identity'), { target: { value: 'helper' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add Agent' }));
+  await openResourceModule('subagents');
+  await newSubagent('helper');
   const agent = screen.getByRole('form', { name: 'Agent helper' });
   fireEvent.click(within(agent).getByLabelText('Use a specific model'));
   const named = options(agent, /Model$/);
-  fireEvent.click(screen.getByRole('button', { name: /^← (Extensions|MCP servers)$/ }));
+  fireEvent.click(screen.getByRole('button', { name: /^(← MCP servers|Back to list)$/ }));
   const selectable = (list: string[]) => list.filter(option => option !== 'Select model');
   return { catalog, root: selectable(root), named: selectable(named) };
 }

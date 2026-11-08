@@ -219,11 +219,11 @@ it('the full-width workflow editor does not inherit the retired Start-icon allow
 });
 
 it('the real workflow CI capture retains exactly its 608 raw curve observations', () => {
-  const name = workflowReference, expected = reference(name);
+  const name = workflowReference, expected = fixture('workflow-editor-baseline-linux.png');
   const file = 'workflow-editor-noise-42313212047-linux.png';
   const actual = fixture(file);
   const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-  expect(hash(readFileSync(new URL(`./e2e/workflow-editor.spec.ts-snapshots/${name}`, import.meta.url))))
+  expect(hash(readFileSync(new URL('workflow-editor-baseline-linux.png', frozen))))
     .toBe('0289fc15fbcc7b77de5af83c1f647bb98f713c8e0c946f81ddb7c8b2f7bc84e4');
   expect(hash(readFileSync(new URL(file, frozen))))
     .toBe('3b70711ff4cea0938cd7d6264fb055b393d9ad67b6bdb7ee641653f971c51bba');
@@ -321,7 +321,7 @@ it('Workflow curve coverage admits exactly the observed union within each measur
 
 it('the fourth Workflow raw PNG binds all 746 observations to the unchanged reference', () => {
   const name = 'workflow-editor-linux.png', file = 'workflow-editor-noise-42371118714-linux.png';
-  const bytes = readFileSync(new URL(file, frozen)), actual = decodePng(bytes), expected = reference(name);
+  const bytes = readFileSync(new URL(file, frozen)), actual = decodePng(bytes), expected = fixture('workflow-editor-baseline-linux.png');
   const capture = workflowCaptures.find(capture => capture.run === 42371118714)!;
   expect(createHash('sha256').update(bytes).digest('hex')).toBe(capture.pngSha256);
   const verdict = compare(actual, name, expected, noisePolicy);

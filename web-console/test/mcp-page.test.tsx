@@ -1,14 +1,15 @@
+import {openResourceModule} from './settings-harness';
 import { changeJson, readJson } from './json-editor-helpers';
 // @vitest-environment jsdom
 import {afterEach,expect,it} from 'vitest';
-import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
+import {cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
 import {cfg3Client,cfg3Host} from './cfg3-fixture';
 import {SettingsSurface,settingsReady,openSettingsPage,chooseOption} from './settings-harness';
 import {userSettingsTarget} from '../src/app/settings/projection';
-import {formatMcpJson,parseMcpJson} from '../src/app/settings/mcp/json';
+import {formatMcpJson,parseMcpJson} from '../src/app/resources/mcp/json';
 afterEach(cleanup);
 const writes=(s:ReturnType<typeof cfg3Client>)=>s.request.mock.calls.flatMap(([op])=>op.method==='configuration/sourceWrite'?[op.params]:[]);
-async function open(){const s=cfg3Client(async (op,source)=>{if(op.method==='configuration/sourceWrite' && op.params.mutation.kind==='mcp') {const mutation=op.params.mutation;source.user_mcp.revision='mcp-saved';if(mutation.authored){const {env,headers,...definition}=mutation.authored.definition;source.user_mcp.authored![mutation.id]={definition,retained_env:Object.keys(env??{}),retained_headers:Object.keys(headers??{})};}else delete source.user_mcp.authored![mutation.id];}});render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)}/>);await settingsReady();await openSettingsPage('MCP servers');return s;}
+async function open(){const s=cfg3Client(async (op,source)=>{if(op.method==='configuration/sourceWrite' && op.params.mutation.kind==='mcp') {const mutation=op.params.mutation;source.user_mcp.revision='mcp-saved';if(mutation.authored){const {env,headers,...definition}=mutation.authored.definition;source.user_mcp.authored![mutation.id]={definition,retained_env:Object.keys(env??{}),retained_headers:Object.keys(headers??{})};}else delete source.user_mcp.authored![mutation.id];}});render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)}/>);await settingsReady();await openResourceModule('mcp');return s;}
 it('MCP has its own navigation and saves a new HTTP server before returning to the list',async()=>{
  const s=await open();
  expect(screen.queryByRole('tab',{name:'All'})).toBeNull();
@@ -173,24 +174,24 @@ it('HTTP authors header references without literal credential fields',async()=>{
  expect(writes(s)[0].mutation).toMatchObject({kind:'mcp',authored:{definition:{sensitive_headers:{Authorization:'$TOKEN'}}}});
 });
 
-it('workspace MCP management excludes user definitions from rows, counts, search and connection actions',async()=>{
+it('workspace MCP management shows inherited global definitions without probing or authoring them',async()=>{
  const s=cfg3Client();
  s.source.target={kind:'workspace',directory:'/workspace/A'};
  s.source.user_mcp.authored={exa:{definition:{type:'http',url:'https://mcp.exa.ai/mcp'},retained_env:[],retained_headers:[]}};
  s.source.prospective_resources={...s.effective.resources,definitions:[]};
  s.source.prospective_resources.definitions.push({family:'mcp',name:'exa',valid:true,location:{scope:'user',path:s.source.user_mcp.path}});
- const {McpPage}=await import('../src/app/settings/mcp/McpPage');
+ const {McpPage}=await import('../src/app/resources/mcp/McpPage');
  const {vi}=await import('vitest');
  const onFocus=vi.fn();
  const props={source:s.source,scope:'workspace' as const,onFocus,scopeControl:<span>Workspace A</span>,refresh:vi.fn(),refreshing:false};
  const ui=render(<McpPage {...props}/>);
  expect(screen.getByText('No MCP servers installed')).toBeTruthy();
- expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();
+ expect(within(screen.getByRole('group',{name:'Available from Global'})).getByRole('listitem',{name:'exa'})).toBeTruthy();
  expect(screen.queryByText('Inherited from user')).toBeNull();
- expect(ui.container.querySelector('[class*="total"]')?.textContent).toBe('MCP 0');
+ expect(ui.container.querySelector('[class*="total"]')?.textContent).toBe('MCP 1');
+ expect(screen.getByRole('button',{name:'Test connection exa'})).toHaveProperty('disabled',true);
  fireEvent.change(screen.getByRole('searchbox'),{target:{value:'exa'}});
- expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();
- await screen.findByText('No matching resources');
+ expect(within(screen.getByRole('group',{name:'Available from Global'})).getByRole('listitem',{name:'exa'})).toBeTruthy();
  expect(s.request.mock.calls.some(([op])=>String(op.method).startsWith('mcp/'))).toBe(false);
  // Switching scope reveals the same user definition without copying or editing it.
  s.source.target={kind:'user'};
@@ -214,7 +215,7 @@ it('a shadowed User definition stays editable at its exact source and retained h
  s.source.workspace_mcp!.authored={docs:{definition:{type:'http',url:'https://workspace.invalid'},retained_env:[],retained_headers:[]}};
  s.source.prospective_resources={...s.effective.resources,definitions:[{family:'mcp',name:'docs',valid:true,location:{scope:'workspace',path:'/workspace/.agents/mcp.toml',shadowed:s.source.user_mcp.path}}]};
  render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)}/>);
- await settingsReady();await openSettingsPage('MCP servers');
+ await settingsReady();await openResourceModule('mcp');
  fireEvent.click(screen.getByRole('button',{name:'MCP docs'}));
  expect((screen.getByLabelText('URL') as HTMLInputElement).value).toBe('https://user.invalid');
  expect(screen.queryByRole('textbox',{name:'Authorization'})).toBeNull();

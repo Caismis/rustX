@@ -1,3 +1,4 @@
+import {openResourceModule} from './settings-harness';
 import { settingsContext } from './settings-harness';
 import {applicationReceipt} from './fixture';
 import { materializeSource } from '../../protocol/app-server/source-observation';
@@ -651,19 +652,18 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
 it('MCP refresh is one read and an unrelated native source update never replays external work', async () => {
   const native = new Native();
   const s = await open(native);
-  await openSettingsPage('MCP servers');
-  expect(sent(s, 'configuration/sourcesRead')).toHaveLength(1);
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-  await settingsReady();
+  await openResourceModule('mcp');
   expect(sent(s, 'configuration/sourcesRead')).toHaveLength(2);
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3));
   native.revision = 'user-2';
   native.description = 'unrelated guidance edit';
   native.application = native.applied('1', 'applied');
   await publish(s, native.application);
-  await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3));
+  await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(4));
   await openSettingsPage('Advanced');
   await waitForSettingsRevision('user-2');
-  await openSettingsPage('MCP servers');
+  await openResourceModule('mcp');
   cleanup();
-  expect(s.requests.map(item => item.request.method)).toEqual(['initialize', 'session/list', ...Array(3).fill('configuration/sourcesRead')]);
+  expect(s.requests.map(item => item.request.method)).toEqual(['initialize', 'session/list', ...Array(5).fill('configuration/sourcesRead')]);
 });

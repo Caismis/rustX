@@ -1,5 +1,5 @@
 import { connectRemote } from './shell-actions';
-import { openEmptySession, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { openEmptySession, returnHome, openResourceModule, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -119,19 +119,14 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childView).toContainText('One-shot subagent record');
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    await returnHome(page);
+        await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A');
-    await openSettingsPage(page, 'Extensions');
-    await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
-    await expect(settings.getByRole('button', { name: 'Agent reviewer', exact: true })).toBeVisible();
-    await settings.getByRole('tab', { name: 'Workflows', exact: true }).click();
-    await expect(settings.getByRole('button', { name: 'Workflow review_pr', exact: true })).toBeVisible();
-    // A Workflow has no authoring operation on this protocol: no Add is offered.
-    await expect(settings.getByRole('button', { name: /^Add / })).toHaveCount(0);
-    await settings.screenshot({ path: test.info().outputPath('native-workflow-inventory.png') });
-    await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
-    await expect(settings.getByRole('button', { name: 'Skill acceptance', exact: true })).toBeVisible();
+    const agents=await openResourceModule(page,'subagents','Workspace A');
+    await expect(agents.getByRole('listitem',{name:'reviewer',exact:true})).toBeVisible();
+    await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'Workflows',exact:true}).click();
+    await expect(page.getByRole('listitem').filter({has:page.getByRole('button',{name:'review_pr',exact:true})})).toBeVisible();
+    const skills=await openResourceModule(page,'skills','Workspace A');
+    await expect(skills.getByRole('listitem',{name:'acceptance',exact:true})).toBeVisible();
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);
     expect(readFileSync(agentPath, 'utf8')).toBe(agent);
     expect((await fixture.control('requests')).requests).toHaveLength(4);
