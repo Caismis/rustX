@@ -486,6 +486,7 @@ impl ModelEventAssembler {
         if index == self.blocks.len() {
             self.blocks
                 .push(Some(AssistantContentBlock::Reasoning(ReasoningBlock {
+                    origin: None,
                     text: None,
                     provider_state: None,
                 })));
@@ -534,6 +535,7 @@ impl BlockKind {
                 text: String::new(),
             }),
             Self::Reasoning => AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
                 text: None,
                 provider_state: None,
             }),

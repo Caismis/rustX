@@ -236,6 +236,7 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
         Vec::new(),
         RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "model-x".to_owned(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
@@ -1328,6 +1329,7 @@ fn requirement_15_old_request_snapshot_reconstructs_old_system_bytes() {
         Vec::new(),
         RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "old-model".to_owned(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 64,

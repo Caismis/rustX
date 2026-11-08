@@ -221,6 +221,19 @@ pointers are not sent. Complete stateless Responses output, including encrypted
 reasoning, remains a validated native replay unit. These wire conversions
 never rewrite the saved conversation.
 
+History can switch in either direction among Chat Completions, Responses and
+Anthropic Messages. Native reasoning is scoped to the producing provider
+binding (provider identity and endpoint), protocol and wire model. Profiles
+do not change that identity. Other models receive the readable reasoning as
+ordinary assistant history; opaque foreign thinking is not sent. Anthropic
+receives historical refusals as text. All protocols use bounded, valid tool
+IDs with the same ID on the matching result; Responses native bundles keep
+their original IDs. Stateless continuation resends the entire input history
+and each native output bundle once. Canonical tool IDs and reasoning stay
+unchanged. The replay owner is frozen with each actual request and retained
+on accepted reasoning, so retries, reconstruction and later model switches
+make the same translation decision.
+
 The bounded endpoint/model rules in `src/model/compat.rs` use `max_tokens` for
 the OpenCode Go API models listed there, following ZCode's built-in catalog.
 Rules are resolved before freezing an invocation, so replay and subprocess

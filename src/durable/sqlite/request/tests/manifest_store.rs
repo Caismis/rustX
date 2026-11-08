@@ -377,6 +377,15 @@ fn native_manifest_tool_relationship_mutation_revokes_warm_proof_and_rejects_wit
     let (snapshot, request) = selected_snapshot(&store, 1);
     let origin = snapshot.input.origin.as_ref().unwrap();
     assert!(snapshot.tool_associations.certifies(origin, &snapshot));
+    for binding_change in [false, true] {
+        let mut changed = snapshot.clone();
+        if binding_change {
+            changed.invocation.replay_binding = Some("another-binding".into());
+        } else {
+            changed.invocation.model = "another-model".into();
+        }
+        assert!(!changed.tool_associations.certifies(origin, &changed));
+    }
     let encoded = serde_json::to_vec(&snapshot.tool_associations).unwrap();
     let decoded: crate::model::occurrence::FrozenToolAssociations =
         serde_json::from_slice(&encoded).unwrap();

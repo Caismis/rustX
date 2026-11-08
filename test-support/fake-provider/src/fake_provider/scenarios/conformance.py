@@ -179,6 +179,34 @@ def anthropic_streamed_turn() -> Scenario:
     )
 
 
+def all_protocol_switches(stateless: bool = False) -> Scenario:
+    """Every directed protocol transition, with real tools on every turn."""
+    steps = []
+    for index, (protocol, model) in enumerate([
+        (OPENAI_RESPONSES, RESPONSES_MODEL),
+        (OPENAI_CHAT_COMPLETIONS, CHAT_MODEL),
+        (ANTHROPIC_MESSAGES, ANTHROPIC_MODEL),
+        (OPENAI_RESPONSES, RESPONSES_MODEL),
+        (ANTHROPIC_MESSAGES, ANTHROPIC_MODEL),
+        (OPENAI_CHAT_COMPLETIONS, CHAT_MODEL),
+        (OPENAI_RESPONSES, RESPONSES_MODEL),
+    ]):
+        prior = tuple(f"switch answer {previous}" for previous in range(index))
+        call_id = f"switch-call-{index}"
+        steps.extend([
+            Step(Expect(protocol=protocol, model=model,
+                        body_contains=(*prior, f"switch prompt {index}")),
+                 Stream(Reasoning(f"switch tool thought {index}", encrypted_content=f"encrypted-tool-{index}" if stateless else None),
+                        ToolCall(call_id, "read", f'{{"path":"{NOTE_PATH}"}}'),
+                        Finish("tool_calls"))),
+            Step(Expect(protocol=protocol, model=model,
+                        body_contains=((call_id, NOTE_MARKER) if protocol == OPENAI_RESPONSES and not stateless else (*prior, f"switch prompt {index}", call_id, NOTE_MARKER))),
+                 Stream(Reasoning(f"switch final thought {index}", encrypted_content=f"encrypted-final-{index}" if stateless else None),
+                        Text(f"switch answer {index}"), Finish())),
+        ])
+    return Scenario("all_protocol_switches_stateless" if stateless else "all_protocol_switches", *steps)
+
+
 def tool_call_continuation() -> Scenario:
     """Provider tool call -> real rustX Read -> provider continuation.
 
@@ -789,6 +817,8 @@ def image_coverage_overflow_retry() -> Scenario:
 
 
 SCENARIOS = {
+    "all_protocol_switches": all_protocol_switches,
+    "all_protocol_switches_stateless": lambda: all_protocol_switches(True),
     "responses_chat_responses_switch": responses_chat_responses_switch,
     "image_coverage_overflow_retry": image_coverage_overflow_retry,
     "image_coverage_stored_reasoning": image_coverage_stored_reasoning,

@@ -518,6 +518,7 @@ async fn tools_are_sent_by_default_when_present() {
 #[test]
 fn the_invocation_configuration_is_credential_free_and_serializable() {
     let invocation = rustx::model::ModelInvocationConfig {
+        replay_binding: Some("test-binding".into()),
         model: "wire-test".to_owned(),
         protocol: ModelProtocol::AnthropicMessages,
         max_output_tokens: 256,

@@ -170,6 +170,7 @@ struct Setup {
     summary_model: Option<String>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
+    responses_stateless: bool,
 }
 
 impl Setup {
@@ -183,6 +184,7 @@ impl Setup {
             keep_recent_tokens: 8_192,
             summary_model: None,
             skill_paths: Vec::new(),
+            responses_stateless: false,
         }
     }
 }
@@ -824,6 +826,11 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
             }),
         );
     }
+    if setup.responses_stateless {
+        models
+            .get_mut(&format!("emulator/{RESPONSES_MODEL}"))
+            .unwrap()["compat"] = serde_json::json!({"responses_storage":"stateless"});
+    }
     if setup.images {
         for (id, protocol) in [
             ("chat-image", "openai_chat_completions"),
@@ -982,6 +989,112 @@ async fn responses_chat_responses_switch_preserves_history_and_tool_results() {
         "Responses answerChat answerBack on Responses"
     );
     emulator.finish().await;
+}
+
+/// Every directed protocol switch goes through real admission and tool execution.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_protocol_switch_keeps_native_owners_history_and_tools() {
+    use rustx::message::types::AssistantContentBlock;
+    use rustx::model::ModelProtocol;
+    for stateless in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join(NOTE_PATH), NOTE_MARKER).unwrap();
+        let Some(emulator) = ProviderEmulator::start_with_workspace(
+            if stateless {
+                "all_protocol_switches_stateless"
+            } else {
+                "all_protocol_switches"
+            },
+            Some(&workspace),
+        )
+        .await
+        else {
+            return;
+        };
+        let models = [
+            ("emulator/responses-model", ModelProtocol::OpenAiResponses),
+            ("emulator/chat-model", ModelProtocol::OpenAiChatCompletions),
+            (
+                "emulator-anthropic/anthropic-model",
+                ModelProtocol::AnthropicMessages,
+            ),
+            ("emulator/responses-model", ModelProtocol::OpenAiResponses),
+            (
+                "emulator-anthropic/anthropic-model",
+                ModelProtocol::AnthropicMessages,
+            ),
+            ("emulator/chat-model", ModelProtocol::OpenAiChatCompletions),
+            ("emulator/responses-model", ModelProtocol::OpenAiResponses),
+        ];
+        let mut setup = Setup::new(models[0].0);
+        setup.responses_stateless = stateless;
+        let driver = Driver::start_in(root, &emulator, &setup).await;
+        for (index, (model, protocol)) in models.into_iter().enumerate() {
+            let before = driver.canonical_history();
+            driver
+                .model_set(SessionModelConfig::of(ModelRef::parse(model).unwrap()))
+                .await
+                .unwrap();
+            driver.submit(&format!("switch prompt {index}"));
+            let (_, outcome) = driver.settle().await;
+            assert!(
+                matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+                "{model}: {outcome:?}"
+            );
+            let after = driver.canonical_history();
+            assert!(after.starts_with(&before));
+            let owned = after[before.len()..]
+                .iter()
+                .filter_map(|message| match message {
+                    MessageBlock::Assistant(a) => Some(a),
+                    _ => None,
+                })
+                .flat_map(|a| &a.content)
+                .filter_map(|block| match block {
+                    AssistantContentBlock::Reasoning(r) => r.origin.as_ref(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!owned.is_empty());
+            assert!(
+                owned
+                    .iter()
+                    .all(|origin| origin.protocol == protocol && origin.model == model_id(model))
+            );
+        }
+        let requests = emulator.requests().await;
+        assert_eq!(requests.len(), 14);
+        let history = driver.request_history();
+        let snapshots = history.page(None, 32).unwrap().snapshots;
+        assert_eq!(snapshots.len(), 14);
+        for pair in snapshots.as_chunks::<2>().0 {
+            assert!(
+                pair[0].continuation.is_none(),
+                "a changed Session model starts from full history"
+            );
+            let first = history.reconstruct(&pair[0].identity).unwrap();
+            let next = history.reconstruct(&pair[1].identity).unwrap();
+            assert_eq!(
+                first.invocation.replay_origin(),
+                next.invocation.replay_origin()
+            );
+            assert_eq!(
+                pair[1].continuation.is_some(),
+                first.protocol() != ModelProtocol::OpenAiChatCompletions
+            );
+        }
+        assert_eq!(
+            driver
+                .canonical_history()
+                .iter()
+                .filter(|m| matches!(m, MessageBlock::Tool(_)))
+                .count(),
+            7
+        );
+        emulator.finish().await;
+    }
 }
 
 /// One fixed user input produces exactly one provider request, one canonical

@@ -175,6 +175,21 @@ fn validate_continuation(
     request: &ModelRequest,
     protocol: ModelProtocol,
 ) -> Result<(), ModelError> {
+    if request.continuation.is_some()
+        && let Some(boundary) = request.continuation_boundary().map_err(invalid_request)?
+        && let crate::model::projected::ModelMessageView::Assistant(content) =
+            request.messages[boundary].view()
+        && !content.iter().any(|block| {
+            matches!(block,
+            crate::message::types::AssistantContentBlock::Reasoning(reasoning)
+            if reasoning.belongs_to(request.invocation.replay_origin().as_ref())
+                && reasoning.provider_state.as_ref() == request.continuation.as_ref())
+        })
+    {
+        return Err(invalid_request(
+            "continuation belongs to a different model or provider binding".into(),
+        ));
+    }
     match (&request.continuation, protocol) {
         (None, _) => Ok(()),
         (Some(_state), ModelProtocol::OpenAiChatCompletions) => Err(invalid_request(
@@ -442,6 +457,7 @@ mod tests {
             continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
+                replay_binding: Some("test-binding".into()),
                 model: "m".to_owned(),
                 protocol: ModelProtocol::OpenAiResponses,
                 max_output_tokens: 512,
@@ -521,6 +537,7 @@ mod tests {
             let output = MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("actual-output"),
                 content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                    origin: input.invocation.replay_origin(),
                     text: text.map(str::to_owned),
                     provider_state: Some(state.clone()),
                 })],

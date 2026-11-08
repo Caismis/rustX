@@ -131,6 +131,7 @@ async fn canonical_assistant_history_uses_output_text() {
         })];
         if stored_pointer {
             content.push(AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
                 text: None,
                 provider_state: Some(ProviderContinuationState::OpenAiResponses(
                     OpenAiResponsesContinuation::Stored {
@@ -791,9 +792,8 @@ async fn stateless_fresh_request_preserves_opaque_items() {
     );
 }
 
-/// Stateless continuation replays the preserved provider-native items first,
-/// then only the canonical context after the continuation boundary, without
-/// duplicating the previous generation.
+/// Stateless continuation preserves earlier inputs and tool results, substituting
+/// the exact native output once at its original chronological position.
 #[tokio::test]
 async fn stateless_continuation_replays_items_without_duplication() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
@@ -833,7 +833,21 @@ async fn stateless_continuation_replays_items_without_duplication() {
             ],
         },
     ));
-    crate::common::bind_accepted_continuation_source(&mut request, 0);
+    let prefix = simple_request(
+        ModelProtocol::OpenAiResponses,
+        "gpt-test",
+        "Original user context",
+    )
+    .messages[0]
+        .clone();
+    request.messages.insert(0, prefix);
+    for (index, message) in crate::model_switching::tool_history("prefix", "prefix-call", None)
+        .into_iter()
+        .enumerate()
+    {
+        request.messages.insert(index + 1, message.into());
+    }
+    crate::common::bind_accepted_continuation_source(&mut request, 3);
     let events = collect_events(
         &adapter(&server),
         with_storage(request, ResponsesStorageMode::Stateless),
@@ -843,14 +857,27 @@ async fn stateless_continuation_replays_items_without_duplication() {
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     let input = body["input"].as_array().expect("input array");
-    assert_eq!(input.len(), 3, "items + tail user prompt, no duplication");
-    assert_eq!(input[0]["type"], "reasoning");
-    assert_eq!(input[0]["encrypted_content"], "opaque-blob");
-    assert_eq!(input[1]["type"], "message");
-    assert_eq!(input[1]["content"][0]["text"], "Previous answer.");
-    assert_eq!(input[2]["type"], "message");
-    assert_eq!(input[2]["role"], "user");
-    assert_eq!(input[2]["content"][0]["text"], "Continue");
+    assert_eq!(
+        input.len(),
+        6,
+        "original input + tool pair + native output + tail, exactly once"
+    );
+    assert_eq!(input[0]["content"][0]["text"], "Original user context");
+    assert_eq!(input[1]["type"], "function_call");
+    assert_eq!(input[2]["type"], "function_call_output");
+    assert_eq!(input[1]["call_id"], input[2]["call_id"]);
+    assert!(
+        input[2]["output"]
+            .as_str()
+            .unwrap()
+            .contains("prefix tool result")
+    );
+    assert_eq!(input[3]["type"], "reasoning");
+    assert_eq!(input[3]["encrypted_content"], "opaque-blob");
+    assert_eq!(input[4]["type"], "message");
+    assert_eq!(input[4]["content"][0]["text"], "Previous answer.");
+    assert_eq!(input[5]["role"], "user");
+    assert_eq!(input[5]["content"][0]["text"], "Continue");
     assert!(body.get("previous_response_id").is_none());
 }
 
@@ -1214,6 +1241,7 @@ async fn reasoning_without_responses_replay_state_is_readable_history() {
                 id: MessageId::new("msg-reasoning"),
                 content: vec![
                     AssistantContentBlock::Reasoning(ReasoningBlock {
+                        origin: None,
                         text: text.map(str::to_owned),
                         provider_state,
                     }),
@@ -1263,6 +1291,7 @@ async fn reasoning_with_provider_state_replays_items_verbatim() {
                 id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
                 content: vec![AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
                         text: None,
                         provider_state: Some(ProviderContinuationState::OpenAiResponses(
                             OpenAiResponsesContinuation::Stateless {
@@ -1323,6 +1352,7 @@ async fn complete_stateless_output_replays_text_and_calls_once_and_rejects_edits
                 id: MessageId::new("accepted-output"),
                 content: vec![
                     AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
                         text: None,
                         provider_state: Some(ProviderContinuationState::OpenAiResponses(
                             OpenAiResponsesContinuation::Stateless {

@@ -248,6 +248,7 @@ mod tests {
                     } else {
                         blocks.push(AssistantContentBlock::Reasoning(
                             crate::message::types::ReasoningBlock {
+                                origin: None,
                                 text: Some(text.clone()),
                                 provider_state: None,
                             },
@@ -272,6 +273,7 @@ mod tests {
                         // implicitly at the declared index.
                         blocks.push(AssistantContentBlock::Reasoning(
                             crate::message::types::ReasoningBlock {
+                                origin: None,
                                 text: None,
                                 provider_state: Some(state.clone()),
                             },

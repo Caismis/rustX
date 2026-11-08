@@ -16470,6 +16470,48 @@
         }
       ]
     },
+    "ReplayOrigin": {
+      "description": "Only the originating provider binding, protocol and wire model can replay\nopaque reasoning. Other invocations use the readable history instead.",
+      "type": "object",
+      "properties": {
+        "binding": {
+          "description": "Fingerprint of the configured provider identity and endpoint; no credentials.",
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/ModelProtocol"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "binding",
+        "protocol",
+        "model"
+      ]
+    },
+    "ModelProtocol": {
+      "description": "The model interaction protocol an adapter must speak.",
+      "oneOf": [
+        {
+          "description": "`OpenAI` Chat Completions API.",
+          "type": "string",
+          "const": "openai_chat_completions"
+        },
+        {
+          "description": "`OpenAI` Responses API.",
+          "type": "string",
+          "const": "openai_responses"
+        },
+        {
+          "description": "`Anthropic` Messages API.",
+          "type": "string",
+          "const": "anthropic_messages"
+        }
+      ]
+    },
     "ProviderContinuationState": {
       "description": "Provider-specific continuation state preserved by the runtime.\n\n`None` (absence) is the natural representation for protocols that carry no\ncontinuation state, such as `OpenAI` Chat Completions, which resend the\nfull context instead of referencing a previous response.",
       "oneOf": [
@@ -16567,6 +16609,17 @@
       "description": "Model reasoning content.\n\nReadable reasoning stays separate from provider-specific opaque state.\nAdapters may render the readable text as ordinary assistant history when\nthe target protocol has no native replay representation. Opaque state is\nnever flattened: it survives on the [`ProviderContinuationState`] boundary\nfor native continuation.",
       "type": "object",
       "properties": {
+        "origin": {
+          "description": "Producing invocation, when this reasoning has an attributed model owner.\nUnattributed reasoning is readable history, never native replay authority.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReplayOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "text": {
           "description": "The reasoning text, when the provider exposed it.",
           "type": [
@@ -19120,26 +19173,6 @@
     "ModelRef": {
       "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
       "type": "string"
-    },
-    "ModelProtocol": {
-      "description": "The model interaction protocol an adapter must speak.",
-      "oneOf": [
-        {
-          "description": "`OpenAI` Chat Completions API.",
-          "type": "string",
-          "const": "openai_chat_completions"
-        },
-        {
-          "description": "`OpenAI` Responses API.",
-          "type": "string",
-          "const": "openai_responses"
-        },
-        {
-          "description": "`Anthropic` Messages API.",
-          "type": "string",
-          "const": "anthropic_messages"
-        }
-      ]
     },
     "ModelProfileId": {
       "description": "The identity of one Model Profile declared by a model.\n\nThe runtime assigns no meaning to the name: `fast`, `precise`, `creative`,\n`thinking-32k`, and `deep` are all just names whose behaviour is exactly\nthe profile's output default and\n`request_params`.",

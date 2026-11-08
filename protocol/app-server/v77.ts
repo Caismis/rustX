@@ -12957,6 +12957,11 @@ export interface AssistantMessageBlock {
  */
 export interface ReasoningBlock {
   /**
+   * Producing invocation, when this reasoning has an attributed model owner.
+   * Unattributed reasoning is readable history, never native replay authority.
+   */
+  origin?: ReplayOrigin | null;
+  /**
    * The reasoning text, when the provider exposed it.
    */
   text?: string | null;
@@ -12964,6 +12969,21 @@ export interface ReasoningBlock {
    * Provider continuation state required to continue the generation.
    */
   provider_state?: ProviderContinuationState | null;
+}
+/**
+ * Only the originating provider binding, protocol and wire model can replay
+ * opaque reasoning. Other invocations use the readable history instead.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ReplayOrigin".
+ */
+export interface ReplayOrigin {
+  /**
+   * Fingerprint of the configured provider identity and endpoint; no credentials.
+   */
+  binding: string;
+  protocol: ModelProtocol;
+  model: string;
 }
 /**
  * Continuation state for the `Anthropic` Messages protocol.
