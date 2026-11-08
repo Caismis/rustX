@@ -35,8 +35,8 @@ export function ConversationStatus({ client, sessionId, recover, transition }: {
 }
 
 /** Execution admission belongs at the resident composer seat, never the shell. */
-export function ConversationSeat({ client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, draftOwner, binding, current, executable, intakeCommitted, transitioning = false, consumed, restored, preparePublication, onCommand }: {
-  client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
+export function ConversationSeat({ visible = true, client, host, authority, associations, sessionId, initialWorkspace, workspacePicked, draftOwner, binding, current, executable, intakeCommitted, transitioning = false, consumed, restored, preparePublication, onCommand }: {
+  visible?: boolean; client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; associations: WorkspaceAssociations; sessionId?: string; initialWorkspace?: string;
   workspacePicked?: (id: string) => void;
   draftOwner?: ComposerDraft; executable: boolean; intakeCommitted?: boolean; transitioning?: boolean; binding: string; current: () => boolean; consumed?: { id: string; sequence: number };
   restored?: { conversation: string; content: UserInputBlock[] }; preparePublication: () => ((id: string) => (() => boolean) | void);
@@ -56,7 +56,7 @@ export function ConversationSeat({ client, host, authority, associations, sessio
   const disabled = transitioning || !attached || !executable || !!view?.modelMutation || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   return <ComposerSeat>
     <div hidden={view?.observationState === 'following' && !!view.snapshot?.pending_interactions?.length || !!panels?.record}>
-      <ConversationComposer intakeCommitted={intakeCommitted} draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
+      <ConversationComposer visible={visible} intakeCommitted={intakeCommitted} draftOwner={draftOwner} client={client} host={host} authority={authority} associations={associations} initialWorkspace={initialWorkspace} workspacePicked={workspacePicked} binding={binding} activeView={view} current={current} consumed={consumed} preparePublication={preparePublication}
         context={view && <ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/>}
         active={view ? {
           initialContent: restored?.conversation === (view.nodeConversationId ?? view.target?.conversation_id ?? view.snapshot?.conversation_id) ? restored?.content : undefined,

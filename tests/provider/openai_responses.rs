@@ -111,6 +111,61 @@ async fn plain_text_normalizes() {
     assert_eq!(events.len(), 5, "{}", describe_events(&events));
 }
 
+/// Fresh requests replay canonical history after a turn or model switch.
+/// Assistant text is output_text even though it is part of the next input;
+/// only the new user prompt is input_text. Stored pointers are not replayed.
+#[tokio::test]
+async fn canonical_assistant_history_uses_output_text() {
+    use rustx::message::types::{AssistantMessageBlock, ReasoningBlock};
+    use rustx::runtime::identity::MessageId;
+
+    let server = crate::common::FixtureServer::start(|_, _| {
+        sse_fixture("openai_responses", "plain_text.sse")
+    })
+    .await;
+    for (attempt, stored_pointer) in [false, true].into_iter().enumerate() {
+        let mut request =
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Next question");
+        let mut content = vec![AssistantContentBlock::Text(TextBlock {
+            text: "Previous answer".to_owned(),
+        })];
+        if stored_pointer {
+            content.push(AssistantContentBlock::Reasoning(ReasoningBlock {
+                text: None,
+                provider_state: Some(ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stored {
+                        previous_response_id: "resp_previous_model".to_owned(),
+                    },
+                )),
+            }));
+        }
+        request.messages.insert(
+            0,
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+                AssistantMessageBlock {
+                    id: MessageId::new("previous"),
+                    content,
+                },
+            )),
+        );
+        let events = collect_events(
+            &adapter(&server),
+            with_storage(request, ResponsesStorageMode::Stored),
+        )
+        .await;
+        assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+        let body: serde_json::Value = serde_json::from_str(&server.request_body(attempt)).unwrap();
+        assert_eq!(
+            body["input"],
+            serde_json::json!([
+                {"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"Previous answer"}]},
+                {"type":"message", "role":"user", "content":[{"type":"input_text", "text":"Next question"}]},
+            ])
+        );
+        assert!(body.get("previous_response_id").is_none());
+    }
+}
+
 /// Reasoning summary and reasoning text merge into one canonical reasoning
 /// block per provider reasoning item.
 #[tokio::test]

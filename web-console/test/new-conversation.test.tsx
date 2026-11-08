@@ -36,10 +36,10 @@ function workspaceSource(session_models: SourceSettings['session_models'] = { ki
 async function mount({ current = () => true, source = workspaceSource(), configureWorkspace, ready = true, workspaceHost }: { workspaceHost?: Partial<ProductHostWorkspaces>; current?: () => boolean; source?: SourceSettings; configureWorkspace?: (id: string) => Promise<{ kind: 'read'; projection: SourceSettings }>; ready?: boolean } = {}) {
   // As in App, the route fence is a new function for every connection
   // generation, so every transport transition hands the composer a new one.
-  function Composer() {
+  function Composer({visible = true, binding = 'draft'}: {visible?: boolean; binding?: string}) {
     const generation = useSyncExternalStore(server.client.subscribe, () => server.client.getSnapshot().generation);
     const fenced = useMemo(() => () => current(), [generation]);
-    return <ConversationComposer authority={authority} associations={associations} binding="draft" client={server.client} host={host} initialWorkspace="workspace-a" current={fenced} preparePublication={() => opened}/>;
+    return <ConversationComposer visible={visible} authority={authority} associations={associations} binding={binding} client={server.client} host={host} initialWorkspace="workspace-a" current={fenced} preparePublication={() => opened}/>;
   }
   server = new Server(); await server.connect();
   const base = { ...server.workspaceHost, ...workspaceHost };
@@ -49,10 +49,12 @@ async function mount({ current = () => true, source = workspaceSource(), configu
     configureWorkspace: vi.fn<NonNullable<ProductHostWorkspaces['configureWorkspace']>>(configureWorkspace ?? (async () => ({ kind: 'read' as const, projection: source }))),
   };
   const opened = vi.fn(), authority = new WorkspaceAuthority(host), associations = new WorkspaceAssociations(server.client, authority);
-  await act(async () => { render(<Composer/>); });
+  const presentation = render(<Composer/>);
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Preserved draft' } });
   if (ready) await waitFor(() => expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false));
-  return { host, opened, authority, associations };
+  return { host, opened, authority, associations, present: async (props: {visible?: boolean; binding?: string}) => {
+    await act(async () => presentation.rerender(<Composer {...props}/>));
+  } };
 }
 const methods = () => server.requests.map(r => r.request.method);
 
@@ -73,6 +75,31 @@ async function openModelMenu() {
   if (document.querySelector('[data-model-menu]')?.getAttribute('data-pane') === 'root') fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
 }
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+it('returning to a retained composer and starting a new draft each reread the Workspace model catalog', async () => {
+  let source = workspaceSource();
+  const {host, present} = await mount({configureWorkspace: async () => ({kind:'read', projection:source})});
+  const input = screen.getByRole('textbox', {name:'Message'});
+  await openModelMenu();
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', {name:'fixture/second'})));
+  expect(host.configureWorkspace).toHaveBeenCalledTimes(1);
+  await present({visible:false});
+  source = workspaceSource({kind:'available', default_model:{model:'fixture/fresh'}, catalog:{models:[
+    nativeModel('fixture/native'), nativeModel('fixture/second'), nativeModel('fixture/fresh'),
+  ]}});
+  expect(host.configureWorkspace).toHaveBeenCalledTimes(1);
+  await present({visible:true});
+  await waitFor(() => expect(host.configureWorkspace).toHaveBeenCalledTimes(2));
+  // A reread updates choices without replacing the editor or explicit draft intent.
+  expect(screen.getByRole('textbox', {name:'Message'})).toBe(input);
+  expect(input).toHaveProperty('value', 'Preserved draft');
+  expect(screen.getByRole('button', {name:'Model and thinking effort'}).textContent).toContain('fixture/second');
+  await openModelMenu();
+  expect(modelChoices()).toContain('fixture/fresh');
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', {name:'fixture/second'})));
+  await present({binding:'next-draft'});
+  await waitFor(() => expect(host.configureWorkspace).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(screen.getByRole('button', {name:'Model and thinking effort'}).textContent).toContain('fixture/fresh'));
+});
 it('loads initial permissions and models silently without replacing the editor or its draft', async () => {
   const source = gate<{ kind: 'read'; projection: SourceSettings }>();
   await mount({ configureWorkspace: () => source.promise, ready: false });

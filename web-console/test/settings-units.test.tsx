@@ -58,7 +58,7 @@ it('configures a complete reasoning draft, preserves invalid JSON, and clears on
   const list = () => screen.getByRole('list', { name: 'Reasoning order (low to high)' });
   const ids = () => [...list().children].map(row => row.getAttribute('data-profile-order'));
   expect(ids()).toEqual(['a-high', 'z-low']);
-  const json = screen.getByLabelText('Profile parameters (JSON)');
+  const json = screen.getByLabelText('API parameters (JSON)');
   changeJson(json, '{"request_params":');
   const up = screen.getByRole('button', { name: 'Move z-low up' });
   fireEvent.click(up);
@@ -66,9 +66,9 @@ it('configures a complete reasoning draft, preserves invalid JSON, and clears on
   expect(document.activeElement).toBe(up);
   expect(readJson(json)).toBe('{"request_params":');
   fireEvent.click(screen.getByRole('button', { name: 'Profile a-high' }));
-  expect(readJson(screen.getByLabelText('Profile parameters (JSON)'))).toBe('{"request_params":');
+  expect(readJson(screen.getByLabelText('API parameters (JSON)'))).toBe('{"request_params":');
   expect(jsonValidity(json).checkValidity()).toBe(false);
-  changeJson(json, JSON.stringify(main.profiles['z-low']));
+  changeJson(json, JSON.stringify(main.profiles['z-low'].request_params));
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(writes).toHaveBeenCalledTimes(1));
   expect(writes.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
@@ -162,30 +162,33 @@ it('authors general Model Profiles as complete presets, moving model parameters 
   const precise = within(screen.getByRole('group', { name: 'Profile precise' }));
   // The Model's own parameters seed the first profile; the Model no longer
   // declares any, and the new profile is the default.
-  expect(JSON.parse(readJson(precise.getByLabelText('Profile parameters (JSON)')))).toEqual({ request_params: { temperature: 0.2 } });
-  expect(precise.getByRole('button', { name: 'Format JSON: Profile parameters (JSON)' })).toBeTruthy();
-  expect(precise.queryByLabelText('Default output tokens')).toBeNull();
+  expect(JSON.parse(readJson(precise.getByLabelText('API parameters (JSON)')))).toEqual({ temperature: 0.2 });
+  expect(precise.getByRole('button', { name: 'Format JSON: API parameters (JSON)' })).toBeTruthy();
+  expect(precise.getByLabelText('Profile output limit (optional)')).toHaveProperty('value', '');
   const preciseValue = { max_output_tokens: 1024, request_params: { temperature: 0.1, top_p: 0.5, stop: ['\n', null], metadata: { tier: null } } };
-  changeJson(precise.getByLabelText('Profile parameters (JSON)'), JSON.stringify(preciseValue));
+  changeJson(precise.getByLabelText('API parameters (JSON)'), JSON.stringify(preciseValue.request_params));
+  fireEvent.change(precise.getByLabelText('Profile output limit (optional)'), { target: { value: '1024' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: 'creative' } });
   fireEvent.keyDown(screen.getByLabelText('New profile identity'), { key: 'Enter' });
   const creative = within(screen.getByRole('group', { name: 'Profile creative' }));
   // A later profile starts empty: profiles never inherit from one another.
-  expect(JSON.parse(readJson(creative.getByLabelText('Profile parameters (JSON)')))).toEqual({ request_params: {} });
+  expect(JSON.parse(readJson(creative.getByLabelText('API parameters (JSON)')))).toEqual({});
   // Switching or adding a chip must not unmount an invalid JSON buffer and
   // silently restore the last valid parameters.
-  changeJson(creative.getByLabelText('Profile parameters (JSON)'), '{"request_params":');
+  changeJson(creative.getByLabelText('API parameters (JSON)'), '{"request_params":');
   fireEvent.click(screen.getByRole('button', { name: 'Profile precise' }));
-  expect(readJson(screen.getByLabelText('Profile parameters (JSON)'))).toBe('{"request_params":');
+  expect(readJson(screen.getByLabelText('API parameters (JSON)'))).toBe('{"request_params":');
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   expect(screen.queryByLabelText('New profile identity')).toBeNull();
   const creativeValue = { request_params: { temperature: 1.3 } };
-  changeJson(creative.getByLabelText('Profile parameters (JSON)'), JSON.stringify(creativeValue));
+  changeJson(creative.getByLabelText('API parameters (JSON)'), JSON.stringify(creativeValue.request_params));
   fireEvent.click(screen.getByRole('button', { name: 'Profile precise' }));
-  expect(JSON.parse(readJson(screen.getByLabelText('Profile parameters (JSON)')))).toEqual(preciseValue);
+  expect(JSON.parse(readJson(screen.getByLabelText('API parameters (JSON)')))).toEqual(preciseValue.request_params);
+  expect(screen.getByLabelText('Profile output limit (optional)')).toHaveProperty('value', '1024');
   fireEvent.click(screen.getByRole('button', { name: 'Profile creative' }));
-  expect(JSON.parse(readJson(screen.getByLabelText('Profile parameters (JSON)')))).toEqual(creativeValue);
+  expect(JSON.parse(readJson(screen.getByLabelText('API parameters (JSON)')))).toEqual(creativeValue.request_params);
+  expect(screen.getByLabelText('Profile output limit (optional)')).toHaveProperty('value', '');
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   const { request_params: _, ...rest } = main;
@@ -495,7 +498,7 @@ it('keeps invalid Model parameters mounted until repaired before creating the fi
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: 'precise' } });
   fireEvent.keyDown(screen.getByLabelText('New profile identity'), { key: 'Enter' });
-  expect(JSON.parse(readJson(screen.getByLabelText('Profile parameters (JSON)')))).toEqual({ request_params: { temperature: 0.3 } });
+  expect(JSON.parse(readJson(screen.getByLabelText('API parameters (JSON)')))).toEqual({ temperature: 0.3 });
   fireEvent.click(save());
   const { request_params: _, ...rest } = main;
   await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {

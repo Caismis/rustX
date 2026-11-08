@@ -1525,7 +1525,7 @@ fn translate_assistant_inputs(
         match content {
             AssistantContentBlock::Text(text) => {
                 message_content.push(serde_json::json!({
-                    "type": "input_text",
+                    "type": "output_text",
                     "text": text.text,
                 }));
             }

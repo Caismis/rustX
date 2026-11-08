@@ -4,6 +4,79 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { choose, connectRemote, openEmptySession, openSettingsPage } from './shell-actions';
 import { captureEvidence } from './screenshot';
+import { wireProbe } from './wire-probe';
+
+for (const width of [1440, 390]) test(`Responses profile API parameters save directly and preserve the independent output limit at ${width}px`, async ({page}) => {
+  const fixture = await startDogfood();
+  const wire = await wireProbe(page);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', event => { if (['error','warning'].includes(event.type())) errors.push(event.text()); });
+  try {
+    writeFileSync(fixture.settings, `[providers.OpenAI]
+protocol = "openai_responses"
+base_url = "${fixture.providerUrl}/v1"
+api_key = "fixture-only"
+[models."OpenAI/gpt-6-luna"]
+provider = "OpenAI"
+id = "gpt-6-luna"
+context_window = 128000
+max_output_tokens = 8192
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
+default_profile = "none"
+[models."OpenAI/gpt-6-luna".profiles.none]
+request_params = '{}'
+`);
+    await page.setViewportSize({width, height:1000});
+    await page.emulateMedia({colorScheme:'dark', reducedMotion:'reduce'});
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.getByRole('button', {name:'Settings',exact:true}).click();
+    await openSettingsPage(page, 'Models');
+    const settings = page.getByRole('region', {name:'Settings',exact:true});
+    await settings.getByRole('row', {name:'OpenAI',exact:true}).click();
+    await settings.getByRole('row', {name:'OpenAI/gpt-6-luna',exact:true}).click();
+    const modal = page.getByRole('dialog', {name:'Model OpenAI/gpt-6-luna',exact:true});
+    await modal.getByRole('button', {name:'Advanced configuration',exact:true}).click();
+    const params = modal.getByRole('textbox', {name:'API parameters (JSON)',exact:true});
+    const limit = modal.getByLabel('Profile output limit (optional)', {exact:true});
+    const low = {reasoning:{effort:'low'}};
+    await params.press('ControlOrMeta+a');
+    await page.keyboard.insertText(JSON.stringify(low));
+    await limit.fill('2048');
+    const save = modal.getByRole('button', {name:'Save Model OpenAI/gpt-6-luna',exact:true});
+    await save.click();
+    await expect(modal.getByRole('status')).toHaveText('Model OpenAI/gpt-6-luna saved.');
+    await expect(save).toBeDisabled();
+    await expect(modal.getByRole('alert')).toHaveCount(0);
+    const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0].params.mutation.mutation.authored.profiles.none).toEqual({max_output_tokens:2048, request_params:low});
+    expect(readFileSync(fixture.settings, 'utf8')).toContain('"reasoning":{"effort":"low"}');
+    await captureEvidence(modal, `responses-profile-${width}`);
+    await modal.getByRole('button', {name:'Cancel',exact:true}).click();
+    await settings.getByRole('row', {name:'OpenAI/gpt-6-luna',exact:true}).click();
+    await modal.getByRole('button', {name:'Advanced configuration',exact:true}).click();
+    await expect(limit).toHaveValue('2048');
+    await expect(params).toHaveText(JSON.stringify(low,null,2), {useInnerText:true});
+    const high = {reasoning:{effort:'high'}};
+    await params.press('ControlOrMeta+a');
+    await page.keyboard.insertText(JSON.stringify(high));
+    await limit.fill('');
+    await save.click();
+    await expect.poll(() => readFileSync(fixture.settings, 'utf8')).toContain('\"reasoning\":{\"effort\":\"high\"}');
+    await expect(modal.getByRole('status')).toHaveText('Model OpenAI/gpt-6-luna saved.');
+    await expect(save).toBeDisabled();
+    await expect(modal.getByRole('alert')).toHaveCount(0);
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1].params.mutation.mutation.authored.profiles.none).toEqual({request_params:high});
+    expect(readFileSync(fixture.settings, 'utf8')).not.toContain('max_output_tokens = 2048');
+    expect(errors).toEqual([]);
+  } catch (error) {
+    await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
+    throw error;
+  } finally { await fixture.stop(false); }
+});
 
 for (const width of [1440, 390]) test(`provider-only setup stays editable and adds its first native model at ${width}px`, async ({ page }) => {
   const fixture = await startDogfood();

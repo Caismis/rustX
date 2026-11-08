@@ -658,7 +658,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "17554cc72a8c46773813a6040fff4288bb442acf16044e89dc766457d449093c"
+      "local_sha256": "d7ff50a292724c782ceb397e11b5382fcf66436d5baee3bffbe11f682f595b1d"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -3497,7 +3497,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "bf52e34625d6ca911e590a1a8f0b9312a6c3346ad2244ef2c1ba0b36bbc0b153",
+      "local_sha256": "36b24ffd6865ea99121a0dda1bd26a85b72e1df76345815890985cf7e101b261",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -4100,7 +4100,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "fa2cf08966911e48daacdb27aa0bc116c23525376f9a44a34e36c3d4c52e7f89"
+      "local_sha256": "a863e5141cd5db1cc1c39191d805fa42905a1ffd205300bf8546f1413bd7494c"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -7595,7 +7595,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e7fb1e53e1d257599c3e4944c2fd4ba92718650fd84ac36941f165c3d9bdab5d"
+      "local_sha256": "996b4366be6e24dc90857e6bcec14ea5f4ca49ad7b4181f916017fe7c21db8d2"
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.tsx",

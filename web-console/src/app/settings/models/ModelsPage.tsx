@@ -73,8 +73,12 @@ export function ModelsPage({ source, scope, revision, models, profiles, focus, o
       <div className={cards.navigation}>
         <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
         <h4>{tx('settings:models-page.providers')}</h4>
-        <GridList className={cards.providers} aria-label={tx('settings:models-page.providers')} selectionMode="single" selectedKeys={selected ? [selected] : []}
-          onAction={id => onFocus(focus?.kind === 'provider' && focus.creating && id === focus.id ? focus : { kind: 'provider', id: String(id) })}>
+        <GridList className={cards.providers} aria-label={tx('settings:models-page.providers')} selectionMode="single" disallowEmptySelection selectedKeys={selected ? [selected] : []}
+          onSelectionChange={keys => {
+            if (keys === 'all') return;
+            const id = keys.values().next().value;
+            if (id !== undefined) onFocus(focus?.kind === 'provider' && focus.creating && id === focus.id ? focus : { kind: 'provider', id: String(id) });
+          }}>
           {navigation.map(entry => <GridListItem id={entry.id} key={entry.id} textValue={entry.id} aria-label={entry.id} className={cards.provider}>
             <ProviderIcon icon={(entry.authored ?? entry.effective)?.icon}/>
             <span className={cards.providerLabel}><span className={cards.providerName} title={entry.id}>{entry.id}</span>

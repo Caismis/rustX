@@ -156,7 +156,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await expect(modal.getByRole('checkbox', {name:'Image',exact:true}).first()).toBeChecked();
     const addProfile = modal.getByRole('button', {name:'Add profile',exact:true});
     const identity = modal.getByRole('textbox', {name:'New profile identity',exact:true});
-    const params = modal.getByRole('textbox', {name:'Profile parameters (JSON)',exact:true});
+    const params = modal.getByRole('textbox', {name:'API parameters (JSON)',exact:true});
     await addProfile.click();
     await expect(identity).toBeFocused();
     await identity.fill('cancelled');
@@ -168,7 +168,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await identity.fill('low');
     await identity.press('Enter');
     await expect(modal.getByRole('button', {name:'Profile low',exact:true})).toHaveAttribute('aria-pressed','true');
-    const lowValue = {request_params:{reasoning_effort:'low'}};
+    const lowValue = {reasoning:{effort:'low'}};
     await replaceJson(params, JSON.stringify(lowValue));
     await addProfile.click();
     await identity.fill('low');
@@ -179,13 +179,14 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     const high = 'high-with-an-exceptionally-long-profile-identity';
     await identity.fill(high);
     await identity.press('Enter');
-    await expect(params).toHaveText(JSON.stringify({request_params:{}},null,2), {useInnerText:true});
+    await expect(params).toHaveText(JSON.stringify({},null,2), {useInnerText:true});
     await replaceJson(params, '{"request_params":');
     await modal.getByRole('button', {name:'Profile low',exact:true}).click();
     await expect(params).toHaveText('{"request_params":', {useInnerText:true});
     await expect(params).toBeFocused();
     await expect(modal.getByRole('button', {name:'Profile '+high,exact:true})).toHaveAttribute('aria-pressed','true');
-    const highValue = {max_output_tokens:16384,request_params:{reasoning_effort:'high'}};
+    const highValue = {reasoning:{effort:'high'}};
+    await modal.getByLabel('Profile output limit (optional)', {exact:true}).fill('16384');
     await replaceJson(params, JSON.stringify(highValue));
     await modal.getByRole('button', {name:'Profile low',exact:true}).click();
     await expect(params).toHaveText(JSON.stringify(lowValue,null,2), {useInnerText:true});
@@ -193,8 +194,8 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await expect(params).toHaveText(JSON.stringify(highValue,null,2), {useInnerText:true});
     const profile = modal.getByRole('group',{name:'Profile '+high,exact:true});
     await expect(profile.getByRole('textbox')).toHaveCount(1);
-    await expect(profile.getByRole('button', {name:'Format JSON: Profile parameters (JSON)',exact:true})).toHaveCount(1);
-    await expect(profile.getByRole('spinbutton')).toHaveCount(0);
+    await expect(profile.getByRole('button', {name:'Format JSON: API parameters (JSON)',exact:true})).toHaveCount(1);
+    await expect(profile.getByRole('spinbutton')).toHaveCount(1);
     await modal.getByText('Default profile',{exact:true}).scrollIntoViewIfNeeded();
     await noOverflow(page); await accessible(page);
     await expectStableScreenshot(modal, `model-profiles-${theme.toLowerCase()}-${width}.png`);
@@ -287,10 +288,11 @@ test('Chinese settings use the same model dialog without Smart configuration', a
     await identity.fill(name);
     await identity.press('Enter');
   }
-  await replaceJson(modal.getByRole('textbox',{name:'预设参数（JSON）',exact:true}), JSON.stringify({max_output_tokens:16384,request_params:{reasoning_effort:'high'}},null,2));
+  await modal.getByLabel('预设输出上限（可选）', {exact:true}).fill('16384');
+  await replaceJson(modal.getByRole('textbox',{name:'API 参数（JSON）',exact:true}), JSON.stringify({reasoning:{effort:'high'}},null,2));
   const profile = modal.getByRole('group',{name:'预设 high',exact:true});
-  await expect(profile.getByRole('button', {name:'格式化 JSON：预设参数（JSON）',exact:true})).toHaveCount(1);
-  await expect(profile.getByRole('spinbutton')).toHaveCount(0);
+  await expect(profile.getByRole('button', {name:'格式化 JSON：API 参数（JSON）',exact:true})).toHaveCount(1);
+  await expect(profile.getByRole('spinbutton')).toHaveCount(1);
   await modal.getByText('默认预设',{exact:true}).scrollIntoViewIfNeeded();
   await accessible(page);
   await expectStableScreenshot(modal,'model-profiles-zh-dark.png');

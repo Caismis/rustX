@@ -29,7 +29,7 @@ import { sessionModelBlock, WorkspaceControls, WorkspacePermission } from './Wor
 import { firstSubmissions } from './first-submit';
 import { draftPreparations } from './preparation';
 
-export function ConversationComposer({ client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed, intakeCommitted = true }: { intakeCommitted?: boolean; draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
+export function ConversationComposer({ visible = true, client, host, authority, associations, initialWorkspace, workspacePicked, current, preparePublication, draftOwner, binding, active, activeView, context, consumed, intakeCommitted = true }: { visible?: boolean; intakeCommitted?: boolean; draftOwner?: ComposerDraft; authority: WorkspaceAuthority; associations: WorkspaceAssociations; activeView?: SessionView; binding: string; active?: ComponentProps<typeof AgentComposer>; context?: ReactNode; consumed?: { id: string; sequence: number }; client: AppServerClient; host: ProductHostWorkspaces; initialWorkspace?: string; workspacePicked?: (id: string) => void; current: () => boolean; preparePublication: () => ((id: string) => (() => boolean) | void) }) {
   const tx = useTranslation();
   const [workspaceId, setWorkspace] = useState(initialWorkspace);
   const [owner, setOwner] = useState(binding);
@@ -111,7 +111,7 @@ export function ConversationComposer({ client, host, authority, associations, in
         }}
         anchor={<button type="button" className={hero.workspace} aria-label={tx('common:conversation-composer.choose-workspace')} aria-haspopup="menu" aria-expanded={menu} disabled={!drafting || adopting} onClick={() => setMenu(v => !v)}><IconFolderClose16 size={16}/><span className={hero.workspaceLabel}>{selected?.displayName ?? tx('common:conversation-composer.choose-workspace')}</span><IconChevronDownOutline14 size={12}/></button>}/>
     </div>}
-    <ComposerContextStack todo={context} goal={null} queue={null} composer={<WorkspaceControls client={client} host={host} workspaceId={active ? initialWorkspace : workspaceId}>{(source, approval) => {
+    <ComposerContextStack todo={context} goal={null} queue={null} composer={<WorkspaceControls visible={visible} presentationKey={binding} client={client} host={host} workspaceId={active ? initialWorkspace : workspaceId}>{(source, approval) => {
       const selection = intent ?? preference ?? (source?.session_models?.kind === 'available' ? source.session_models.default_model : undefined);
       const block = () => approval.block() ?? sessionModelBlock(source, selection);
       const guidance = block();

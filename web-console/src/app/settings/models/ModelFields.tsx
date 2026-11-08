@@ -199,8 +199,13 @@ function ReasoningOrder({ identities, order, appended, change }: {
 function ProfileFields({ id, profile, change }: { id: string; profile: ProfileMap[string]; change: (next: ProfileMap[string]) => void }) {
   const tx = useTranslation();
   return <div role="group" aria-label={tx('settings:models-page.profile-value', { p0: id })} data-profile={id}>
-    <JsonObjectEditor label={tx('settings:models-page.profile-parameters')} value={{ ...profile }} optional={false}
+    <label>{tx('settings:models-page.profile-output-limit')}
+      <input type="number" min="1" max="4294967295" step="1" value={profile.max_output_tokens ?? ''}
+        placeholder={tx('settings:models-page.profile-output-default')}
+        onChange={event => change({ ...profile, max_output_tokens: event.target.value ? Number(event.target.value) : undefined })}/>
+    </label>
+    <JsonObjectEditor label={tx('settings:models-page.profile-parameters')} value={profile.request_params ?? {}} optional={false}
       hint={tx('settings:models-page.profile-parameters-hint')}
-      change={next => change((next ?? {}) as ProfileMap[string])} />
+      change={request_params => change({ ...profile, request_params: request_params ?? {} })} />
   </div>;
 }

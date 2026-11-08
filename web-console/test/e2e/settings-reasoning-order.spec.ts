@@ -105,7 +105,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await expect(up).toBeFocused();
     expect(await ids()).toEqual(['z-off', 'a-high']);
     // Reorder leaves the current invalid parameter buffer mounted and unsaved.
-    const json = modal.getByRole('textbox', { name: 'Profile parameters (JSON)', exact: true });
+    const json = modal.getByRole('textbox', { name: 'API parameters (JSON)', exact: true });
     await json.fill('{"request_params":');
     await modal.getByRole('button', { name: 'Move a-high up', exact: true }).click();
     await expect(json).toHaveText('{"request_params":', { useInnerText: true });
