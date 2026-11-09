@@ -6,7 +6,6 @@ use super::{CompactionBudgets, ContextConfig, ContextError, ContextErrorKind};
 pub(crate) struct CompactionPolicy {
     pub primary: ContextConfig,
     pub budgets: CompactionBudgets,
-    pub minimum_summary_output: u32,
     pub maximum_summary_output: u32,
 }
 
@@ -126,7 +125,6 @@ impl CompactionPolicy {
                 u32::try_from(summary_output).expect("bounded by admitted output capability"),
                 summary_input,
             ),
-            minimum_summary_output: minimum_output,
             maximum_summary_output: u32::try_from(maximum_output)
                 .expect("bounded by admitted output capability"),
         })
@@ -162,7 +160,6 @@ mod tests {
             CompactionPolicy::resolve_with_reasoning(128_000, 8_000, 16_000, 8_000, Some(5_000))
                 .unwrap();
         assert_eq!(p.budgets.primary_output_budget, 8_000);
-        assert_eq!(p.minimum_summary_output, 6_024);
         assert_eq!(p.budgets.summary_output_budget, 6_024);
         assert_eq!(p.budgets.summary_input_limit, 9_176);
         assert!(p.maximum_summary_output >= p.budgets.summary_output_budget);

@@ -319,9 +319,7 @@ pub(crate) async fn execute_compaction_in_operation(
                 )
             })
         };
-        let current_input_limit = budgets.summary_input_limit.saturating_sub(u64::from(
-            output_budget.saturating_sub(budgets.summary_output_budget),
-        ));
+        let current_input_limit = summary_input_limit(budgets, output_budget);
         let request = match chunks.next(
             summary.as_ref(),
             constraints.focus,
@@ -344,29 +342,20 @@ pub(crate) async fn execute_compaction_in_operation(
                         generation: previous.generation.clone(),
                     }),
                     focus: constraints.focus.map(str::to_owned),
-                    output_tokens: Some(
-                        (budgets.summary_output_budget / 2).max(context.minimum_summary_output),
-                    ),
+                    output_tokens: Some(output_budget),
                     ..Default::default()
                 };
-                let reduction_estimate = estimate(&reduction)?;
-                if reduction_estimate > budgets.summary_input_limit {
-                    return Err(ContextError::new(
-                        ContextErrorKind::CannotFit,
-                        format!("summary input capacity: rolling reduction request estimate={reduction_estimate}, summary input limit estimate={}; no source was discarded; estimates are not provider usage", budgets.summary_input_limit),
-                    ).into());
-                }
-                let reduced = match operation
-                    .prepare()?
-                    .summarize(reduction, Some(resources.cut().clone()))
-                    .await
-                {
-                    Ok(reduced) => reduced,
-                    // The operation retained the authorized downgrade. Reprice
-                    // before retrying, without discarding accepted coverage.
-                    Err(error) if error.kind == ContextErrorKind::SummaryFormatChanged => continue,
-                    Err(error) => return Err(error.into()),
-                };
+                let reduced = reduce_summary(
+                    reduction,
+                    operation,
+                    &engine,
+                    budgets,
+                    &mut output_budget,
+                    summary_output_ceiling,
+                    resources.cut(),
+                    cancellation,
+                )
+                .await?;
                 if reduced.text == previous.text {
                     return Err(ContextError::new(
                         ContextErrorKind::NoProgress,
@@ -694,31 +683,20 @@ pub(crate) async fn execute_compaction_in_operation(
                 generation: summary.generation.clone(),
             }),
             focus: active_constraints.focus.map(str::to_owned),
-            output_tokens: Some((output_budget / 2).max(context.minimum_summary_output)),
+            output_tokens: Some(output_budget),
             ..Default::default()
         };
-        let reduction_estimate = operation.preview(&reduction)?.map_or_else(
-            || engine.estimate_model_input(&reduction.model_input().messages.into(), "", &[]),
-            |preview| engine.estimate_frozen_request(&preview),
-        );
-        if reduction_estimate > budgets.summary_input_limit {
-            return Err(ContextError::new(
-                ContextErrorKind::CannotFit,
-                format!("summary input capacity: final Summary reduction request estimate={reduction_estimate}, summary input limit estimate={}; estimates are not provider usage", budgets.summary_input_limit),
-            ).into());
-        }
-        let reduced = match operation
-            .prepare()?
-            .summarize(reduction, Some(resources.cut().clone()))
-            .await
-        {
-            Ok(reduced) => reduced,
-            Err(error) if error.kind == ContextErrorKind::SummaryFormatChanged => {
-                reductions += 1;
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        };
+        let reduced = reduce_summary(
+            reduction,
+            operation,
+            &engine,
+            budgets,
+            &mut output_budget,
+            summary_output_ceiling,
+            resources.cut(),
+            cancellation,
+        )
+        .await?;
         if reduced.text == summary.text {
             return Err(ContextError::new(
                 ContextErrorKind::NoProgress,
@@ -807,6 +785,61 @@ pub(crate) async fn execute_compaction_in_operation(
             completed: Box::new(completed),
             error,
         }),
+    }
+}
+
+fn summary_input_limit(budgets: super::CompactionBudgets, output_budget: u32) -> u64 {
+    budgets.summary_input_limit.saturating_sub(u64::from(
+        output_budget.saturating_sub(budgets.summary_output_budget),
+    ))
+}
+
+/// Shorter visible content must not reduce the unchanged Profile's reasoning
+/// allowance. Every physical retry keeps the original operation lifetime and
+/// reprices the complete request before reserving its next Call.
+#[allow(clippy::too_many_arguments)] // Both stages retain the same frozen request and accounting context.
+async fn reduce_summary(
+    mut request: super::summarizer::SummaryRequest,
+    operation: &dyn super::summarizer::SummaryOperation,
+    engine: &super::ContextEngine,
+    budgets: super::CompactionBudgets,
+    output_budget: &mut u32,
+    output_ceiling: u32,
+    cut: &super::resources::ResourceReadCut,
+    cancellation: &CancellationSignal,
+) -> Result<super::summarizer::SummaryGeneration, ContextError> {
+    let budget = operation.budget();
+    loop {
+        budget.check_start(cancellation)?;
+        request.output_tokens = Some(*output_budget);
+        let limit = summary_input_limit(budgets, *output_budget);
+        let estimate = operation.preview(&request)?.map_or_else(
+            || engine.estimate_model_input(&request.model_input().messages.into(), "", &[]),
+            |preview| engine.estimate_frozen_request(&preview),
+        );
+        if estimate > limit {
+            return Err(ContextError::new(
+                ContextErrorKind::CannotFit,
+                format!(
+                    "summary input capacity: Summary reduction request estimate={estimate}, summary input limit estimate={limit}; no source was discarded; estimates are not provider usage"
+                ),
+            ));
+        }
+        match operation
+            .prepare()?
+            .summarize(request.clone(), Some(cut.clone()))
+            .await
+        {
+            Err(error) if error.kind == ContextErrorKind::SummaryFormatChanged => {}
+            Err(error)
+                if error.kind == ContextErrorKind::SummaryOutputExhausted
+                    && *output_budget < output_ceiling =>
+            {
+                budget.charge_recovery(cancellation)?;
+                *output_budget = output_budget.saturating_mul(2).min(output_ceiling);
+            }
+            result => return result,
+        }
     }
 }
 

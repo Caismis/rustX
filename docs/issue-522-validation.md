@@ -24,6 +24,11 @@ bounded by `Cs - M(Cs) - 1`. Primary input does not cap this recovery ceiling.
 Each increase reprices the same unaccepted source against the smaller Summary
 input allowance. The final visible Summary is checked independently against
 the complete primary request; reasoning Profile and output strategy stay frozen.
+Rolling and final-fit reductions explicitly request shorter visible content
+while retaining the learned total output allowance. Both use the same bounded
+output-growth recovery and complete-request repricing, preserving the original
+operation budget, deadline and accepted source coverage. A larger retry that
+no longer fits is rejected before its physical Call starts.
 
 For a 256000-token primary with 16000 output and a 128000-token thinking
 Summary model with 64000 output capability, `H=227200`, the trigger is
@@ -85,11 +90,11 @@ coverage steps were skipped. That run does not verify the lane. The later
 completed every selected gate successfully for `c8d6b7f435dacfef3e4740f934ca7eec1ecdc3e6`.
 That result does not establish verification of subsequent changes.
 
-Focused Linux verification passes 220 Rust tests in the all-feature harness:
+Focused Linux verification passes 223 Rust tests in the all-feature harness:
 
 | Owner suite | Passing tests |
 | --- | ---: |
-| Scripted Context pipeline and runtime composition | 111 |
+| Scripted Context pipeline and runtime composition | 114 |
 | Native Trace, including interleaved terminals and cold reconstruction | 79 |
 | Manual compaction and receipts | 6 |
 | Dual-model policy | 6 |
@@ -111,7 +116,9 @@ fixture hashes use canonical tracked bytes, independently of Windows checkout
 line endings; actual request and provenance bytes retain their native authority.
 
 The response-loss browser test waits for the actual MCP page before inspecting
-a retained editor. Browser acceptance uses the repository's production build,
+a retained editor. Reopened Workflow Model selection waits for node visibility
+and focus, dispatches Enter to that node and waits for its Inspector before
+checking the retained schema. Browser acceptance uses the repository's production build,
 native process boundaries and strict screenshot comparators.
 
 The semantic corpus is maintained separately in

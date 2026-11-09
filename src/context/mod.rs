@@ -100,7 +100,6 @@ pub struct ContextRuntime {
     /// The primary/summary output budgets and the summary input limit,
     /// frozen at attempt admission.
     pub(crate) compaction_budgets: CompactionBudgets,
-    pub(crate) minimum_summary_output: u32,
     pub(crate) maximum_summary_output: u32,
     /// Static request-time System inputs frozen from the admitted resource
     /// generation. Dynamic domain content enters through registered contributors.
@@ -174,7 +173,6 @@ impl ContextRuntime {
             native_composition: crate::extensions::NativeContextComposition::new(status_engine),
             assembly,
             compaction_budgets,
-            minimum_summary_output: policy.minimum_summary_output,
             maximum_summary_output: policy.maximum_summary_output,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),
@@ -232,7 +230,6 @@ impl ContextRuntime {
             native_composition: crate::extensions::NativeContextComposition::new(status_engine),
             assembly,
             compaction_budgets,
-            minimum_summary_output: 1,
             maximum_summary_output: compaction_budgets.summary_output_budget,
             native_system: NativeContextInput::default(),
             resource_revision: crate::runtime::RuntimeResourceRevision::default(),

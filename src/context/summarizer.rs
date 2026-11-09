@@ -135,6 +135,11 @@ impl SummaryRequest {
                 "<previous-accepted-summary>\n{}\n</previous-accepted-summary>",
                 previous.text
             );
+            if !self.advances_coverage() {
+                transcript.push_str(
+                    "<summary-reduction>\nRewrite the previous accepted summary more concisely, preserving its essential facts and the required JSON Schema. Reduce the visible summary; the total output allowance also reserves reasoning and is not a visible-length target.\n</summary-reduction>\n",
+                );
+            }
         }
         if let Some(focus) = &self.focus {
             let _ = writeln!(
