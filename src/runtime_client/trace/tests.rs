@@ -292,7 +292,7 @@ fn request_with_private_continuation(store: &dyn ConversationStore) -> RequestSn
     completion(store, &prior, None, None, 2);
     let native = crate::runtime::continuation::ProviderContinuationState::Anthropic(
         crate::runtime::continuation::AnthropicContinuation {
-            opaque: serde_json::json!({"type":"thinking", "thinking":"retained native thinking", "signature":PROVIDER_CONTINUATION}),
+            opaque: serde_json::json!({"type":"thinking", "thinking":"retained native thinking", "signature":PROVIDER_CONTINUATION}).into(),
         },
     );
     let output = MessageBlock::Assistant(AssistantMessageBlock {

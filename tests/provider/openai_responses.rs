@@ -775,7 +775,7 @@ async fn stateless_continuation_replays_items_without_duplication() {
                     "status": "completed",
                     "content": [{"type": "output_text", "text": "Previous answer.", "annotations": []}],
                 }),
-            ],
+            ].into(),
         },
     ));
     crate::common::bind_accepted_continuation_source(&mut request, 0);
@@ -993,7 +993,7 @@ async fn storage_mode_continuation_contradiction_is_rejected() {
         (
             ResponsesStorageMode::Stored,
             ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-                items: Vec::new(),
+                items: Vec::new().into(),
             }),
         ),
         (
@@ -1172,7 +1172,7 @@ async fn reasoning_with_provider_state_replays_items_verbatim() {
                         text: None,
                         provider_state: Some(ProviderContinuationState::OpenAiResponses(
                             OpenAiResponsesContinuation::Stateless {
-                                items: preserved.clone(),
+                                items: preserved.clone().into(),
                             },
                         )),
                     },
@@ -1232,7 +1232,7 @@ async fn complete_stateless_output_replays_text_and_calls_once_and_rejects_edits
                         text: None,
                         provider_state: Some(ProviderContinuationState::OpenAiResponses(
                             OpenAiResponsesContinuation::Stateless {
-                                items: native.clone(),
+                                items: native.clone().into(),
                             },
                         )),
                     }),

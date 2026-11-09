@@ -5,7 +5,8 @@ use serde_json::Value;
 /// Disambiguate completed historical batches while retaining the newest native
 /// call label (required by stored continuation). Provider signatures and opaque
 /// replay values are untouched; only explicit wire correlation fields change.
-pub(crate) fn encode(value: &mut Value, protocol: ModelProtocol) -> Result<(), &'static str> {
+#[cfg(test)]
+fn encode(value: &mut Value, protocol: ModelProtocol) -> Result<(), &'static str> {
     encode_fields(|field| visit(value, protocol, field))
 }
 
@@ -69,6 +70,13 @@ pub(super) fn encode_fields(
 pub(crate) fn request_labels(
     request: &crate::model::ModelRequest,
 ) -> Result<std::collections::BTreeMap<(u32, u32), String>, String> {
+    request_labels_at(request, request.continuation_boundary()?)
+}
+
+pub(super) fn request_labels_at(
+    request: &crate::model::ModelRequest,
+    boundary: Option<usize>,
+) -> Result<std::collections::BTreeMap<(u32, u32), String>, String> {
     use crate::message::types::AssistantContentBlock;
     use crate::model::projected::ModelMessageView;
     use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
@@ -76,7 +84,6 @@ pub(crate) fn request_labels(
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::RequestCorrelation,
     );
-    let boundary = request.continuation_boundary()?;
     let stored = request.protocol() == ModelProtocol::OpenAiResponses
         && matches!(
             request.continuation,
@@ -153,6 +160,7 @@ pub(crate) fn request_labels(
     Ok(mapped)
 }
 
+#[cfg(test)]
 fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool, &mut Value)) {
     match protocol {
         ModelProtocol::OpenAiChatCompletions => {

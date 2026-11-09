@@ -4,7 +4,11 @@
 //! requests own only the exact output-format field, preserving native siblings
 //! such as Responses verbosity and Anthropic effort.
 
-use serde_json::{Value, json};
+use std::borrow::Cow;
+
+use serde_json::json;
+
+use crate::model::invocation::{RequestParams, RequestParamsLayer, validate_request_params_layer};
 
 use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
 use crate::model::types::{ModelProtocol, ModelRequest};
@@ -52,20 +56,25 @@ pub(crate) fn validate_request(request: &ModelRequest) -> Result<(), ModelError>
     Ok(())
 }
 
-/// Applies the schema to the final request after the ordinary shallow overlay.
-/// The collision check prevents overwrites; only the owned format field is added.
-pub(crate) fn finalize_request(
-    mut value: Value,
-    request: &ModelRequest,
-) -> Result<Value, ModelError> {
+/// Check protected keys before flattening opaque parameters. Ordinary requests
+/// borrow the original map. Native structured output adds the exact owned format.
+pub(crate) fn request_params(request: &ModelRequest) -> Result<Cow<'_, RequestParams>, ModelError> {
+    let params = request.request_params();
+    validate_request_params_layer(
+        params,
+        request.protocol(),
+        RequestParamsLayer::EffectiveRequest,
+    )
+    .map_err(|collision| error(ModelErrorKind::InvalidRequest, &collision.to_string()))?;
     validate_request(request)?;
     let Some(output) = request
         .response_schema
         .as_ref()
         .filter(|value| value.is_native())
     else {
-        return Ok(value);
+        return Ok(Cow::Borrowed(params));
     };
+    let mut value = serde_json::Value::Object(params.clone());
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => {
             value["response_format"] = json!({
@@ -99,7 +108,10 @@ pub(crate) fn finalize_request(
             });
         }
     }
-    Ok(value)
+    let serde_json::Value::Object(params) = value else {
+        unreachable!("adding a format preserves the parameter object");
+    };
+    Ok(Cow::Owned(params))
 }
 
 fn error(kind: ModelErrorKind, message: &str) -> ModelError {

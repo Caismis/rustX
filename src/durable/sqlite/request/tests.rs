@@ -1864,7 +1864,7 @@ fn incomplete_historical_snapshot_does_not_block_independently_complete_current_
                         crate::runtime::continuation::OpenAiResponsesContinuation::Stateless {
                             items: vec![
                                 serde_json::json!({"type":"reasoning","id":"rs-old","encrypted_content":"retained-native-bytes"}),
-                            ],
+                            ].into(),
                         },
                     ),
                 ),

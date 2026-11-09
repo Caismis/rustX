@@ -10,9 +10,8 @@ use crate::model::error::{
     ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
 };
 use crate::model::finish::ModelFinishReason;
-use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
-use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
+use crate::model::types::{ModelUsage, UsageDetails};
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 
 use super::wire::WireUsage;
@@ -305,7 +304,7 @@ pub(crate) struct WireRequest<'a> {
     tools: Option<Vec<WireTool<'a>>>,
     stream: bool,
     #[serde(flatten)]
-    params: crate::model::invocation::RequestParams,
+    params: Cow<'a, crate::model::invocation::RequestParams>,
 }
 
 #[derive(serde::Serialize)]
@@ -335,13 +334,14 @@ struct WireTool<'a> {
     input_schema: &'a serde_json::Value,
 }
 
-pub(crate) fn translate_request(
-    request: &crate::model::types::ModelRequest,
-) -> Result<WireRequest<'_>, ModelError> {
+pub(crate) fn translate_request<'a>(
+    request: &'a crate::model::types::ModelRequest,
+    tools: &crate::model::adapter::validation::ValidatedTools,
+) -> Result<WireRequest<'a>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
-    let mut messages = translate_messages(request)?;
+    let mut messages = translate_messages(request, tools.continuation_boundary)?;
     crate::model::adapter::correlation::encode_fields(|field| {
         for message in &mut messages {
             #[cfg(feature = "issue-387-profile")]
@@ -360,16 +360,7 @@ pub(crate) fn translate_request(
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    let params = finalize_provider_request(
-        serde_json::Value::Object(serde_json::Map::new()),
-        request.request_params(),
-        ModelProtocol::AnthropicMessages,
-    )?;
-    let serde_json::Value::Object(params) =
-        crate::model::adapter::structured::finalize_request(params, request)?
-    else {
-        unreachable!("request parameter finalization preserves the object")
-    };
+    let params = crate::model::adapter::structured::request_params(request)?;
     Ok(WireRequest {
         model: request.model(),
         max_tokens: request.max_output_tokens(),
@@ -400,6 +391,7 @@ fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<Wi
 /// Translates the canonical message list into Anthropic wire messages.
 fn translate_messages(
     request: &crate::model::types::ModelRequest,
+    continuation_boundary: Option<usize>,
 ) -> Result<Vec<WireRequestMessage<'_>>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
@@ -407,9 +399,6 @@ fn translate_messages(
     );
     let mut messages = Vec::with_capacity(request.messages.len());
     let mut pending_tool_results = Vec::new();
-    let continuation_boundary = request
-        .continuation_boundary()
-        .map_err(|error| unsupported(&error))?;
 
     let continuation = match &request.continuation {
         Some(ProviderContinuationState::Anthropic(continuation)) => Some(continuation),

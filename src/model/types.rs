@@ -267,6 +267,22 @@ pub fn semantic_messages_fingerprint<'a>(
 }
 
 pub(crate) fn append_semantic_message(digest: &mut sha2::Sha256, message: &ModelInputMessage) {
+    append_semantic_view(digest, &message.view());
+}
+
+pub(crate) fn semantic_view_fingerprint(
+    view: &crate::model::projected::ModelMessageView<'_>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    append_semantic_view(&mut digest, view);
+    format!("{:x}", digest.finalize())
+}
+
+fn append_semantic_view(
+    digest: &mut sha2::Sha256,
+    view: &crate::model::projected::ModelMessageView<'_>,
+) {
     use sha2::Digest;
     struct SemanticWriter<'a>(&'a mut sha2::Sha256);
     impl std::io::Write for SemanticWriter<'_> {
@@ -280,7 +296,7 @@ pub(crate) fn append_semantic_message(digest: &mut sha2::Sha256, message: &Model
             Ok(())
         }
     }
-    let value = match message.view() {
+    let value = match view {
         crate::model::projected::ModelMessageView::User(content) => {
             serde_json::json!({"role":"user", "content":content})
         }
@@ -372,7 +388,7 @@ mod continuation_work_tests {
             "prefix",
         );
         let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
-            opaque: serde_json::json!({"type":"redacted_thinking","data":"a".repeat(8192)}),
+            opaque: serde_json::json!({"type":"redacted_thinking","data":"a".repeat(8192)}).into(),
         });
         let output = MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("accepted"),

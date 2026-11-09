@@ -164,7 +164,7 @@ fn continuation() -> ModelEvent {
     ModelEvent::ContinuationState {
         block_index: ContentBlockIndex::new(0),
         state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-            opaque: serde_json::json!({"signature": "sig-135"}),
+            opaque: serde_json::json!({"signature": "sig-135"}).into(),
         }),
     }
 }

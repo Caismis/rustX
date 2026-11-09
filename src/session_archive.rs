@@ -743,7 +743,7 @@ mod tests {
                 provider_state: Some(
                     crate::runtime::continuation::ProviderContinuationState::Anthropic(
                         crate::runtime::continuation::AnthropicContinuation {
-                            opaque: json!({"private":"PROVIDER_PRIVATE_SECRET"}),
+                            opaque: json!({"private":"PROVIDER_PRIVATE_SECRET"}).into(),
                         },
                     ),
                 ),
