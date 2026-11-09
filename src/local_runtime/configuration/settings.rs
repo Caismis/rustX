@@ -691,12 +691,6 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
             authored,
         ),
         M::Skills { authored } => {
-            if let Some(value) = &authored {
-                for name in value.names() {
-                    crate::skills::package::validate_skill_name(name)
-                        .map_err(|_| SettingsError::Invalid)?;
-                }
-            }
             document.agent.get_or_insert_default().skills = authored;
         }
         M::Todo { authored } => {
@@ -981,7 +975,6 @@ impl UserConfigManager {
                 .ok()
                 .map(|workspace| {
                     crate::skills::SkillDiscovery::with_config(
-                        &workspace,
                         crate::skills::SkillDiscoveryConfig {
                             automatic: crate::skills::automatic_skill_roots(
                                 Some(&self.sources.home_directory),
@@ -1229,10 +1222,7 @@ impl UserConfigManager {
             .as_ref()
             .map(crate::skills::SkillDiscoveryOutcome::revision);
         if let Some(revision) = &skill_revision {
-            let root = target.workspace().map_or_else(
-                || self.sources.home_directory.join(".pi/agent/skills"),
-                |workspace| workspace.join(".pi/skills"),
-            );
+            let root = self.resource_root(target).join(crate::skills::SKILLS_ROOT);
             manifest.insert(root, revision.clone());
         }
         let input_revision = super::capture::source_manifest_revision(&manifest);

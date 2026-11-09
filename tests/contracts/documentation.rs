@@ -135,7 +135,7 @@ fn documentation_guard_distinguishes_current_paths_and_negative_spellings() {
         "--skill",
         "--no-direct-tools",
         "--user-settings",
-        "~/rustx/.agents/skills",
+        "~/.agents/skills",
         "rustx.app-server.v5",
         "protocol/app-server/v5.ts",
         "Todo Plugin, enabled by default",
@@ -143,7 +143,7 @@ fn documentation_guard_distinguishes_current_paths_and_negative_spellings() {
         assert!(obsolete_contract(obsolete), "{obsolete}");
     }
     for current in [
-        "~/.agents/skills",
+        "~/rustx/.agents/skills",
         "<workspace>/.agents/skills",
         "rustx.toml",
         "--config",

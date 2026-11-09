@@ -14,7 +14,7 @@
 //! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `tools` and `workflows`, recursively |
 //! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml`, the guidance files and `*.md` |
 //! | Workspace resources | each known Workspace's `.agents`, as for the User |
-//! | Skills | pi and shared collections and grouping directories, non-recursively |
+//! | Skills | User and Workspace collections and grouping directories, non-recursively |
 //! | Captured inputs | each other file a known Workspace's retained capture read or tried to read (a selected instruction file, for one, valid or not), as every directory entry opening it traverses — each component beneath the Workspace (or from the filesystem root, for a file outside it, and again for an absolute link target), each link and what it resolves to, up to the first missing or non-directory entry — through each entry's canonical directory, non-recursively |
 //!
 //! The guidance files are exactly the loader's (`AGENTS.override.md`,
@@ -138,31 +138,22 @@ fn beneath<'p>(
 }
 
 /// The same collections used by native discovery, including absent roots.
-fn skill_collections(
+fn skill_collections<'a>(
     user: &UserSourceRoots,
-    workspaces: &[PathBuf],
-) -> Vec<(SourceTarget, crate::skills::AutomaticSkillRoot)> {
-    let home = user.resources.ancestors().nth(USER_RESOURCES.len());
-    let mut collections = Vec::new();
-    if let Some(home) = home {
-        collections.extend(
-            crate::skills::user_skill_roots(home)
-                .into_iter()
-                .map(|root| (SourceTarget::User, root)),
-        );
-    }
-    for directory in workspaces {
-        let target = SourceTarget::Workspace {
-            directory: directory.clone(),
-        };
-        collections.extend(
-            crate::skills::automatic_skill_roots(home, directory)
-                .into_iter()
-                .filter(|root| root.source.is_workspace_owned())
-                .map(|root| (target.clone(), root)),
-        );
-    }
-    collections
+    workspaces: &'a [PathBuf],
+) -> impl Iterator<Item = (SourceTarget, PathBuf)> + 'a {
+    std::iter::once((
+        SourceTarget::User,
+        user.resources.join(crate::skills::SKILLS_ROOT),
+    ))
+    .chain(workspaces.iter().map(|directory| {
+        (
+            SourceTarget::Workspace {
+                directory: directory.clone(),
+            },
+            crate::skills::AutomaticSkillRoot::workspace(directory).root,
+        )
+    }))
 }
 
 /// Match collection structure and definition files. Nothing inside a Skill
@@ -183,9 +174,9 @@ fn skill_entry(root: &Path, rest: &Path, same: &impl Fn(&Path, &Path) -> bool) -
             ) {
                 return Some(directory.join(fixed));
             }
-            // All direct entries of a grouping directory consume its scan
-            // budget, including hidden and unrelated files.
-            return (!directory.join(SKILL_MARKDOWN_FILE).is_file()).then(|| directory.join(name));
+            // A missing visible entry may be a removed collection branch.
+            return (!hidden(name) && !directory.join(SKILL_MARKDOWN_FILE).is_file())
+                .then(|| directory.join(name));
         }
         if hidden(name) || directory.join(SKILL_MARKDOWN_FILE).is_file() {
             return None;
@@ -193,6 +184,23 @@ fn skill_entry(root: &Path, rest: &Path, same: &impl Fn(&Path, &Path) -> bool) -
         directory.push(name);
     }
     Some(directory)
+}
+
+fn skill_collection_entry(
+    path: &Path,
+    root: &Path,
+    same: &impl Fn(&Path, &Path) -> bool,
+) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(root).ok().filter(|path| path != root);
+    std::iter::once(root)
+        .chain(canonical.as_deref())
+        .find_map(|base| {
+            if let Some(rest) = beneath(path, base, same) {
+                skill_entry(root, rest.as_path(), same)
+            } else {
+                beneath(base, path, same).map(|_| root.to_path_buf())
+            }
+        })
 }
 
 /// Every source target whose loaders read `path`, each with `path` as that
@@ -263,39 +271,13 @@ fn owners(
             owners.push((target, root.join(name).join(rest)));
         }
     }
-    for (target, collection) in skill_collections(user, workspaces) {
-        let root = collection.root;
-        let canonical = std::fs::canonicalize(&root)
-            .ok()
-            .filter(|path| path != &root);
-        let observed = std::iter::once(&root)
-            .chain(canonical.as_ref())
-            .find_map(|base| {
-                if let Some(rest) = beneath(path, base, same) {
-                    skill_entry(&root, rest.as_path(), same)
-                } else {
-                    beneath(base, path, same).map(|_| root.clone())
-                }
-            });
-        if let Some(path) = observed
+    for (target, root) in skill_collections(user, workspaces) {
+        if let Some(path) = skill_collection_entry(path, &root, same)
             && !owners
                 .iter()
                 .any(|(existing, ancestor)| existing == &target && path.starts_with(ancestor))
         {
             owners.push((target, path));
-        }
-    }
-    if path.file_name().is_some_and(|name| name == ".git") {
-        for directory in workspaces.iter().filter(|directory| {
-            directory
-                .ancestors()
-                .take_while(|ancestor| Some(*ancestor) != path.parent())
-                .all(|ancestor| !ancestor.join(".git").exists())
-                && path
-                    .parent()
-                    .is_some_and(|parent| directory.starts_with(parent))
-        }) {
-            owners.push((workspace(directory), path.to_path_buf()));
         }
     }
     let document = |directory: &Path| {
@@ -584,18 +566,52 @@ fn invalidate(active: &mut BTreeMap<PathBuf, RecursiveMode>, path: &Path) {
 /// The exact watch set for these sources: existing directories only. An
 /// input file outside them is watched through its directory, which also
 /// reports the file replaced in place.
-pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode> {
+#[derive(Default, PartialEq, Eq)]
+struct WatchPlan {
+    watches: BTreeMap<PathBuf, RecursiveMode>,
+    linked_directories: Vec<(SourceTarget, PathBuf, PathBuf)>,
+    linked_inputs: Vec<(SourceTarget, PathBuf)>,
+}
+
+impl WatchPlan {
+    fn skill_owners(
+        &self,
+        path: &Path,
+        same: &impl Fn(&Path, &Path) -> bool,
+    ) -> impl Iterator<Item = SourceTarget> {
+        let directories =
+            self.linked_directories
+                .iter()
+                .filter_map(move |(target, directory, alias)| {
+                    let rest = beneath(path, directory, same)?;
+                    skill_entry(alias, rest.as_path(), same).map(|_| target.clone())
+                });
+        let inputs = self
+            .linked_inputs
+            .iter()
+            .filter_map(move |(target, file)| beneath(file, path, same).map(|_| target.clone()));
+        directories.chain(inputs)
+    }
+}
+
+#[cfg(test)]
+fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode> {
+    watch_plan(sources).watches
+}
+
+fn watch_plan(sources: &KnownSources) -> WatchPlan {
     let KnownSources {
         user,
         workspaces,
         inputs,
     } = sources;
-    let mut watches = BTreeMap::new();
+    let mut plan = WatchPlan::default();
+    let watches = &mut plan.watches;
     if let Some(parent) = user.document.parent() {
         watches.insert(parent.to_path_buf(), RecursiveMode::NonRecursive);
     }
     if user.resources.is_dir() {
-        resource_watches(&user.resources, &mut watches);
+        resource_watches(&user.resources, watches);
     } else if let Some(parent) = user.resources.parent().filter(|parent| parent.is_dir()) {
         watches
             .entry(parent.to_path_buf())
@@ -605,39 +621,40 @@ pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode
         watches
             .entry(workspace.clone())
             .or_insert(RecursiveMode::NonRecursive);
-        // A Git marker changes which ancestor collections are in scope.
-        for directory in workspace.ancestors() {
-            watches
-                .entry(directory.to_path_buf())
-                .or_insert(RecursiveMode::NonRecursive);
-            if directory.join(".git").exists() {
-                break;
-            }
-        }
         let resources = workspace.join(".agents");
         if resources.is_dir() {
-            resource_watches(&resources, &mut watches);
+            resource_watches(&resources, watches);
         }
     }
-    for (target, collection) in skill_collections(user, workspaces) {
-        let root = &collection.root;
+    for (target, root) in skill_collections(user, workspaces) {
+        let root = &root;
         if let Some(parent) = root.ancestors().skip(1).find(|path| path.is_dir()) {
             watches
                 .entry(parent.to_path_buf())
                 .or_insert(RecursiveMode::NonRecursive);
         }
-        let owner = collection.workspace_boundary(target.workspace());
-        if let Ok(canonical) = crate::skills::discovery::canonical_root(root, owner) {
-            let signal = crate::runtime::CancellationSignal::new();
-            let scanned = crate::skills::discovery::collect(
-                root,
-                crate::skills::discovery::is_shared(root),
-                owner.map(|_| canonical.as_path()),
-                &signal,
-            );
-            for directory in scanned.directories {
-                if let Ok(path) = std::fs::canonicalize(directory) {
-                    watches.entry(path).or_insert(RecursiveMode::NonRecursive);
+        let signal = crate::runtime::CancellationSignal::new();
+        let scanned = crate::skills::discovery::collect(
+            root,
+            crate::skills::discovery::is_shared(root),
+            &signal,
+        );
+        for directory in scanned.directories {
+            if let Ok(path) = std::fs::canonicalize(&directory) {
+                if path != directory {
+                    plan.linked_directories
+                        .push((target.clone(), path.clone(), directory));
+                }
+                watches.entry(path).or_insert(RecursiveMode::NonRecursive);
+            }
+        }
+        for link in scanned.links {
+            for entry in resolution(root, &link) {
+                if let Some(parent) = entry.parent().filter(|parent| parent.is_dir()) {
+                    watches
+                        .entry(parent.to_path_buf())
+                        .or_insert(RecursiveMode::NonRecursive);
+                    plan.linked_inputs.push((target.clone(), entry));
                 }
             }
         }
@@ -668,7 +685,7 @@ pub(super) fn desired(sources: &KnownSources) -> BTreeMap<PathBuf, RecursiveMode
         }
     }
     watches.retain(|path, _| path.is_dir());
-    watches
+    plan
 }
 
 /// Register the watches for `sources` until the set no longer changes, so a
@@ -678,13 +695,13 @@ fn settle(
     watcher: &mut dyn Watcher,
     active: &mut BTreeMap<PathBuf, RecursiveMode>,
     sources: &KnownSources,
-) {
-    let mut registered = desired(sources);
+) -> WatchPlan {
+    let mut registered = watch_plan(sources);
     loop {
-        rearm(watcher, active, &registered);
-        let now = desired(sources);
+        rearm(watcher, active, &registered.watches);
+        let now = watch_plan(sources);
         if now == registered {
-            return;
+            return now;
         }
         registered = now;
     }
@@ -849,7 +866,7 @@ impl SessionRuntimeManager {
             let sources = tokio::task::spawn_blocking(move || owner.known_sources())
                 .await
                 .map_err(|error| error.to_string())?;
-            settle(watcher.as_mut(), &mut active, &sources);
+            let plan = settle(watcher.as_mut(), &mut active, &sources);
             // An input that just appeared — a newly selected instruction
             // file, a link's new target — may have changed between the
             // capture that found it and its watch: capture its readers again
@@ -899,7 +916,10 @@ impl SessionRuntimeManager {
                 }));
             } else {
                 for path in paths {
-                    for target in notified(&path, &sources, &same, &mut active) {
+                    for target in notified(&path, &sources, &same, &mut active)
+                        .into_iter()
+                        .chain(plan.skill_owners(&path, &same))
+                    {
                         if !targets.contains(&target) {
                             targets.push(target);
                         }
@@ -975,7 +995,11 @@ mod tests {
             Vec::<SourceTarget>::new()
         );
         assert_eq!(
-            route(&home.join(".agents/skills/x/SKILL.md"), &user, &workspaces),
+            route(
+                &home.join("rustx/.agents/skills/x/SKILL.md"),
+                &user,
+                &workspaces
+            ),
             vec![SourceTarget::User]
         );
         assert_eq!(
@@ -1127,8 +1151,8 @@ mod tests {
                 "/home/u/rustx/.agents/workflows/a.yaml",
             ),
             (
-                "/home/u/.Agents/skills/guide/SKILL.md",
-                "/home/u/.agents/skills/guide/SKILL.md",
+                "/home/u/RustX/.agents/skills/guide/SKILL.md",
+                "/home/u/rustx/.agents/skills/guide/SKILL.md",
             ),
             ("/home/u/RUSTX/.AGENTS", "/home/u/rustx/.agents"),
             ("/home/u/config/RUSTX.toml", "/home/u/config/rustx.toml"),
@@ -1241,7 +1265,7 @@ mod tests {
         let user = roots(Path::new("/home/u"));
         let workspaces = vec![
             PathBuf::from("/home/u/RustX/.agents/agents"),
-            PathBuf::from("/home/u/.Agents/skills/guide"),
+            PathBuf::from("/home/u/RustX/.agents/skills/guide"),
             PathBuf::from("/w"),
             PathBuf::from("/w/.agents"),
         ];
@@ -1268,7 +1292,7 @@ mod tests {
         );
         assert_eq!(
             owners(
-                Path::new("/home/u/.Agents/skills/guide/SKILL.md"),
+                Path::new("/home/u/RustX/.agents/skills/guide/SKILL.md"),
                 &user,
                 &workspaces,
                 &aliases
@@ -1276,11 +1300,11 @@ mod tests {
             [
                 (
                     SourceTarget::User,
-                    PathBuf::from("/home/u/.agents/skills/guide/SKILL.md")
+                    PathBuf::from("/home/u/rustx/.agents/skills/guide/SKILL.md")
                 ),
                 workspace(
-                    "/home/u/.Agents/skills/guide",
-                    "/home/u/.Agents/skills/guide/SKILL.md"
+                    "/home/u/RustX/.agents/skills/guide",
+                    "/home/u/RustX/.agents/skills/guide/SKILL.md"
                 ),
             ]
         );
@@ -1779,16 +1803,14 @@ mod tests {
                 "{path:?}"
             );
         }
-        assert_eq!(
+        assert!(
             notified(
                 &collection.join(".hidden"),
                 &sources,
                 &same_entry,
                 &mut watches
             )
-            .len(),
-            1,
-            "every direct entry consumes the collection budget"
+            .is_empty()
         );
         std::fs::rename(&candidate, collection.join("old")).unwrap();
         std::fs::write(&candidate, "a directory replaced by a file").unwrap();
@@ -1805,26 +1827,68 @@ mod tests {
     }
 
     #[test]
+    fn external_skill_links_route_structure_and_definition_changes() {
+        let home = tempfile::tempdir().unwrap();
+        let user = roots(home.path());
+        let workspace_dir = tempfile::tempdir().unwrap();
+        let workspace = workspace_dir.path().canonicalize().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let external_root = external.path().canonicalize().unwrap();
+        let collection = workspace.join(".agents/skills");
+        let grouping = external_root.join("grouping");
+        let package = grouping.join("guide");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(&collection).unwrap();
+        std::os::unix::fs::symlink(&grouping, collection.join("linked")).unwrap();
+        let definition = external_root.join("definition.md");
+        std::fs::write(&definition, "---\ndescription: Guide\n---").unwrap();
+        std::os::unix::fs::symlink(&definition, package.join("SKILL.md")).unwrap();
+
+        let target = SourceTarget::Workspace {
+            directory: workspace.clone(),
+        };
+        let sources = known(&user, &[workspace]);
+        let plan = watch_plan(&sources);
+        assert!(plan.watches.contains_key(&grouping));
+        assert!(plan.watches.contains_key(&package));
+        assert!(plan.watches.contains_key(&external_root));
+        for changed in [
+            definition,
+            grouping.join("new-package"),
+            package.join("SKILL.md"),
+        ] {
+            assert!(
+                plan.skill_owners(&changed, &same_entry)
+                    .any(|owner| owner == target),
+                "{changed:?}"
+            );
+        }
+        for unrelated in [package.join("assets/note.md"), grouping.join(".hidden")] {
+            assert!(
+                plan.skill_owners(&unrelated, &same_entry).next().is_none(),
+                "{unrelated:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_watch_set_is_bounded_to_existing_source_directories() {
         let home = tempfile::tempdir().unwrap();
         let user = roots(home.path());
         std::fs::create_dir_all(home.path().join("config")).unwrap();
         std::fs::create_dir_all(home.path().join("rustx")).unwrap();
         let workspace = tempfile::tempdir().unwrap();
-        std::fs::write(workspace.path().join(".git"), "").unwrap();
         let workspaces = vec![workspace.path().to_path_buf()];
         let watches = desired(&known(&user, &workspaces));
         assert_eq!(
             watches,
             BTreeMap::from([
-                (home.path().to_path_buf(), RecursiveMode::NonRecursive),
                 (home.path().join("config"), RecursiveMode::NonRecursive),
                 (home.path().join("rustx"), RecursiveMode::NonRecursive),
                 (workspace.path().to_path_buf(), RecursiveMode::NonRecursive),
             ])
         );
-        std::fs::create_dir_all(home.path().join("rustx/.agents")).unwrap();
-        std::fs::create_dir_all(home.path().join(".agents/skills")).unwrap();
+        std::fs::create_dir_all(home.path().join("rustx/.agents/skills")).unwrap();
         std::fs::create_dir_all(workspace.path().join(".agents/uploads")).unwrap();
         std::fs::create_dir_all(workspace.path().join(".agents/workflows")).unwrap();
         let watches = desired(&known(&user, &workspaces));
@@ -1833,7 +1897,7 @@ mod tests {
             Some(&RecursiveMode::NonRecursive)
         );
         assert_eq!(
-            watches.get(&home.path().join(".agents/skills")),
+            watches.get(&home.path().join("rustx/.agents/skills")),
             Some(&RecursiveMode::NonRecursive)
         );
         assert_eq!(
@@ -1918,11 +1982,11 @@ mod case_insensitive_tests {
                 )]
             );
         }
-        // The loader opens the shared User collection in its fixed case.
-        let skill = home.join(".Agents/skills/guide/SKILL.md");
+        // The loader opens the User collection in its fixed case.
+        let skill = home.join("RustX/.agents/skills/guide/SKILL.md");
         std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
         std::fs::write(&skill, b"user").unwrap();
-        let loader = home.join(".agents/skills/guide/SKILL.md");
+        let loader = user.resources.join("skills/guide/SKILL.md");
         assert_eq!(std::fs::read(&loader).unwrap(), b"user");
         assert_eq!(
             owners(&skill, &user, &workspaces, &same_entry),

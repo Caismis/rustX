@@ -115,11 +115,10 @@ those Tools. A negotiated, authorized Resources source automatically composes
 per Agent, including when the source publishes no Tools. Resource contents enter
 context only through an explicit Tool call.
 
-Skills follow pi's discovery layout. Project collections are `<workspace>/.pi/skills`
-and `.agents/skills` from the Workspace through the Git root, or through the
-filesystem root outside Git. User collections are `~/.pi/agent/skills` and
-`~/.agents/skills`. Discovery is recursive, stops at a package's `SKILL.md`, and
-uses the first valid definition for a name. The root Agent advertises eligible
+Skills are discovered in `<workspace>/.agents/skills` and
+`~/rustx/.agents/skills`. Discovery is recursive, follows file and directory
+symlinks, stops at a package's `SKILL.md`, and uses the first valid definition
+for a name. The root Agent advertises eligible
 Skills by default. Use `agent.skills` to select `"all"`, exact names, or `[]`.
 The model receives names, descriptions and absolute instruction paths, then
 reads matching instructions on demand through Read or Bash.

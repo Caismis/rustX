@@ -61,7 +61,6 @@ pub use package::{
 };
 pub use source::{
     AutomaticSkillRoot, SKILLS_DIRECTORY, SKILLS_ROOT, SkillSource, automatic_skill_roots,
-    user_skill_roots,
 };
 
 #[cfg(test)]

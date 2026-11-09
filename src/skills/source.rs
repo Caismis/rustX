@@ -1,4 +1,4 @@
-//! Automatic Skill roots in pi discovery order.
+//! Fixed User and Workspace Skill collections.
 
 use std::path::{Path, PathBuf};
 
@@ -25,9 +25,9 @@ pub const SKILLS_ROOT: &str = "skills";
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SkillSource {
-    /// User-wide collections under the process-bound home.
+    /// `<home>/rustx/.agents/skills`.
     User,
-    /// Project collections at the working directory and its ancestors.
+    /// `<workspace>/.agents/skills`.
     Workspace,
 }
 
@@ -40,12 +40,6 @@ impl SkillSource {
             Self::Workspace => "workspace",
         }
     }
-
-    /// Whether containment is checked against the Workspace resource root.
-    #[must_use]
-    pub const fn is_workspace_owned(self) -> bool {
-        matches!(self, Self::Workspace)
-    }
 }
 
 impl core::fmt::Display for SkillSource {
@@ -56,9 +50,8 @@ impl core::fmt::Display for SkillSource {
 
 /// One resolved automatic Skill source root.
 ///
-/// The root is a *physical* location chosen by the launch/environment owner.
-/// Discovery treats it as a bounded authority: a package found under it may
-/// never escape it.
+/// The root is chosen by the launch/environment owner. Links offered there
+/// keep this collection's scope even when their target lives elsewhere.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct AutomaticSkillRoot {
     /// The source authority this root belongs to.
@@ -69,51 +62,25 @@ pub struct AutomaticSkillRoot {
 }
 
 impl AutomaticSkillRoot {
-    pub(crate) fn workspace_boundary<'a>(&self, workspace: Option<&'a Path>) -> Option<&'a Path> {
-        workspace
-            .filter(|_| self.source.is_workspace_owned())
-            .map(|workspace| {
-                workspace
-                    .ancestors()
-                    .find(|ancestor| self.root == ancestor.join(".agents/skills"))
-                    .unwrap_or(workspace)
-            })
+    pub(crate) fn user(home: &Path) -> Self {
+        Self {
+            source: SkillSource::User,
+            root: home.join("rustx").join(SKILLS_DIRECTORY).join(SKILLS_ROOT),
+        }
+    }
+
+    pub(crate) fn workspace(workspace: &Path) -> Self {
+        Self {
+            source: SkillSource::Workspace,
+            root: workspace.join(SKILLS_DIRECTORY).join(SKILLS_ROOT),
+        }
     }
 }
 
-/// Resolve the user-specific and shared Skill collections.
-#[must_use]
-pub fn user_skill_roots(home: &Path) -> Vec<AutomaticSkillRoot> {
-    [".pi/agent/skills", ".agents/skills"]
-        .into_iter()
-        .map(|directory| AutomaticSkillRoot {
-            source: SkillSource::User,
-            root: home.join(directory),
-        })
-        .collect()
-}
-
-/// Project collections take precedence, in working-directory order.
-/// The shared user directory is never classified as a project collection.
+/// Resolve the rustX Skill collections for one Workspace.
 #[must_use]
 pub fn automatic_skill_roots(home: Option<&Path>, workspace: &Path) -> Vec<AutomaticSkillRoot> {
-    let mut roots = vec![AutomaticSkillRoot {
-        source: SkillSource::Workspace,
-        root: workspace.join(".pi/skills"),
-    }];
-    for directory in workspace.ancestors() {
-        if home != Some(directory) {
-            roots.push(AutomaticSkillRoot {
-                source: SkillSource::Workspace,
-                root: directory.join(".agents/skills"),
-            });
-        }
-        if directory.join(".git").exists() {
-            break;
-        }
-    }
-    if let Some(home) = home {
-        roots.extend(user_skill_roots(home));
-    }
+    let mut roots = vec![AutomaticSkillRoot::workspace(workspace)];
+    roots.extend(home.map(AutomaticSkillRoot::user));
     roots
 }

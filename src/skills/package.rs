@@ -27,31 +27,21 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::runtime::identity::{SkillId, SkillVersionId};
-use crate::skills::dependencies::{DependencyManifest, parse_dependency_map};
+use crate::skills::dependencies::{
+    DependencyError, DependencyManifest, NODE_DEPENDENCIES_METADATA_KEY,
+    PYTHON_DEPENDENCIES_METADATA_KEY, parse_node_dependencies, parse_python_dependencies,
+};
 use crate::skills::diagnostics::{ShadowedSkill, SkillDiagnostic, SkillProvenance};
 use crate::skills::identity::definition_version_id;
 use crate::skills::source::{AutomaticSkillRoot, SkillSource};
-use crate::tools::workspace::Workspace;
 
 /// The canonical primary instructions file name of a Skill package.
 pub const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
 
-/// The maximum allowed length of a validated standard Skill name.
+/// The recommended maximum length of a standard Skill name.
 pub const MAX_SKILL_NAME_CHARS: usize = 64;
-/// The maximum allowed length of a validated standard Skill description.
+/// The recommended maximum length of a standard Skill description.
 pub const MAX_SKILL_DESCRIPTION_CHARS: usize = 1024;
-/// The maximum allowed length of the standard `compatibility` field.
-pub const MAX_SKILL_COMPATIBILITY_CHARS: usize = 500;
-
-/// The maximum number of direct entries one Skill collection *directory* may
-/// hold.
-///
-/// This bounds one `read_dir`, so it is deliberately per directory: it is the
-/// cost of enumerating that directory, not the cost of the source.
-pub const MAX_SKILL_ROOT_ENTRIES: usize = 1024;
-/// Maximum candidate packages in one fixed User or Workspace collection.
-/// Candidates consume this budget before parsing, including malformed packages.
-pub const MAX_SOURCE_SKILL_PACKAGES: usize = 128;
 
 /// A parsing/validation failure of **one** Skill package.
 ///
@@ -63,25 +53,6 @@ pub const MAX_SOURCE_SKILL_PACKAGES: usize = 128;
 #[serde(tag = "cause", rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum SkillPackageError {
-    /// The package name violates the Agent Skills naming rules.
-    InvalidName {
-        directory: String,
-        #[serde(skip)]
-        name: String,
-        #[serde(skip)]
-        detail: String,
-    },
-    /// The frontmatter `name` does not match the parent directory name.
-    NameDirectoryMismatch {
-        directory: String,
-        #[serde(skip)]
-        name: String,
-    },
-    /// The candidate directory contains no `SKILL.md`.
-    MissingSkillMarkdown { directory: String },
-    /// The `SKILL.md` entry is not an ordinary regular file (or is a
-    /// symlink).
-    SkillMarkdownNotRegularFile { directory: String },
     /// The `SKILL.md` frontmatter is malformed YAML or violates the
     /// standard shape.
     MalformedFrontmatter {
@@ -89,60 +60,25 @@ pub enum SkillPackageError {
         #[serde(skip)]
         detail: String,
     },
-    /// The standard description is empty or exceeds the length bound.
+    /// The description is missing, empty, or not a string.
     InvalidDescription {
         directory: String,
         #[serde(skip)]
         detail: String,
     },
-    /// The standard `compatibility` field exceeds its length bound.
-    InvalidCompatibility {
-        directory: String,
-        #[serde(skip)]
-        detail: String,
-    },
-    /// The `metadata` field is not a string-to-string map.
-    MalformedMetadata {
-        directory: String,
-        #[serde(skip)]
-        detail: String,
-    },
-    /// A rustX dependency declaration is malformed or unsupported.
-    InvalidDependencyDeclaration {
-        directory: String,
-        #[serde(skip)]
-        detail: String,
-    },
-    /// A symlinked package root was found. Internal resources are validated
-    /// by the Tool that actually opens them, never by discovery.
-    UnsupportedSymlink { path: String },
     /// The canonical package root is not losslessly representable as UTF-8,
     /// so it cannot be published as a model-visible location.
     UnrepresentableRoot { path: String },
-    /// A filesystem failure while reading the package.
-    Io {
-        path: String,
-        #[serde(skip)]
-        detail: String,
-    },
 }
 
 impl SkillPackageError {
     pub(crate) fn redacted(&self) -> Self {
         let mut error = self.clone();
         match &mut error {
-            Self::InvalidName { name, detail, .. } => {
-                name.clear();
+            Self::MalformedFrontmatter { detail, .. } | Self::InvalidDescription { detail, .. } => {
                 detail.clear();
             }
-            Self::NameDirectoryMismatch { name, .. } => name.clear(),
-            Self::MalformedFrontmatter { detail, .. }
-            | Self::InvalidDescription { detail, .. }
-            | Self::InvalidCompatibility { detail, .. }
-            | Self::MalformedMetadata { detail, .. }
-            | Self::InvalidDependencyDeclaration { detail, .. }
-            | Self::Io { detail, .. } => detail.clear(),
-            _ => {}
+            Self::UnrepresentableRoot { .. } => {}
         }
         error
     }
@@ -151,51 +87,17 @@ impl SkillPackageError {
 impl core::fmt::Display for SkillPackageError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::InvalidName {
-                directory,
-                name,
-                detail,
-            } => write!(
-                f,
-                "skill {directory:?}: name {name:?} violates the Agent Skills naming rules: \
-                 {detail}"
-            ),
-            Self::NameDirectoryMismatch { directory, name } => write!(
-                f,
-                "skill {directory:?}: frontmatter name {name:?} does not match the parent \
-                 directory"
-            ),
-            Self::MissingSkillMarkdown { directory } => {
-                write!(f, "skill {directory:?}: no {SKILL_MARKDOWN_FILE} present")
-            }
-            Self::SkillMarkdownNotRegularFile { directory } => write!(
-                f,
-                "skill {directory:?}: {SKILL_MARKDOWN_FILE} is not an ordinary regular file"
-            ),
             Self::MalformedFrontmatter { directory, detail } => {
                 write!(f, "skill {directory:?}: malformed frontmatter: {detail}")
             }
             Self::InvalidDescription { directory, detail } => {
                 write!(f, "skill {directory:?}: invalid description: {detail}")
             }
-            Self::InvalidCompatibility { directory, detail } => {
-                write!(f, "skill {directory:?}: invalid compatibility: {detail}")
-            }
-            Self::MalformedMetadata { directory, detail } => {
-                write!(f, "skill {directory:?}: malformed metadata: {detail}")
-            }
-            Self::InvalidDependencyDeclaration { directory, detail } => {
-                write!(f, "skill {directory:?}: {detail}")
-            }
             Self::UnrepresentableRoot { path } => write!(
                 f,
                 "the skill package root {path} is not valid UTF-8 and cannot be published as a \
                  model-visible location"
             ),
-            Self::UnsupportedSymlink { path } => {
-                write!(f, "skill package symlinks are rejected: {path:?}")
-            }
-            Self::Io { path, detail } => write!(f, "cannot read {path:?}: {detail}"),
         }
     }
 }
@@ -206,9 +108,9 @@ impl std::error::Error for SkillPackageError {}
 ///
 /// The package is immutable after discovery: its `SkillVersionId` is
 /// derived only from its normalized frontmatter definition, and its dependency
-/// declarations are already parsed and normalized. `location` is the canonical,
-/// absolute model-visible host path of its
-/// `SKILL.md` — see the package root invariant in the module documentation.
+/// declarations are already parsed and normalized. The advertised location is
+/// the absolute path under its collection, retaining links within the collection
+/// so the model finds resources beside the offered instruction file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillPackage {
     id: SkillId,
@@ -216,6 +118,7 @@ pub struct SkillPackage {
     definition: Frontmatter,
     dependencies: DependencyManifest,
     location: String,
+    instruction_source: PathBuf,
     source: SkillSource,
 }
 
@@ -230,7 +133,7 @@ impl SkillPackage {
         self.source
     }
 
-    /// The validated standard Skill name, used as the logical `SkillId`.
+    /// The discovered Skill name, used as the logical `SkillId`.
     #[must_use]
     pub fn id(&self) -> &SkillId {
         &self.id
@@ -242,7 +145,7 @@ impl SkillPackage {
         &self.version_id
     }
 
-    /// The standard validated Skill name.
+    /// The discovered Skill name.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.definition.name
@@ -257,7 +160,7 @@ impl SkillPackage {
     /// The preserved standard `metadata` map (including the rustX
     /// dependency declaration keys).
     #[must_use]
-    pub fn metadata(&self) -> &BTreeMap<String, String> {
+    pub fn metadata(&self) -> &BTreeMap<String, serde_json::Value> {
         &self.definition.metadata
     }
 
@@ -293,6 +196,11 @@ impl SkillPackage {
     #[must_use]
     pub fn location(&self) -> &str {
         &self.location
+    }
+
+    /// The resolved regular file captured during discovery.
+    pub(crate) fn instruction_source(&self) -> &Path {
+        &self.instruction_source
     }
 
     /// Whether this validated Skill is omitted from the model catalog.
@@ -370,15 +278,10 @@ impl SkillDiscoveryOutcome {
     }
 }
 
-/// Discovers Skill packages across the configured bounded authorities.
+/// Discovers Skill packages across the configured collections.
 #[derive(Debug, Clone)]
 pub struct SkillDiscovery {
-    workspace: Option<PathBuf>,
     config: SkillDiscoveryConfig,
-    /// The cumulative candidate budget of **one logical source**. Always
-    /// [`MAX_SOURCE_SKILL_PACKAGES`] in production; a test may lower it to
-    /// prove the boundary without materializing hundreds of package trees.
-    source_budget: usize,
     cancellation: crate::runtime::CancellationSignal,
 }
 
@@ -388,6 +291,7 @@ struct Candidate {
     source: SkillSource,
     name: String,
     location: String,
+    canonical: PathBuf,
     package: Option<SkillPackage>,
 }
 
@@ -395,28 +299,19 @@ impl SkillDiscovery {
     /// Discover only the process-bound User collections.
     #[must_use]
     pub fn user(home: &Path) -> Self {
-        Self {
-            workspace: None,
-            config: SkillDiscoveryConfig {
-                automatic: super::source::user_skill_roots(home),
-            },
-            source_budget: MAX_SOURCE_SKILL_PACKAGES,
-            cancellation: crate::runtime::CancellationSignal::new(),
-        }
+        Self::user_root(AutomaticSkillRoot::user(home).root)
     }
 
     /// Discover one explicitly bound user collection.
     #[must_use]
     pub fn user_root(root: PathBuf) -> Self {
         Self {
-            workspace: None,
             config: SkillDiscoveryConfig {
                 automatic: vec![AutomaticSkillRoot {
                     source: SkillSource::User,
                     root,
                 }],
             },
-            source_budget: MAX_SOURCE_SKILL_PACKAGES,
             cancellation: crate::runtime::CancellationSignal::new(),
         }
     }
@@ -428,30 +323,9 @@ impl SkillDiscovery {
     /// global root, from its captured home directory) and hands them here, so
     /// a test injects an isolated HOME without touching process-global state.
     #[must_use]
-    pub fn with_config(workspace: &Workspace, config: SkillDiscoveryConfig) -> Self {
+    pub fn with_config(config: SkillDiscoveryConfig) -> Self {
         Self {
-            workspace: Some(workspace.root().to_path_buf()),
             config,
-            source_budget: MAX_SOURCE_SKILL_PACKAGES,
-            cancellation: crate::runtime::CancellationSignal::new(),
-        }
-    }
-
-    /// The same discovery with a lowered per-source candidate budget.
-    ///
-    /// A deterministic boundary seam, not a configuration knob: production has
-    /// exactly one budget ([`MAX_SOURCE_SKILL_PACKAGES`]). The arithmetic and
-    /// every reporting path are shared, so a test proves the real contract —
-    /// cumulative per source, exact at the limit, enumeration-order
-    /// independent — without materializing hundreds of real package trees per
-    /// root.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_source_budget(config: SkillDiscoveryConfig, source_budget: usize) -> Self {
-        Self {
-            workspace: None,
-            config,
-            source_budget,
             cancellation: crate::runtime::CancellationSignal::new(),
         }
     }
@@ -477,8 +351,6 @@ impl SkillDiscovery {
             candidates.extend(collect_automatic_source(
                 source,
                 &roots,
-                self.workspace.as_deref(),
-                self.source_budget,
                 &mut diagnostics,
                 &self.cancellation,
             ));
@@ -505,7 +377,7 @@ fn merge_candidates(
     let mut identities: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
     let mut seen = std::collections::BTreeSet::new();
     for candidate in candidates {
-        if seen.insert(candidate.location.clone()) {
+        if seen.insert(candidate.canonical.clone()) {
             identities
                 .entry(candidate.name.clone())
                 .or_default()
@@ -578,17 +450,14 @@ fn merge_candidates(
 fn collect_automatic_source(
     source: SkillSource,
     roots: &[&AutomaticSkillRoot],
-    workspace: Option<&Path>,
-    budget: usize,
     diagnostics: &mut Vec<SkillDiagnostic>,
     cancellation: &crate::runtime::CancellationSignal,
 ) -> Vec<Candidate> {
     let mut files = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for root in roots {
-        let owner = root.workspace_boundary(workspace);
         crate::bounded_file::record_read(&root.root);
-        let canonical = match super::discovery::canonical_root(&root.root, owner) {
+        let canonical = match super::discovery::canonical_root(&root.root) {
             Ok(path) => path,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 diagnostics.push(SkillDiagnostic::SourceRootMissing {
@@ -606,11 +475,9 @@ fn collect_automatic_source(
                 continue;
             }
         };
-        let boundary = owner.map(|_| canonical.as_path());
         let collection = super::discovery::collect(
-            &root.root,
+            &canonical,
             super::discovery::is_shared(&root.root),
-            boundary,
             cancellation,
         );
         if let Some(error) = collection.error {
@@ -623,28 +490,14 @@ fn collect_automatic_source(
         }
         for file in collection.files {
             crate::bounded_file::record_read(&file);
-            let path = match std::fs::canonicalize(&file) {
-                Ok(path) if boundary.is_none_or(|boundary| path.starts_with(boundary)) => path,
-                _ => continue,
+            let Ok(path) = std::fs::canonicalize(&file) else {
+                continue;
             };
+            crate::bounded_file::record_read(&path);
             if seen.insert(path.clone()) {
                 files.push((file, path));
             }
         }
-    }
-    if files.len() > budget {
-        let mut root_paths: Vec<_> = roots
-            .iter()
-            .map(|root| root.root.display().to_string())
-            .collect();
-        root_paths.sort();
-        diagnostics.push(SkillDiagnostic::SourceBudgetExceeded {
-            source,
-            roots: root_paths,
-            candidates: files.len(),
-            limit: budget,
-        });
-        return Vec::new();
     }
     files
         .into_iter()
@@ -653,15 +506,25 @@ fn collect_automatic_source(
                 .file_name()
                 .is_some_and(|name| name == SKILL_MARKDOWN_FILE);
             let fallback_name = file.parent()?.file_name()?.to_string_lossy().into_owned();
-            let location = canonical.display().to_string();
-            let result = discover_package(&canonical, &fallback_name, source, cancellation);
+            let location = file.display().to_string();
+            let result = discover_package(&file, &canonical, &fallback_name, source, cancellation);
             match result {
-                Ok(package) => Some(Candidate {
-                    source,
-                    name: package.name().to_owned(),
-                    location: package.location.clone(),
-                    package: Some(package),
-                }),
+                Ok((package, warnings)) => {
+                    for detail in warnings {
+                        diagnostics.push(SkillDiagnostic::PackageWarning {
+                            source,
+                            package: location.clone(),
+                            detail,
+                        });
+                    }
+                    Some(Candidate {
+                        source,
+                        name: package.name().to_owned(),
+                        location,
+                        canonical,
+                        package: Some(package),
+                    })
+                }
                 Err(cause) if declared => {
                     diagnostics.push(SkillDiagnostic::PackageInvalid {
                         source,
@@ -672,6 +535,7 @@ fn collect_automatic_source(
                         source,
                         name: fallback_name,
                         location,
+                        canonical,
                         package: None,
                     })
                 }
@@ -684,10 +548,11 @@ fn collect_automatic_source(
 /// Parses, validates, and hashes one Skill instruction file.
 fn discover_package(
     path: &Path,
+    canonical: &Path,
     directory_name: &str,
     source: SkillSource,
     cancellation: &crate::runtime::CancellationSignal,
-) -> Result<SkillPackage, SkillPackageError> {
+) -> Result<(SkillPackage, Vec<String>), SkillPackageError> {
     let location = path
         .to_str()
         .ok_or_else(|| SkillPackageError::UnrepresentableRoot {
@@ -698,96 +563,75 @@ fn discover_package(
         directory: directory_name.to_owned(),
         detail,
     };
-    let header = super::frontmatter::read(path, cancellation).map_err(malformed)?;
-    let markdown = std::str::from_utf8(&header).map_err(|error| malformed(error.to_string()))?;
-    let mut frontmatter = parse_frontmatter(markdown).map_err(|failure| match failure {
-        FrontmatterFailure::Malformed(detail) => malformed(detail),
-        FrontmatterFailure::InvalidMetadata(detail) => SkillPackageError::MalformedMetadata {
-            directory: directory_name.to_owned(),
-            detail,
-        },
-    })?;
+    let header = super::frontmatter::read(canonical, cancellation).map_err(malformed)?;
+    let markdown = String::from_utf8_lossy(&header);
+    let mut frontmatter = parse_frontmatter(&markdown).map_err(malformed)?;
     if frontmatter.name.is_empty() {
-        frontmatter.name = directory_name.to_owned();
+        directory_name.clone_into(&mut frontmatter.name);
     }
-    validate_skill_name(&frontmatter.name).map_err(|detail| SkillPackageError::InvalidName {
-        directory: directory_name.to_owned(),
-        name: frontmatter.name.clone(),
-        detail,
-    })?;
-    let description = frontmatter.description.trim();
-    if description.is_empty() {
+    if frontmatter.description.trim().is_empty() {
         return Err(SkillPackageError::InvalidDescription {
             directory: directory_name.to_owned(),
-            detail: "description must be non-empty".to_owned(),
+            detail: "description must be a non-empty string".to_owned(),
         });
     }
-    if description.chars().count() > MAX_SKILL_DESCRIPTION_CHARS {
-        return Err(SkillPackageError::InvalidDescription {
-            directory: directory_name.to_owned(),
-            detail: format!(
-                "description exceeds the {MAX_SKILL_DESCRIPTION_CHARS}-character standard bound"
-            ),
-        });
-    }
-    if let Some(compatibility) = &frontmatter.compatibility {
-        let compatibility = compatibility.trim();
-        if compatibility.is_empty() || compatibility.chars().count() > MAX_SKILL_COMPATIBILITY_CHARS
-        {
-            return Err(SkillPackageError::InvalidCompatibility {
-                directory: directory_name.to_owned(),
-                detail: format!(
-                    "compatibility must be 1-{MAX_SKILL_COMPATIBILITY_CHARS} characters"
-                ),
-            });
-        }
-    }
-    let dependencies = parse_dependency_map(&frontmatter.metadata).map_err(|detail| {
-        SkillPackageError::InvalidDependencyDeclaration {
-            directory: directory_name.to_owned(),
-            detail: detail.to_string(),
-        }
-    })?;
 
-    // Dependency metadata carries JSON, whose formatting/key order is not
-    // definition semantics. Reuse the parsed normalized manifest, not a second parser.
-    for (key, pins) in [
+    let mut warnings = Vec::new();
+    if let Err(detail) = validate_skill_name(&frontmatter.name) {
+        warnings.push(detail);
+    }
+    if frontmatter.description.encode_utf16().count() > MAX_SKILL_DESCRIPTION_CHARS {
+        warnings.push(format!(
+            "description exceeds {MAX_SKILL_DESCRIPTION_CHARS} characters"
+        ));
+    }
+
+    // Dependency keys are a rustX extension. Invalid declarations never hide a
+    // skill or prevent the other ecosystem's valid declaration from being used.
+    let mut dependencies = DependencyManifest::default();
+    for (key, parse, pins) in [
         (
-            crate::skills::dependencies::PYTHON_DEPENDENCIES_METADATA_KEY,
-            &dependencies.python,
+            PYTHON_DEPENDENCIES_METADATA_KEY,
+            parse_python_dependencies as fn(&str) -> Result<_, DependencyError>,
+            &mut dependencies.python,
         ),
         (
-            crate::skills::dependencies::NODE_DEPENDENCIES_METADATA_KEY,
-            &dependencies.node,
+            NODE_DEPENDENCIES_METADATA_KEY,
+            parse_node_dependencies as fn(&str) -> Result<_, DependencyError>,
+            &mut dependencies.node,
         ),
     ] {
-        if frontmatter.metadata.contains_key(key) {
-            frontmatter.metadata.insert(
-                key.to_owned(),
-                serde_json::to_string(pins).expect("normalized dependency pins serialize"),
-            );
+        if let Some(value) = frontmatter.metadata.get_mut(key) {
+            if let Some(declared) = value.as_str().and_then(|value| parse(value).ok()) {
+                *value = serde_json::Value::String(
+                    serde_json::to_string(&declared).expect("normalized dependency pins serialize"),
+                );
+                *pins = declared;
+            } else {
+                warnings.push(format!("invalid {key} declaration was ignored"));
+            }
         }
     }
-    frontmatter.description = description.to_owned();
-    frontmatter.compatibility = frontmatter
-        .compatibility
-        .map(|value| value.trim().to_owned());
     let version_id = definition_version_id(&frontmatter);
-    Ok(SkillPackage {
-        id: SkillId::new(frontmatter.name.clone()),
-        version_id,
-        definition: frontmatter,
-        dependencies,
-        location,
-        source,
-    })
+    Ok((
+        SkillPackage {
+            id: SkillId::new(frontmatter.name.clone()),
+            version_id,
+            definition: frontmatter,
+            dependencies,
+            location,
+            instruction_source: canonical.to_path_buf(),
+            source,
+        },
+        warnings,
+    ))
 }
 
-/// Validates one Skill name against the Agent Skills naming rules:
+/// Checks one Skill name against the Agent Skills naming recommendations:
 /// 1-64 characters, lowercase letters, numbers, and hyphens only, no
 /// leading/trailing or consecutive hyphens.
-pub(crate) fn validate_skill_name(name: &str) -> Result<(), String> {
-    let count = name.chars().count();
+fn validate_skill_name(name: &str) -> Result<(), String> {
+    let count = name.encode_utf16().count();
     if !(1..=MAX_SKILL_NAME_CHARS).contains(&count) {
         return Err(format!(
             "name length must be 1-{MAX_SKILL_NAME_CHARS} characters, got {count}"
@@ -812,139 +656,50 @@ pub(crate) fn validate_skill_name(name: &str) -> Result<(), String> {
 struct Frontmatter {
     name: String,
     description: String,
-    metadata: BTreeMap<String, String>,
+    metadata: BTreeMap<String, serde_json::Value>,
     license: Option<String>,
     compatibility: Option<String>,
     allowed_tools: Option<String>,
     disable_model_invocation: bool,
 }
 
-/// The serde target of the standard frontmatter fields.
-///
-/// `metadata` is parsed as a map of YAML values so the standard
-/// string-to-string constraint is enforced explicitly: `serde_yaml` would
-/// otherwise coerce scalar numbers into strings.
-#[derive(serde::Deserialize)]
-struct FrontmatterSerde {
-    #[serde(default)]
-    name: serde_yaml::Value,
-    #[serde(default)]
-    description: serde_yaml::Value,
-    #[serde(default)]
-    metadata: BTreeMap<String, serde_yaml::Value>,
-    #[serde(default)]
-    license: Option<String>,
-    #[serde(default)]
-    compatibility: Option<String>,
-    #[serde(default, rename = "allowed-tools")]
-    allowed_tools: Option<String>,
-    #[serde(default, rename = "disable-model-invocation")]
-    disable_model_invocation: serde_yaml::Value,
-}
-
-/// The frontmatter parse outcome distinguishes a malformed YAML block from
-/// a metadata map that violates the standard string-to-string constraint.
-#[derive(Debug)]
-enum FrontmatterFailure {
-    /// The YAML block is malformed or the standard fields have the wrong
-    /// shape.
-    Malformed(String),
-    /// The `metadata` map contains a non-string value.
-    InvalidMetadata(String),
-}
-
-impl From<FrontmatterFailure> for String {
-    fn from(failure: FrontmatterFailure) -> Self {
-        match failure {
-            FrontmatterFailure::Malformed(detail) | FrontmatterFailure::InvalidMetadata(detail) => {
-                detail
-            }
-        }
-    }
-}
-
-/// Splits `SKILL.md` into its YAML frontmatter block and the Markdown body.
-///
-/// The frontmatter is the first `---`-delimited block at the start of the
-/// file. A missing opening or closing delimiter is malformed.
-fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, FrontmatterFailure> {
-    let Some(opening_end) = frontmatter_line_end(markdown, 0) else {
-        return Err(FrontmatterFailure::Malformed(
-            "SKILL.md must start with a YAML frontmatter block".to_owned(),
-        ));
+/// Reads the YAML block using Pi's delimiter and newline conventions.
+fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, String> {
+    let markdown = markdown.strip_prefix('\u{feff}').unwrap_or(markdown);
+    let normalized;
+    let markdown = if markdown.contains('\r') {
+        normalized = markdown.replace("\r\n", "\n").replace('\r', "\n");
+        normalized.as_str()
+    } else {
+        markdown
     };
-    if line_content(&markdown[..opening_end]) != "---" {
-        return Err(FrontmatterFailure::Malformed(
-            "SKILL.md must start with a YAML frontmatter block".to_owned(),
-        ));
-    }
-    let remainder = &markdown[opening_end..];
-    let mut cursor = 0;
-    let mut closing = None;
-    while cursor < remainder.len() {
-        let Some(end) = frontmatter_line_end(remainder, cursor) else {
-            break;
-        };
-        if line_content(&remainder[cursor..end]) == "---" {
-            closing = Some((cursor, end));
-            break;
-        }
-        cursor = end;
-    }
-    let Some((closing_start, _closing_end)) = closing else {
-        return Err(FrontmatterFailure::Malformed(
-            "SKILL.md frontmatter is missing its closing delimiter".to_owned(),
-        ));
-    };
-    let yaml_block = &remainder[..closing_start];
-    let frontmatter: FrontmatterSerde = serde_yaml::from_str(yaml_block).map_err(|error| {
-        FrontmatterFailure::Malformed(format!("frontmatter is not valid YAML: {error}"))
-    })?;
-    // The standard requires metadata to be a string-to-string map; a
-    // non-string value is malformed (never coerced).
-    let mut metadata = BTreeMap::new();
-    for (key, value) in frontmatter.metadata {
-        let serde_yaml::Value::String(string) = value else {
-            return Err(FrontmatterFailure::InvalidMetadata(format!(
-                "metadata entry {key:?} must be a string, got {value:?}"
-            )));
-        };
-        metadata.insert(key, string);
-    }
+    let remainder = markdown
+        .strip_prefix("---")
+        .ok_or("SKILL.md must start with a YAML frontmatter block")?;
+    let closing = remainder
+        .find("\n---")
+        .ok_or("SKILL.md frontmatter is missing its closing delimiter")?;
+    let yaml = remainder.get(1..closing).unwrap_or_default();
+    let value: serde_yaml::Value = serde_yaml::from_str(yaml)
+        .map_err(|error| format!("frontmatter is not valid YAML: {error}"))?;
+    let string = |key| value[key].as_str().map(str::to_owned);
+    let metadata = value["metadata"]
+        .as_mapping()
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, value)| {
+            Some((key.as_str()?.to_owned(), serde_json::to_value(value).ok()?))
+        })
+        .collect();
     Ok(Frontmatter {
-        name: frontmatter.name.as_str().unwrap_or_default().to_owned(),
-        description: frontmatter
-            .description
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
+        name: string("name").unwrap_or_default(),
+        description: string("description").unwrap_or_default(),
         metadata,
-        license: frontmatter.license,
-        compatibility: frontmatter.compatibility,
-        allowed_tools: frontmatter.allowed_tools,
-        disable_model_invocation: frontmatter.disable_model_invocation
-            == serde_yaml::Value::Bool(true),
+        license: string("license"),
+        compatibility: string("compatibility"),
+        allowed_tools: string("allowed-tools"),
+        disable_model_invocation: value["disable-model-invocation"].as_bool() == Some(true),
     })
-}
-
-/// Returns the end offset (exclusive) of the line beginning at `start`.
-/// An EOF-terminated final line is still a line; delimiter recognition remains
-/// exact because only the complete line content `---` is accepted.
-fn frontmatter_line_end(text: &str, start: usize) -> Option<usize> {
-    if start >= text.len() {
-        return None;
-    }
-    Some(
-        text[start..]
-            .find('\n')
-            .map_or(text.len(), |relative| start + relative + 1),
-    )
-}
-
-/// Removes only the line ending from one frontmatter line.
-fn line_content(line: &str) -> &str {
-    let line = line.strip_suffix('\n').unwrap_or(line);
-    line.strip_suffix('\r').unwrap_or(line)
 }
 
 #[cfg(test)]
@@ -1023,9 +778,9 @@ mod frontmatter_tests {
     }
 
     #[test]
-    fn requires_exact_opening_and_closing_delimiter_lines() {
+    fn requires_delimiters_and_accepts_a_closing_prefix() {
         assert!(parse_frontmatter("name: pdf\n---\nbody\n").is_err());
-        assert!(parse_frontmatter("---\nname: pdf\ndescription: test\n---oops\nbody\n").is_err());
+        assert!(parse_frontmatter("---\nname: pdf\ndescription: test\n---oops\nbody\n").is_ok());
         assert!(parse_frontmatter("---\nname: pdf\ndescription: test\nbody\n").is_err());
     }
 
@@ -1039,77 +794,54 @@ mod frontmatter_tests {
     }
 
     #[test]
-    fn pi_collections_discover_ancestor_packages_and_standalone_markdown() {
+    fn rustx_collections_discover_recursively_without_importing_other_roots() {
         let (_temp, base, workspace) = workspace_fixture();
         let home = base.join("home");
-        std::fs::write(workspace.root().join(".git"), "gitdir: elsewhere").unwrap();
         let project = workspace.root().join("src/project");
-        std::fs::create_dir_all(&project).unwrap();
-        let pi = project.join(".pi/skills");
-        let shared = project.join(".agents/skills");
-        write_skill(&home.join(".agents/skills"), "global", "Global", "");
-        write_skill(&home.join(".pi/agent/skills"), "duplicate", "User Pi", "");
-        write_skill(&shared.join("team"), "duplicate", "Shared project", "");
+        let local = project.join(".agents/skills");
+        let global = home.join("rustx/.agents/skills");
+        write_skill(&global, "global", "Global", "");
+        write_skill(&global, "duplicate", "Global duplicate", "");
+        write_skill(&local.join("team"), "duplicate", "Workspace duplicate", "");
         write_skill(
-            &shared.join("team/duplicate"),
+            &local.join("team/duplicate"),
             "asset",
-            "Never scan inside a package",
+            "Inside a package",
             "",
         );
         write_skill(
             &workspace.root().join(".agents/skills"),
             "ancestor",
-            "Repo root",
+            "Ancestor",
             "",
         );
-        write_skill(
-            &base.join(".agents/skills"),
-            "outside",
-            "Outside Git repo",
-            "",
-        );
-        write_skill(&home.join("rustx/.agents/skills"), "old", "Old root", "");
-        write_skill(&shared, "ignored", "Ignored", "");
-        std::fs::write(shared.join(".fdignore"), "ignored/\n").unwrap();
-        std::fs::create_dir_all(&pi).unwrap();
+        write_skill(&home.join(".agents/skills"), "shared", "Shared home", "");
+        write_skill(&home.join(".pi/agent/skills"), "user-pi", "User Pi", "");
+        write_skill(&project.join(".pi/skills"), "project-pi", "Project Pi", "");
+        write_skill(&local, "ignored", "Ignored", "");
+        std::fs::write(local.join(".fdignore"), "ignored/\n").unwrap();
+        std::fs::create_dir_all(local.join("loose")).unwrap();
         std::fs::write(
-            pi.join("review.md"),
-            "---\nname: duplicate\ndescription: Pi project\n---\nPRIVATE_BODY",
-        )
-        .unwrap();
-        std::fs::write(
-            shared.join("ignored-root.md"),
-            "---\nname: root-note\ndescription: Ignore loose root files\n---\n",
-        )
-        .unwrap();
-        std::fs::create_dir_all(shared.join("loose")).unwrap();
-        std::fs::write(
-            shared.join("loose/guide.md"),
+            local.join("loose/guide.md"),
             "---\ndescription: Fallback name\n---\n",
         )
         .unwrap();
+
         let project = Workspace::new(project).unwrap();
-        let outcome = SkillDiscovery::with_config(
-            &project,
-            SkillDiscoveryConfig {
-                automatic: automatic_skill_roots(Some(&home), project.root()),
-            },
-        )
+        let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig {
+            automatic: automatic_skill_roots(Some(&home), project.root()),
+        })
         .discover();
-        assert_eq!(
-            names(&outcome.packages),
-            ["ancestor", "duplicate", "global", "loose"]
-        );
-        assert_eq!(outcome.packages[1].description(), "Pi project");
+        assert_eq!(names(&outcome.packages), ["duplicate", "global", "loose"]);
+        assert_eq!(outcome.packages[0].description(), "Workspace duplicate");
         assert!(
-            outcome.packages[1]
-                .location()
-                .ends_with(".pi/skills/review.md")
-        );
-        assert!(
-            outcome.packages[3]
+            outcome.packages[2]
                 .location()
                 .ends_with(".agents/skills/loose/guide.md")
+        );
+        assert_eq!(
+            names(&SkillDiscovery::user(&home).discover().packages),
+            ["duplicate", "global"]
         );
     }
 
@@ -1118,15 +850,12 @@ mod frontmatter_tests {
     fn cfg280_missing_automatic_roots_are_benign_empty_sets() {
         let (_temp, base, workspace) = workspace_fixture();
         let home = base.join("home");
-        let outcome = SkillDiscovery::with_config(
-            &workspace,
-            SkillDiscoveryConfig {
-                automatic: automatic_skill_roots(Some(&home), workspace.root()),
-            },
-        )
+        let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig {
+            automatic: automatic_skill_roots(Some(&home), workspace.root()),
+        })
         .discover();
         assert!(outcome.packages.is_empty());
-        assert_eq!(outcome.diagnostics.len(), 4);
+        assert_eq!(outcome.diagnostics.len(), 2);
         assert!(
             outcome
                 .diagnostics
@@ -1148,8 +877,7 @@ mod frontmatter_tests {
         std::fs::write(root.join("broken/SKILL.md"), "not frontmatter at all\n")
             .expect("broken SKILL.md");
         let outcome =
-            SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::workspace_root(root))
-                .discover();
+            SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(root)).discover();
         assert_eq!(names(&outcome.packages), ["debugging", "rust-review"]);
         assert!(matches!(
             outcome.diagnostics.as_slice(),
@@ -1176,10 +904,8 @@ mod frontmatter_tests {
             workspace.root().join(".agents/skills"),
         );
         let forward =
-            SkillDiscovery::with_config(&workspace, automatic(&[global.clone(), project.clone()]))
-                .discover();
-        let reversed =
-            SkillDiscovery::with_config(&workspace, automatic(&[project, global])).discover();
+            SkillDiscovery::with_config(automatic(&[global.clone(), project.clone()])).discover();
+        let reversed = SkillDiscovery::with_config(automatic(&[project, global])).discover();
         assert_eq!(forward, reversed);
         assert_eq!(names(&forward.packages), ["foo"]);
         assert_eq!(forward.packages[0].description(), "Workspace foo");
@@ -1211,13 +937,10 @@ mod frontmatter_tests {
         write_skill(&global, "foo", "Global foo", "");
         write_skill(&project, "foo", "Workspace foo", "");
         std::fs::write(project.join("foo/SKILL.md"), "malformed").unwrap();
-        let outcome = SkillDiscovery::with_config(
-            &workspace,
-            automatic(&[
-                (SkillSource::User, global),
-                (SkillSource::Workspace, project),
-            ]),
-        )
+        let outcome = SkillDiscovery::with_config(automatic(&[
+            (SkillSource::User, global),
+            (SkillSource::Workspace, project),
+        ]))
         .discover();
         assert_eq!(names(&outcome.packages), ["foo"]);
         assert_eq!(outcome.packages[0].source(), SkillSource::User);
@@ -1228,7 +951,7 @@ mod frontmatter_tests {
     }
 
     #[test]
-    fn discovery_follows_contained_symlinks_and_dedupes_aliases() {
+    fn discovery_follows_external_symlinks_and_dedupes_aliases() {
         let (_temp, base, workspace) = workspace_fixture();
         let root = workspace.root().join(".agents/skills");
         write_skill(&root, "valid", "Valid", "");
@@ -1236,10 +959,32 @@ mod frontmatter_tests {
         std::os::unix::fs::symlink(root.join("valid"), root.join("alias")).unwrap();
         std::os::unix::fs::symlink(base.join("external"), root.join("external")).unwrap();
         std::os::unix::fs::symlink(&root, root.join("cycle")).unwrap();
+        std::os::unix::fs::symlink(base.join("missing"), root.join("broken")).unwrap();
+        let linked = root.join("linked-file");
+        std::fs::create_dir(&linked).unwrap();
+        let instruction = base.join("standalone.md");
+        std::fs::write(
+            &instruction,
+            "---\nname: linked-file\ndescription: File link\n---\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&instruction, linked.join("SKILL.md")).unwrap();
         let outcome =
-            SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::workspace_root(root))
+            SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(root.clone()))
                 .discover();
-        assert_eq!(names(&outcome.packages), ["valid"]);
+        assert_eq!(
+            names(&outcome.packages),
+            ["external", "linked-file", "valid"]
+        );
+        assert_eq!(
+            Path::new(outcome.packages[0].location()),
+            root.join("external/SKILL.md")
+        );
+        assert_eq!(
+            Path::new(outcome.packages[1].location()),
+            linked.join("SKILL.md")
+        );
+        assert_eq!(outcome.packages[1].instruction_source(), instruction);
         assert!(outcome.diagnostics.is_empty());
     }
 
@@ -1252,16 +997,13 @@ mod frontmatter_tests {
         std::fs::create_dir_all(home.join(".agents")).expect("home agents");
         std::fs::write(home.join(".agents/skills"), "not a directory").expect("file root");
         write_skill(&workspace.root().join(".agents/skills"), "zeta", "Zeta", "");
-        let outcome = SkillDiscovery::with_config(
-            &workspace,
-            automatic(&[
-                (SkillSource::User, home.join(".agents/skills")),
-                (
-                    SkillSource::Workspace,
-                    workspace.root().join(".agents/skills"),
-                ),
-            ]),
-        )
+        let outcome = SkillDiscovery::with_config(automatic(&[
+            (SkillSource::User, home.join(".agents/skills")),
+            (
+                SkillSource::Workspace,
+                workspace.root().join(".agents/skills"),
+            ),
+        ]))
         .discover();
         assert_eq!(names(&outcome.packages), ["zeta"]);
         assert!(matches!(
@@ -1274,7 +1016,7 @@ mod frontmatter_tests {
     }
 
     #[test]
-    fn discovery_merges_bounded_roots_in_deterministic_identity_order() {
+    fn discovery_merges_roots_in_deterministic_identity_order() {
         let (_temp, base, workspace) = workspace_fixture();
         let user_agents = base.join("user/.agents/skills");
         let project_agents = workspace.root().join(".agents/skills");
@@ -1283,21 +1025,18 @@ mod frontmatter_tests {
         write_skill(&user_agents, "alpha", "Alpha", "");
         write_skill(&user_agents, "middle", "Middle", "");
 
-        let outcome = SkillDiscovery::with_config(
-            &workspace,
-            SkillDiscoveryConfig {
-                automatic: vec![
-                    AutomaticSkillRoot {
-                        source: SkillSource::Workspace,
-                        root: project_agents,
-                    },
-                    AutomaticSkillRoot {
-                        source: SkillSource::User,
-                        root: user_agents,
-                    },
-                ],
-            },
-        )
+        let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig {
+            automatic: vec![
+                AutomaticSkillRoot {
+                    source: SkillSource::Workspace,
+                    root: project_agents,
+                },
+                AutomaticSkillRoot {
+                    source: SkillSource::User,
+                    root: user_agents,
+                },
+            ],
+        })
         .discover();
         assert_eq!(names(&outcome.packages), vec!["alpha", "middle", "zeta"]);
     }
@@ -1315,12 +1054,9 @@ mod frontmatter_tests {
             "unrelated legacy user bytes; not valid frontmatter",
         )
         .expect("legacy bytes");
-        let outcome = SkillDiscovery::with_config(
-            &workspace,
-            SkillDiscoveryConfig {
-                automatic: automatic_skill_roots(Some(&home), workspace.root()),
-            },
-        )
+        let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig {
+            automatic: automatic_skill_roots(Some(&home), workspace.root()),
+        })
         .discover();
         assert!(outcome.packages.is_empty());
         assert_eq!(
@@ -1358,27 +1094,21 @@ mod frontmatter_tests {
         // reached through a link, exactly like macOS's `/var` alias.
         let alias = base.join("alias");
         std::os::unix::fs::symlink(&home, &alias).expect("home alias");
-        let canonical = SkillDiscovery::with_config(
-            &workspace,
-            automatic(&[
-                (SkillSource::User, home.join(".agents/skills")),
-                (
-                    SkillSource::Workspace,
-                    workspace.root().join(".agents/skills"),
-                ),
-            ]),
-        )
+        let canonical = SkillDiscovery::with_config(automatic(&[
+            (SkillSource::User, home.join(".agents/skills")),
+            (
+                SkillSource::Workspace,
+                workspace.root().join(".agents/skills"),
+            ),
+        ]))
         .discover();
-        let aliased = SkillDiscovery::with_config(
-            &workspace,
-            automatic(&[
-                (SkillSource::User, alias.join(".agents/skills")),
-                (
-                    SkillSource::Workspace,
-                    workspace.root().join(".agents/skills"),
-                ),
-            ]),
-        )
+        let aliased = SkillDiscovery::with_config(automatic(&[
+            (SkillSource::User, alias.join(".agents/skills")),
+            (
+                SkillSource::Workspace,
+                workspace.root().join(".agents/skills"),
+            ),
+        ]))
         .discover();
         // The alias is not a second Skill plane: it publishes the identical
         // generation, down to the shadowed provenance location.
@@ -1417,107 +1147,23 @@ mod frontmatter_tests {
         );
     }
 
-    /// The cumulative per-source candidate budget: exact at the limit, one
-    /// over is an exclusion, and every root of one source draws from the same
-    /// counter.
-    ///
-    /// The budget is lowered through a deterministic seam rather than by
-    /// materializing `MAX_SOURCE_SKILL_PACKAGES` + 1 real package trees: the
-    /// arithmetic and every reporting path are the production ones.
     #[test]
-    fn cfg280_one_cumulative_candidate_budget_per_source() {
-        let (_temp, base, workspace) = workspace_fixture();
-        let global = base.join("home/.agents/skills");
-        let project = workspace.root().join(".agents/skills");
-        for name in ["g-one", "g-two", "g-three"] {
-            write_skill(&global, name, "Global", "");
+    fn skill_collections_have_no_package_entry_or_depth_limit() {
+        let (_temp, _base, workspace) = workspace_fixture();
+        let root = workspace.root().join(".agents/skills");
+        std::fs::create_dir_all(&root).unwrap();
+        for index in 0..1025 {
+            std::fs::write(root.join(format!(".ignored-{index}")), "").unwrap();
         }
-        write_skill(&project, "p-one", "Workspace", "");
-        let config = || {
-            automatic(&[
-                (SkillSource::User, global.clone()),
-                (SkillSource::Workspace, project.clone()),
-            ])
-        };
-
-        // Exactly at the limit: the source publishes completely.
-        let exact = SkillDiscovery::with_source_budget(config(), 3).discover();
-        assert_eq!(
-            names(&exact.packages),
-            ["g-one", "g-three", "g-two", "p-one"]
-        );
-        assert!(
-            !exact
-                .diagnostics
-                .iter()
-                .any(|fact| matches!(fact, SkillDiagnostic::SourceBudgetExceeded { .. })),
-            "{:?}",
-            exact.diagnostics
-        );
-
-        // One over: that source is excluded, and only that source. The
-        // budget belongs to the source, so the workspace source — well inside
-        // its own budget — still publishes.
-        let over = SkillDiscovery::with_source_budget(config(), 2).discover();
-        assert_eq!(names(&over.packages), ["p-one"]);
-        let [
-            SkillDiagnostic::SourceBudgetExceeded {
-                source,
-                roots,
-                candidates,
-                limit,
-            },
-        ] = over.diagnostics.as_slice()
-        else {
-            panic!("expected one budget fact, got {:?}", over.diagnostics);
-        };
-        assert_eq!(*source, SkillSource::User);
-        assert_eq!(roots, &[global.display().to_string()]);
-        assert_eq!((*candidates, *limit), (3, 2));
-        assert_eq!(
-            over.diagnostics[0].severity(),
-            SkillDiagnosticSeverity::Warning
-        );
-
-        // Several roots configured for the *same* source share that source's
-        // one budget, in either configured order: four candidates spread over
-        // two global roots fit a budget of four and overrun a budget of three,
-        // even though either root alone fits inside three.
-        let split = base.join("home-two/.agents/skills");
-        write_skill(&split, "g-four", "Global", "");
-        let two_roots = |reverse: bool| {
-            let mut roots = vec![
-                (SkillSource::User, global.clone()),
-                (SkillSource::User, split.clone()),
-            ];
-            if reverse {
-                roots.reverse();
-            }
-            automatic(&roots)
-        };
-        for reverse in [false, true] {
-            let outcome = SkillDiscovery::with_source_budget(two_roots(reverse), 4).discover();
-            assert_eq!(
-                names(&outcome.packages),
-                ["g-four", "g-one", "g-three", "g-two"]
-            );
-            let over = SkillDiscovery::with_source_budget(two_roots(reverse), 3).discover();
-            assert!(over.packages.is_empty(), "the source is excluded whole");
-            let [
-                SkillDiagnostic::SourceBudgetExceeded {
-                    roots, candidates, ..
-                },
-            ] = over.diagnostics.as_slice()
-            else {
-                panic!("expected one budget fact, got {:?}", over.diagnostics);
-            };
-            // Canonically ordered and order-independent: both the decision and
-            // the number it reports are functions of the source alone.
-            let mut expected = vec![global.display().to_string(), split.display().to_string()];
-            expected.sort();
-            assert_eq!(roots, &expected);
-            assert_eq!(*candidates, 4);
+        for index in 0..129 {
+            write_skill(&root, &format!("guide-{index}"), "Guide", "");
         }
+        let deep = (0..70).fold(root.clone(), |path, _| path.join("deep"));
+        write_skill(&deep, "deep-guide", "Deep guide", "");
+        let outcome =
+            SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(root)).discover();
+        assert_eq!(outcome.packages.len(), 130);
+        assert!(outcome.diagnostics.is_empty(), "{:?}", outcome.diagnostics);
     }
 
     #[test]
@@ -1531,8 +1177,7 @@ mod frontmatter_tests {
             "\ndisable-model-invocation: true",
         );
         let outcome =
-            SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::workspace_root(explicit))
-                .discover();
+            SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(explicit)).discover();
         assert_eq!(outcome.packages.len(), 1);
         assert!(outcome.packages[0].disable_model_invocation());
         let snapshot = SkillSnapshot::new(outcome.packages.into_iter().map(Arc::new).collect());

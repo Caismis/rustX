@@ -2333,7 +2333,7 @@ async fn selected_workspace_guidance_cannot_escape_its_resource_root() {
 #[tokio::test]
 async fn launch_freezes_discovered_skills_with_workspace_precedence() {
     let f = Fixture::new();
-    let user = f.host.home_directory.join(".agents/skills");
+    let user = f.host.home_directory.join("rustx/.agents/skills");
     let workspace = f.host.launch_directory.join(".agents/skills");
     for (root, name, description) in [
         (&user, "user-only", "User only"),

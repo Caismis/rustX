@@ -2,26 +2,26 @@
 
 ## Contract and ownership
 
-Skill discovery visits the Workspace's `.pi/skills`, then each ancestor's
-`.agents/skills` from the Workspace to the nearest Git root. Outside Git it
-visits ancestors through the filesystem root. It then reads the user collections
-`~/.pi/agent/skills` and `~/.agents/skills`, in that order. The first valid
-definition for a name wins and canonical file aliases are deduplicated.
-Discovery skips hidden entries, `node_modules`, and entries excluded by
-`.gitignore`, `.ignore` or `.fdignore`. It stops traversal at a `SKILL.md`.
-Standalone Markdown files with Skill frontmatter are discovered at the root of a
-pi collection and below the root of a shared collection. Workspace links stay
-within their collection's authorized boundary.
+Skill discovery visits `<workspace>/.agents/skills` and then
+`~/rustx/.agents/skills`. The first valid definition for a name wins and aliases
+to the same instruction file are deduplicated. Discovery skips hidden entries,
+`node_modules`, and entries excluded by `.gitignore`, `.ignore` or `.fdignore`.
+It stops traversal at a `SKILL.md`. Standalone Markdown files with Skill
+frontmatter are discovered below the collection root.
 
-`skills/frontmatter.rs` opens SKILL.md through the existing anchored directory I/O
-owner. It reads a cancellable prefix with 4 KiB bounded read-ahead and stops on the
-closing YAML delimiter. Two matching prefix reads verify the definition without
-using mtime/size/inode as content equality. No body UTF-8 validation occurs.
-The **frontmatter prefix**, including malformed newline-free input, is bounded to
-1 MiB. The file, body and assets have no discovery size limit. Missing delimiters,
-invalid YAML, field shapes, invalid names and malformed dependency
-metadata retain explicit candidate diagnostics. Internal resource symlinks are
-not inspected; actual Native Tools own their ordinary path/permission rules.
+Directory and file symlinks can point outside either collection. Discovered
+paths retain links below the collection root so package-relative references
+resolve beside the offered instruction file. Broken links and directory cycles
+are skipped. Package bodies and supporting files are opened on demand by the
+tools that use them.
+
+`skills/frontmatter.rs` reads a cancellable prefix with 4 KiB read-ahead and
+stops at the closing YAML delimiter. Two matching prefix reads verify the
+definition using content equality. Discovery requires parseable YAML and a
+nonempty string description. It uses the parent directory name when the
+frontmatter supplies no string name. Nonstandard names and descriptions over
+1024 characters produce warnings. Optional fields do not gate discovery.
+Invalid rustX dependency declarations are ignored with a warning.
 
 `SkillPackage` stores one normalized definition, its dependency manifest, version
 and effective binding. It has no resource file list or materialization root.
@@ -35,9 +35,8 @@ actual host paths and under their existing authorization rules.
 `SkillVersionId` is `sha256:<64 lowercase hex>` over the domain
 `rustx-skill-definition-v1\n` and stable JSON serialization of normalized validated
 frontmatter. Struct field order and sorted metadata keys are deterministic.
-Description and compatibility use their validated trimmed values; absent optional
-fields/default false are normalized. Every recognized standard field and all
-metadata, including dependency declarations, participate. Recognized dependency
+Absent optional fields and default false are normalized. Recognized standard
+fields and metadata, including dependency declarations, participate. Recognized dependency
 metadata uses the existing parsed normalized pins and canonical sorted JSON, so
 embedded JSON formatting and equivalent normalized package names stay inert. YAML key order,
 comments, quote style and line endings do not. Absolute paths, provenance, body
@@ -54,8 +53,8 @@ Native notifications invalidate observations. The watcher registers collections,
 grouping directories and package directories non-recursively. Atomic instruction
 replacement, ignore-file edits and collection recreation are observed without
 walking package assets. Configuration capture compares the same discovered
-definitions on both sides of the capture fence, including ancestor and user
-collections.
+definitions on both sides of the capture fence for both collections. Changes
+to linked instruction files and linked collection directories are also observed.
 
 A body/asset edit or semantically identical YAML produces no configuration
 revision, capability preparation or `configuration_applied` fact. Changes outside
@@ -103,7 +102,7 @@ the guard awaits physical process settlement before reporting preparation failur
 
 | Path | Authoritative implementation | Excluded work and evidence |
 | --- | --- | --- |
-| Discovery | `skills/package.rs`, `frontmatter.rs`, `identity.rs` | Bounded collection traversal and instruction-file prefix only. Tests use 10 GiB assets, a 4 GiB body, 4,200 nested files and an internal resource symlink; actual file-open/read counters admit only SKILL.md, with no package directory listing. |
+| Discovery | `skills/package.rs`, `frontmatter.rs`, `identity.rs` | Collection traversal and instruction-file prefix only. Tests use 10 GiB assets, a 4 GiB body, 4,200 nested files and an internal resource symlink; actual file-open/read counters admit only SKILL.md, with no package directory listing. |
 | Revision / rescan | `local_runtime/resource_directory.rs`, `resource_directory/evidence.rs` | Skill discovery owns its revision separately from generic resource traversal. Revision tests assert only two SKILL.md opens and zero resource-directory listings. |
 | Configuration preparation | `configuration/capture.rs`, `prospective.rs`, `capabilities/coordinator.rs` | Captured definitions are passed by value. Selected-only dependency merging; no body/asset inputs. Tests cover inert body edits, unused conflicts, safe Attempt snapshots, stale successors, source replacement and Journal differences. |
 | Child initialization | `runtime/subagent/resolver.rs`, `ipc.rs`, `composition/subagent_child.rs` | Metadata/manifest installation, explicit selected environment preparation, no Skill file I/O. `skills/materialization.rs`, recursive package walking and package-content identity APIs are deleted. Composition tests retain original host locations and versions across rewritten definitions/new ambient Skills; no private Skill copy exists. |

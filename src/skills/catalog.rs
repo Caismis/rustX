@@ -1,7 +1,7 @@
 //! The compact model-visible Skill catalog (M6).
 //!
 //! The catalog is rendered deterministically from the attempt's immutable
-//! Skill snapshot. Each entry contains only the validated standard `name`,
+//! Skill snapshot. Each entry contains only the discovered `name`,
 //! `description`, and the host path of the package's `SKILL.md`. `SKILL.md`
 //! bodies, supporting resources, and dependency metadata never appear in the
 //! catalog.
@@ -15,10 +15,8 @@
 //! every Bash-executed Skill resource unreachable.
 //!
 //! The catalog never derives that path: [`crate::skills::SkillPackage`]
-//! establishes one canonical absolute UTF-8 location at discovery time (see
-//! its package root invariant), and the catalog is only a projection of it.
-//! Deriving it here instead would let a non-canonical package root reach the
-//! model as a path that resolves differently per tool.
+//! provides one absolute UTF-8 location at discovery time. Links inside the
+//! collection keep their offered spelling for package-relative references.
 //!
 //! The catalog is an immutable capability snapshot. Its rendered guidance
 //! enters the request-time Effective System Prompt through Context Assembly;
@@ -407,8 +405,9 @@ mod tests {
             vec![SkillDiagnostic::PackageInvalid {
                 source: SkillSource::Workspace,
                 package: "/w/.agents/skills/broken".to_owned(),
-                cause: SkillPackageError::MissingSkillMarkdown {
+                cause: SkillPackageError::MalformedFrontmatter {
                     directory: "broken".to_owned(),
+                    detail: "invalid YAML".to_owned(),
                 },
             }],
         );

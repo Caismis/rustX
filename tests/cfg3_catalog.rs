@@ -742,7 +742,7 @@ fn session_persistence_refuses_obsolete_effective_configuration_fields() {
 fn malformed_workspace_skill_leaves_the_valid_user_definition_available() {
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
-    let user = host.home_directory.join(".agents/skills/review");
+    let user = host.home_directory.join("rustx/.agents/skills/review");
     let workspace = request
         .workspace
         .as_ref()
@@ -756,23 +756,18 @@ fn malformed_workspace_skill_leaves_the_valid_user_definition_available() {
     )
     .unwrap();
     std::fs::write(workspace.join("SKILL.md"), "invalid manifest").unwrap();
-    let boundary =
-        rustx::tools::workspace::Workspace::new(request.workspace.as_ref().unwrap()).unwrap();
-    let outcome = rustx::skills::SkillDiscovery::with_config(
-        &boundary,
-        rustx::skills::SkillDiscoveryConfig {
-            automatic: vec![
-                rustx::skills::AutomaticSkillRoot {
-                    source: rustx::skills::SkillSource::User,
-                    root: user.parent().unwrap().to_owned(),
-                },
-                rustx::skills::AutomaticSkillRoot {
-                    source: rustx::skills::SkillSource::Workspace,
-                    root: workspace.parent().unwrap().to_owned(),
-                },
-            ],
-        },
-    )
+    let outcome = rustx::skills::SkillDiscovery::with_config(rustx::skills::SkillDiscoveryConfig {
+        automatic: vec![
+            rustx::skills::AutomaticSkillRoot {
+                source: rustx::skills::SkillSource::User,
+                root: user.parent().unwrap().to_owned(),
+            },
+            rustx::skills::AutomaticSkillRoot {
+                source: rustx::skills::SkillSource::Workspace,
+                root: workspace.parent().unwrap().to_owned(),
+            },
+        ],
+    })
     .discover();
     assert_eq!(outcome.packages.len(), 1);
     assert_eq!(

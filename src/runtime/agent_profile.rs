@@ -127,9 +127,6 @@ impl AgentProfile {
             AgentProfileKind::Root => AgentSkillSelection::All,
             AgentProfileKind::Named => AgentSkillSelection::default(),
         });
-        for name in skills.names() {
-            crate::skills::package::validate_skill_name(name)?;
-        }
         if document.description.len()
             > crate::runtime::subagent::catalog::MAX_SUBAGENT_DESCRIPTION_BYTES
             || document.instructions.len()
@@ -927,13 +924,11 @@ mod composition_tests {
         )
         .unwrap();
         let workspace = crate::tools::workspace::Workspace::new(directory.path()).unwrap();
-        let discovered = crate::skills::SkillDiscovery::with_config(
-            &workspace,
-            crate::skills::SkillDiscoveryConfig {
+        let discovered =
+            crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
                 automatic: crate::skills::automatic_skill_roots(None, workspace.root()),
-            },
-        )
-        .discover();
+            })
+            .discover();
         let skills = SkillSnapshot::from_discovery(discovered);
         let document = crate::local_runtime::agent_resources::parse(
             "skills = ['review', 'missing']\n[tools]\nbuiltin = ['read']",
@@ -975,7 +970,7 @@ mod composition_tests {
     #[allow(clippy::too_many_lines)] // one contract, proven end to end in order
     fn cfg332_root_visibility_and_named_visibility_are_independent() {
         let directory = tempfile::tempdir().unwrap();
-        let global = directory.path().join("home/.agents/skills");
+        let global = directory.path().join("home/rustx/.agents/skills");
         let workspace_root = directory.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).unwrap();
         let project = workspace_root.join(".agents/skills");
@@ -1001,16 +996,14 @@ mod composition_tests {
             .unwrap();
         }
         let workspace = crate::tools::workspace::Workspace::new(&workspace_root).unwrap();
-        let discovered = crate::skills::SkillDiscovery::with_config(
-            &workspace,
-            crate::skills::SkillDiscoveryConfig {
+        let discovered =
+            crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
                 automatic: crate::skills::automatic_skill_roots(
                     Some(&directory.path().join("home")),
                     workspace.root(),
                 ),
-            },
-        )
-        .discover();
+            })
+            .discover();
         let skills = SkillSnapshot::from_discovery(discovered);
         // The catalog owns four packages; one is model-ineligible.
         assert_eq!(skills.packages().len(), 4);

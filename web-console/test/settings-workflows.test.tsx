@@ -165,7 +165,7 @@ function inventory(): CapabilityInspection {
     definitions: [
       { family: 'mcp', name: 'search', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/mcp.toml' } },
       { family: 'mcp', name: 'broken', valid: false, location: { scope: 'user', path: '/home/user/rustx/.agents/mcp.toml' } },
-      { family: 'skill', name: 'docs', valid: true, location: { scope: 'user', path: '/home/user/.agents/skills/docs' } },
+      { family: 'skill', name: 'docs', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/skills/docs' } },
       { family: 'workflow', name: 'nightly', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/workflows/nightly' } },
       { family: 'managed_python', name: 'analysis', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/python/analysis' } },
     ],

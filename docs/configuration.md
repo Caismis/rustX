@@ -16,6 +16,7 @@ facts and keep unsaved drafts.
 ├── rustx.toml
 ├── .agents/
 │   ├── mcp.toml
+│   ├── skills/<name>/SKILL.md
 │   ├── tools/<package>/server.py
 │   │                  /requirements.txt
 │   ├── agents/<name>.toml
@@ -49,8 +50,8 @@ facts and keep unsaved drafts.
 ```
 
 There are exactly two ordinary scopes: User and Workspace. The Workspace is the
-selected directory. Skill discovery also reads ancestor Skill collections. Runtime files can also contain ownership locks, SQLite sidecars and
-physical execution scratch beneath their native owner directories.
+selected directory. Runtime files can also contain ownership locks, SQLite
+sidecars and physical execution scratch beneath their native owner directories.
 
 `--config /absolute/file.toml` replaces the User document binding for this
 process (`rustx app-server` and the offline configuration commands). Any file
@@ -635,8 +636,9 @@ Unused invalid resources yield bounded ordered diagnostics; selecting an invalid
 resource fails the typed resolution or admission operation. A malformed collection
 whose identities cannot be read cannot expose lower definitions through fallback.
 
-Skills are discovered from pi and shared User and Workspace collections. The
-first valid definition of a name wins. The root Agent advertises eligible Skills
+Skills are discovered from `<workspace>/.agents/skills` and
+`~/rustx/.agents/skills`, in that order. Collection and instruction symlinks
+may resolve outside these directories. The first valid definition of a name wins. The root Agent advertises eligible Skills
 by default, with exact selections and `[]` available in `agent.skills`.
 The system prompt includes names, descriptions, and real instruction paths
 when Read or Bash is available. Skill bodies and supporting files are read on
@@ -1119,7 +1121,7 @@ resolution and source inspection share:
   without a default model is incomplete, not invalid, once everything else holds.
 
 Every candidate is also bounded in bytes: its complete serialization must fit the
-1 MiB limit every authored file reader enforces (`bounded_file`), checked before
+1 MiB limit the authored document reader enforces (`bounded_file`), checked before
 any lock or backup. A repair that would grow a source past it — `schema_version
 = 9` becoming `10` in a document already at the limit — is `unresolved` with no
 backup, and the source is unchanged. The source publication primitive fences the

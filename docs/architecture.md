@@ -7539,11 +7539,10 @@ and pending authority. No deletion or successful cleanup follows failed proof.
 
 ## Local resource byte policies (Issue #527)
 
-Skill discovery enumerates direct candidates and reads only `SKILL.md`
-frontmatter for standard metadata/dependency validation. The prefix is bounded
-to 1 MiB with cancellable 4 KiB read-ahead and two matching anchored prefix reads.
-Bodies and supporting assets have no discovery size ceiling because they are
-not discovery inputs. The definition digest hashes normalized frontmatter under
+Skill discovery recursively scans the Workspace and User collections, following
+directory and instruction file symlinks. It reads only instruction frontmatter
+with cancellable 4 KiB read-ahead and two matching anchored prefix reads. Bodies
+and supporting assets are read on demand. The definition digest hashes normalized frontmatter under
 `rustx-skill-definition-v1`; source/location bindings are compared separately.
 Native Read remains the progressive-disclosure path for current runtime bytes.
 Revision/rescan reuse definition discovery, while children inherit frozen

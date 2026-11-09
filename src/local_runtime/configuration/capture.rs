@@ -914,9 +914,9 @@ impl UserConfigManager {
             return Err("Skill definitions changed during capture; rescan to retry".into());
         }
         // The project Skill collection is the revision key of the complete
-        // ordered inventory, including shared and ancestor collections.
+        // User and Workspace inventory.
         revisions.insert(
-            locations.workspace.join(".pi/skills"),
+            crate::skills::AutomaticSkillRoot::workspace(&locations.workspace).root,
             skill_discovery.revision(),
         );
         diagnostics.sort();

@@ -812,11 +812,8 @@ async fn queued_candidate_cancels_without_waiting_for_another_candidates_sources
     let (settled_tx, mut settled_rx) = tokio::sync::mpsc::unbounded_channel();
     *coordinator.inner.preparation_settled.lock().unwrap() = Some(settled_tx);
     let inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
-    let discovered = crate::skills::SkillDiscovery::with_config(
-        &coordinator.inner.workspace,
-        inputs.skill_discovery.clone(),
-    )
-    .discover();
+    let discovered =
+        crate::skills::SkillDiscovery::with_config(inputs.skill_discovery.clone()).discover();
     let cancellation = CancellationSignal::new();
     let queued_cancellation = cancellation.clone();
     let preparing = coordinator.clone();

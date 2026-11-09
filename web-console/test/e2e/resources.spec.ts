@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import {expect,test,type Locator,type Page} from '@playwright/test';
-import {existsSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,readFileSync,symlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {startDogfood} from './dogfood-server';
@@ -37,18 +37,21 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   const workspaceRoot=join(f.workspaceA,'.agents');
   const mcpScript=fileURLToPath(new URL('./image-mcp.py',import.meta.url));
   for(const [root,prefix] of [[userRoot,'global'],[workspaceRoot,'local']]) {
-   const skill = join(prefix === 'global' ? join(f.directory,'home/.agents') : root,'skills','team',`${prefix}-guide`);
+   const skill = join(root,'skills','team',`${prefix}-guide`);
    mkdirSync(join(root,'agents'),{recursive:true});mkdirSync(skill,{recursive:true});
    writeFileSync(join(root,'agents',`${prefix}-reviewer.toml`),`description = "${prefix} reviewer"\ninstructions = "Review carefully."\n`);
-   writeFileSync(join(skill,'SKILL.md'),`---\nname: ${prefix}-guide\ndescription: A ${prefix} skill for reviewing changes.\n---\n# ${prefix} guide\n${prefix} guide instructions.\n`);
+   const skillFile=join(skill,'SKILL.md');
+   const instructionFile=prefix==='global'?join(f.directory,'shared-global-guide.md'):skillFile;
+   writeFileSync(instructionFile,`---\nname: ${prefix}-guide\ndescription: A ${prefix} skill for reviewing changes.\n---\n# ${prefix} guide\n${prefix} guide instructions.\n`);
+   if(instructionFile!==skillFile)symlinkSync(instructionFile,skillFile);
    writeFileSync(join(root,'mcp.toml'),`[mcp_servers.${prefix}-server]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(mcpScript)}]\n`);
   }
-  const projectSkills=join(f.workspaceA,'.pi/skills');
+  const projectSkills=join(workspaceRoot,'skills','manual');
   mkdirSync(projectSkills,{recursive:true});
   writeFileSync(join(projectSkills,'manual.md'),'---\nname: manual-guide\ndescription: Manual skill.\ndisable-model-invocation: true\n---\n# Manual\nInstructions in a standalone file.');
   // Descriptions beyond the native 32-item page must remain discoverable.
   for(let index=0;index<34;index++) {
-   const name=`catalog-${String(index).padStart(2,'0')}`,directory=join(f.directory,'home/.agents/skills',name);
+   const name=`catalog-${String(index).padStart(2,'0')}`,directory=join(userRoot,'skills',name);
    mkdirSync(directory,{recursive:true});
    writeFileSync(join(directory,'SKILL.md'),`---\nname: ${name}\ndescription: Catalog entry ${index}.\n---\n# ${name}\nInstructions.\n`);
   }

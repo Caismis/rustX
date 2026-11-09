@@ -1938,15 +1938,16 @@ model = 'provider/model'
             assert_eq!(root.agent.skills, Some(expected.clone()));
             assert_eq!(named.skills, Some(expected));
         }
+        let named = crate::local_runtime::agent_resources::parse(
+            "description = 'r'\nskills = ['UPPERCASE and spaces']",
+        )
+        .unwrap();
+        assert_eq!(named.skills.unwrap().names(), &["UPPERCASE and spaces"]);
         let omitted = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).unwrap();
         assert_eq!(omitted.agent.skills, None);
         let named = crate::local_runtime::agent_resources::parse("description = 'r'").unwrap();
         assert_eq!(named.skills, None);
-        for authored in [
-            "disabled_skills = []",
-            "skills = ['NOT VALID']",
-            "skills = 'none'",
-        ] {
+        for authored in ["disabled_skills = []", "skills = 'none'"] {
             assert!(
                 CurrentRuntimeConfig::from_toml_slice(
                     MINIMAL

@@ -2318,124 +2318,6 @@ async fn a_replaced_skill_directory_keeps_feeding_the_source_watch() {
     .await;
 }
 
-/// Hidden entries count toward collection admission even though they are not
-/// Skill candidates. Their own structural events remove and restore the
-/// selected catalog, including definition edits while candidate watches are
-/// absent at the over-budget boundary.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn hidden_skill_collection_entries_invalidate_the_budget_and_recover_watches() {
-    bounded(async {
-        let fixture = Fixture::with_session_count(None, 1).await;
-        let id = fixture.sessions[0].id.clone();
-        let collection = fixture.workspaces[0].join(".agents/skills");
-        let package = collection.join("guide");
-        std::fs::create_dir_all(package.join("assets/deep")).unwrap();
-        std::fs::File::create(package.join("assets/deep/large.bin"))
-            .unwrap()
-            .set_len(2 * 1024 * 1024 * 1024)
-            .unwrap();
-        let definition = package.join("SKILL.md");
-        let write_definition = |description: &str| {
-            std::fs::write(
-                &definition,
-                format!("---\nname: guide\ndescription: {description}\n---\nlive body\n"),
-            )
-            .unwrap();
-        };
-        write_definition("Original");
-        for index in 0..1023 {
-            std::fs::write(collection.join(format!(".ignored-{index}")), []).unwrap();
-        }
-        fixture.manager.load(&id, None).await.unwrap();
-        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
-        select_all_skills(&fixture).await;
-        let descriptions = || {
-            runtime
-                .runtime_resources()
-                .capability()
-                .model_skill_entries()
-                .iter()
-                .map(|entry| entry.description.clone())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(descriptions(), ["Original"]);
-        injected_only(&fixture);
-        let captured = fixture
-            .manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .source_watch_captured
-            .clone();
-        let stop = tokio_util::sync::CancellationToken::new();
-        let observe = async {
-            watch_settled(&fixture).await;
-            let overflow = collection.join(".overflow");
-            captured.arm();
-            std::fs::write(&overflow, []).unwrap();
-            assert!(
-                fixture.manager.notify_source_watch(
-                    notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
-                        .add_path(overflow.clone())
-                )
-            );
-            captured.entered().await;
-            applied(&fixture, 0).await;
-            assert!(
-                descriptions().is_empty(),
-                "1,025 entries must suppress the collection"
-            );
-            assert!(
-                runtime
-                    .runtime_resources()
-                    .capability()
-                    .skills()
-                    .diagnostics()
-                    .iter()
-                    .any(|diagnostic| diagnostic.to_string().contains("exceeds 1024"))
-            );
-            // Candidate watches are gone while the collection is over budget.
-            // No definition event is injected: only removing the hidden entry
-            // may recover the changed definition.
-            write_definition("Changed while unwatched");
-            let passes = *settled_passes(&fixture).borrow();
-            captured.release();
-            captured.parked(0).await;
-            settled_passes(&fixture)
-                .wait_for(|settled| *settled > passes)
-                .await
-                .unwrap();
-            captured.arm();
-            std::fs::remove_file(&overflow).unwrap();
-            assert!(
-                fixture.manager.notify_source_watch(
-                    notify::Event::new(notify::EventKind::Remove(notify::event::RemoveKind::File))
-                        .add_path(overflow)
-                )
-            );
-            captured.entered().await;
-            applied(&fixture, 0).await;
-            assert_eq!(descriptions(), ["Changed while unwatched"]);
-            // A definition event received after recovery's capture, before the
-            // next watch adjustment, must continue to update the catalog.
-            let mut changes = fixture.manager.configuration_changes();
-            write_definition("After rearm");
-            assert!(fixture.manager.notify_source_watch(modified(&definition)));
-            captured.release();
-            captured.parked(0).await;
-            while descriptions() != ["After rearm"] {
-                changes.changed().await.unwrap();
-            }
-            stop.cancel();
-        };
-        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
-        watched.unwrap();
-        fixture.close().await;
-    })
-    .await;
-}
-
 /// A platform rescan names no path, so it recaptures every known source: a
 /// Skill added to Workspace A while notifications were lost is committed
 /// although only Workspace B's document was notified, and a repeated rescan
@@ -2612,7 +2494,7 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
         let home = fixture.workspaces[0].parent().unwrap().join("home");
-        let guide = home.join(".agents/skills/guide");
+        let guide = home.join("rustx/.agents/skills/guide");
         let skill = |description: &str| {
             std::fs::create_dir_all(&guide).unwrap();
             std::fs::write(
@@ -2639,9 +2521,9 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
             tokio::task::yield_now().await;
         }
         // The Skill's directory is also a known Workspace, whose canonical
-        // path on a case-folding volume keeps `.Agents`.
+        // path on a case-folding volume keeps `RustX`.
         fixture.manager.applications.lock().record_source(
-            &home.join(".Agents/skills/guide"),
+            &home.join("RustX/.agents/skills/guide"),
             &Err("not a Session's workspace".into()),
         );
         injected_only(&fixture);
@@ -2667,7 +2549,7 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
             skill("Version B");
             let edit =
                 notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
-                    .add_path(home.join(".Agents/skills/guide/SKILL.md"));
+                    .add_path(home.join("RustX/.agents/skills/guide/SKILL.md"));
             while !fixture.manager.notify_source_watch(edit.clone()) {
                 tokio::task::yield_now().await;
             }

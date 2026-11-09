@@ -1231,11 +1231,10 @@ impl CapabilityCoordinator {
         let discovered = if let Some(discovered) = discovered {
             discovered
         } else {
-            let workspace = self.inner.workspace.clone();
             let config = inputs.skill_discovery.clone();
             let signal = cancellation.cloned().unwrap_or_default();
             let discovered = tokio::task::spawn_blocking(move || {
-                SkillDiscovery::with_config(&workspace, config)
+                SkillDiscovery::with_config(config)
                     .with_cancellation(signal)
                     .discover()
             })

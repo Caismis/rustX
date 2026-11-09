@@ -3091,25 +3091,6 @@ export type SkillDiagnostic =
     }
   | {
       /**
-       * The source whose cumulative budget was exhausted.
-       */
-      source: 'user' | 'workspace';
-      /**
-       * The fixed collection root, represented in canonical order.
-       */
-      roots: string[];
-      /**
-       * The source's total candidate count.
-       */
-      candidates: number;
-      /**
-       * The source's cumulative candidate budget.
-       */
-      limit: number;
-      kind: 'source_budget_exceeded';
-    }
-  | {
-      /**
        * The source the candidate was found under.
        */
       source: 'user' | 'workspace';
@@ -3123,22 +3104,6 @@ export type SkillDiagnostic =
       cause:
         | {
             directory: string;
-            cause: 'invalid_name';
-          }
-        | {
-            directory: string;
-            cause: 'name_directory_mismatch';
-          }
-        | {
-            directory: string;
-            cause: 'missing_skill_markdown';
-          }
-        | {
-            directory: string;
-            cause: 'skill_markdown_not_regular_file';
-          }
-        | {
-            directory: string;
             cause: 'malformed_frontmatter';
           }
         | {
@@ -3146,45 +3111,21 @@ export type SkillDiagnostic =
             cause: 'invalid_description';
           }
         | {
-            directory: string;
-            cause: 'invalid_compatibility';
-          }
-        | {
-            directory: string;
-            cause: 'malformed_metadata';
-          }
-        | {
-            directory: string;
-            cause: 'invalid_dependency_declaration';
-          }
-        | {
-            path: string;
-            cause: 'unsupported_symlink';
-          }
-        | {
             path: string;
             cause: 'unrepresentable_root';
-          }
-        | {
-            path: string;
-            cause: 'io';
           };
       kind: 'package_invalid';
     }
   | {
       /**
-       * The source that offered the candidate.
+       * The source the package was found under.
        */
       source: 'user' | 'workspace';
       /**
-       * The candidate package directory as offered.
+       * The instruction file as offered.
        */
       package: string;
-      /**
-       * The canonical source root the candidate left.
-       */
-      root: string;
-      kind: 'package_escapes_source';
+      kind: 'package_warning';
     }
   | {
       /**
@@ -7921,22 +7862,6 @@ export type SkillSource = 'user' | 'workspace';
 export type SkillPackageError =
   | {
       directory: string;
-      cause: 'invalid_name';
-    }
-  | {
-      directory: string;
-      cause: 'name_directory_mismatch';
-    }
-  | {
-      directory: string;
-      cause: 'missing_skill_markdown';
-    }
-  | {
-      directory: string;
-      cause: 'skill_markdown_not_regular_file';
-    }
-  | {
-      directory: string;
       cause: 'malformed_frontmatter';
     }
   | {
@@ -7944,28 +7869,8 @@ export type SkillPackageError =
       cause: 'invalid_description';
     }
   | {
-      directory: string;
-      cause: 'invalid_compatibility';
-    }
-  | {
-      directory: string;
-      cause: 'malformed_metadata';
-    }
-  | {
-      directory: string;
-      cause: 'invalid_dependency_declaration';
-    }
-  | {
-      path: string;
-      cause: 'unsupported_symlink';
-    }
-  | {
       path: string;
       cause: 'unrepresentable_root';
-    }
-  | {
-      path: string;
-      cause: 'io';
     };
 /**
  * Where a [`TokenMeasurement`] came from.
@@ -9147,7 +9052,7 @@ export type CapabilityRevision = string;
  * Identifies a skill bound to the runtime.
  *
  * M6 makes the standard Agent Skills `name` the logical skill identity:
- * a `SkillId` is the validated standard skill name, not an externally
+ * a `SkillId` is the discovered skill name, not an externally
  * assigned opaque string.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

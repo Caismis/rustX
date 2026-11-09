@@ -445,9 +445,6 @@ mod tests {
                 &mut tainted
             };
             payload["detail"] = "SECRET_PARSER_PAYLOAD".into();
-            if payload["cause"] == "invalid_name" || payload["cause"] == "name_directory_mismatch" {
-                payload["name"] = "SECRET_AUTHORED_VALUE".into();
-            }
             let decoded: SkillDiagnostic = serde_json::from_value(tainted).unwrap();
             assert_eq!(
                 decoded,

@@ -973,7 +973,12 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
     let directory = fixture.workspaces[0].join(".agents/skills/inspection");
     std::fs::create_dir_all(&directory).unwrap();
     let body = "---\nname: inspection\ndescription: Inspect native management\nlicense: MIT\n---\nVersion one.\n";
-    std::fs::write(directory.join("SKILL.md"), body).unwrap();
+    let external = fixture.workspaces[0]
+        .parent()
+        .unwrap()
+        .join("shared-instructions.md");
+    std::fs::write(&external, body).unwrap();
+    std::os::unix::fs::symlink(&external, directory.join("SKILL.md")).unwrap();
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
     let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace {
@@ -1025,11 +1030,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
             .unwrap(),
         body.as_bytes()
     );
-    std::fs::write(
-        directory.join("SKILL.md"),
-        body.replace("Version one", "Version two"),
-    )
-    .unwrap();
+    std::fs::write(&external, body.replace("Version one", "Version two")).unwrap();
     assert!(matches!(
         rejected(
             &connection,

@@ -365,12 +365,9 @@ fn cfg274_child_skills_use_merged_catalog_explicitly_and_remain_lazy() {
     std::fs::write(invalid.join("SKILL.md"), "invalid front matter").unwrap();
     let workspace = crate::tools::workspace::Workspace::new(&workspace_root).unwrap();
     let skills = SkillSnapshot::from_discovery(
-        crate::skills::SkillDiscovery::with_config(
-            &workspace,
-            crate::skills::SkillDiscoveryConfig {
-                automatic: crate::skills::automatic_skill_roots(Some(&home), workspace.root()),
-            },
-        )
+        crate::skills::SkillDiscovery::with_config(crate::skills::SkillDiscoveryConfig {
+            automatic: crate::skills::automatic_skill_roots(Some(&home), workspace.root()),
+        })
         .discover(),
     );
     let available = crate::capabilities::AvailableToolCatalog::default();

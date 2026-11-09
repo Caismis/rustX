@@ -317,7 +317,7 @@ fn conversation_with_sources(
             automatic: rustx::skills::automatic_skill_roots(Some(&home), workspace.root()),
         }
     });
-    (conversation, home)
+    (conversation, home.join("rustx"))
 }
 
 /// #280 (6)(7)(9)(11)(13)(14): the whole ownership chain proven through the
@@ -1800,11 +1800,8 @@ async fn failed_preparation_leaves_revision_authoritative() {
     );
 }
 
-/// #280 (11)(12): a malformed dependency declaration is a *package*
-/// exclusion, not a candidate failure. The candidate still prepares and
-/// publishes every unrelated valid Skill.
 #[tokio::test]
-async fn cfg280_a_malformed_declaration_excludes_only_its_own_package() {
+async fn cfg280_malformed_skill_dependencies_do_not_block_publication() {
     let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
@@ -1826,16 +1823,16 @@ async fn cfg280_a_malformed_declaration_excludes_only_its_own_package() {
             .iter()
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>(),
-        ["good"]
+        ["bad", "good"]
     );
     assert!(snapshot.python_environment().is_some());
-    assert!(snapshot.skills().diagnostics().iter().any(|fact| matches!(
-        fact,
-        rustx::skills::SkillDiagnostic::PackageInvalid {
-            cause: rustx::skills::SkillPackageError::InvalidDependencyDeclaration { .. },
-            ..
-        }
-    )));
+    assert!(
+        snapshot
+            .skills()
+            .diagnostics()
+            .iter()
+            .any(|fact| matches!(fact, rustx::skills::SkillDiagnostic::PackageWarning { .. }))
+    );
 }
 
 // ---------------------------------------------------------------------------

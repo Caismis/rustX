@@ -251,7 +251,7 @@ it('edits an independent named-Agent whole resource with inherited model and ext
 
 it('an invalid skill shows the native read error without an editor or an invented healthy definition',async()=>{
  const subject=cfg3Client(async op=>{if(op.method==='skills/read')throw new Error('Invalid SKILL.md');});
- subject.source.prospective_resources={...subject.effective.resources,definitions:[{family:'skill',name:'review',valid:false,location:{scope:'user',path:'/home/user/.agents/skills/review/SKILL.md'}}]};
+ subject.source.prospective_resources={...subject.effective.resources,definitions:[{family:'skill',name:'review',valid:false,location:{scope:'user',path:'/home/user/rustx/.agents/skills/review/SKILL.md'}}]};
  render(<SettingsSurface client={subject.client} target={userSettingsTarget} host={cfg3Host(subject)}/>);
  await openResourceModule('skills');
  expect(screen.getByRole('switch',{name:'Allow review for the agent'})).toHaveProperty('disabled',true);

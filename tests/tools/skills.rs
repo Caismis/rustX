@@ -74,10 +74,9 @@ fn invalid_cause(workspace: &Workspace) -> SkillPackageError {
 
 /// Isolates the project-root tests from the developer's User Skill roots.
 fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
-    SkillDiscovery::with_config(
-        workspace,
-        SkillDiscoveryConfig::workspace_root(workspace.root().join(".agents/skills")),
-    )
+    SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(
+        workspace.root().join(".agents/skills"),
+    ))
 }
 
 /// A missing `.agents/skills/` directory means an empty Skill set, not an
@@ -141,10 +140,9 @@ fn declared_name_can_differ_from_the_parent_directory() {
     assert_eq!(discover(&workspace)[0].name(), "documents");
 }
 
-/// Invalid standard names are rejected: uppercase, leading hyphen,
-/// consecutive hyphens, and names exceeding 64 characters.
+/// Nonstandard names load with a warning, as in Pi.
 #[test]
-fn invalid_standard_names_are_rejected() {
+fn invalid_standard_names_warn_without_hiding_the_skill() {
     for bad in ["PDF", "-pdf", "pdf--x", "pdf-", &"p".repeat(65)] {
         let (dir, workspace) = fixture();
         let root = dir.path().join(".agents/skills").join(bad);
@@ -154,17 +152,18 @@ fn invalid_standard_names_are_rejected() {
             format!("---\nname: {bad}\ndescription: A skill.\n---\nbody\n"),
         )
         .expect("SKILL.md");
-        let cause = invalid_cause(&workspace);
-        assert!(
-            matches!(cause, SkillPackageError::InvalidName { .. }),
-            "name {bad:?} must be rejected, got {cause:?}"
-        );
+        let outcome = project_discovery(&workspace).discover();
+        assert_eq!(outcome.packages[0].name(), bad);
+        assert!(matches!(
+            outcome.diagnostics.as_slice(),
+            [SkillDiagnostic::PackageWarning { .. }]
+        ));
     }
 }
 
-/// An empty or oversized description is rejected.
+/// A description is required. The length recommendation only produces a warning.
 #[test]
-fn empty_and_oversized_descriptions_are_rejected() {
+fn empty_descriptions_are_rejected_and_oversized_ones_warn() {
     let (dir, workspace) = fixture();
     let root = dir.path().join(".agents/skills/skill");
     std::fs::create_dir_all(&root).expect("dir");
@@ -185,9 +184,11 @@ fn empty_and_oversized_descriptions_are_rejected() {
         ),
     )
     .expect("SKILL.md");
+    let outcome = project_discovery(&workspace).discover();
+    assert_eq!(outcome.packages[0].description().len(), 1025);
     assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::InvalidDescription { .. }
+        outcome.diagnostics.as_slice(),
+        [SkillDiagnostic::PackageWarning { .. }]
     ));
 }
 
@@ -217,22 +218,21 @@ fn malformed_yaml_is_rejected() {
     ));
 }
 
-/// A non-string `metadata` value is rejected (the standard requires a
-/// string-to-string map).
+/// Optional fields are accepted without strict shape validation.
 #[test]
-fn malformed_metadata_is_rejected() {
+fn optional_frontmatter_fields_do_not_gate_discovery() {
     let (dir, workspace) = fixture();
     let root = dir.path().join(".agents/skills/skill");
     std::fs::create_dir_all(&root).expect("dir");
     std::fs::write(
         root.join("SKILL.md"),
-        "---\nname: skill\ndescription: A skill.\nmetadata:\n  version: 1.0\n---\nbody\n",
+        format!("---\nname: skill\ndescription: A skill.\ncompatibility: {}\nallowed-tools: [Read]\nmetadata:\n  version: 1.0\n---\nbody\n", "x".repeat(501)),
     )
     .expect("SKILL.md");
-    assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::MalformedMetadata { .. }
-    ));
+    let outcome = project_discovery(&workspace).discover();
+    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(outcome.packages[0].compatibility().unwrap().len(), 501);
+    assert_eq!(outcome.packages[0].metadata()["version"], 1.0);
 }
 
 /// A grouping directory without any definitions is an empty branch.
@@ -333,10 +333,9 @@ fn a_non_canonical_package_root_is_published_canonically() {
         // spelling of the same package.
         workspace_root.join("../work/.agents/skills/deck"),
     ] {
-        let outcome = SkillDiscovery::with_config(
-            &workspace,
-            SkillDiscoveryConfig::workspace_root(explicit.parent().unwrap().to_path_buf()),
-        )
+        let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(
+            explicit.parent().unwrap().to_path_buf(),
+        ))
         .discover();
         let snapshot = rustx::skills::SkillSnapshot::from_discovery(outcome);
         let location = snapshot.catalog_entries()[0].location.clone();
@@ -373,7 +372,7 @@ fn a_non_canonical_package_root_is_published_canonically() {
 fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
     use std::os::unix::ffi::OsStrExt as _;
 
-    let (dir, workspace) = fixture();
+    let (dir, _) = fixture();
     // A lone 0xFF byte is never valid UTF-8. Linux filesystems store it
     // verbatim, which is what makes the discovery-level rejection reachable
     // and worth asserting.
@@ -398,10 +397,9 @@ fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
     )
     .expect("SKILL.md");
 
-    let outcome = SkillDiscovery::with_config(
-        &workspace,
-        SkillDiscoveryConfig::workspace_root(package.parent().unwrap().to_path_buf()),
-    )
+    let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(
+        package.parent().unwrap().to_path_buf(),
+    ))
     .discover();
     assert!(outcome.packages.is_empty());
     assert!(
@@ -917,17 +915,19 @@ fn merge_coalesces_and_conflicts_report_every_skill() {
     assert_eq!(versions, ["5.9.0", "5.10.0"]);
 }
 
-/// A malformed rustX dependency declaration excludes exactly that package
-/// (#280): one malformed Skill must never suppress an unrelated valid one.
+/// Invalid rustX dependency pins do not hide a skill or its valid pins.
 #[test]
-fn malformed_dependency_declaration_excludes_only_its_own_package() {
+fn malformed_dependency_declaration_warns_and_keeps_the_skill() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "good", "Good skill.", &[], "body\n");
     write_skill(
         dir.path(),
         "bad",
         "Bad skill.",
-        &[("rustx.python-dependencies", r#"{"pypdf":"not a version"}"#)],
+        &[
+            ("rustx.python-dependencies", r#"{"pypdf":"not a version"}"#),
+            ("rustx.node-dependencies", r#"{"typescript":"5.8.0"}"#),
+        ],
         "body\n",
     );
     let outcome = project_discovery(&workspace).discover();
@@ -937,14 +937,16 @@ fn malformed_dependency_declaration_excludes_only_its_own_package() {
             .iter()
             .map(rustx::skills::SkillPackage::name)
             .collect::<Vec<_>>(),
-        ["good"]
+        ["bad", "good"]
+    );
+    assert!(outcome.packages[0].dependencies().python.is_empty());
+    assert_eq!(
+        outcome.packages[0].dependencies().node["typescript"],
+        "5.8.0"
     );
     assert!(matches!(
         outcome.diagnostics.as_slice(),
-        [SkillDiagnostic::PackageInvalid {
-            cause: SkillPackageError::InvalidDependencyDeclaration { .. },
-            ..
-        }]
+        [SkillDiagnostic::PackageWarning { .. }]
     ));
 }
 

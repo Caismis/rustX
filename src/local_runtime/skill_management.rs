@@ -1,4 +1,4 @@
-//! Finite native Skills discovery and instruction reads, without model work.
+//! Native Skills discovery and paginated instruction reads, without model work.
 use super::configuration::observation::{digest, encode};
 use super::configuration::settings::{SettingsError, SourceTarget};
 use super::session_runtime_manager::SessionRuntimeManager;
@@ -166,7 +166,7 @@ impl SessionRuntimeManager {
             let skill = descriptor(package, provenance)?;
             let (data_base64, next_offset, revision) = match kind {
                 SkillContentKind::Instructions => {
-                    let path = Path::new(package.location());
+                    let path = package.instruction_source();
                     let directory = crate::package_io::PackageDirectory::open(
                         path.parent().ok_or(SettingsError::Invalid)?,
                     )

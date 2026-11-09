@@ -4,8 +4,6 @@ use std::path::Path;
 
 use crate::runtime::CancellationSignal;
 
-/// Only the definition header is bounded; SKILL.md and its body have no size cap.
-pub(crate) const MAX_FRONTMATTER_BYTES: usize = 1024 * 1024;
 const BUFFER_BYTES: usize = 4096;
 
 #[cfg(test)]
@@ -24,15 +22,12 @@ pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, 
         // Bounded read-ahead, independent of the body size. Never validate body UTF-8.
         let mut reader = BufReader::with_capacity(BUFFER_BYTES, file);
         let mut header = Vec::new();
-        let mut line_start = 0;
-        let mut delimiters = 0;
+        let mut first = true;
+        let mut previous_cr = false;
         loop {
             crate::package_io::check_cancelled(signal)?;
             let bytes = reader.fill_buf()?;
             if bytes.is_empty() {
-                if delimiters == 1 && matches!(&header[line_start..], b"---" | b"---\r") {
-                    return Ok(header);
-                }
                 return Err(std::io::Error::other(
                     "SKILL.md frontmatter is missing its closing delimiter",
                 ));
@@ -45,29 +40,27 @@ pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, 
                     hook();
                 }
             });
-            let mut used = 0;
+            let used = bytes.len();
+            let bytes = if first {
+                first = false;
+                bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)
+            } else {
+                bytes
+            };
             for &byte in bytes {
-                used += 1;
-                if header.len() == MAX_FRONTMATTER_BYTES {
-                    return Err(std::io::Error::other("SKILL.md frontmatter exceeds 1 MiB"));
+                let skip = previous_cr && byte == b'\n';
+                previous_cr = byte == b'\r';
+                if skip {
+                    continue;
                 }
-                header.push(byte);
-                if line_start == 0
-                    && !b"---\n".starts_with(&header)
-                    && !b"---\r\n".starts_with(&header)
-                {
+                header.push(if previous_cr { b'\n' } else { byte });
+                if header.len() <= 3 && !b"---".starts_with(&header) {
                     return Err(std::io::Error::other(
                         "SKILL.md must start with a YAML frontmatter delimiter",
                     ));
                 }
-                if byte == b'\n' {
-                    if matches!(&header[line_start..], b"---\n" | b"---\r\n") {
-                        delimiters += 1;
-                    }
-                    if delimiters == 2 {
-                        return Ok(header);
-                    }
-                    line_start = header.len();
+                if header.len() >= 7 && header.ends_with(b"\n---") {
+                    return Ok(header);
                 }
             }
             reader.consume(used);
