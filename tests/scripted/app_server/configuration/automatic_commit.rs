@@ -28,14 +28,7 @@ async fn select_all_skills(fixture: &Fixture) {
 }
 
 fn instructions(runtime: &crate::runtime::ConversationRuntime) -> String {
-    runtime
-        .runtime_resources()
-        .configuration()
-        .unwrap()
-        .config
-        .agent
-        .instructions
-        .clone()
+    guidance(runtime.runtime_resources().project_context_files()).to_owned()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -138,14 +131,7 @@ async fn t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_ar
     for session in &fixture.sessions {
         fixture.manager.load(&session.id, None).await.unwrap();
     }
-    write(
-        &fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some("P2".into()),
-        },
-    )
-    .await;
+    write_guidance(&fixture, "P2".into()).await;
     let runtimes: Vec<_> = fixture
         .sessions
         .iter()
@@ -231,14 +217,7 @@ async fn t11_newer_desire_supersedes_a_staged_candidate_and_rescan_does_not_repr
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("candidate one".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "candidate one".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -262,14 +241,7 @@ async fn t11_newer_desire_supersedes_a_staged_candidate_and_rescan_does_not_repr
             probe.configuration_preparations.load(Ordering::SeqCst),
             preparations
         );
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("candidate two".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "candidate two".into()).await;
         let newer = settled(&fixture, 0).await;
         assert_ne!(newer.desired, staged.desired);
         assert_eq!(
@@ -297,14 +269,7 @@ async fn t15_unload_load_retains_the_committed_configuration_without_replay() {
     let fixture = Fixture::with_session_count(None, 1).await;
     let id = &fixture.sessions[0].id;
     let loaded = fixture.manager.load(id, None).await.unwrap();
-    write(
-        &fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some("committed before unload".into()),
-        },
-    )
-    .await;
+    write_guidance(&fixture, "committed before unload".into()).await;
     applied(&fixture, 0).await;
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     assert_eq!(instructions(&runtime), "committed before unload");
@@ -493,14 +458,7 @@ async fn t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         probe.before_configuration_prepare.arm();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("superseded candidate".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "superseded candidate".into()).await;
         probe.before_configuration_prepare.entered().await;
         let old = fixture
             .manager
@@ -574,14 +532,7 @@ async fn t11_ready_candidate_commits_before_racing_independent_admission() {
         tokio::task::spawn_blocking(move || gate.wait_entered())
             .await
             .unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("committed before admission".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "committed before admission".into()).await;
         applied(&fixture, 0).await;
         drop(release);
         fixture.gates[0].wait_entered().await;
@@ -706,14 +657,7 @@ async fn a_runtime_closed_in_place_defers_its_application_and_others_still_commi
             closed.lifecycle_state(),
             crate::runtime::ConversationLifecycleState::Running
         );
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("after close".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "after close".into()).await;
         applied(&fixture, 1).await;
         assert_eq!(instructions(&live), "after close");
         let mut changed = fixture.manager.configuration_changes();
@@ -768,14 +712,7 @@ async fn reattaching_the_same_runtime_keeps_its_ready_candidate() {
             .probe(&fixture.sessions[0].active_conversation_id);
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("kept across attach".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "kept across attach".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -831,14 +768,7 @@ async fn a_reallocation_consumes_its_deferral_and_a_later_attach_keeps_the_candi
             .probe(&fixture.sessions[0].active_conversation_id);
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("after reallocation".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "after reallocation".into()).await;
         let first = settled(&fixture, 0).await;
         fixture
             .manager
@@ -997,14 +927,7 @@ async fn live_model_selection_supersedes_a_candidate_blocked_by_background_owner
         let (execution_id, mut started, release) =
             start_background(&runtime, "live-selection-background");
         started.wait_for(|entered| *entered).await.unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("commits after background settles".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "commits after background settles".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -1087,14 +1010,7 @@ async fn a_catalog_rebase_never_rewinds_a_binding_a_commit_retained() {
         let (execution_id, mut started, release) =
             start_background(&runtime, "call-rebase-background");
         started.wait_for(|entered| *entered).await.unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("committed between the cut and the write".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "committed between the cut and the write".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -1200,14 +1116,7 @@ async fn t11_background_ownership_defers_commit_until_it_settles() {
             runtime.idle_epoch(),
             Err(crate::runtime::conversation_runtime::IdleBusyReason::Background)
         );
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("commit after background settles".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "commit after background settles".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -1273,17 +1182,11 @@ async fn external_workspace_edit_commits_through_the_bounded_source_watch() {
         let edit = async {
             let mut changed = fixture.manager.configuration_changes();
             std::fs::write(fixture.workspaces[0].join("notes.txt"), "not a source").unwrap();
-            let path = fixture.workspaces[0].join("rustx.toml");
-            let mut config: toml::Value =
-                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            config.as_table_mut().unwrap().insert(
-                "agent".into(),
-                toml::Value::try_from(
-                    serde_json::json!({"instructions": "from an external editor"}),
-                )
-                .unwrap(),
-            );
-            std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+            std::fs::write(
+                fixture.workspaces[0].join("AGENTS.md"),
+                "from an external editor",
+            )
+            .unwrap();
             while instructions(&runtime) != "from an external editor" {
                 changed.changed().await.unwrap();
             }
@@ -2901,9 +2804,7 @@ async fn a_notification_flood_stays_bounded_and_rescans_into_the_edit() {
             // The pass is parked after its capture: everything below arrives
             // while the watch is busy.
             captured.entered().await;
-            let mut document = std::fs::read_to_string(&config).unwrap();
-            document.push_str("\n[agent]\ninstructions = \"reached by the rescan\"\n");
-            std::fs::write(&config, document).unwrap();
+            std::fs::write(workspace.join("AGENTS.md"), "reached by the rescan").unwrap();
             let pending = pending_notifications(&fixture);
             let bound = super::super::source_watch::PENDING_PATHS;
             for index in 0..4 * bound {
@@ -3642,14 +3543,7 @@ async fn a_published_policy_after_an_unrecorded_commit_survives_reload() {
         let loaded = fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         runtime.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published, not recorded".into()).await;
         let view = applied(&fixture, 0).await;
         assert!(matches!(
             view.units[&ApplyUnit::Instructions],
@@ -3718,14 +3612,7 @@ async fn a_load_returns_only_after_its_runtime_owns_the_application() {
         let loaded = fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         runtime.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published, not recorded".into()).await;
         let uncertain = |fixture: &Fixture| {
             fixture
                 .manager
@@ -3825,14 +3712,7 @@ async fn a_replaced_allocation_never_reattaches_late() {
         fixture.manager.load(&id, None).await.unwrap();
         let b = fixture.manager.configuration_runtime(&id).unwrap();
         b.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published by B, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published by B, not recorded".into()).await;
         let uncertain = |fixture: &Fixture| {
             fixture
                 .manager
@@ -3886,14 +3766,7 @@ async fn a_preparation_never_attaches_the_allocation_it_outlived() {
         let loaded = fixture.manager.load(&id, None).await.unwrap();
         let a = fixture.manager.configuration_runtime(&id).unwrap();
         a.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published by A, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published by A, not recorded".into()).await;
         let uncertain = |fixture: &Fixture| {
             fixture
                 .manager
@@ -3983,14 +3856,7 @@ async fn a_late_unrecorded_settlement_is_never_reported_applied() {
             .clone();
         settlement.arm();
         runtime.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published, not recorded".into()).await;
         // Native published B and failed to record it; its report is parked.
         settlement.entered().await;
         assert_eq!(instructions(&runtime), "published, not recorded");
@@ -4116,14 +3982,7 @@ async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         runtime.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published, not recorded".into()).await;
         let view = applied(&fixture, 0).await;
         assert!(
             matches!(

@@ -10,14 +10,7 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 0).await;
         let workspace = std::fs::canonicalize(&fixture.workspaces[0]).unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("available A".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "available A".into()).await;
         source_settled(&fixture, &SourceTarget::User).await;
         // Establish last-good A for the Workspace through a real Session.
         let first = fixture
@@ -33,12 +26,12 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
         {
             let applications = fixture.manager.applications.lock();
             assert_eq!(
-                applications
-                    .test_available(&workspace)
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
+                guidance(
+                    &applications
+                        .test_available(&workspace)
+                        .unwrap()
+                        .project_context_files
+                ),
                 "available A"
             );
         }
@@ -77,26 +70,19 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
         {
             let applications = fixture.manager.applications.lock();
             assert_eq!(
-                applications
-                    .test_available(&workspace)
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
+                guidance(
+                    &applications
+                        .test_available(&workspace)
+                        .unwrap()
+                        .project_context_files
+                ),
                 "available A"
             );
             assert!(applications.test_desired_source(&workspace).is_none());
         }
         // A User commit with zero Sessions in the known Workspace refreshes
         // only the retained desired source; it creates nothing.
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("desired B".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "desired B".into()).await;
         source_settled(&fixture, &SourceTarget::User).await;
         assert!(
             fixture
@@ -121,12 +107,12 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
         let desired_revision = {
             let applications = fixture.manager.applications.lock();
             assert_eq!(
-                applications
-                    .test_available(&workspace)
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
+                guidance(
+                    &applications
+                        .test_available(&workspace)
+                        .unwrap()
+                        .project_context_files
+                ),
                 "available A"
             );
             let desired = applications
@@ -135,7 +121,7 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
                 .as_ref()
                 .expect("desired capture");
             assert_eq!(
-                desired.context.as_ref().unwrap().config.agent.instructions,
+                guidance(&desired.context.as_ref().unwrap().project_context_files),
                 "desired B"
             );
             desired.revision.clone()
@@ -152,15 +138,15 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
             .unwrap()
             .session;
         assert_eq!(
-            fixture
-                .manager
-                .sessions
-                .configuration_bindings
-                .lock()
-                .unwrap()[&second.id]
-                .config
-                .agent
-                .instructions,
+            guidance(
+                &fixture
+                    .manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()[&second.id]
+                    .project_context_files
+            ),
             "available A"
         );
         assert!(fixture.manager.configuration_runtime(&second.id).is_none());
@@ -194,27 +180,25 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
             UnitApplication::Applied
         );
         assert_eq!(
-            fixture
-                .manager
-                .configuration_runtime(&second.id)
-                .unwrap()
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(
+                fixture
+                    .manager
+                    .configuration_runtime(&second.id)
+                    .unwrap()
+                    .runtime_resources()
+                    .project_context_files()
+            ),
             "desired B"
         );
         {
             let applications = fixture.manager.applications.lock();
             assert_eq!(
-                applications
-                    .test_available(&workspace)
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
+                guidance(
+                    &applications
+                        .test_available(&workspace)
+                        .unwrap()
+                        .project_context_files
+                ),
                 "desired B"
             );
         }
@@ -230,14 +214,7 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 0).await;
         let workspace = std::fs::canonicalize(&fixture.workspaces[0]).unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("available A".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "available A".into()).await;
         source_settled(&fixture, &SourceTarget::User).await;
         let first = fixture
             .manager
@@ -269,14 +246,7 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
                 .entries
                 .is_empty()
         );
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("desired B".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "desired B".into()).await;
         source_settled(&fixture, &SourceTarget::User).await;
         assert!(
             fixture
@@ -300,15 +270,15 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
             .unwrap()
             .session;
         assert_eq!(
-            fixture
-                .manager
-                .sessions
-                .configuration_bindings
-                .lock()
-                .unwrap()[&second.id]
-                .config
-                .agent
-                .instructions,
+            guidance(
+                &fixture
+                    .manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()[&second.id]
+                    .project_context_files
+            ),
             "available A"
         );
         assert!(fixture.manager.applications.is_deferred(second.id.as_str()));
@@ -331,12 +301,12 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
         {
             let applications = fixture.manager.applications.lock();
             assert_eq!(
-                applications
-                    .test_available(&workspace)
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
+                guidance(
+                    &applications
+                        .test_available(&workspace)
+                        .unwrap()
+                        .project_context_files
+                ),
                 "available A"
             );
             let desired = applications
@@ -345,21 +315,19 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
                 .as_ref()
                 .unwrap();
             assert_eq!(
-                desired.context.as_ref().unwrap().config.agent.instructions,
+                guidance(&desired.context.as_ref().unwrap().project_context_files),
                 "desired B"
             );
         }
         assert_eq!(
-            fixture
-                .manager
-                .configuration_runtime(&second.id)
-                .unwrap()
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(
+                fixture
+                    .manager
+                    .configuration_runtime(&second.id)
+                    .unwrap()
+                    .runtime_resources()
+                    .project_context_files()
+            ),
             "available A"
         );
         // A Session created after the failure still binds A, never invalid B.
@@ -373,26 +341,26 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
             .unwrap()
             .session;
         assert_eq!(
-            fixture
-                .manager
-                .sessions
-                .configuration_bindings
-                .lock()
-                .unwrap()[&third.id]
-                .config
-                .agent
-                .instructions,
+            guidance(
+                &fixture
+                    .manager
+                    .sessions
+                    .configuration_bindings
+                    .lock()
+                    .unwrap()[&third.id]
+                    .project_context_files
+            ),
             "available A"
         );
         {
             let applications = fixture.manager.applications.lock();
             assert_eq!(
-                applications
-                    .test_available(&workspace)
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
+                guidance(
+                    &applications
+                        .test_available(&workspace)
+                        .unwrap()
+                        .project_context_files
+                ),
                 "available A"
             );
         }

@@ -86,10 +86,6 @@ impl ProspectiveSessionConfig {
         let config = Arc::make_mut(&mut configuration.config);
         config
             .agent
-            .instructions
-            .clone_from(&self.config.agent.instructions);
-        config
-            .agent
             .agents_md
             .clone_from(&self.config.agent.agents_md);
         config.context = self.config.context;
@@ -107,7 +103,6 @@ impl ProspectiveSessionConfig {
             .effective
             .agent
             .get_or_insert_with(Default::default);
-        context.instructions = agent.and_then(|agent| agent.instructions.clone());
         context.agents_md = agent.and_then(|agent| agent.agents_md.clone());
         context.model = agent.and_then(|agent| agent.model.clone());
         authored

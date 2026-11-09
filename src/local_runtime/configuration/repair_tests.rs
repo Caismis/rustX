@@ -1200,7 +1200,7 @@ fn independent_constraints_hold_without_a_default_model() {
 #[test]
 fn a_partial_intrinsically_valid_source_is_repaired_without_inventing_facts() {
     let fixture = Fixture::new();
-    let text = "legacy_field = true\n[agent]\ninstructions = \"Be brief.\"\n";
+    let text = "legacy_field = true\n[agent]\ndescription = \"Review\"\n";
     fixture.write(&SourceTarget::User, text);
     assert_eq!(
         fixture.repair(&SourceTarget::User, &SourceTarget::User),
@@ -1208,7 +1208,7 @@ fn a_partial_intrinsically_valid_source_is_repaired_without_inventing_facts() {
     );
     assert_eq!(
         fixture.read(&SourceTarget::User),
-        "[agent]\ninstructions = \"Be brief.\"\n"
+        "[agent]\ndescription = \"Review\"\n"
     );
     let receipt = fixture.receipt(&SourceTarget::User).unwrap();
     assert_eq!(receipt.changes, vec![removed("")]);

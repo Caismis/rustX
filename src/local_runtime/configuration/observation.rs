@@ -28,6 +28,7 @@ pub enum SourceFieldName {
     WorkspaceRepair,
     RepairSequence,
     UserResourceRoot,
+    GlobalGuidance,
     WorkspaceResourceRoot,
     RuntimeRoot,
     UserMcp,
@@ -37,7 +38,7 @@ pub enum SourceFieldName {
     WorkspaceModels,
     ResolvedModels,
 }
-const FIELDS: [SourceFieldName; 23] = [
+const FIELDS: [SourceFieldName; 24] = [
     SourceFieldName::Target,
     SourceFieldName::ProcessPolicyImpacts,
     SourceFieldName::ProcessBindings,
@@ -56,6 +57,7 @@ const FIELDS: [SourceFieldName; 23] = [
     SourceFieldName::WorkspaceRepair,
     SourceFieldName::RepairSequence,
     SourceFieldName::UserResourceRoot,
+    SourceFieldName::GlobalGuidance,
     SourceFieldName::WorkspaceResourceRoot,
     SourceFieldName::RuntimeRoot,
     SourceFieldName::UserMcp,
@@ -209,7 +211,7 @@ fn field(
         );
     }
     macro_rules! fields {($($variant:ident:$member:ident),+)=>{match name {$(SourceFieldName::$variant=>encode(&source.$member,offset,limit)),+, _=>unreachable!("derived model field handled above")}};}
-    fields!(Target:target,ProcessPolicyImpacts:process_policy_impacts,ProcessBindings:process_bindings,Application:application,ProspectiveApprovalMode:prospective_approval_mode,ProspectiveResources:prospective_resources,ProspectiveDiagnostic:prospective_diagnostic,AbsentResourceRevision:absent_resource_revision,ResourceRevisions:resource_revisions,Resolved:resolved,SessionModels:session_models,Provenance:provenance,User:user,Workspace:workspace,UserRepair:user_repair,WorkspaceRepair:workspace_repair,RepairSequence:repair_sequence,UserResourceRoot:user_resource_root,WorkspaceResourceRoot:workspace_resource_root,RuntimeRoot:runtime_root,UserMcp:user_mcp,WorkspaceMcp:workspace_mcp,Agents:agents)
+    fields!(Target:target,ProcessPolicyImpacts:process_policy_impacts,ProcessBindings:process_bindings,Application:application,ProspectiveApprovalMode:prospective_approval_mode,ProspectiveResources:prospective_resources,ProspectiveDiagnostic:prospective_diagnostic,AbsentResourceRevision:absent_resource_revision,ResourceRevisions:resource_revisions,Resolved:resolved,SessionModels:session_models,Provenance:provenance,User:user,Workspace:workspace,UserRepair:user_repair,WorkspaceRepair:workspace_repair,RepairSequence:repair_sequence,UserResourceRoot:user_resource_root,GlobalGuidance:global_guidance,WorkspaceResourceRoot:workspace_resource_root,RuntimeRoot:runtime_root,UserMcp:user_mcp,WorkspaceMcp:workspace_mcp,Agents:agents)
 }
 pub(crate) fn bounded(source: &SourceSettings) -> Result<BoundedSourceSettings, String> {
     let revision = revision(source)?;

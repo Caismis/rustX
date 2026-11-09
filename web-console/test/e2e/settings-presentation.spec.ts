@@ -121,13 +121,14 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
 
   // Provider cards and the general Settings forms share the Harness spacing and radius.
   await openSettingsPage(page, 'Agent');
-  const instructions = settings.getByRole('form', { name: 'Instructions' });
+  const instructions = settings.getByRole('form', { name: 'Global instructions' });
   await expect(instructions.getByRole('button', { name: 'Configuration details', exact: true })).toHaveCount(0);
   await expect(instructions).toHaveAttribute('data-authored', 'absent');
-  await expect(settings.getByRole('button', { name: /^Author (Instructions|Project guidance)$/ })).toHaveCount(0);
-  const save = instructions.getByRole('button', { name: 'Save Instructions', exact: true });
+  await expect(instructions.getByText('/home/user/rustx/.agents/AGENTS.md', { exact: true })).toBeVisible();
+  await expect(settings.getByRole('button', { name: /^Author (Global instructions|Project guidance)$/ })).toHaveCount(0);
+  const save = instructions.getByRole('button', { name: 'Save instructions', exact: true });
   await expect(save).toBeDisabled();
-  await instructions.getByRole('textbox', { name: 'Instructions', exact: true }).fill('Review the changes.');
+  await instructions.getByRole('textbox', { name: 'Global instructions', exact: true }).fill('Review the changes.');
   await expect(save).toBeEnabled();
   await instructions.getByRole('button', { name: 'Discard', exact: true }).click();
   const unit = await instructions.evaluate(el => {
@@ -169,22 +170,22 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
 
   // Overridden and dirty: the draft's Save / Discard row sticks in reach.
   await openSettingsPage(page, 'Agent');
-  const instructions = settings.getByRole('form', { name: 'Instructions' });
-  await expect(settings.getByRole('form', { name: /^(Agent name|Description)$/ })).toHaveCount(0);
-  await expect(instructions).toHaveAttribute('data-authored', 'present');
-  await instructions.getByRole('textbox', { name: 'Instructions', exact: true }).fill('Review the changes and explain the impact.');
-  await expect(instructions).toHaveAttribute('data-draft', 'true');
-  await expect(instructions.getByRole('button', { name: 'Save Instructions' })).toBeEnabled();
-  await expect(instructions.getByRole('button', { name: 'Discard' })).toBeVisible();
+  const guidance = settings.getByRole('form', { name: 'Project guidance' });
+  await expect(settings.getByRole('form', { name: /^(Agent name|Description|Global instructions)$/ })).toHaveCount(0);
+  await expect(guidance).toHaveAttribute('data-authored', 'present');
+  await guidance.getByRole('switch', { name: 'Automatically load project guidance' }).click();
+  await expect(guidance).toHaveAttribute('data-draft', 'true');
+  await expect(guidance.getByRole('button', { name: 'Save Project guidance' })).toBeEnabled();
+  await expect(guidance.getByRole('button', { name: 'Discard' })).toBeVisible();
   await expectStableScreenshot(settings, 'settings-workspace-override-light.png');
-  await instructions.getByRole('button', { name: 'Discard' }).click();
-  await expect(instructions).not.toHaveAttribute('data-draft', 'true');
+  await guidance.getByRole('button', { name: 'Discard' }).click();
+  await expect(guidance).not.toHaveAttribute('data-draft', 'true');
 
   // Restoring inheritance is an ordinary dialog, not a deletion; Escape closes
   // only that topmost layer and returns focus to its trigger inside Settings.
-  const restore = instructions.getByRole('button', { name: 'Use global default Instructions', exact: true });
+  const restore = guidance.getByRole('button', { name: 'Use global default Project guidance', exact: true });
   await restore.click();
-  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Instructions?' });
+  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Project guidance?' });
   await expect(confirmation).toBeVisible();
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
@@ -655,9 +656,9 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   const settings = settingsPage(page);
   await openWorkspaceSettings(page, 'Workspace A');
   await openSettingsPage(page, 'Agent');
-  const unit = settings.getByRole('form', { name: 'Instructions' });
-  const restore = unit.getByRole('button', { name: 'Use global default Instructions', exact: true });
-  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Instructions?' });
+  const unit = settings.getByRole('form', { name: 'Project guidance' });
+  const restore = unit.getByRole('button', { name: 'Use global default Project guidance', exact: true });
+  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Project guidance?' });
   // This Workspace mutation travels through the native Product Host boundary.
   const writes = () => page.evaluate(() => (window as unknown as { rustxHeldWorkspaceWrites: () => number }).rustxHeldWorkspaceWrites());
   for (const dismissal of ['Cancel', 'Escape', 'outside'] as const) {
@@ -676,7 +677,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await page.keyboard.press('Enter');
   await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(confirmation.getByRole('button', { name: 'Use global default Instructions', exact: true })).toBeFocused();
+  await expect(confirmation.getByRole('button', { name: 'Use global default Project guidance', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(confirmation).toHaveCount(0);
   await expect(restore).toBeDisabled();
@@ -687,7 +688,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await expect(unit).toBeFocused();
   await releaseWrites(page);
   await expect.poll(writes).toBe(1);
-  await expect(settledSave(unit, 'Instructions')).toBeVisible();
+  await expect(settledSave(unit, 'Project guidance')).toBeVisible();
   await expect(unit).toHaveAttribute('data-authored', 'absent');
   await expect(unit).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

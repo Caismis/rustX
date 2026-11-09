@@ -4,6 +4,70 @@
 #![allow(clippy::large_futures)] // bounded fixture futures; no recursive or unbounded stack growth
 use super::*;
 
+#[tokio::test]
+async fn global_guidance_uses_its_own_revision_and_cannot_be_written_by_a_workspace() {
+    use crate::local_runtime::configuration::settings::{SettingsError, SourceTarget};
+    use crate::local_runtime::session_runtime_manager::SourceSettingsError;
+    let fixture = Fixture::with_session_count(None, 0).await;
+    let target = SourceTarget::User;
+    let source = fixture.manager.source_settings(&target).await.unwrap();
+    let original_toml = std::fs::read(&source.user.path).unwrap();
+    let guidance = source.global_guidance.unwrap();
+    let markdown = "# Global instructions\n\nUse UTF-8. 中文。\n";
+    let save = SourceMutation::GlobalGuidance {
+        document: markdown.into(),
+    };
+    let committed = fixture
+        .manager
+        .write_source_settings(&target, guidance.revision, save.clone())
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&guidance.path).unwrap(), markdown);
+    assert_eq!(std::fs::read(&source.user.path).unwrap(), original_toml);
+    let reread = fixture
+        .manager
+        .source_settings(&target)
+        .await
+        .unwrap()
+        .global_guidance
+        .unwrap();
+    assert_eq!(reread.revision, committed.revision);
+    assert_eq!(reread.authored.as_deref(), Some(markdown));
+
+    std::fs::write(&guidance.path, "Edited outside the WebUI").unwrap();
+    assert!(matches!(
+        fixture
+            .manager
+            .write_source_settings(&target, reread.revision, save.clone())
+            .await,
+        Err(SourceSettingsError::Source(SettingsError::Conflict { .. }))
+    ));
+    let workspace = SourceTarget::Workspace {
+        directory: fixture.workspaces[0].clone(),
+    };
+    assert!(
+        fixture
+            .manager
+            .source_settings(&workspace)
+            .await
+            .unwrap()
+            .global_guidance
+            .is_none()
+    );
+    assert!(matches!(
+        fixture
+            .manager
+            .write_source_settings(&workspace, committed.revision, save)
+            .await,
+        Err(SourceSettingsError::Source(SettingsError::Invalid))
+    ));
+    assert_eq!(
+        std::fs::read_to_string(&guidance.path).unwrap(),
+        "Edited outside the WebUI"
+    );
+    fixture.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn c07_zero_session_commit_transfers_ownership_before_lost_response() {
     use crate::local_runtime::configuration::settings::SourceTarget;
@@ -390,13 +454,19 @@ async fn c11_c12_model_selection_and_source_authoring_have_disjoint_durable_owne
         let after = f.manager.source_settings(&target).await.unwrap();
         assert_eq!(after.user, sources.user);
         assert_eq!(after.workspace, sources.workspace);
+        std::fs::write(f.workspaces[0].join("review.md"), "new source guidance").unwrap();
         f.manager
             .write_source_settings(
                 &target,
                 after.workspace.unwrap().revision,
                 SourceMutation::Config {
-                    mutation: ConfigMutation::Instructions {
-                        authored: Some("new source guidance".into()),
+                    mutation: ConfigMutation::ProjectGuidance {
+                        authored: Some(
+                            crate::local_runtime::config::AgentProjectInstructionsDocument {
+                                inherit: true,
+                                files: vec!["review.md".into()],
+                            },
+                        ),
                     },
                 },
             )

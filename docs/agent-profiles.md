@@ -8,7 +8,6 @@ Workspace replaces a same-name User profile completely, including when invalid.
 ```toml
 # rustx.toml: the Root profile
 [agent]
-instructions = "Coordinate review."
 skills = []
 agents = ["reviewer"]
 workflows = []
@@ -44,7 +43,7 @@ inherit = true
 | `skills` | `"all"`, exact names, or `[]`, for both Root and named Agents; default none. Prompt visibility only. |
 | `plugins` | Closed Rust-owned Agent Status, Todo and Goal vocabulary, default off. Each Root Plugin object overlays atomically. |
 | `agents`, `workflows` | Explicit delegation/invocation allowlists. Child scope limits remain enforced for every activation. A nonempty `agents` list composes the five Root-only Agent controls automatically; they are never authored in `tools.builtin`. |
-| `description`, `instructions` | Agent prose; named reusable profiles require nonempty values. Prose cannot change invocation policy. |
+| `description`, `instructions` | Agent prose. Named profiles can include task instructions. Root guidance lives in `AGENTS.md`. |
 | `agents_md` | Canonical project guidance and bounded supplemental files. |
 | `timeout_ms` | Named child lifecycle policy only. Root rejects it. Every Agent runs in the shared Session workspace; an authored `worktree` table is refused. |
 

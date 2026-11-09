@@ -193,6 +193,8 @@ pub struct SourceSettings {
     /// for the same source: the higher one is the newer observation.
     pub repair_sequence: u64,
     pub user_resource_root: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_guidance: Option<SourceView<String>>,
     pub workspace_resource_root: Option<PathBuf>,
     pub runtime_root: PathBuf,
     pub user_mcp: SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>>,
@@ -302,9 +304,6 @@ pub enum ConfigMutation {
     Description {
         authored: Option<String>,
     },
-    Instructions {
-        authored: Option<String>,
-    },
     ProjectGuidance {
         authored: Option<super::super::config::AgentProjectInstructionsDocument>,
     },
@@ -344,6 +343,10 @@ pub enum ConfigMutation {
 #[allow(clippy::large_enum_variant)] // Finite wire command; parsed and consumed once per CAS operation.
 #[schemars(rename = "SourceMutation")]
 pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
+    /// Replace the User's global AGENTS.md without changing rustx.toml.
+    GlobalGuidance {
+        document: String,
+    },
     /// Explicit repair of a configuration document violating its source contract. Never used
     /// for ordinary semantic-unit editing and never accepts an invalid source.
     RepairConfig {
@@ -734,9 +737,6 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
         M::Description { authored } => {
             document.agent.get_or_insert_default().description = authored;
         }
-        M::Instructions { authored } => {
-            document.agent.get_or_insert_default().instructions = authored;
-        }
         M::ProjectGuidance { authored } => {
             document.agent.get_or_insert_default().agents_md = authored;
         }
@@ -1010,6 +1010,30 @@ impl UserConfigManager {
             SourceTarget::Workspace { directory } => directory.join(".agents"),
         }
     }
+    fn global_guidance_path(&self) -> PathBuf {
+        self.resource_root(&SourceTarget::User).join("AGENTS.md")
+    }
+
+    fn global_guidance(&self) -> SourceView<String> {
+        let path = self.global_guidance_path();
+        let (revision, authored, diagnostic) = match super::super::settings::read_source(&path) {
+            Ok(Some(bytes)) => {
+                let version = revision(Some(&bytes));
+                match String::from_utf8(bytes) {
+                    Ok(document) => (version, Some(document), None),
+                    Err(_) => (version, None, Some("AGENTS.md is not valid UTF-8.".into())),
+                }
+            }
+            Ok(None) => (revision(None), None, None),
+            Err(_) => (revision(None), None, Some("Cannot read AGENTS.md.".into())),
+        };
+        SourceView {
+            path,
+            revision,
+            authored,
+            diagnostic,
+        }
+    }
     pub(in crate::local_runtime) fn config_path(&self, target: &SourceTarget) -> PathBuf {
         match target {
             SourceTarget::User => self.sources.config_path.clone(),
@@ -1271,6 +1295,7 @@ impl UserConfigManager {
             workspace_repair,
             repair_sequence,
             user_resource_root: self.resource_root(&SourceTarget::User),
+            global_guidance: matches!(target, SourceTarget::User).then(|| self.global_guidance()),
             workspace_resource_root: target
                 .workspace()
                 .map(|directory| directory.join(".agents")),
@@ -1319,6 +1344,12 @@ impl UserConfigManager {
             SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. }
         );
         let path = match &mutation {
+            SourceMutation::GlobalGuidance { .. } => {
+                if scope != SourceScope::User {
+                    return Err(SettingsError::Invalid);
+                }
+                self.global_guidance_path()
+            }
             SourceMutation::Mcp { .. } => self.resource_root(target).join("mcp.toml"),
             SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. } => {
                 self.config_path(target)
@@ -1382,6 +1413,7 @@ impl UserConfigManager {
                 capacity.admit(id)?;
             }
             let candidate = match mutation {
+                SourceMutation::GlobalGuidance { document } => Some(document.into_bytes()),
                 SourceMutation::RepairConfig { document } => {
                     // Manual repair exists for documents that fail their own
                     // source contract, including TOML-parsable ones; it never
@@ -1681,8 +1713,8 @@ mod mcp_write_tests {
                 .unwrap();
         apply(
             &mut document,
-            ConfigMutation::Instructions {
-                authored: Some("updated instructions".into()),
+            ConfigMutation::Description {
+                authored: Some("updated description".into()),
             },
         )
         .unwrap();
@@ -1693,8 +1725,8 @@ mod mcp_write_tests {
             Some(23_500)
         );
         assert_eq!(
-            reread.agent.unwrap().instructions.as_deref(),
-            Some("updated instructions")
+            reread.agent.unwrap().description.as_deref(),
+            Some("updated description")
         );
     }
 

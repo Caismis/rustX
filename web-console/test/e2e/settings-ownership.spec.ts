@@ -97,8 +97,8 @@ test('C13 C15 real native automatic commit waits for Session work and preserves 
    const selection = await remote.client.call('session/settings', { session_id: id }, 'settings');
    await message.fill('Long action in A'); await message.press('Enter'); await f.gate('finish-a');
    const source = await readSource(remote,{kind:'user'});
-   await remote.client.call('configuration/sourceWrite', { target: { kind: 'user' }, expected_revision: source.user.revision,
-     mutation: { kind: 'config', mutation: { unit: 'instructions', authored: 'New instructions apply at the next safe boundary.' } } }, 'sources_written');
+   await remote.client.call('configuration/sourceWrite', { target: { kind: 'user' }, expected_revision: source.global_guidance!.revision,
+     mutation: { kind: 'global_guidance', document: 'New instructions apply at the next safe boundary.' } }, 'sources_written');
    const waiting = page.getByText('Configuration changes will apply automatically after the current work settles.');
    await expect(waiting).toBeVisible();
    await page.screenshot({ path: '/tmp/rustx-configuration-waiting.png' });

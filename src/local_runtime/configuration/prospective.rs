@@ -54,7 +54,6 @@ impl ProspectiveSessionConfig {
             config.mcp_startup_policy = super::super::config::McpStartupPolicyDocument::default();
             config.subagents = super::super::config::SubagentsDocument::default();
             config.context = super::super::config::ContextPolicyDocument::default();
-            config.agent.instructions.clear();
             config.agent.model = None;
             config.agent.agents_md =
                 super::super::config::AgentProjectInstructionsDocument::default();
@@ -144,8 +143,7 @@ impl ProspectiveSessionConfig {
     }
 
     pub(crate) fn same_context(&self, other: &Self) -> bool {
-        self.config.agent.instructions == other.config.agent.instructions
-            && self.config.agent.agents_md == other.config.agent.agents_md
+        self.config.agent.agents_md == other.config.agent.agents_md
             && self.config.context == other.config.context
             && self.project_context_files == other.project_context_files
             && self.root_agent_project_files == other.root_agent_project_files
@@ -363,10 +361,6 @@ impl ProspectiveSessionConfig {
         let config = std::sync::Arc::make_mut(&mut self.config);
         config
             .agent
-            .instructions
-            .clone_from(&adopted.config.agent.instructions);
-        config
-            .agent
             .agents_md
             .clone_from(&adopted.config.agent.agents_md);
         config.context = adopted.config.context;
@@ -379,11 +373,6 @@ impl ProspectiveSessionConfig {
         self.project_resources
             .clone_from(&adopted.project_resources);
         let context = self.effective.agent.get_or_insert_with(Default::default);
-        context.instructions = adopted
-            .effective
-            .agent
-            .as_ref()
-            .and_then(|agent| agent.instructions.clone());
         context.agents_md = adopted
             .effective
             .agent

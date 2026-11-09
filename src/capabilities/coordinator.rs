@@ -442,8 +442,8 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
-    /// Rebinds the candidate's root context profile to `agent`'s instructions
-    /// and project-instruction policy and its resolved root project files.
+    /// Rebinds the candidate's root context profile to its project-instruction
+    /// policy and resolved project files.
     pub(crate) fn set_context_profile(
         &mut self,
         agent: &crate::local_runtime::config::AgentProfileDocument,
@@ -451,15 +451,10 @@ impl PreparedCapabilityCandidate {
     ) {
         if let Some(profile) = &mut self.resolved_profile {
             let profile = Arc::make_mut(profile);
-            profile.instructions.clone_from(&agent.instructions);
             profile.project_instructions.inherit = agent.agents_md.inherit;
             profile.project_instructions.files = root_agent_project_files.to_vec();
         }
         let activation = &mut self.resource_inputs.agent_activation;
-        activation
-            .profile
-            .instructions
-            .clone_from(&agent.instructions);
         activation.profile.agents_md.clone_from(&agent.agents_md);
         activation.project_files = root_agent_project_files.to_vec();
     }
@@ -2277,11 +2272,6 @@ impl CapabilityCoordinator {
                     .resource_inputs
                     .lock()
                     .expect("capability inputs");
-                inputs
-                    .agent_activation
-                    .profile
-                    .instructions
-                    .clone_from(&agent.instructions);
                 inputs
                     .agent_activation
                     .profile

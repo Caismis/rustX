@@ -482,12 +482,17 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 .path;
             let mut document: toml::Value =
                 toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            let instructions_a = document["agent"].get("instructions").cloned();
-            document["agent"]["model"]["model"] = "local/b".into();
-            document["agent"]
-                .as_table_mut()
+            let instructions_a = f
+                .manager
+                .source_settings(&SourceTarget::User)
+                .await
                 .unwrap()
-                .insert("instructions".into(), "configuration B".into());
+                .global_guidance
+                .unwrap()
+                .authored
+                .unwrap_or_default();
+            document["agent"]["model"]["model"] = "local/b".into();
+            set_file_guidance(&f, "configuration B");
             std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
             let source = SourceTarget::Workspace {
                 directory: f.workspaces[0].clone(),
@@ -511,7 +516,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 )
                 .unwrap();
             assert_eq!(fresh.session_model().model.to_string(), "local/b");
-            assert_eq!(fresh.config().agent.instructions, "configuration B");
+            assert_eq!(guidance(&fresh.project_context_files), "configuration B");
             if uncertain {
                 f.manager
                     .sessions
@@ -548,10 +553,8 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             assert!(sessions.iter().any(|session| session.id == id));
             let retained = f.manager.sessions.configuration_bindings.lock().unwrap()[&id].clone();
             assert_eq!(retained.session_model().model.to_string(), "local/a");
-            assert_ne!(retained.config().agent.instructions, "configuration B");
-            if let Some(toml::Value::String(text)) = instructions_a {
-                assert_eq!(retained.config().agent.instructions, text);
-            }
+            assert_ne!(guidance(&retained.project_context_files), "configuration B");
+            assert_eq!(guidance(&retained.project_context_files), instructions_a);
             let MethodResult::Attached { target, .. } = super::super::protocol::call(
                 &observer,
                 3,
@@ -571,14 +574,8 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             };
             let runtime = f.manager.configuration_runtime(&id).unwrap();
             assert_eq!(
-                runtime
-                    .runtime_resources()
-                    .configuration()
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
-                retained.config().agent.instructions
+                guidance(runtime.runtime_resources().project_context_files()),
+                guidance(&retained.project_context_files)
             );
             assert_eq!(runtime.model_view().configured, *retained.session_model());
             assert!(!create.is_finished());
@@ -616,14 +613,8 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             );
             assert_eq!(runtime.model_view().configured, *retained.session_model());
             assert_eq!(
-                runtime
-                    .runtime_resources()
-                    .configuration()
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
-                retained.config().agent.instructions
+                guidance(runtime.runtime_resources().project_context_files()),
+                guidance(&retained.project_context_files)
             );
             publication.before_catalog_publication.release();
             // The catalog publishes, then the desired instructions commit
@@ -641,13 +632,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             );
             assert_eq!(runtime.model_view().configured, *retained.session_model());
             assert_eq!(
-                runtime
-                    .runtime_resources()
-                    .configuration()
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
+                guidance(runtime.runtime_resources().project_context_files()),
                 "configuration B"
             );
             assert_eq!(

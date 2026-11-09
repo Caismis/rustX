@@ -164,9 +164,11 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
     {current === 'models' && (structured
       ? <ModelsPage client={client} host={host} target={target} source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} refreshing={busy} onRefresh={editable ? () => actor.send({ type: 'REFRESH' }) : undefined} />
       : <MalformedNotice config={config} />)}
-    {current === 'agent' && (structured
-      ? <AgentPage document={config.document} revision={config.revision} />
-      : <MalformedNotice config={config} />)}
+    {current === 'agent' && <>
+      {(structured || scope === 'user' && source.global_guidance) &&
+        <AgentPage config={structured ? config : undefined} globalGuidance={scope === 'user' ? source.global_guidance : undefined} />}
+      {!structured && <MalformedNotice config={config} />}
+    </>}
     {current === 'tools' && (structured
       ? <ToolsPage source={source} document={config.document} scope={scope} revision={config.revision} />
       : <MalformedNotice config={config} />)}

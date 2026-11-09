@@ -136,7 +136,7 @@ it('S2-03 each setting has exactly one primary editor across the six pages', asy
     }
   }
   expect(seen.get('Default model')).toBe('Models');
-  expect(seen.get('Instructions')).toBe('Agent');
+  expect(seen.get('Global instructions')).toBe('Agent');
   expect(seen.get('Built-in tools')).toBe('Tools & Permissions');
   expect(seen.get('Todo extension')).toBe('Extensions');
   expect(seen.get('Context')).toBe('Advanced');
@@ -147,7 +147,7 @@ it('S2-03 each setting has exactly one primary editor across the six pages', asy
 it('S2-04 Agent holds guidance; Tools & Permissions holds what the Agent may do', async () => {
   const s = cfg3Client();
   await user(s, 'Agent');
-  expect(forms()).toEqual(['Instructions', 'Project guidance']);
+  expect(forms()).toEqual(['Global instructions', 'Project guidance']);
   await openSettingsPage('Tools & Permissions');
   expect(forms()).toEqual(['Approval mode', 'Built-in tools']);
   // Per-Tool policies are one task deeper, not scattered primary tabs.

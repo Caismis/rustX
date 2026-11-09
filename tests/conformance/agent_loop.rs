@@ -158,7 +158,6 @@ impl ObservedEvents {
 struct Setup {
     /// The model the session selects.
     model: String,
-    instructions: Option<String>,
     images: bool,
     /// The declared context window of every catalog model.
     context_window: u64,
@@ -177,7 +176,6 @@ impl Setup {
     fn new(model: &str) -> Self {
         Self {
             model: model.to_owned(),
-            instructions: None,
             images: false,
             context_window: 128_000,
             reserve_tokens: 1_024,
@@ -876,7 +874,7 @@ fn session_json(setup: &Setup) -> String {
     if let Some(summary) = &setup.summary_model {
         model["summary_model"] = serde_json::json!({"mode": "explicit", "model": summary});
     }
-    let mut document = serde_json::json!({
+    let document = serde_json::json!({
         "agent_id": "agent-issue47",
         "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
@@ -884,9 +882,6 @@ fn session_json(setup: &Setup) -> String {
             "keep_recent_tokens": setup.keep_recent_tokens,
         },
     });
-    if let Some(instructions) = &setup.instructions {
-        document["agent"]["instructions"] = serde_json::json!(instructions);
-    }
     toml::to_string_pretty(&document).unwrap()
 }
 
@@ -1199,10 +1194,10 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
     }
 }
 
-/// Built-in guidance, Agent instructions, global, workspace and explicit files cross
+/// Built-in guidance and global, workspace and explicit files cross
 /// every provider boundary in the same order and survive frozen reconstruction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn default_system_prompt_layers_agent_and_project_instructions_on_every_protocol() {
+async fn default_system_prompt_layers_project_instructions_on_every_protocol() {
     for (scenario, model) in [
         (
             "openai_chat_streamed_turn",
@@ -1240,12 +1235,7 @@ async fn default_system_prompt_layers_agent_and_project_instructions_on_every_pr
             "[agent.agents_md]\nfiles = ['extra.md']\n",
         )
         .unwrap();
-        let instructions = "Agent guidance: explain the evidence for changes.";
-        let setup = Setup {
-            instructions: Some(instructions.to_owned()),
-            ..Setup::new(&model)
-        };
-        let driver = Driver::start_in(root, &emulator, &setup).await;
+        let driver = Driver::start_in(root, &emulator, &Setup::new(&model)).await;
         driver.submit(TURN_ONE);
         let (_, outcome) = driver.settle().await;
         assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
@@ -1259,7 +1249,7 @@ async fn default_system_prompt_layers_agent_and_project_instructions_on_every_pr
             workspace.canonicalize().unwrap().display()
         )));
         assert!(prompt.ends_with(&format!(
-            "\n\n{instructions}\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{global}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{explicit}\n</project_instructions>",
+            "\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{global}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{explicit}\n</project_instructions>",
             global_directory.canonicalize().unwrap().join("AGENTS.md").display(),
             workspace.canonicalize().unwrap().join("AGENTS.md").display(),
             workspace.canonicalize().unwrap().join("extra.md").display()
@@ -1274,7 +1264,7 @@ async fn default_system_prompt_layers_agent_and_project_instructions_on_every_pr
         assert_eq!(reconstructed.effective_system_prompt, prompt);
         assert!(driver.canonical_history().iter().all(|message| {
             let json = serde_json::to_string(message).unwrap();
-            ![instructions, global, project, explicit]
+            ![global, project, explicit]
                 .iter()
                 .any(|text| json.contains(text))
         }));

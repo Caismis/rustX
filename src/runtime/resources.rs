@@ -241,7 +241,6 @@ impl RuntimeResourceSnapshot {
         let mut snapshot = self.clone();
         let agent = &binding.configuration.config.agent;
         let mut profile = self.root_profile().ok_or("missing root profile")?.clone();
-        profile.instructions.clone_from(&agent.instructions);
         profile.project_instructions.inherit = agent.agents_md.inherit;
         profile
             .project_instructions
@@ -271,8 +270,6 @@ impl RuntimeResourceSnapshot {
         };
         files.extend(binding.root_agent_project_files.clone());
         snapshot.project_instructions = concatenate_project_instructions(&files).map(Arc::from);
-        snapshot.agent_profile =
-            (!agent.instructions.is_empty()).then(|| Arc::from(agent.instructions.as_str()));
         snapshot.configuration = Some(Arc::new(binding.configuration.clone()));
         snapshot.resolve_profiles();
         // Context adoption does not recover an external source. Keep the

@@ -2,12 +2,12 @@ import { settledSave } from './shell-actions';
 import{domainOriginalValue}from '../../../protocol/app-server/domain-observation';
 import { followRoot, readApplication, readEffective, readSource } from './source-reading';
 import { expect, test } from '@playwright/test';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { returnHome, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { returnHome, connectRemote, openSettingsPage } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { diagnosticCut } from './wire-diagnostics';
 import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v77';
@@ -54,24 +54,19 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     // independent failure and adopted binding while A prepares successfully.
     writeFileSync(join(f.workspaceB, 'rustx.toml'), '[invalid TOML');
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
-    await openWorkspaceSettings(page, 'Workspace A');
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     await openSettingsPage(page, 'Agent');
-    await settings.getByLabel('Instructions', { exact: true }).fill('TRACE_NEW_INSTRUCTIONS');
-    await settings.getByRole('button', { name: 'Save Instructions', exact: true }).click();
-    await expect(settledSave(settings, 'Instructions')).toBeVisible();
-    await returnHome(page);
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
+    await settings.getByRole('textbox', { name: 'Global instructions', exact: true }).fill('TRACE_NEW_INSTRUCTIONS');
+    await settings.getByRole('button', { name: 'Save instructions', exact: true }).click();
+    await expect(settledSave(settings, 'instructions')).toBeVisible();
     await openSettingsPage(page, 'Tools & Permissions');
     await settings.getByLabel('read', { exact: true }).uncheck();
     await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
     await expect(settledSave(settings, 'Built-in tools')).toBeVisible();
     const source = await readSource(remote,{kind:'user'});
-    const workspaceA = (await f.workspaceHost.host.listWorkspaces()).workspaces.find(workspace => workspace.displayName === 'Workspace A')!;
-    const workspaceSource = await f.workspaceHost.host.configureWorkspace(workspaceA.id, f.endpoint, { kind: 'read' });
-    if (workspaceSource.kind !== 'read') throw new Error('Expected native Workspace reread');
-    expect(workspaceSource.projection.workspace?.authored?.agent?.instructions).toBe('TRACE_NEW_INSTRUCTIONS');
+    expect(source.global_guidance?.authored).toBe('TRACE_NEW_INSTRUCTIONS');
+    expect(readFileSync(source.global_guidance!.path, 'utf8')).toBe('TRACE_NEW_INSTRUCTIONS');
     expect(source.user.authored?.agent?.tools?.builtin).not.toContain('read');
     const application = (id: string) => readApplication(remote, id);
     // A is busy: native keeps the prepared change waiting and never asks for consent.
@@ -117,7 +112,8 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     expect(after.previous_system_prompt).toEqual(before.effective_system_prompt);
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
     expect((await f.control('requests')).requests).toHaveLength(2);
-    expect(wire.requests.filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(1);
+    expect(wire.requests.filter(request => request.method === 'configuration/sourceWrite').map(request => request.params.mutation.kind))
+      .toEqual(['global_guidance', 'config']);
     expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(0);
     await returnHome(page);
     await remote.client.call('session/detach', { target: attachedA.target }, 'detached');

@@ -15,7 +15,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   try {
     // Unselected malformed resources warn without preventing unrelated composition.
-    writeFileSync(join(a.workspaceA, 'rustx.toml'), '[agent]\ninstructions = "Workspace guidance"\n');
+    writeFileSync(join(a.workspaceA, 'rustx.toml'), '[agent]\ndescription = "Workspace guidance"\n');
     for (const kind of ['agents', 'skills', 'workflows', 'tools']) {
       mkdirSync(join(a.workspaceA, '.agents', kind), { recursive: true });
       writeFileSync(join(a.workspaceA, '.agents', kind, 'invalid.toml'), 'must never activate');

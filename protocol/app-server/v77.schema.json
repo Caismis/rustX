@@ -25984,12 +25984,6 @@
             "null"
           ]
         },
-        "instructions": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "model": {
           "anyOf": [
             {
@@ -27479,6 +27473,7 @@
         "workspace_repair",
         "repair_sequence",
         "user_resource_root",
+        "global_guidance",
         "workspace_resource_root",
         "runtime_root",
         "user_mcp",
@@ -27765,6 +27760,16 @@
         "user_resource_root": {
           "type": "string"
         },
+        "global_guidance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceView2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "workspace_resource_root": {
           "type": [
             "string",
@@ -27775,12 +27780,12 @@
           "type": "string"
         },
         "user_mcp": {
-          "$ref": "#/$defs/SourceView2"
+          "$ref": "#/$defs/SourceView3"
         },
         "workspace_mcp": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SourceView2"
+              "$ref": "#/$defs/SourceView3"
             },
             {
               "type": "null"
@@ -28216,6 +28221,33 @@
         },
         "authored": {
           "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "revision"
+      ]
+    },
+    "SourceView3": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "authored": {
+          "type": [
             "object",
             "null"
           ],
@@ -28368,7 +28400,7 @@
           "$ref": "#/$defs/SubagentName"
         },
         "source": {
-          "$ref": "#/$defs/SourceView3"
+          "$ref": "#/$defs/SourceView4"
         }
       },
       "required": [
@@ -28377,7 +28409,7 @@
         "source"
       ]
     },
-    "SourceView3": {
+    "SourceView4": {
       "type": "object",
       "properties": {
         "path": {
@@ -38318,6 +38350,24 @@
     "SourceMutation": {
       "oneOf": [
         {
+          "description": "Replace the User's global AGENTS.md without changing rustx.toml.",
+          "type": "object",
+          "properties": {
+            "document": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "global_guidance"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "document"
+          ]
+        },
+        {
           "description": "Explicit repair of a configuration document violating its source contract. Never used\nfor ordinary semantic-unit editing and never accepts an invalid source.",
           "type": "object",
           "properties": {
@@ -38772,25 +38822,6 @@
             "unit": {
               "type": "string",
               "const": "description"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "unit"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "authored": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "unit": {
-              "type": "string",
-              "const": "instructions"
             }
           },
           "additionalProperties": false,

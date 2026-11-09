@@ -289,9 +289,9 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
  *
  * The frame renders the actions; it never owns them. Every one of them is a
  * message to the unit's transaction actor. */
-function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, allowUnchangedDraft = true, children, presentation, onCancel, onSubmit }: {
+function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, allowUnchangedDraft = true, saveLabel, children, presentation, onCancel, onSubmit }: {
   title: string; unit: UnitEditing<T>; redacted?: boolean; removable: boolean;
-  removalNotice?: ReactNode; allowUnchangedDraft?: boolean; children: ReactNode;
+  removalNotice?: ReactNode; allowUnchangedDraft?: boolean; saveLabel?: string | undefined; children: ReactNode;
   presentation?: 'resource' | 'dialog'; onCancel?: () => void;
   onSubmit?: () => void;
 }) {
@@ -352,7 +352,9 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       </div>
       <div className={css.actions}>
-        <Button variant="primary" type="submit" aria-label={`${tx('settings:bridge.save')} ${title}`} aria-busy={saving} disabled={!unit.draft || !unit.admitted}>{tx(saving ? 'settings:catalog.saving' : 'settings:bridge.save')}</Button>
+        <Button variant="primary" type="submit" aria-label={saveLabel ?? `${tx('settings:bridge.save')} ${title}`} aria-busy={saving} disabled={!unit.draft || !unit.admitted}>
+          {saving ? tx('settings:catalog.saving') : saveLabel ?? tx('settings:bridge.save')}
+        </Button>
         {/* Authoring an absent unit is always an explicit gesture, never
             something rendering it does. For a Workspace it is an override of
             the inherited value; for User it starts this scope's own authored
@@ -402,12 +404,12 @@ export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: 
  *
  * Used where the unit is a single scalar or a small closed choice, so a typed
  * form layer would add mechanics without removing any. */
-export function UnitForm<T>({ title, children, removable = true, removalNotice, allowUnchangedDraft = true, ...options }: UnitOptions<T> & {
+export function UnitForm<T>({ title, children, removable = true, removalNotice, allowUnchangedDraft = true, saveLabel, ...options }: UnitOptions<T> & {
   title: string; children: (value: T, change: (value: T) => void) => ReactNode;
-  removable?: boolean; removalNotice?: ReactNode; allowUnchangedDraft?: boolean;
+  removable?: boolean; removalNotice?: ReactNode; allowUnchangedDraft?: boolean; saveLabel?: string;
 }) {
   const unit = useUnitEditing(options);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} allowUnchangedDraft={allowUnchangedDraft}>
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} allowUnchangedDraft={allowUnchangedDraft} saveLabel={saveLabel}>
     {children(unit.displayed, unit.edit)}
   </UnitShell>;
 }

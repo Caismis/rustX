@@ -4,6 +4,7 @@ export function cfg3Source(): SourceSettings {
     user: { path: '/bound/rustx.toml', revision: 'user-1', authored: { providers: { transport: { protocol: 'openai_responses', base_url: 'https://user.invalid', credential: { type: 'environment', variable: 'USER_KEY' } } }, models: {} } },
     workspace: { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: {} },
     user_resource_root: '/home/user/rustx/.agents', workspace_resource_root: '/workspace/.agents', runtime_root: '/home/user/rustx/runtime',
+    global_guidance: { path: '/home/user/rustx/.agents/AGENTS.md', revision: 'missing' },
     user_mcp: { path: '/home/user/rustx/.agents/mcp.toml', revision: 'mcp-1', authored: {} }, workspace_mcp: { path: '/workspace/.agents/mcp.toml', revision: 'mcp-2', authored: {} }, agents: [],
   };
 }

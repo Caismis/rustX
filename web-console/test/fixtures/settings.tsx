@@ -39,7 +39,7 @@ source.user.authored!.providers![longProvider] = { protocol: 'openai_responses',
 };
 source.user.authored!.models![longModel] = { provider: longProvider, id: longModel, context_window: '1048576', max_output_tokens: 65536,
   capabilities: { input_modalities: ['text', 'image'], output_modalities: ['text'], json_schema_output: false } };
-source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', instructions: 'Inspect the source, implement the change, and verify native boundaries.', tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
+source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', agents_md: { inherit: false }, tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
 effective.document.providers = source.user.authored!.providers;
 effective.provenance = { 'models.main': { kind: 'workspace', base: '/workspace', document: '/workspace/rustx.toml' }, 'providers.transport': { kind: 'user', base: '/bound', document: '/bound/rustx.toml' } };
 effective.resources.definitions = [
@@ -131,7 +131,7 @@ if (variant.get('write') === 'held') {
     const view = source[scope]!, authored = view.authored!;
     if (mutation.kind !== 'config' || !('authored' in mutation.mutation) || mutation.mutation.authored !== null) throw new Error('The held-write fixture commits removals only');
     if (mutation.mutation.unit === 'provider') delete authored.providers![mutation.mutation.id];
-    else if (mutation.mutation.unit === 'instructions') delete authored.agent?.instructions;
+    else if (mutation.mutation.unit === 'project_guidance') delete authored.agent?.agents_md;
     else throw new Error(`The held-write fixture has no removal of ${mutation.mutation.unit}`);
     view.revision = `${scope}-committed`;
     source.resolved = { ...source.user.authored, ...source.workspace!.authored };

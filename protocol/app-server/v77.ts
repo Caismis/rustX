@@ -2047,6 +2047,7 @@ export type SourceFieldName =
   | 'workspace_repair'
   | 'repair_sequence'
   | 'user_resource_root'
+  | 'global_guidance'
   | 'workspace_resource_root'
   | 'runtime_root'
   | 'user_mcp'
@@ -2185,6 +2186,10 @@ export type WorkflowExpressionStep =
 export type SourceMutation =
   | {
       document: string;
+      kind: 'global_guidance';
+    }
+  | {
+      document: string;
       kind: 'repair_config';
     }
   | {
@@ -2284,10 +2289,6 @@ export type ConfigMutation =
   | {
       authored?: string | null;
       unit: 'description';
-    }
-  | {
-      authored?: string | null;
-      unit: 'instructions';
     }
   | {
       authored?: AgentProjectInstructionsDocument | null;
@@ -18654,7 +18655,6 @@ export interface ProviderView {
  */
 export interface AgentProfileLayer {
   description?: string | null;
-  instructions?: string | null;
   model?: ModelLayer | null;
   tools?: ToolsLayer | null;
   skills?: AgentSkillSelection | null;
@@ -19093,10 +19093,11 @@ export interface SourceSettings {
    */
   repair_sequence: string;
   user_resource_root: string;
+  global_guidance?: SourceView2 | null;
   workspace_resource_root?: string | null;
   runtime_root: string;
-  user_mcp: SourceView2;
-  workspace_mcp?: SourceView2 | null;
+  user_mcp: SourceView3;
+  workspace_mcp?: SourceView3 | null;
   agents: AgentSourceView[];
 }
 /**
@@ -19295,6 +19296,16 @@ export interface ConfigRepairReceipt {
 export interface SourceView2 {
   path: string;
   revision: string;
+  authored?: string | null;
+  diagnostic?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SourceView3".
+ */
+export interface SourceView3 {
+  path: string;
+  revision: string;
   authored?: {
     [k: string]: McpView;
   } | null;
@@ -19316,13 +19327,13 @@ export interface McpView {
 export interface AgentSourceView {
   scope: SourceScope;
   name: SubagentName;
-  source: SourceView3;
+  source: SourceView4;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceView3".
+ * via the `definition` "SourceView4".
  */
-export interface SourceView3 {
+export interface SourceView4 {
   path: string;
   revision: string;
   authored?: AgentProfileDocument | null;

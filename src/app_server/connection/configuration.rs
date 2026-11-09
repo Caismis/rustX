@@ -417,6 +417,9 @@ impl AppServerConnection {
                 use crate::local_runtime::configuration::settings::SourceMutation;
                 use crate::local_runtime::workflow_authoring::WorkflowEdit;
                 let mutation = match mutation {
+                    SourceMutation::GlobalGuidance { document } => {
+                        SourceMutation::GlobalGuidance { document }
+                    }
                     SourceMutation::RepairConfig { document } => {
                         SourceMutation::RepairConfig { document }
                     }

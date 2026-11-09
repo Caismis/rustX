@@ -57,7 +57,6 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
     case 'workflow_enabled': return document.agent?.workflows?.includes(unit.id);
     case 'agent_identity': return document.agent_id;
     case 'description': return document.agent?.description;
-    case 'instructions': return document.agent?.instructions;
     case 'project_guidance': return document.agent?.agents_md;
     case 'approval': return document.approval_mode;
     case 'context': return document.context;
@@ -88,7 +87,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
  * definitions carry a `mcp_servers.<id>` default origin. */
 export function unitProvenancePath(mutation: SourceMutation): string | undefined {
   if (mutation.kind === 'mcp') return `mcp_servers.${mutation.id}`;
-  if (mutation.kind === 'agent' || mutation.kind === 'repair_config' || mutation.kind === 'workflow') return undefined;
+  if (mutation.kind !== 'config') return undefined;
   const unit = mutation.mutation;
   switch (unit.unit) {
     case 'provider': case 'restore_provider': return `providers.${unit.id}`;
@@ -104,7 +103,6 @@ export function unitProvenancePath(mutation: SourceMutation): string | undefined
     case 'workflow_enabled': return 'agent.workflows';
     case 'agent_identity': return 'agent_id';
     case 'description': return 'agent.description';
-    case 'instructions': return 'agent.instructions';
     case 'project_guidance': return 'agent.agents_md';
     case 'approval': return 'approval_mode';
     case 'context': return 'context';
@@ -215,6 +213,12 @@ export function configAuthoring(source: SourceSettings | undefined, scope: Sourc
 /** Native authored membership for exactly this scope. A parse failure means the
  * document was not loaded, so membership is unknown, never absent. */
 export function authoredFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): AuthoredFacts {
+  if (mutation.kind === 'global_guidance') {
+    const view = source?.global_guidance;
+    if (!view) return { state: 'unavailable' };
+    if (view.diagnostic) return { state: 'invalid', diagnostic: view.diagnostic };
+    return view.authored == null ? { state: 'absent' } : { state: 'present', value: view.authored };
+  }
   const view = sourceView(source, scope);
   if (!source || !view) return { state: 'unavailable' };
   if (view.diagnostic) return { state: 'invalid', diagnostic: view.diagnostic };
@@ -228,7 +232,7 @@ export function authoredFacts(source: SourceSettings | undefined, scope: SourceS
  * a merged configuration that parsed but does not resolve. Neither is an empty
  * value, an unset unit or a native default. */
 export function effectiveFacts(source: SourceSettings | undefined, mutation: SourceMutation): EffectiveFacts {
-  if (!source) return { state: 'unavailable' };
+  if (!source || mutation.kind === 'global_guidance') return { state: 'unavailable' };
   const diagnostic = source.prospective_diagnostic ?? undefined;
   if (!source.resolved) return diagnostic ? { state: 'invalid', diagnostic } : { state: 'unavailable' };
   if (diagnostic) return { state: 'invalid', diagnostic };
@@ -264,9 +268,11 @@ export function effectiveStateLabel(tx: Translate, effective: EffectiveFacts): s
  * of different units in the same document. */
 export type RevisionSelector =
   | { kind: 'config'; unit?: Extract<SourceMutation, { kind: 'config' }>['mutation']['unit']; entry?: string; removesModels?: boolean }
+  | { kind: 'global_guidance' }
   | { kind: 'mcp'; entry: string }
   | { kind: 'agent'; name: string };
 export function revisionSelector(mutation: SourceMutation): RevisionSelector {
+  if (mutation.kind === 'global_guidance') return { kind: 'global_guidance' };
   if (mutation.kind === 'config') {
     const config = mutation.mutation;
     if (config.unit === 'restore_provider') return { kind: 'config', unit: 'provider', entry: config.id };
@@ -292,6 +298,7 @@ export function separateUnitsInDocument(draft: RevisionSelector, written: Revisi
  * the native absent-resource revision, never a fabricated one. */
 export function selectedRevision(source: SourceSettings, selector: RevisionSelector): string {
   const scope = source.target.kind;
+  if (selector.kind === 'global_guidance') return source.global_guidance?.revision ?? source.absent_resource_revision;
   if (selector.kind === 'config') return source[scope]!.revision;
   if (selector.kind === 'mcp') return (scope === 'user' ? source.user_mcp : source.workspace_mcp)!.revision;
   return source.agents.find(agent => agent.scope === scope && agent.name === selector.name)?.source.revision ?? source.absent_resource_revision;

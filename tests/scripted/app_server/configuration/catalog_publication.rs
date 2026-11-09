@@ -993,14 +993,7 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
         assert!(Arc::ptr_eq(&after, &runtime.runtime_resources()));
 
         // Committing a real context change moves the baseline forward.
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("issue459 adopted".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "issue459 adopted".into()).await;
         let committed = applied(&fixture, 0).await;
         let adopted = runtime.runtime_resources().configuration().unwrap().clone();
         let binding = retained();

@@ -343,7 +343,7 @@ it('replaces default model intent on the Models page', async () => {
 });
 
 it('saves project guidance and supplemental files after collapsing Advanced options', async () => {
-  const { writes: write } = await renderEditor(<AgentPage document={{}} revision="root-r1" />);
+  const { writes: write } = await renderEditor(<AgentPage config={{ document: {}, revision: 'root-r1' }} />);
   const guidance = within(screen.getByRole('form', { name: 'Project guidance' }));
   const automatic = guidance.getByRole('switch', { name: 'Automatically load project guidance' });
   expect(automatic.getAttribute('aria-checked')).toBe('true');

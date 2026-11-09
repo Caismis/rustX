@@ -152,7 +152,6 @@ it('S1-14 whole-unit semantic units use their exact whole-unit native paths', ()
     [{ kind: 'config', mutation: { unit: 'workflow_enabled', id: 'nightly', enabled: true } }, 'agent.workflows'],
     [{ kind: 'config', mutation: { unit: 'agent_identity', authored: null } }, 'agent_id'],
     [{ kind: 'config', mutation: { unit: 'description', authored: null } }, 'agent.description'],
-    [{ kind: 'config', mutation: { unit: 'instructions', authored: null } }, 'agent.instructions'],
     [{ kind: 'config', mutation: { unit: 'project_guidance', authored: null } }, 'agent.agents_md'],
     [{ kind: 'config', mutation: { unit: 'approval', authored: null } }, 'approval_mode'],
     [{ kind: 'config', mutation: { unit: 'context', authored: null } }, 'context'],

@@ -396,16 +396,16 @@ explicit auxiliary choices.
 
 ### Root Agent
 
-`agent` supports `description`, `instructions`, `model`, `tools`, `skills`,
+`agent` supports `description`, `model`, `tools`, `skills`,
 `plugins`, `agents`, `workflows`, and `agents_md`.
 
 Every primary Agent request includes rustX's built-in coding-assistant guidance
-and execution working directory, even when `instructions` is omitted.
-Agent instructions extend that baseline; they do not replace it.
-The effective System Prompt is ordered as built-in
-guidance, Agent instructions, project instructions selected by `agents_md`,
-certified-extension sections, and visible Skill guidance. Root and named Agents
-use the same baseline with their own admitted instructions and capabilities.
+and execution working directory. The effective System Prompt starts with that
+guidance, then includes any named Agent profile instructions, project instructions
+selected by `agents_md`, certified-extension sections, and visible Skill guidance.
+In WebUI User Settings, Agent → Global instructions edits
+`~/rustx/.agents/AGENTS.md` directly. The Workspace root's `AGENTS.md` holds
+project-specific rules.
 Auxiliary summary requests retain their separate task-specific input.
 
 ```toml
@@ -413,7 +413,6 @@ Auxiliary summary requests retain their separate task-specific input.
 skills = ["review"]
 agents = ["reviewer"]
 workflows = []
-instructions = "Explain the evidence for each proposed change."
 
 [agent.tools]
 builtin = ["read", "glob", "grep"]
@@ -599,7 +598,7 @@ units; there is no recursive TOML merge.
 
 | Domain | Atomic replacement unit | Explicit empty behavior |
 | --- | --- | --- |
-| Independent scalars | `agent_id`, `approval_mode`, Root `description`, Root `instructions` individually | Empty strings undergo the field's validation |
+| Independent scalars | `agent_id`, `approval_mode`, Root `description` individually | Empty strings undergo the field's validation |
 | Providers | Complete `providers.<name>` | An incomplete Provider fails; `{}` map replaces no identities |
 | Models | Complete `models.<name>` | An incomplete Model fails; `{}` map replaces no identities |
 | Root model | Complete `agent.model` | Missing required model fails; optional members use domain defaults |
