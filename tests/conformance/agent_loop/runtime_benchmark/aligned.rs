@@ -880,7 +880,7 @@ pub(super) async fn measure(mode: &str) {
             "protocol":APP_SERVER_PROTOCOL_VERSION,"history":history,"measured":measured,
             "requests":expected_requests,"open_us":open_us,"samples":samples,
             "initial_process":initial,"lifecycle":lifecycle,"workload_version":3,"model_time":request_oracle::MODEL_TIME,"measurement_version":4,"observer_mode":mode,"observer_surface":"LocalConversationRuntime/Runtime Client","late_snapshot":late_snapshot,"observer_validation":observer_validation,
-            "wire_requests":requests,"live_requests":verified_requests,
+            "workspace":workspace,"wire_requests":requests,"live_requests":verified_requests,
             "reopened_requests":reopened_requests,"canonical":history_messages,
             "oracle_version":2,"verified_live_requests":verified_live_requests,
             "verified_reopened_requests":verified_reopened_requests,

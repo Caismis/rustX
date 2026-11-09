@@ -17,6 +17,20 @@ const sameEngine=pi.measurement_version !== undefined;
 const rightRequests=pi.wire_requests??pi.requests;
 assert.equal(rust.case,pi.scenario??pi.case);
 assert.equal(rust.wire_requests.length,rightRequests.length);
+function splitNativePrompt(body) {
+ const {messages,...options}=body;
+ const hasSystem=messages[0]?.role==='system';
+ const conversation=hasSystem?messages.slice(1):messages;
+ assert(conversation.every(message=>message.role!=='system'));
+ return {system:hasSystem?messages[0]:null,core:{...options,messages:conversation}};
+}
+function normalizeNativeDirectory(body,workspace) {
+ const text=body.messages[0]?.role==='system' ? body.messages[0].content[0] : null;
+ const directory=`\n\nCurrent working directory: ${workspace}`;
+ if(text?.text?.endsWith(directory) && typeof workspace==='string') {
+  text.text=text.text.slice(0,-directory.length)+'\n\nCurrent working directory: <WORKSPACE>';
+ }
+}
 const checked=[];
 for(let i=0;i<rightRequests.length;i++) {
  const r=rust.wire_requests[i],p=rightRequests[i];
@@ -29,12 +43,17 @@ for(let i=0;i<rightRequests.length;i++) {
   return '/unused';
  };
  const a=normalized(r.body,workspaceOf(r),true),b=normalized(p.body,workspaceOf(p),true);
- // Compare the core independently, and retain the meaningful schema differences.
+ // Each product oracle authenticates its native prompt and tools.
  // This is explicitly not full request equality or feature/durability equivalence.
- const {tools:rustTools,...rustCore}=a,{tools:piTools,...piCore}=b;
- assert.deepEqual(rustCore,piCore);
- if(sameEngine) assert.deepEqual(a,b);
+ const {tools:rustTools,...rustBody}=a,{tools:piTools,...piBody}=b;
+ const rustInput=splitNativePrompt(rustBody),piInput=splitNativePrompt(piBody);
+ assert.deepEqual(rustInput.core,piInput.core);
+ if(sameEngine) {
+  normalizeNativeDirectory(a,rust.workspace);
+  normalizeNativeDirectory(b,pi.workspace);
+  assert.deepEqual(a,b);
+ }
  const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
- checked.push({index:i,coreSemanticEqual:true,fullSemanticRequestEqual:sameEngine || JSON.stringify(a)===JSON.stringify(b),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
+ checked.push({index:i,coreSemanticEqual:true,fullSemanticRequestEqual:sameEngine || JSON.stringify(a)===JSON.stringify(b),rustSystemSha256:digest(rustInput.system),piSystemSha256:digest(piInput.system),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
 }
-await writeFile(output,JSON.stringify({workload_version:3,model_time:MODEL_TIME,equality_scope:'semantic JSON input; exact model-facing time; only text representation, JSON argument spelling and the exact fixture path normalized; transport byte equality is not asserted',case:rust.case,observer_mode:mode,checked},null,2));
+await writeFile(output,JSON.stringify({workload_version:3,model_time:MODEL_TIME,equality_scope:'ordered conversation and request options; exact model-facing time; native leading system messages and tools independently validated and hashed; same-engine comparisons also require full semantic equality',case:rust.case,observer_mode:mode,checked},null,2));
