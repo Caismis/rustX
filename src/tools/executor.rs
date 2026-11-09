@@ -39,7 +39,7 @@ use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::schema::{
     EXECUTION_MODE_FIELD, SchemaError, compile_canonical_schema, compile_model_definition,
-    resolve_invocation_metadata, validate_compiled_arguments, validate_execution_metadata_contract,
+    resolve_invocation_metadata, validate_compiled_arguments,
 };
 use crate::tools::todo::TodoWriter;
 use crate::tools::types::{
@@ -758,6 +758,7 @@ pub struct PreparedInvocation {
 #[derive(Clone, Default)]
 pub struct ToolRegistry {
     entries: Vec<Arc<ToolRegistration>>,
+    model_definitions: Arc<Vec<ModelToolDefinition>>,
     by_id: HashMap<ToolId, usize>,
     by_name: HashMap<String, usize>,
 }
@@ -910,11 +911,7 @@ impl ToolRegistry {
     /// Creates an empty registry.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-            by_id: HashMap::new(),
-            by_name: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Registers one tool definition with its executor.
@@ -1037,11 +1034,12 @@ impl ToolRegistry {
         // schema together — and not in the policy-unaware canonical schema
         // validation above, which must keep accepting composed roots such as
         // the `ask_user` intrinsic's and arbitrary MCP server schemas.
-        validate_execution_metadata_contract(definition.execution_policy, &definition.input_schema)
-            .map_err(|error| ToolRegistryError::ModelSelectableSchema {
+        let model_definition = compile_model_definition(definition).map_err(|error| {
+            ToolRegistryError::ModelSelectableSchema {
                 name: definition.name.clone(),
                 reason: error.to_string(),
-            })?;
+            }
+        })?;
         if crate::tools::native::is_domain_control(&definition.name)
             && (definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
@@ -1076,6 +1074,7 @@ impl ToolRegistry {
         self.by_name
             .insert(definition.name.clone(), self.entries.len());
         self.entries.push(Arc::new(registration));
+        Arc::make_mut(&mut self.model_definitions).push(model_definition);
         Ok(())
     }
 
@@ -1108,12 +1107,20 @@ impl ToolRegistry {
         // the validated schemas, policies and executor bindings intact; only
         // the lookup ordinals change. Do not compile each schema again for
         // every model invocation.
-        let entries: Vec<_> = self
+        if self
             .entries
             .iter()
-            .filter(|entry| model_allows_tool(&entry.definition.id, capabilities))
-            .cloned()
-            .collect();
+            .all(|entry| model_allows_tool(&entry.definition.id, capabilities))
+        {
+            return self.clone();
+        }
+        let (entries, model_definitions): (Vec<_>, Vec<_>) = self
+            .entries
+            .iter()
+            .zip(self.model_definition_refs())
+            .filter(|(entry, _)| model_allows_tool(&entry.definition.id, capabilities))
+            .map(|(entry, definition)| (entry.clone(), definition.clone()))
+            .unzip();
         Self {
             by_id: entries
                 .iter()
@@ -1126,6 +1133,7 @@ impl ToolRegistry {
                 .map(|(ordinal, entry)| (entry.definition.name.clone(), ordinal))
                 .collect(),
             entries,
+            model_definitions: Arc::new(model_definitions),
         }
     }
 
@@ -1172,25 +1180,15 @@ impl ToolRegistry {
             .collect()
     }
 
-    /// The compiled model-facing definitions in registration order. These
-    /// are what one model request receives; the canonical schemas are never
-    /// sent.
-    ///
-    /// # Panics
-    ///
-    /// Panics only when a registered canonical schema would fail its own
-    /// registration validation — including the `ModelSelectable`
-    /// `execution_mode` reservation — which is impossible by construction.
+    /// The already compiled model-facing definitions in registration order.
+    /// An owned request copies the declarations while sharing the schema bodies.
     #[must_use]
     pub fn model_definitions(&self) -> Vec<ModelToolDefinition> {
-        self.entries
-            .iter()
-            .map(|entry| {
-                compile_model_definition(&entry.definition).expect(
-                    "registered canonical schemas always compile into model-facing definitions",
-                )
-            })
-            .collect()
+        self.model_definition_refs().to_vec()
+    }
+
+    pub(crate) fn model_definition_refs(&self) -> &[ModelToolDefinition] {
+        self.model_definitions.as_slice()
     }
 
     /// The number of registered tools.
@@ -1485,6 +1483,74 @@ mod tests {
     }
 
     #[test]
+    fn model_definitions_compile_once_per_effective_registry_and_preserve_frozen_owners() {
+        use super::super::schema::take_model_definition_compiles;
+
+        take_model_definition_compiles();
+        let mut registry = ToolRegistry::new();
+        register(
+            &mut registry,
+            definition(
+                "tool-a",
+                "alpha",
+                ToolExecutionPolicy::ModelSelectable,
+                ToolConcurrencyPolicy::Sequential,
+                object_schema(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(take_model_definition_compiles(), 1);
+        let frozen = registry.model_definitions();
+        let compiled = &frozen[0].input_schema;
+        let old_schema = Arc::downgrade(compiled);
+        assert!(compiled["properties"]["execution_mode"].is_object());
+        let selected = registry.for_model(&crate::model::ModelCapabilities::text_only());
+        assert!(std::ptr::eq(
+            registry.model_definition_refs(),
+            selected.model_definition_refs()
+        ));
+        for _ in 0..8 {
+            assert!(Arc::ptr_eq(
+                compiled,
+                &selected.model_definitions()[0].input_schema
+            ));
+        }
+        assert_eq!(take_model_definition_compiles(), 0);
+
+        let mut changed = registry.registrations().pop().unwrap();
+        changed.definition.name = "beta".into();
+        changed.definition.description = "updated description".into();
+        changed.definition.input_schema = json!({
+            "type": "object",
+            "properties": { "text": { "type": "string" } }
+        })
+        .into();
+        changed.definition.execution_policy = ToolExecutionPolicy::ForegroundOnly;
+        let fixed = ToolRegistry::from_registrations([changed.clone()]).unwrap();
+        assert_eq!(take_model_definition_compiles(), 1);
+        let definition = &fixed.model_definition_refs()[0];
+        assert_eq!(definition.name, "beta");
+        assert_eq!(definition.description, "updated description");
+        assert!(definition.input_schema["properties"]["text"].is_object());
+        assert!(definition.input_schema["properties"]["execution_mode"].is_null());
+
+        changed.definition.execution_policy = ToolExecutionPolicy::ModelSelectable;
+        let selectable = ToolRegistry::from_registrations([changed]).unwrap();
+        assert_eq!(take_model_definition_compiles(), 1);
+        let updated = &selectable.model_definition_refs()[0];
+        assert!(updated.input_schema["properties"]["execution_mode"].is_object());
+        assert!(updated.description.starts_with("updated description"));
+        assert_ne!(updated.description, frozen[0].description);
+        assert_eq!(frozen[0].name, "alpha");
+        assert!(frozen[0].input_schema["properties"]["text"].is_null());
+
+        drop((registry, selected));
+        assert!(old_schema.upgrade().is_some());
+        drop(frozen);
+        assert!(old_schema.upgrade().is_none());
+    }
+
+    #[test]
     fn immutable_registry_selection_preserves_bindings_without_registration() {
         use crate::local_runtime::static_effects::{Effect, measure};
         use crate::model::catalog::{Modality, ModelCapabilities};
@@ -1529,6 +1595,10 @@ mod tests {
             let entry = &selected.entries[new_ordinal];
             assert!(Arc::ptr_eq(entry, original));
             assert_eq!(entry.definition, original.definition);
+            assert!(Arc::ptr_eq(
+                &selected.model_definition_refs()[new_ordinal].input_schema,
+                &registry.model_definition_refs()[old_ordinal].input_schema
+            ));
             assert!(Arc::ptr_eq(&entry.executor, &original.executor));
             assert!(std::ptr::fn_addr_eq(entry.normalizer, original.normalizer));
             assert_eq!(entry.foreground, original.foreground);

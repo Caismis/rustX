@@ -3946,7 +3946,11 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   on every such invocation, is resolved exactly once at preflight, is
   stripped before business-argument validation, and is never forwarded to
   any executor. A missing or invalid value is a deterministic rejection with
-  actionable diagnostics, never a silent foreground default.
+  actionable diagnostics, never a silent foreground default. A validated
+  registry owns its ordered compiled declarations. Model selection shares
+  their schema bodies, and request preparation borrows the declarations for
+  context estimates. Publishing a new registry preserves definitions already
+  frozen by earlier requests.
 - `execution_mode` is reserved, and the canonical root schema must match the
   decoratable root profile, when and only when the effective execution policy
   is `ModelSelectable`. The profile is an allowlist: the root instance
