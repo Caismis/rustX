@@ -98,7 +98,7 @@ class Client:
             if not isinstance(error, asyncio.CancelledError):
                 raise
 
-    async def call(self, method, params):
+    async def call(self, method, params, *, allow_unavailable=False):
         lane = self.control if method in ['turn/interrupt', 'session/detach'] else self.ordinary
         async with lane:
             self.sequence += 1
@@ -108,6 +108,9 @@ class Client:
             await self.ws.send(json.dumps({'jsonrpc': '2.0', 'id': identity,
                                            'method': method, 'params': params}))
             value = await asyncio.wait_for(future, 60)
+            if (allow_unavailable and value.get('error', {}).get('data', {}).get('kind')
+                    == 'observation_unavailable'):
+                return None
             assert 'error' not in value, value
             return value['result']
 
@@ -133,7 +136,9 @@ async def main(a):
         'sessions': a.sessions, 'history_turns': a.history, 'widths': a.widths,
         'rounds': a.rounds, 'cache_probes': a.cache_probes,
         'protocol_version': PROTOCOL_VERSION, 'memory_only': a.memory_only,
+        'rotate_active': a.rotate_active,
         'session_names': 'Explicit fixture names; automatic title generation is not part of this workload.',
+        'retirement': 'Observe native idle after terminal delivery before starting another turn; CPU windows include these reads.',
         'scope': 'Actual native App Server over authenticated WebSocket. '
         'Single-process samples, not a production capacity/P99 guarantee. '
         'Driver and provider are siblings; only server PID resource counters are reported.',
@@ -268,8 +273,25 @@ shutdown_deadline_ms = 30000
             terminal = await asyncio.wait_for(owners[index].settled[target['conversation_id']].get(), 60)
             assert terminal['outcome']['type'] == expected, terminal
             finished = time.monotonic_ns()
+            # A delivered terminal commits the result before the coordinator
+            # finishes retirement. Observe readiness rather than racing another
+            # turn/start against the closed steering gate of that old attempt.
+            checks = 0
+            deadline = time.monotonic() + 30
+            while True:
+                status = await owners[index].call('thread/read',
+                    {'threadId': target['conversation_id']}, allow_unavailable=True)
+                checks += 1
+                if status is not None:
+                    state = status['thread']['status']['type']
+                    assert state in ['idle', 'active'], status
+                    if state == 'idle':
+                        break
+                assert time.monotonic() < deadline, status
+                await asyncio.sleep(0)
             return {'session': index, 'turn': turn, 'accepted_us': (accepted - began) / 1000,
                     'settled_us': (finished - began) / 1000,
+                    'retirement_checks': checks, 'idle_us': (time.monotonic_ns() - began) / 1000,
                     'began_monotonic_ns': began, 'settled_monotonic_ns': finished,
                     'acknowledgement': acknowledgement, 'terminal': terminal}
 
@@ -359,7 +381,8 @@ shutdown_deadline_ms = 30000
                     if repeat:
                         await asyncio.gather(*(control(f'gates/active-{width}-{repeat}-{i}/release', True)
                                                for i in range(width)))
-                    tasks = [asyncio.create_task(turn(i)) for i in range(width)]
+                    start = repeat * width if a.rotate_active else 0
+                    tasks = [asyncio.create_task(turn((start + i) % a.sessions)) for i in range(width)]
                     if repeat == 0:
                         await asyncio.gather(*(gate(f'active-{width}-{repeat}-{i}') for i in range(width)))
                         await sample(f'active_held_{width}')
@@ -563,6 +586,7 @@ if __name__ == '__main__':
     parser.add_argument('--widths', type=int, nargs='+', default=[1, 4, 8])
     parser.add_argument('--rounds', type=int, default=16)
     parser.add_argument('--cpu-profiler', type=Path)
+    parser.add_argument('--rotate-active', action='store_true', help='Advance the active session group each repeat instead of keeping a fixed prefix')
     parser.add_argument('--memory-only', action='store_true', help='Measure empty/seeded memory and native close/reload checks without active, browse, slow-consumer or cancel scenarios')
     parser.add_argument('--cache-probes', action='store_true', help='Measure page/statement idle windows, four warm sessions, Inspector and cold/warm128-session rotation')
     options = parser.parse_args()
