@@ -289,9 +289,6 @@ pub(crate) struct BorrowedFailure<'a> {
     message: BorrowedText<'a>,
 }
 impl BorrowedFailure<'_> {
-    pub(crate) fn kind(&self) -> &crate::model::ModelErrorKind {
-        self.kind
-    }
     pub(crate) fn message(&self) -> &str {
         self.message.text
     }

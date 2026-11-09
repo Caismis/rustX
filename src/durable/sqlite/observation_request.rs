@@ -13,8 +13,6 @@ pub(in crate::durable::sqlite) mod composed;
 #[cfg(test)]
 pub(super) use composed::exercise_workspace_spill;
 mod input;
-mod terminal;
-pub(super) use terminal::{outcome, outcome_at, outcome_read, outcome_read_at, terminal};
 pub(super) mod provenance;
 pub(in crate::durable::sqlite) mod state_preview;
 #[cfg(test)]
@@ -851,6 +849,190 @@ fn typed_value<T: serde::Serialize + schemars::JsonSchema>(
     .map_err(|error| storage(error.to_string()))
 }
 
+pub(super) fn terminal(
+    connection: &Connection,
+    event: &crate::events::types::RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    use crate::events::types::RuntimeEvent;
+    let (RuntimeEvent::ModelRequestCompleted {
+        request_id: request,
+        ..
+    }
+    | RuntimeEvent::ModelRequestFailed {
+        request_id: request,
+        ..
+    }) = &event.event
+    else {
+        return Ok(());
+    };
+    // A Journal may truthfully retain a request terminal whose immutable
+    // input source is unavailable. Display indexing must not reject that
+    // execution fact or invent a frozen source to make it readable.
+    let retained: bool = connection
+        .query_row_cached(
+            "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
+            [request.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
+    if !retained {
+        return Ok(());
+    }
+    let source_sequence = started(connection, request, event.sequence)?;
+    let source_key = source_sequence.to_string();
+    let source = crate::observation::trace::frozen_request_outcome(&event.event)
+        .expect("matched native request terminal");
+    let encode = |field, value: &_| {
+        crate::durable::sqlite::content::index_structural_value(
+            connection,
+            "trace_terminal",
+            &source_key,
+            field,
+            value,
+        )
+    };
+    let encoded_bytes = encode(0, &source)?;
+    crate::durable::sqlite::content::index_structural_value(
+        connection,
+        "trace_terminal",
+        &source_key,
+        1,
+        &source.failure,
+    )?;
+    crate::durable::sqlite::content::index_structural_value(
+        connection,
+        "trace_terminal",
+        &source_key,
+        2,
+        &source
+            .failure
+            .as_ref()
+            .map(crate::observation::trace::frozen::BorrowedFailure::message),
+    )?;
+    crate::durable::sqlite::content::index_structural_value(
+        connection,
+        "trace_terminal",
+        &source_key,
+        3,
+        &source.usage,
+    )?;
+    crate::durable::sqlite::content::index_structural_value(
+        connection,
+        "trace_terminal",
+        &source_key,
+        4,
+        &source.generation,
+    )?;
+    let failure_deferred = source
+        .failure
+        .as_ref()
+        .is_some_and(|value| value.message().chars().nth(256).is_some());
+    let failure = source
+        .failure
+        .as_ref()
+        .map(crate::observation::trace::frozen::BorrowedFailure::header);
+    let header = crate::durable::observation::RequestObservationOutcome {
+        terminal_sequence: event.sequence,
+        event_id: (event.event_id.as_str().len() <= 512).then(|| event.event_id.clone()),
+        usage: source.usage.clone(),
+        failure,
+        generation: source.generation,
+        failure_deferred,
+        encoded_bytes,
+    };
+    let bytes = crate::observation::bounded::bounded_bytes(&header, 16_384)
+        .ok_or_else(|| storage("native request outcome header exceeds bound"))?;
+    let changed=connection.execute_cached("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if changed != 1 {
+        return Err(storage(
+            "native request terminal header owner missing or duplicated",
+        ));
+    }
+    Ok(())
+}
+pub(super) fn outcome_at(
+    connection: &Connection,
+    source_sequence: u64,
+    through: u64,
+) -> Result<Option<crate::durable::observation::RequestObservationOutcome>, ConversationStoreError>
+{
+    validate_start(connection, source_sequence, through)?;
+    let row:Option<(Option<u64>,Option<Vec<u8>>)>=connection.query_row("SELECT completed_sequence,observation_terminal_header FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|sqlite_error(&error, error.to_string()))?;
+    let (terminal, bytes) =
+        row.ok_or_else(|| storage("original Request snapshot source absent"))?;
+    if terminal.is_none_or(|sequence| sequence > through) {
+        return Ok(None);
+    }
+    let bytes = bytes.ok_or_else(|| storage("native Request outcome header unavailable"))?;
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|_| storage("native Request outcome header corrupt"))
+}
+pub(super) fn outcome_read_at(
+    connection: &Connection,
+    source_sequence: u64,
+    through: u64,
+    path: &[String],
+    offset: u64,
+    max_bytes: u32,
+) -> Result<ObservationValueChunk, ConversationStoreError> {
+    if outcome_at(connection, source_sequence, through)?.is_none() {
+        return Err(ConversationStoreError::InvalidReference(
+            "request terminal source is outside native cut".into(),
+        ));
+    }
+    let field = match path
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [] => 0,
+        ["failure"] => 1,
+        ["failure", "message", "text"] => 2,
+        ["usage"] => 3,
+        ["generation"] => 4,
+        _ => {
+            return Err(ConversationStoreError::InvalidReference(
+                "request terminal field is not allowlisted".into(),
+            ));
+        }
+    };
+    crate::durable::sqlite::content::structural_field_read(
+        connection,
+        "trace_terminal",
+        &source_sequence.to_string(),
+        field,
+        offset,
+        max_bytes,
+    )
+}
+
+pub(super) fn outcome(
+    connection: &Connection,
+    request: &RequestId,
+    through: u64,
+) -> Result<Option<crate::durable::observation::RequestObservationOutcome>, ConversationStoreError>
+{
+    outcome_at(connection, started(connection, request, through)?, through)
+}
+pub(super) fn outcome_read(
+    connection: &Connection,
+    request: &RequestId,
+    through: u64,
+    path: &[String],
+    offset: u64,
+    max_bytes: u32,
+) -> Result<ObservationValueChunk, ConversationStoreError> {
+    outcome_read_at(
+        connection,
+        started(connection, request, through)?,
+        through,
+        path,
+        offset,
+        max_bytes,
+    )
+}
 // Only a native request-message producer owns this descriptor flag. An
 // identically named property inside arbitrary original JSON stays opaque.
 fn message_descriptor_deferred(table: &str, path: &[String], value: &serde_json::Value) -> bool {
