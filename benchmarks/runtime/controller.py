@@ -53,7 +53,9 @@ def validate_sample(result, sample, case, log_text):
     if mode != 'native-workflow' or 'observer_mode' in sample:
         assert sample.get('observer_mode') == mode, 'observer mode missing or mismatched'
         assert all(point.get('observer_mode') == mode for point in sample['samples'])
-    expected_requests = {'short-small':40,'short-large':96,'tool':2}.get(case,1)
+    expected_history = result.get('diagnostic_history', {'short-small':8,'short-large':64}.get(case,0))
+    expected_measured = 32 if expected_history else 1
+    expected_requests = expected_history + expected_measured + int(case == 'tool')
     assert result['provider_report']['requestCount'] == expected_requests
     wire = sample.get('wire_requests', sample.get('requests'))
     assert isinstance(wire,list) and len(wire) == expected_requests
@@ -64,8 +66,6 @@ def validate_sample(result, sample, case, log_text):
         assert [message['role'] for message in messages[first_user:first_user+2]] == ['user', 'user']
         content = messages[first_user+1]['content']
         assert content == MODEL_REMINDER or content == [{'type': 'text', 'text': MODEL_REMINDER}]
-    expected_history={'short-small':8,'short-large':64}.get(case,0)
-    expected_measured=32 if expected_history else 1
     assert sample['history']==expected_history and sample['measured']==expected_measured
     assert len(sample['samples'])==expected_history+expected_measured
     for i,point in enumerate(sample['samples']):
@@ -125,6 +125,9 @@ def run(argv, stem, case, env, project):
     product = provider = None
     result = {'argv': argv, 'case': case, 'accepted': False,
               'observer_mode': env.get('RUSTX_BENCH_OBSERVER_MODE', 'native-workflow')}
+    if (history := env.get('RUSTX_BENCH_DIAGNOSTIC_HISTORY')) is not None:
+        assert case == 'short-small' and env.get('RUSTX_BENCH_PROFILE_SOCKET') and history in ('32', '96')
+        result['diagnostic_history'] = int(history)
     try:
         with stem.with_suffix('.log').open('w') as log, stem.with_suffix('.provider.log').open('w') as provider_log:
             product = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)

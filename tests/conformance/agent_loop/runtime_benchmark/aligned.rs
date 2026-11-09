@@ -602,6 +602,15 @@ pub(super) async fn measure(mode: &str) {
         "stream" | "large" | "tool" | "cancel" => (0, 1),
         _ => panic!("unknown benchmark case"),
     };
+    let history = if let Ok(value) = std::env::var("RUSTX_BENCH_DIAGNOSTIC_HISTORY") {
+        assert_eq!(case, "short-small");
+        assert!(std::env::var_os("RUSTX_BENCH_PROFILE_SOCKET").is_some());
+        let setup = value.parse().expect("diagnostic history length");
+        assert!(matches!(setup, 32 | 96));
+        setup
+    } else {
+        history
+    };
     let lifecycle_began = Instant::now();
     let mut lifecycle = Vec::new();
     lifecycle_sample(&mut lifecycle, "before_initialization", lifecycle_began);

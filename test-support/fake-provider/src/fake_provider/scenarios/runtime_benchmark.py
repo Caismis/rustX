@@ -1,4 +1,6 @@
 """Bounded offline runtime benchmark workloads. No external service or credentials."""
+import os
+
 from fake_provider.scenario import (
     OPENAI_CHAT_COMPLETIONS, Expect, Finish, Gate, Scenario, Step, Stream, Text, ToolCall,
 )
@@ -6,6 +8,10 @@ from fake_provider.scenario import (
 
 def workload(case: str) -> Scenario:
     count = {"short-small": 40, "short-large": 96}.get(case, 1)
+    if (setup := os.environ.get("RUSTX_BENCH_DIAGNOSTIC_HISTORY")) is not None:
+        assert case == "short-small" and os.environ.get("RUSTX_BENCH_PROFILE_SOCKET")
+        assert setup in ("32", "96")
+        count = int(setup) + 32
     steps = []
     for turn in range(count):
         script = [Text(f"reply {turn:04}"), Finish()]
