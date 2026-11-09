@@ -146,7 +146,6 @@ impl ProspectiveSessionConfig {
         self.config.agent.agents_md == other.config.agent.agents_md
             && self.config.context == other.config.context
             && self.project_context_files == other.project_context_files
-            && self.root_agent_project_files == other.root_agent_project_files
     }
 
     /// Invocation overrides may select any eligible discovered Skill, including
@@ -366,12 +365,6 @@ impl ProspectiveSessionConfig {
         config.context = adopted.config.context;
         self.project_context_files
             .clone_from(&adopted.project_context_files);
-        self.root_agent_project_files
-            .clone_from(&adopted.root_agent_project_files);
-        // These paths are exclusively the Workspace-authored agents_md inputs
-        // retained for physical-authority validation after path rebasing.
-        self.project_resources
-            .clone_from(&adopted.project_resources);
         let context = self.effective.agent.get_or_insert_with(Default::default);
         context.agents_md = adopted
             .effective
@@ -425,10 +418,6 @@ impl ProspectiveSessionConfig {
                 &self.agent_root
             };
             crate::runtime::resources::validate_project_resource_path(boundary, &role.selected)
-                .map_err(|e| e.to_string())?;
-        }
-        for path in &self.project_resources {
-            crate::runtime::resources::validate_project_resource_path(&self.workspace, path)
                 .map_err(|e| e.to_string())?;
         }
         Ok(())

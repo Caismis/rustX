@@ -295,14 +295,9 @@ mod tests {
                     execution_deadline: None,
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                    project_instructions:
-                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                            inherit: true,
-                            files: Vec::new(),
-                        },
+                    inherit_project_instructions: true,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
-                    agents: std::collections::BTreeSet::default(),
                     workflows: std::collections::BTreeSet::default(),
                 },
                 std::path::PathBuf::from("/w/research.md"),
@@ -317,14 +312,9 @@ mod tests {
                     execution_deadline: None,
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                    project_instructions:
-                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                            inherit: true,
-                            files: Vec::new(),
-                        },
+                    inherit_project_instructions: true,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
-                    agents: std::collections::BTreeSet::default(),
                     workflows: std::collections::BTreeSet::default(),
                 },
                 std::path::PathBuf::from("/w/explore.md"),
@@ -614,13 +604,8 @@ chat_reasoning_replay = "omit"
                     name: "read".to_owned(),
                 }],
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: false,
-                        files: Vec::new(),
-                    },
+                inherit_project_instructions: false,
                 extensions: crate::extensions::NativeAgentExtensions::none(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             workspace_root.join("reviewer.md"),

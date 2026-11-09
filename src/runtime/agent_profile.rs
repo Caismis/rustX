@@ -6,40 +6,10 @@ use crate::capabilities::selection::{AgentToolSelection, ToolSelectionError};
 use crate::capabilities::{AvailableToolCatalog, CapabilityAvailability};
 use crate::extensions::NativeAgentExtensions;
 use crate::model::session::SessionModelConfig;
-use crate::runtime::resources::ProjectContextFile;
 use crate::runtime::subagent::{SubagentExecutionDeadline, SubagentName};
 use crate::runtime::workflow::WorkflowId;
 use crate::skills::SkillSnapshot;
 use crate::tools::types::{ToolDefinition, ToolOrigin};
-
-/// The project-instruction policy of one Agent Profile.
-///
-/// Resource composition owns discovery; this policy decides only
-/// how the generation's already-discovered chain composes with the
-/// profile's own explicit files.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentProjectInstructionPolicy {
-    /// Whether the invoking generation's normal project instruction chain is
-    /// prepended to the explicit files.
-    pub inherit: bool,
-    /// The explicit profile-owned project instruction resources, already
-    /// loaded by resource composition, in configured order.
-    pub files: Vec<ProjectContextFile>,
-}
-
-/// Which ownership the authored document belongs to.
-///
-/// The root and named Agents share one document, one resolver, one admitted
-/// catalog, one set of frozen bindings, and one lazy-loading mechanism. They
-/// own independent selections. This kind identifies the composition owner;
-/// it never imposes a Root capability ceiling on a named Agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentProfileKind {
-    /// The Root Agent profile authored in rustx.toml.
-    Root,
-    /// A complete named Agent resource profile.
-    Named,
-}
 
 /// Prompt visibility within a frozen Skill catalog; never filesystem authority.
 #[derive(
@@ -108,50 +78,9 @@ pub struct AgentProfile {
     pub tools: Vec<AgentToolSelection>,
     pub skills: AgentSkillSelection,
     pub extensions: NativeAgentExtensions,
-    pub agents: BTreeSet<SubagentName>,
     pub workflows: BTreeSet<WorkflowId>,
-    pub project_instructions: AgentProjectInstructionPolicy,
+    pub inherit_project_instructions: bool,
 }
-impl AgentProfile {
-    /// Lower strict authoring with project files already captured by their resource owner.
-    ///
-    /// # Errors
-    /// Rejects malformed selections, invalid deadlines and native text bounds.
-    pub fn from_document(
-        document: &crate::local_runtime::config::AgentProfileDocument,
-        kind: AgentProfileKind,
-        files: Vec<ProjectContextFile>,
-    ) -> Result<Self, String> {
-        document.tools.validate_spelling()?;
-        let skills = document.skills.clone().unwrap_or_else(|| match kind {
-            AgentProfileKind::Root => AgentSkillSelection::All,
-            AgentProfileKind::Named => AgentSkillSelection::default(),
-        });
-        if document.description.len()
-            > crate::runtime::subagent::catalog::MAX_SUBAGENT_DESCRIPTION_BYTES
-            || document.instructions.len()
-                > crate::runtime::subagent::catalog::MAX_SUBAGENT_INSTRUCTIONS_BYTES
-        {
-            return Err("Agent description or instructions exceeds its native bound".into());
-        }
-        Ok(Self {
-            description: document.description.clone(),
-            instructions: document.instructions.clone(),
-            model: document.model.clone(),
-            execution_deadline: document.execution_deadline()?,
-            tools: document.tools.selectors(),
-            skills,
-            extensions: document.extensions.resolve(),
-            agents: document.agents.iter().cloned().collect(),
-            workflows: document.workflows.iter().cloned().collect(),
-            project_instructions: AgentProjectInstructionPolicy {
-                inherit: document.agents_md.inherit,
-                files,
-            },
-        })
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentScope {
     #[default]
@@ -164,7 +93,6 @@ pub struct AgentProfileAuthority<'a> {
     pub tools: &'a AvailableToolCatalog,
     pub availability: &'a CapabilityAvailability,
     pub skills: &'a SkillSnapshot,
-    pub agents: &'a BTreeSet<SubagentName>,
     pub workflows: &'a BTreeSet<WorkflowId>,
     pub scope: AgentScope,
 }
@@ -199,7 +127,6 @@ pub enum AgentProfileDiagnostic {
 #[serde(tag = "kind", content = "identity", rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum ScopeCapability {
-    Agent(SubagentName),
     Workflow(WorkflowId),
     Goal,
     BuiltinTool(crate::runtime::identity::ToolId),
@@ -207,7 +134,6 @@ pub enum ScopeCapability {
 impl ScopeCapability {
     fn key(&self) -> String {
         match self {
-            Self::Agent(name) => format!("agent:{name}"),
             Self::Workflow(id) => format!("workflow:{id}"),
             Self::Goal => "extension:goal".into(),
             Self::BuiltinTool(id) => format!("builtin:{id}"),
@@ -258,7 +184,7 @@ pub struct ResolvedAgentProfile {
     pub extensions: NativeAgentExtensions,
     pub agents: BTreeSet<SubagentName>,
     pub workflows: BTreeSet<WorkflowId>,
-    pub project_instructions: AgentProjectInstructionPolicy,
+    pub inherit_project_instructions: bool,
     pub diagnostics: Vec<AgentProfileDiagnostic>,
 }
 
@@ -272,6 +198,24 @@ pub struct FrozenAgentSelection {
 }
 
 impl ResolvedAgentProfile {
+    pub(crate) fn with_root_agents(
+        mut self,
+        selected: &[SubagentName],
+        admitted: &BTreeSet<SubagentName>,
+    ) -> Self {
+        for name in selected {
+            if admitted.contains(name) {
+                self.agents.insert(name.clone());
+            } else {
+                self.diagnostics
+                    .push(AgentProfileDiagnostic::AgentUnavailable { name: name.clone() });
+            }
+        }
+        self.diagnostics.sort_by_key(AgentProfileDiagnostic::key);
+        self.diagnostics.dedup();
+        self
+    }
+
     pub(crate) fn frozen_selection(&self) -> FrozenAgentSelection {
         FrozenAgentSelection {
             tools: self.tool_selection.clone(),
@@ -393,18 +337,6 @@ pub fn resolve_agent_profile(
         }
     }
     let skills = select_skills(&profile.skills, authority.skills, &mut diagnostics);
-    let mut agents = BTreeSet::new();
-    for name in &profile.agents {
-        if !authority.agents.contains(name) {
-            diagnostics.push(AgentProfileDiagnostic::AgentUnavailable { name: name.clone() });
-        } else if authority.scope == AgentScope::OneShotChild {
-            diagnostics.push(AgentProfileDiagnostic::ScopeUnsupported {
-                capability: ScopeCapability::Agent(name.clone()),
-            });
-        } else {
-            agents.insert(name.clone());
-        }
-    }
     let mut workflows = BTreeSet::new();
     for id in &profile.workflows {
         if !authority.workflows.contains(id) {
@@ -454,9 +386,9 @@ pub fn resolve_agent_profile(
             .collect(),
         skills: skills.into_iter().collect(),
         extensions,
-        agents,
+        agents: BTreeSet::new(),
         workflows,
-        project_instructions: profile.project_instructions.clone(),
+        inherit_project_instructions: profile.inherit_project_instructions,
         diagnostics,
     }
 }
@@ -466,7 +398,7 @@ mod tests {
     use super::*;
     use crate::capabilities::selection::{SourceResolutionFailure, ToolSelectionDocument};
     use crate::capabilities::{CapabilitySourceState, ToolSourceId};
-    use crate::local_runtime::config::AgentProfileDocument;
+    use crate::local_runtime::config::{AgentProfileDocument, NamedAgentProfileDocument};
     use crate::runtime::identity::{McpServerId, ToolId};
 
     #[test]
@@ -568,17 +500,14 @@ mod tests {
         )
     }
     fn profile(names: &[&str]) -> AgentProfile {
-        AgentProfile::from_document(
-            &AgentProfileDocument {
-                tools: ToolSelectionDocument {
-                    builtin: names.iter().map(|name| (*name).into()).collect(),
-                    ..Default::default()
-                },
+        (NamedAgentProfileDocument {
+            tools: ToolSelectionDocument {
+                builtin: names.iter().map(|name| (*name).into()).collect(),
                 ..Default::default()
             },
-            AgentProfileKind::Named,
-            Vec::new(),
-        )
+            ..Default::default()
+        })
+        .lower()
         .unwrap()
     }
     fn resolve(
@@ -593,7 +522,6 @@ mod tests {
                 tools,
                 availability,
                 skills: &SkillSnapshot::new(Vec::new()),
-                agents: &BTreeSet::from([SubagentName::parse("reviewer").unwrap()]),
                 workflows: &BTreeSet::new(),
                 scope,
             },
@@ -602,8 +530,8 @@ mod tests {
     #[test]
     fn cfg273_root_and_named_share_tools_skills_extensions_and_keep_independent_authority() {
         let tools = available();
-        let mut root = profile(&["read"]);
-        root.agents.insert(SubagentName::parse("reviewer").unwrap());
+        let root = profile(&["read"]);
+        let reviewer = SubagentName::parse("reviewer").unwrap();
         let mut child = profile(&["read", "grep"]);
         child.skills = AgentSkillSelection::Exact(vec!["missing".into()]);
         child.extensions = crate::extensions::NativeAgentExtensionSelection {
@@ -616,6 +544,10 @@ mod tests {
             &tools,
             &CapabilityAvailability::new(),
             AgentScope::Root,
+        )
+        .with_root_agents(
+            std::slice::from_ref(&reviewer),
+            &BTreeSet::from([reviewer.clone()]),
         );
         let named = resolve(
             &child,
@@ -649,9 +581,7 @@ mod tests {
     fn cfg273_missing_builtin_and_catalog_selections_warn_in_canonical_order() {
         let mut profile = profile(&["read", "missing"]);
         profile.skills = AgentSkillSelection::Exact(vec!["zeta".into(), "alpha".into()]);
-        profile.agents = ["zeta", "alpha"]
-            .map(|name| SubagentName::parse(name).unwrap())
-            .into();
+        let agents = ["zeta", "alpha"].map(|name| SubagentName::parse(name).unwrap());
         profile.workflows = ["zeta", "alpha"]
             .map(|name| WorkflowId::parse(name).unwrap())
             .into();
@@ -660,7 +590,8 @@ mod tests {
             &available(),
             &CapabilityAvailability::new(),
             AgentScope::Root,
-        );
+        )
+        .with_root_agents(&agents, &BTreeSet::new());
         profile.tools.reverse();
         profile.skills.names_mut().unwrap().reverse();
         let second = resolve(
@@ -668,7 +599,8 @@ mod tests {
             &available(),
             &CapabilityAvailability::new(),
             AgentScope::Root,
-        );
+        )
+        .with_root_agents(&agents, &BTreeSet::new());
         assert_eq!(first, second);
         assert_eq!(first.tools.len(), 1);
         assert_eq!(first.diagnostics.len(), 7);
@@ -818,6 +750,7 @@ mod tests {
 #[cfg(test)]
 mod composition_tests {
     use super::*;
+    use crate::local_runtime::config::AgentProfileDocument;
     /// Issue #462 A05: Root and named Profiles reject every explicitly
     /// authored Agent control name instead of silently ignoring it.
     #[test]
@@ -835,14 +768,13 @@ mod composition_tests {
             // The shared profile boundary refuses it for either kind.
             let mut document = crate::local_runtime::config::AgentProfileDocument::default();
             document.tools.builtin = vec!["read".into(), control.into()];
-            for kind in [AgentProfileKind::Root, AgentProfileKind::Named] {
-                let error = AgentProfile::from_document(&document, kind, Vec::new())
-                    .expect_err("an authored Agent control is invalid");
-                assert!(
-                    error.contains("composed automatically"),
-                    "{control}: {error}"
-                );
-            }
+            let error = document
+                .lower()
+                .expect_err("an authored Agent control is invalid");
+            assert!(
+                error.contains("composed automatically"),
+                "{control}: {error}"
+            );
         }
     }
 
@@ -853,7 +785,7 @@ mod composition_tests {
         let catalog = crate::runtime::subagent::AgentCatalog::new([
             crate::runtime::subagent::NamedAgentDefinition::new(
                 reviewer.clone(),
-                AgentProfile::from_document(&named, AgentProfileKind::Named, Vec::new()).unwrap(),
+                named.lower().unwrap(),
                 "reviewer.toml".into(),
             )
             .unwrap(),
@@ -866,10 +798,8 @@ mod composition_tests {
         .into_iter()
         .map(|(definition, _)| definition)
         .collect::<Vec<_>>();
-        let root = crate::local_runtime::agent_resources::parse(
-            "agents = ['reviewer']\n[tools]\nbuiltin = ['read']",
-        )
-        .unwrap();
+        let root: AgentProfileDocument =
+            toml::from_str("agents = ['reviewer']\n[tools]\nbuiltin = ['read']").unwrap();
         let selected = crate::capabilities::select_definitions(
             &definitions.iter().collect::<Vec<_>>(),
             &crate::capabilities::AgentActivation {
@@ -934,8 +864,7 @@ mod composition_tests {
             "skills = ['review', 'missing']\n[tools]\nbuiltin = ['read']",
         )
         .unwrap();
-        let profile =
-            AgentProfile::from_document(&document, AgentProfileKind::Named, Vec::new()).unwrap();
+        let profile = document.lower().unwrap();
         let tools = AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
@@ -948,7 +877,6 @@ mod composition_tests {
             tools: &tools,
             availability: &CapabilityAvailability::new(),
             skills: &skills,
-            agents: &BTreeSet::new(),
             workflows: &BTreeSet::new(),
             scope: AgentScope::Root,
         };
@@ -1028,7 +956,6 @@ mod composition_tests {
             tools: &tools,
             availability: &CapabilityAvailability::new(),
             skills: &skills,
-            agents: &BTreeSet::new(),
             workflows: &BTreeSet::new(),
             scope: AgentScope::Root,
         };
@@ -1039,11 +966,7 @@ mod composition_tests {
             ])),
             ..crate::local_runtime::config::builtin_root_profile()
         };
-        let root = resolve_agent_profile(
-            &AgentProfile::from_document(&root_document, AgentProfileKind::Root, Vec::new())
-                .unwrap(),
-            &authority,
-        );
+        let root = resolve_agent_profile(&root_document.lower().unwrap(), &authority);
         // Only the explicitly selected eligible Skills are visible.
         // `internal-only` is never widened by automatic root selection.
         assert_eq!(root.skills, ["backend-conventions", "rust-review"]);
@@ -1052,15 +975,12 @@ mod composition_tests {
         // Root visibility removes nothing from the catalog: a named Agent
         // selects its independent profile against the same frozen catalog.
         let named = resolve_agent_profile(
-            &AgentProfile::from_document(
-                &crate::local_runtime::agent_resources::parse(
-                    "description = 'r'\ninstructions = 'i'\n\
+            &crate::local_runtime::agent_resources::parse(
+                "description = 'r'\ninstructions = 'i'\n\
                      skills = ['legacy-java', 'backend-conventions']",
-                )
-                .unwrap(),
-                AgentProfileKind::Named,
-                Vec::new(),
             )
+            .unwrap()
+            .lower()
             .unwrap(),
             &authority,
         );
@@ -1076,14 +996,11 @@ mod composition_tests {
 
         // (17): a named Agent cannot select a model-ineligible package either.
         let ineligible = resolve_agent_profile(
-            &AgentProfile::from_document(
-                &crate::local_runtime::agent_resources::parse(
-                    "description = 'r'\ninstructions = 'i'\nskills = ['internal-only']",
-                )
-                .unwrap(),
-                AgentProfileKind::Named,
-                Vec::new(),
+            &crate::local_runtime::agent_resources::parse(
+                "description = 'r'\ninstructions = 'i'\nskills = ['internal-only']",
             )
+            .unwrap()
+            .lower()
             .unwrap(),
             &authority,
         );
@@ -1133,22 +1050,18 @@ mod composition_tests {
             tools: &tools,
             availability: &CapabilityAvailability::new(),
             skills: &skills,
-            agents: &BTreeSet::new(),
             workflows: &BTreeSet::new(),
             scope: AgentScope::Root,
         };
         let resolve = |names: &[&str]| {
             resolve_agent_profile(
-                &AgentProfile::from_document(
-                    &crate::local_runtime::config::AgentProfileDocument {
-                        skills: Some(AgentSkillSelection::Exact(
-                            names.iter().map(|name| (*name).to_owned()).collect(),
-                        )),
-                        ..crate::local_runtime::config::builtin_root_profile()
-                    },
-                    AgentProfileKind::Root,
-                    Vec::new(),
-                )
+                &(crate::local_runtime::config::AgentProfileDocument {
+                    skills: Some(AgentSkillSelection::Exact(
+                        names.iter().map(|name| (*name).to_owned()).collect(),
+                    )),
+                    ..crate::local_runtime::config::builtin_root_profile()
+                })
+                .lower()
                 .unwrap(),
                 &authority,
             )
@@ -1160,15 +1073,13 @@ mod composition_tests {
     fn cfg273_known_builtin_unavailable_in_generation_is_suppressed() {
         let document =
             crate::local_runtime::agent_resources::parse("[tools]\nbuiltin = ['read']").unwrap();
-        let profile =
-            AgentProfile::from_document(&document, AgentProfileKind::Named, Vec::new()).unwrap();
+        let profile = document.lower().unwrap();
         let resolved = resolve_agent_profile(
             &profile,
             &AgentProfileAuthority {
                 tools: &AvailableToolCatalog::default(),
                 availability: &CapabilityAvailability::new(),
                 skills: &SkillSnapshot::new(Vec::new()),
-                agents: &BTreeSet::new(),
                 workflows: &BTreeSet::new(),
                 scope: AgentScope::Root,
             },

@@ -599,12 +599,8 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
             execution_deadline: None,
             tools: vec![],
             skills: rustx::runtime::agent_profile::AgentSkillSelection::default(),
-            project_instructions: rustx::runtime::agent_profile::AgentProjectInstructionPolicy {
-                inherit: false,
-                files: vec![],
-            },
+            inherit_project_instructions: false,
             extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
-            agents: std::collections::BTreeSet::default(),
             workflows: std::collections::BTreeSet::default(),
         },
         "worker.md".into(),

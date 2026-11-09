@@ -42,9 +42,10 @@ inherit = true
 | `tools.sources` | MCP identity or `python:<package>` to `"all"` (ordinary Tools and advertised MCP Resources), exact Tool names (Tools only), or `[]`. Definition or connection alone grants nothing. |
 | `skills` | `"all"`, exact names, or `[]`, for both Root and named Agents; default none. Prompt visibility only. |
 | `plugins` | Closed Rust-owned Agent Status, Todo and Goal vocabulary, default off. Each Root Plugin object overlays atomically. |
-| `agents`, `workflows` | Explicit delegation/invocation allowlists. Child scope limits remain enforced for every activation. A nonempty `agents` list composes the five Root-only Agent controls automatically; they are never authored in `tools.builtin`. |
+| `agents` | Root-only delegation allowlist. A nonempty list composes the five Agent controls automatically. |
+| `workflows` | Explicit invocation allowlist, subject to runtime scope. |
 | `description`, `instructions` | Agent prose. Named profiles can include task instructions. Root guidance lives in `AGENTS.md`. |
-| `agents_md` | Canonical project guidance and bounded supplemental files. |
+| `agents_md` | Whether to include the global and Workspace `AGENTS.md` files. |
 | `timeout_ms` | Named child lifecycle policy only. Root rejects it. Every Agent runs in the shared Session workspace; an authored `worktree` table is refused. |
 
 Root may delegate to reviewer while lacking reviewer's Grep or external Tools.

@@ -360,13 +360,9 @@ async fn reconcile_repairs_an_external_edit_once_and_reads_stay_read_only() {
         .await;
         assert!(f.manager.source_repairs().latest(&target).is_none());
         let workspace_file = f.workspaces[0].join("rustx.toml");
-        std::fs::write(
-            f.workspaces[0].join("reconciled.md"),
-            "Reconciled instructions",
-        )
-        .unwrap();
+        std::fs::write(f.workspaces[0].join("AGENTS.md"), "Reconciled instructions").unwrap();
         let edited = format!(
-            "{}[agent]\nagents_md = {{ files = ['reconciled.md'] }}\nfuture_trust = true\n",
+            "{}[agent]\nagents_md = {{ inherit = true }}\nfuture_trust = true\n",
             std::fs::read_to_string(&workspace_file).unwrap()
         );
         std::fs::write(&workspace_file, &edited).unwrap();

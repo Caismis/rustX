@@ -1136,7 +1136,7 @@ tokens = 128
                 // Named Agent authoring consumes the same ModelLayer adapter.
                 let named = text.replace("agent.model", "model");
                 let error = crate::toml_authoring::parse::<
-                    super::super::config::AgentProfileDocument,
+                    super::super::config::NamedAgentProfileDocument,
                 >(named.as_bytes())
                 .unwrap_err();
                 assert!(

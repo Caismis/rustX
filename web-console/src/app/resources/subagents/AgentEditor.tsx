@@ -1,13 +1,13 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
 import { useEffect, useId, useRef } from 'react';
-import type { AgentProfileDocument, SourceSettings } from '../../../../../protocol/app-server/v77';
+import type { NamedAgentProfileDocument, SourceSettings } from '../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { IconChevronRightOutline14 } from '../../../presentation/primitives/icons';
 import { Switch } from '../../../presentation/primitives/Switch';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
 import { DefinitionNotice, UnitOutcomeNotice, UnitReset, useUnitEditing } from '../../settings/forms/bridge';
-import { Names, Selection } from '../../settings/forms/controls';
+import { Selection } from '../../settings/forms/controls';
 import { Advanced, Choice, ConfirmAction } from '../../settings/primitives/aria';
 import { AgentModelOptions, ModelProfileChoice, type ModelProfiles } from '../../settings/models/ModelsPage';
 import { SettingsNotice } from '../../settings/SettingsFeedback';
@@ -18,7 +18,7 @@ import { extensionEntries } from '../shared/inventory';
 import css from './Subagents.module.css';
 import { AgentToolFields, ManagedToolSelections, type LoadMcpTools } from './AgentToolFields';
 
-export type AgentDraft = AgentProfileDocument & { name?: string };
+export type AgentDraft = NamedAgentProfileDocument & { name?: string };
 
 interface Props {
   source: SourceSettings; target: SettingsTarget; host?: ProductHostWorkspaces; name?: string;
@@ -144,11 +144,8 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
             </div>
             <Advanced title={tx('settings:agent-page.advanced-options')}>
               {model && <AgentModelOptions value={model} change={next => update({ model: next })} models={models} profiles={profiles} />}
-              <Names label={tx('settings:extension-detail.delegated-agents')} value={value.agents ?? []} change={agents => update({ agents })} />
               <ManagedToolSelections tools={value.tools} change={tools => update({ tools })} />
               <Selection label={tx('settings:extension-detail.skill-prompt-visibility')} value={value.skills ?? []} change={skills => update({ skills })} />
-              <Names label={tx('settings:extension-detail.project-guidance-files')} value={guidance.files ?? []}
-                change={files => update({ agents_md: { ...guidance, files } })} />
               <label>{tx('settings:extension-detail.child-timeout-ms')}
                 <input type="number" min="1" value={value.timeout_ms ?? ''} onChange={event => update({ timeout_ms: event.target.value || null })} />
               </label>

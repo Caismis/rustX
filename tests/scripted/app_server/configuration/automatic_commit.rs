@@ -2213,7 +2213,7 @@ async fn a_removal_retains_every_removed_definition() {
 }
 
 /// Every guidance file the loader reads is watched: an external edit of the
-/// User `AGENTS.md` and of a Workspace `AGENTS.MD` each commits on its own,
+/// User `AGENTS.md` and of a Workspace `AGENTS.md` each commits on its own,
 /// with no save, rescan or second edit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn external_guidance_edits_commit_through_the_source_watch() {
@@ -2237,7 +2237,7 @@ async fn external_guidance_edits_commit_through_the_source_watch() {
                 changed.changed().await.unwrap();
             }
             std::fs::write(
-                fixture.workspaces[0].join("AGENTS.MD"),
+                fixture.workspaces[0].join("AGENTS.md"),
                 "workspace guidance from an editor",
             )
             .unwrap();
@@ -2573,74 +2573,6 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
     .await;
 }
 
-/// A selected instruction file outside the fixed sources is a captured
-/// input: its edit, the only notification, reaches the resident runtime.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_edited_selected_instruction_file_reaches_the_resident_runtime() {
-    bounded(async {
-        let fixture = Fixture::with_session_count(None, 1).await;
-        let id = fixture.sessions[0].id.clone();
-        let policy = fixture.workspaces[0].join("docs/policy.md");
-        std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
-        std::fs::write(&policy, "Policy version A").unwrap();
-        let config = fixture.workspaces[0].join("rustx.toml");
-        let mut document = std::fs::read_to_string(&config).unwrap();
-        document.push_str("\n[agent.agents_md]\nfiles = [\"docs/policy.md\"]\n");
-        std::fs::write(&config, document).unwrap();
-        fixture.manager.load(&id, None).await.unwrap();
-        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
-        let policy_text = |runtime: &crate::runtime::ConversationRuntime| {
-            runtime
-                .runtime_resources()
-                .project_instructions()
-                .unwrap_or_default()
-                .to_owned()
-        };
-        assert!(policy_text(&runtime).contains("Policy version A"));
-        while !fixture.manager.applications.lock().worker_idle() {
-            tokio::task::yield_now().await;
-        }
-        injected_only(&fixture);
-        let captured = fixture
-            .manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .source_watch_captured
-            .clone();
-        captured.arm();
-        let stop = tokio_util::sync::CancellationToken::new();
-        let observe = async {
-            watch_settled(&fixture).await;
-            // Edited before the watch starts: the injected event is the only one.
-            std::fs::write(&policy, "Policy version B").unwrap();
-            let edit =
-                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
-                    .add_path(policy.clone());
-            while !fixture.manager.notify_source_watch(edit.clone()) {
-                tokio::task::yield_now().await;
-            }
-            captured.entered().await;
-            applied(&fixture, 0).await;
-            while !fixture.manager.applications.lock().worker_idle() {
-                tokio::task::yield_now().await;
-            }
-            assert!(
-                policy_text(&runtime).contains("Policy version B"),
-                "the edit was not routed: {}",
-                policy_text(&runtime)
-            );
-            captured.release();
-            stop.cancel();
-        };
-        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
-        watched.unwrap();
-        fixture.close().await;
-    })
-    .await;
-}
-
 fn pending_notifications(fixture: &Fixture) -> std::sync::Arc<super::super::source_watch::Pending> {
     fixture
         .manager
@@ -2782,16 +2714,9 @@ fn project_text(runtime: &crate::runtime::ConversationRuntime) -> String {
         .to_owned()
 }
 
-/// Select `file` (relative to the first Workspace) as a root instruction file.
-fn select_instruction_file(fixture: &Fixture, file: &str) {
-    let config = fixture.workspaces[0].join("rustx.toml");
-    let mut document = std::fs::read_to_string(&config).unwrap();
-    std::fmt::Write::write_fmt(
-        &mut document,
-        format_args!("\n[agent.agents_md]\nfiles = [{file:?}]\n"),
-    )
-    .unwrap();
-    std::fs::write(&config, document).unwrap();
+/// Exercise captured symlink dependencies through the canonical guidance file.
+fn link_workspace_guidance(fixture: &Fixture, target: &str) {
+    std::os::unix::fs::symlink(target, fixture.workspaces[0].join("AGENTS.md")).unwrap();
 }
 
 fn modified(path: &std::path::Path) -> notify::Event {
@@ -2828,7 +2753,7 @@ async fn a_newly_selected_file_that_fails_its_first_capture_recovers_from_its_ow
             let policy = fixture.workspaces[0].join("docs/new-policy.md");
             std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
             std::fs::write(&policy, b"\xff\xfe not UTF-8").unwrap();
-            select_instruction_file(&fixture, "docs/new-policy.md");
+            link_workspace_guidance(&fixture, "docs/new-policy.md");
             let config = modified(&fixture.workspaces[0].join("rustx.toml"));
             while !fixture.manager.notify_source_watch(config.clone()) {
                 tokio::task::yield_now().await;
@@ -2845,7 +2770,7 @@ async fn a_newly_selected_file_that_fails_its_first_capture_recovers_from_its_ow
                     .lock()
                     .source_inputs()
                     .iter()
-                    .any(|(_, file)| file == &policy),
+                    .any(|(_, file)| file == &fixture.workspaces[0].join("AGENTS.md")),
                 "the failed input is not observed"
             );
             // The pass after this capture watches the failed input and captures
@@ -2899,7 +2824,7 @@ async fn an_edited_absolute_link_target_reaches_the_resident_runtime() {
         std::fs::create_dir_all(workspace.join("docs")).unwrap();
         std::fs::write(&target, "Policy version A").unwrap();
         std::os::unix::fs::symlink(&target, workspace.join("docs/policy.md")).unwrap();
-        select_instruction_file(&fixture, "docs/policy.md");
+        link_workspace_guidance(&fixture, "docs/policy.md");
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         assert!(project_text(&runtime).contains("Policy version A"));
@@ -3014,7 +2939,7 @@ async fn a_repointed_intermediate_link_reaches_the_resident_runtime() {
         std::os::unix::fs::symlink("../v1", workspace.join("links/current")).unwrap();
         std::os::unix::fs::symlink(workspace.join("links/current"), workspace.join("docs"))
             .unwrap();
-        select_instruction_file(&fixture, "docs/policy.md");
+        link_workspace_guidance(&fixture, "docs/policy.md");
         fixture
             .manager
             .load(&fixture.sessions[0].id, None)
@@ -3031,28 +2956,20 @@ async fn a_repointed_intermediate_link_reaches_the_resident_runtime() {
     .await;
 }
 
-/// A User instruction file outside every Workspace keeps a link among its
-/// parents observed: re-pointing only that link reaches the resident runtime.
+/// Global AGENTS.md can use a target beneath its own resource root.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_repointed_parent_link_of_an_external_user_input_reaches_the_resident_runtime() {
+async fn a_repointed_parent_link_of_global_guidance_reaches_the_resident_runtime() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
-        let shared = std::fs::canonicalize(fixture.workspaces[0].parent().unwrap())
-            .unwrap()
-            .join("shared");
-        versioned_policies(&shared);
-        std::os::unix::fs::symlink("v1", shared.join("current")).unwrap();
-        let config = fixture.manager.configuration.sources.config_path.clone();
-        let mut document = std::fs::read_to_string(&config).unwrap();
-        std::fmt::Write::write_fmt(
-            &mut document,
-            format_args!(
-                "\n[agent.agents_md]\nfiles = [{:?}]\n",
-                shared.join("current/policy.md")
-            ),
-        )
-        .unwrap();
-        std::fs::write(&config, document).unwrap();
+        let root = fixture
+            .manager
+            .configuration
+            .sources
+            .home_directory
+            .join("rustx/.agents");
+        versioned_policies(&root);
+        std::os::unix::fs::symlink("v1", root.join("current")).unwrap();
+        std::os::unix::fs::symlink("current/policy.md", root.join("AGENTS.md")).unwrap();
         fixture
             .manager
             .load(&fixture.sessions[0].id, None)
@@ -3060,7 +2977,7 @@ async fn a_repointed_parent_link_of_an_external_user_input_reaches_the_resident_
             .unwrap();
         a_repointed_link_reaches_the_resident_runtime(
             &fixture,
-            &shared.join("current"),
+            &root.join("current"),
             std::path::Path::new("v2"),
         )
         .await;
@@ -3099,7 +3016,7 @@ async fn a_selected_file_beneath_a_non_directory_recovers_when_the_directory_is_
             let docs = fixture.workspaces[0].join("docs");
             let policy = docs.join("policy.md");
             std::fs::write(&docs, "not a directory").unwrap();
-            select_instruction_file(&fixture, "docs/policy.md");
+            link_workspace_guidance(&fixture, "docs/policy.md");
             let config = modified(&fixture.workspaces[0].join("rustx.toml"));
             while !fixture.manager.notify_source_watch(config.clone()) {
                 tokio::task::yield_now().await;
@@ -3116,7 +3033,7 @@ async fn a_selected_file_beneath_a_non_directory_recovers_when_the_directory_is_
                     .lock()
                     .source_inputs()
                     .iter()
-                    .any(|(_, file)| file == &policy),
+                    .any(|(_, file)| file == &fixture.workspaces[0].join("AGENTS.md")),
                 "the unauthorized input is not observed"
             );
             // Let the failed capture's handling finish entirely, including
@@ -3186,7 +3103,7 @@ async fn an_edit_before_a_new_input_is_watched_is_captured_once_it_is() {
             let policy = fixture.workspaces[0].join("docs/policy.md");
             std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
             std::fs::write(&policy, "Policy version A").unwrap();
-            select_instruction_file(&fixture, "docs/policy.md");
+            link_workspace_guidance(&fixture, "docs/policy.md");
             let config = modified(&fixture.workspaces[0].join("rustx.toml"));
             while !fixture.manager.notify_source_watch(config.clone()) {
                 tokio::task::yield_now().await;
@@ -3227,7 +3144,7 @@ async fn a_replaced_input_directory_recaptures_its_readers() {
         let docs = fixture.workspaces[0].join("docs");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::write(docs.join("policy.md"), "Policy version A").unwrap();
-        select_instruction_file(&fixture, "docs/policy.md");
+        link_workspace_guidance(&fixture, "docs/policy.md");
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         assert!(project_text(&runtime).contains("Policy version A"));
@@ -3292,92 +3209,6 @@ fn context_failed(fixture: &Fixture) -> bool {
         })
 }
 
-/// A Named Agent's newly selected instruction file that fails its first
-/// capture is an input although the diagnostic names the Agent's TOML: fixing
-/// only that file, through its own notification, recovers the capture.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_named_agent_file_that_fails_its_first_capture_recovers_from_its_own_edit() {
-    bounded(async {
-        let fixture = Fixture::with_session_count(None, 1).await;
-        let id = fixture.sessions[0].id.clone();
-        let helper = fixture.workspaces[0].join(".agents/agents/helper.toml");
-        std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
-        std::fs::write(&helper, "description = 'Help'\ninstructions = 'Assist'\n").unwrap();
-        let config = fixture.workspaces[0].join("rustx.toml");
-        let mut document = std::fs::read_to_string(&config).unwrap();
-        document.push_str("\n[agent]\nagents = [\"helper\"]\n");
-        std::fs::write(&config, document).unwrap();
-        fixture.manager.load(&id, None).await.unwrap();
-        while !fixture.manager.applications.lock().worker_idle() {
-            tokio::task::yield_now().await;
-        }
-        assert!(!context_failed(&fixture));
-        let file = fixture.workspaces[0].join("docs/helper.md");
-        injected_only(&fixture);
-        let captured = fixture
-            .manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .source_watch_captured
-            .clone();
-        captured.arm();
-        let stop = tokio_util::sync::CancellationToken::new();
-        let observe = async {
-            watch_settled(&fixture).await;
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(&file, b"\xff\xfe not UTF-8").unwrap();
-            std::fs::write(
-                &helper,
-                "description = 'Help'\ninstructions = 'Assist'\n[agents_md]\nfiles = ['docs/helper.md']\n",
-            )
-            .unwrap();
-            assert!(fixture.manager.notify_source_watch(modified(&helper)));
-            captured.entered().await;
-            while !fixture.manager.applications.lock().worker_idle() {
-                tokio::task::yield_now().await;
-            }
-            assert!(context_failed(&fixture), "the invalid file did not fail the capture");
-            assert!(
-                fixture
-                    .manager
-                    .applications
-                    .lock()
-                    .source_inputs()
-                    .iter()
-                    .any(|(_, input)| input == &file),
-                "the file the capture failed at is not an input"
-            );
-            let passes = *settled_passes(&fixture).borrow();
-            captured.release();
-            captured.parked(0).await;
-            settled_passes(&fixture)
-                .wait_for(|settled| *settled > passes)
-                .await
-                .unwrap();
-            while !fixture.manager.applications.lock().worker_idle() {
-                tokio::task::yield_now().await;
-            }
-            assert!(context_failed(&fixture));
-            captured.arm();
-            std::fs::write(&file, "Helper policy").unwrap();
-            assert!(fixture.manager.notify_source_watch(modified(&file)));
-            captured.entered().await;
-            while !fixture.manager.applications.lock().worker_idle() {
-                tokio::task::yield_now().await;
-            }
-            assert!(!context_failed(&fixture), "the fixed file did not recover");
-            captured.release();
-            stop.cancel();
-        };
-        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
-        watched.unwrap();
-        fixture.close().await;
-    })
-    .await;
-}
-
 /// The first pass treats every input it finds as new: an edit after the
 /// capture that read it and before the watch started, with no notification
 /// at all, reaches the resident runtime.
@@ -3389,7 +3220,7 @@ async fn an_edit_before_the_watch_starts_is_captured_by_its_first_pass() {
         let policy = fixture.workspaces[0].join("docs/policy.md");
         std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
         std::fs::write(&policy, "Policy version A").unwrap();
-        select_instruction_file(&fixture, "docs/policy.md");
+        link_workspace_guidance(&fixture, "docs/policy.md");
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         assert!(project_text(&runtime).contains("Policy version A"));

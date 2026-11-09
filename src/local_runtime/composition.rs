@@ -798,7 +798,6 @@ impl LocalConversationCore {
                         profile: runtime_config.agent.clone(),
                         admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
                         admitted_workflows: workflows.entries().keys().cloned().collect(),
-                        project_files: paths.root_agent_project_files.clone(),
                         delegated_skills: delegated_skill_selections(
                             &runtime_config,
                             &subagent_catalog,

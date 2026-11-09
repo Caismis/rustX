@@ -12,13 +12,12 @@
 //! | --- | --- |
 //! | User document | its directory, non-recursively, for that one file |
 //! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `tools` and `workflows`, recursively |
-//! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml`, the guidance files and `*.md` |
+//! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml` and `AGENTS.md` |
 //! | Workspace resources | each known Workspace's `.agents`, as for the User |
 //! | Skills | User and Workspace collections and grouping directories, non-recursively |
 //! | Captured inputs | each other file a known Workspace's retained capture read or tried to read (a selected instruction file, for one, valid or not), as every directory entry opening it traverses — each component beneath the Workspace (or from the filesystem root, for a file outside it, and again for an absolute link target), each link and what it resolves to, up to the first missing or non-directory entry — through each entry's canonical directory, non-recursively |
 //!
-//! The guidance files are exactly the loader's (`AGENTS.override.md`,
-//! `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`). A notification for a
+//! The guidance source is AGENTS.md. A notification for a
 //! watched directory (or an ancestor) may mean it was removed or replaced at
 //! the same path, so its watches are registered again; only a watch that
 //! actually registered counts as active.
@@ -217,7 +216,7 @@ fn owners(
     workspaces: &[PathBuf],
     same: &impl Fn(&Path, &Path) -> bool,
 ) -> Vec<(SourceTarget, PathBuf)> {
-    let guidance = || crate::runtime::resources::PROJECT_CONTEXT_FILENAMES.into_iter();
+    let guidance = crate::runtime::resources::PROJECT_CONTEXT_FILENAME;
     let workspace = |directory: &Path| SourceTarget::Workspace {
         directory: directory.to_path_buf(),
     };
@@ -260,13 +259,9 @@ fn owners(
             continue;
         };
         let rest = components.as_path();
-        let names = SOURCE_ENTRIES.into_iter().chain(
-            rest.as_os_str()
-                .is_empty()
-                .then(guidance)
-                .into_iter()
-                .flatten(),
-        );
+        let names = SOURCE_ENTRIES
+            .into_iter()
+            .chain(rest.as_os_str().is_empty().then_some(guidance));
         if let Some(name) = loader_name(&root, entry.as_os_str(), names, same) {
             owners.push((target, root.join(name).join(rest)));
         }
@@ -296,20 +291,7 @@ fn owners(
         let Some(file) = document(directory) else {
             continue;
         };
-        // The document, the guidance files, and any root `*.md` as listed.
-        let name = loader_name(
-            directory,
-            file,
-            std::iter::once("rustx.toml").chain(guidance()),
-            same,
-        )
-        .map(std::ffi::OsStr::new)
-        .or_else(|| {
-            Path::new(file)
-                .extension()
-                .is_some_and(|extension| extension == "md")
-                .then_some(file)
-        });
+        let name = loader_name(directory, file, ["rustx.toml", guidance].into_iter(), same);
         if let Some(name) = name {
             owners.push((workspace(directory), directory.join(name)));
         }
@@ -1036,15 +1018,15 @@ mod tests {
             route(&home.join("rustx/.agents"), &user, &workspaces),
             vec![SourceTarget::User]
         );
-        // Every guidance file the loader reads, at either root.
+        // Alternate guidance names are outside both source roots.
         for name in ["AGENTS.override.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"] {
             assert_eq!(
                 route(&Path::new("/work/a").join(name), &user, &workspaces),
-                workspace("/work/a")
+                Vec::<SourceTarget>::new()
             );
             assert_eq!(
                 route(&home.join("rustx/.agents").join(name), &user, &workspaces),
-                vec![SourceTarget::User]
+                Vec::<SourceTarget>::new()
             );
         }
         assert_eq!(
@@ -1107,7 +1089,7 @@ mod tests {
             ("/w/.AGENTS/Skills", "/w/.agents/skills", "/w"),
             ("/w/.Agents", "/w/.agents", "/w"),
             ("/w/.agents/MCP.toml", "/w/.agents/mcp.toml", "/w"),
-            ("/w/.agents/claude.md", "/w/.agents/CLAUDE.md", "/w"),
+            ("/w/.agents/agents.md", "/w/.agents/AGENTS.md", "/w"),
             ("/w/RustX.toml", "/w/rustx.toml", "/w"),
             ("/2026/RustX.toml", "/2026/rustx.toml", "/2026"),
             (
@@ -1165,14 +1147,14 @@ mod tests {
         }
         // Uploads stay unrouted in any case.
         assert!(spelled("/w/.Agents/Uploads/s/AGENTS.md", &aliases).is_empty());
-        // The exact spelling wins where both exist.
+        // On a case-insensitive volume, route the alias to the loader spelling.
         assert_eq!(
             spelled("/w/AGENTS.MD", &aliases),
             [(
                 SourceTarget::Workspace {
                     directory: "/w".into()
                 },
-                PathBuf::from("/w/AGENTS.MD")
+                PathBuf::from("/w/AGENTS.md")
             )]
         );
     }
@@ -1297,16 +1279,10 @@ mod tests {
                 &workspaces,
                 &aliases
             ),
-            [
-                (
-                    SourceTarget::User,
-                    PathBuf::from("/home/u/rustx/.agents/skills/guide/SKILL.md")
-                ),
-                workspace(
-                    "/home/u/RustX/.agents/skills/guide",
-                    "/home/u/RustX/.agents/skills/guide/SKILL.md"
-                ),
-            ]
+            [(
+                SourceTarget::User,
+                PathBuf::from("/home/u/rustx/.agents/skills/guide/SKILL.md")
+            )]
         );
         assert_eq!(
             route(Path::new("/w/.agents/AGENTS.md"), &user, &workspaces),

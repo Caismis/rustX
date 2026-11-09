@@ -454,7 +454,7 @@ async fn c11_c12_model_selection_and_source_authoring_have_disjoint_durable_owne
         let after = f.manager.source_settings(&target).await.unwrap();
         assert_eq!(after.user, sources.user);
         assert_eq!(after.workspace, sources.workspace);
-        std::fs::write(f.workspaces[0].join("review.md"), "new source guidance").unwrap();
+        std::fs::write(f.workspaces[0].join("AGENTS.md"), "new source guidance").unwrap();
         f.manager
             .write_source_settings(
                 &target,
@@ -464,7 +464,6 @@ async fn c11_c12_model_selection_and_source_authoring_have_disjoint_durable_owne
                         authored: Some(
                             crate::local_runtime::config::AgentProjectInstructionsDocument {
                                 inherit: true,
-                                files: vec!["review.md".into()],
                             },
                         ),
                     },

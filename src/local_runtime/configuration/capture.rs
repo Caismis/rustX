@@ -320,7 +320,6 @@ impl UserConfigManager {
             ..RuntimeLayer::default()
         };
         let mut provenance = BTreeMap::new();
-        let mut project_resources = Vec::new();
         let scoped_workflows = [&user, &project].map(|layer| {
             layer
                 .agent
@@ -328,7 +327,7 @@ impl UserConfigManager {
                 .and_then(|agent| agent.workflows.clone())
                 .unwrap_or_default()
         });
-        for (mut layer, origin) in [
+        for (layer, origin) in [
             (
                 user,
                 Origin::User {
@@ -344,12 +343,6 @@ impl UserConfigManager {
                 },
             ),
         ] {
-            project_resources.extend(rebase_paths(
-                &mut layer,
-                &origin,
-                &locations.workspace,
-                false,
-            )?);
             merged.overlay(layer, &origin, &mut provenance);
         }
         Ok((
@@ -359,7 +352,6 @@ impl UserConfigManager {
                 identity,
                 merged,
                 provenance,
-                project_resources,
                 scoped_workflows,
             },
             documents,
@@ -406,7 +398,6 @@ impl UserConfigManager {
             identity,
             merged,
             mut provenance,
-            project_resources,
             scoped_workflows,
         } = capture;
         for (root, scope) in [
@@ -604,7 +595,6 @@ impl UserConfigManager {
             config,
             models,
             provenance,
-            project_resources,
             scoped_workflows,
         })
     }
@@ -626,14 +616,9 @@ impl UserConfigManager {
             mut config,
             models,
             provenance,
-            project_resources,
             scoped_workflows,
         } = resolved;
         let host = &self.sources;
-        for path in &project_resources {
-            crate::runtime::resources::validate_project_resource_path(&locations.workspace, path)
-                .map_err(LaunchFailure::resource)?;
-        }
         // Capture authority once, including host path aliases and missing leaves.
         // Configuration preparation retains this physical identity; validators must not rebind it.
         let user_resource_root = normalize_missing(&host.home_directory.join("rustx/.agents"))?;
@@ -723,14 +708,10 @@ impl UserConfigManager {
             &subagents,
             &native_leaves,
         );
-        let root_agent_project_files =
-            super::super::agent_resources::load_profile_files(&config.agent.agents_md.files)
-                .map_err(LaunchFailure::resource)?;
         let policy = crate::capabilities::AgentActivation {
             profile: config.agent.clone(),
             admitted_agents: subagents.names().into_iter().cloned().collect(),
             admitted_workflows: workflows.enabled_ids().clone(),
-            project_files: root_agent_project_files.clone(),
             delegated_skills: super::super::composition::delegated_skill_selections(
                 &config, &subagents, &workflows,
             ),
@@ -741,13 +722,11 @@ impl UserConfigManager {
             &skills,
             &availability,
         )?;
-        let names = subagents.names().into_iter().cloned().collect();
         let admitted_workflows = workflows.enabled_ids();
         let authority = crate::runtime::agent_profile::AgentProfileAuthority {
             tools: &available_catalog,
             availability: &availability,
             skills: &skills,
-            agents: &names,
             workflows: &admitted_workflows,
             scope: crate::runtime::agent_profile::AgentScope::OneShotChild,
         };
@@ -861,15 +840,7 @@ impl UserConfigManager {
                 ));
             }
         }
-        for file in project_context_files
-            .iter()
-            .chain(root_agent_project_files.iter())
-            .chain(
-                subagents
-                    .definitions()
-                    .flat_map(|definition| definition.profile().project_instructions.files.iter()),
-            )
-        {
+        for file in &project_context_files {
             let bytes = read_bounded(&file.path)?;
             let text = std::str::from_utf8(&bytes)
                 .map_err(|_| LaunchFailure::from("instruction text is not UTF-8"))?;
@@ -937,7 +908,6 @@ impl UserConfigManager {
             .collect(),
             source_revisions: revisions,
             effective,
-            root_agent_project_files,
             skill_discovery,
             project_context_files,
             inspection,
@@ -954,7 +924,6 @@ impl UserConfigManager {
             provenance,
             identity,
             skill_sources,
-            project_resources,
         })
     }
 }
@@ -1105,44 +1074,6 @@ pub(in crate::local_runtime) fn source_restrictions(
         ));
     }
     Ok(())
-}
-
-fn rebase_paths(
-    layer: &mut RuntimeLayer,
-    origin: &Origin,
-    workspace: &Path,
-    validate_resources: bool,
-) -> Result<Vec<PathBuf>, String> {
-    let mut resources = Vec::new();
-    let base = match origin {
-        Origin::User { base, .. } | Origin::Workspace { base, .. } | Origin::Process { base } => {
-            base
-        }
-        Origin::Builtin => return Ok(resources),
-    };
-    let mut path = |value: &mut PathBuf| -> Result<(), String> {
-        if value.as_os_str().is_empty() {
-            return Err("path must be non-empty".into());
-        }
-        let resolved = absolute(base, value);
-        if matches!(origin, Origin::Workspace { .. }) {
-            if validate_resources {
-                crate::runtime::resources::validate_project_resource_path(workspace, &resolved)
-                    .map_err(|e| e.to_string())?;
-            }
-            resources.push(resolved.clone());
-        }
-        *value = resolved;
-        Ok(())
-    };
-    if let Some(agent) = &mut layer.agent
-        && let Some(policy) = &mut agent.agents_md
-    {
-        for file in &mut policy.files {
-            path(file)?;
-        }
-    }
-    Ok(resources)
 }
 
 pub(in crate::local_runtime) fn present_on_disk(path: &Path) -> Result<bool, String> {

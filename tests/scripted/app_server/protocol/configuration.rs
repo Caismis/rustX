@@ -759,7 +759,7 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             name: crate::runtime::subagent::SubagentName::parse("title-reader").unwrap(),
             source: crate::local_runtime::configuration::settings::SourceView {
                 path: "/fixture/title-reader.toml".into(), revision: "title-source-v1".into(), diagnostic: None,
-                authored: Some(crate::local_runtime::config::AgentProfileDocument { model: Some(authored.resolve().unwrap()), ..Default::default() }),
+                authored: Some(crate::local_runtime::config::NamedAgentProfileDocument { model: Some(authored.resolve().unwrap()), ..Default::default() }),
             },
         });
         native.prospective_diagnostic = Some("é\n".repeat(140_000));

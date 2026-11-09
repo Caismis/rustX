@@ -397,7 +397,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         let mut agent_model = crate::model::session::SessionModelConfig::of(ModelRef::parse("local/b").unwrap());
         agent_model.profile = Some(ModelProfileId::new("precise"));
         agent_model.request_params = params(serde_json::json!({"metadata": {"k": null}})).0;
-        let agent = crate::local_runtime::config::AgentProfileDocument {
+        let agent = crate::local_runtime::config::NamedAgentProfileDocument {
             description: "Profiles".into(),
             model: Some(agent_model.clone()),
             ..Default::default()
@@ -1076,7 +1076,7 @@ fn raw_request(call: crate::app_server::protocol::Method, literal: &str) -> Stri
 async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
     use crate::local_runtime::authoring::{AuxiliaryModelAuthoring, ModelLayer};
-    use crate::local_runtime::config::AgentProfileDocument;
+    use crate::local_runtime::config::NamedAgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
@@ -1161,11 +1161,11 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
                 expected_revision: source.user.revision.clone(),
                 mutation: SourceMutation::Agent {
                     name: crate::runtime::subagent::SubagentName::parse("reviewer").unwrap(),
-                    authored: Some(AgentProfileDocument {
+                    authored: Some(NamedAgentProfileDocument {
                         description: "Reviews".into(),
                         instructions: "Review.".into(),
                         model: Some(selection.clone()),
-                        ..AgentProfileDocument::default()
+                        ..NamedAgentProfileDocument::default()
                     }),
                 },
             },
@@ -1282,7 +1282,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
 async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
     use crate::local_runtime::authoring::{AuxiliaryModelAuthoring, ModelLayer};
-    use crate::local_runtime::config::AgentProfileDocument;
+    use crate::local_runtime::config::NamedAgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
@@ -1481,7 +1481,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         f.manager
             .write_source_settings(&user, source.absent_resource_revision.clone(), SourceMutation::Agent {
                         name: reviewer.clone(),
-                        authored: Some(AgentProfileDocument {
+                        authored: Some(NamedAgentProfileDocument {
                             description: "Reviews".into(),
                             instructions: "Review.".into(),
                             model: Some(SessionModelConfig {
@@ -1489,7 +1489,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
                                 request_params: object(json!({"top_k": 1, KEY: true})),
                                 ..SessionModelConfig::of(local.clone())
                             }),
-                            ..AgentProfileDocument::default()
+                            ..NamedAgentProfileDocument::default()
                         }),
                     })
             .await

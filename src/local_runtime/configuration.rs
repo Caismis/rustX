@@ -156,7 +156,6 @@ struct LayerCapture {
     identity: String,
     merged: RuntimeLayer,
     provenance: BTreeMap<String, Origin>,
-    project_resources: Vec<PathBuf>,
     /// The `agent.workflows` of the User and the Workspace document: each
     /// enables only its own scope's files.
     scoped_workflows: [Vec<crate::runtime::workflow::WorkflowId>; 2],
@@ -173,7 +172,6 @@ pub(crate) struct SourceCapture {
     pub(crate) config: CurrentRuntimeConfig,
     pub(crate) models: ModelCatalog,
     pub(crate) provenance: BTreeMap<String, Origin>,
-    project_resources: Vec<PathBuf>,
     scoped_workflows: [Vec<crate::runtime::workflow::WorkflowId>; 2],
 }
 
@@ -184,7 +182,6 @@ pub struct ProspectiveSessionConfig {
     pub(crate) component_revisions: BTreeMap<application::ApplyUnit, String>,
     pub(crate) source_revisions: BTreeMap<PathBuf, String>,
     pub(crate) effective: RuntimeLayer,
-    pub(crate) root_agent_project_files: Vec<crate::runtime::resources::ProjectContextFile>,
     pub(crate) skill_discovery: crate::skills::SkillDiscoveryOutcome,
     pub(crate) project_context_files: Vec<crate::runtime::resources::ProjectContextFile>,
     pub(crate) inspection: crate::runtime::capability_inspection::CapabilityInspection,
@@ -202,8 +199,6 @@ pub struct ProspectiveSessionConfig {
     pub(crate) provenance: BTreeMap<String, Origin>,
     pub(crate) identity: String,
     pub(crate) skill_sources: Vec<crate::skills::AutomaticSkillRoot>,
-    /// Project-origin paths retain their authority even after becoming absolute.
-    project_resources: Vec<PathBuf>,
 }
 
 /// Captured authority for the two independent policy units, including when

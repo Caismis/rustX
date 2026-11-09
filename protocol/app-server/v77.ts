@@ -2203,7 +2203,7 @@ export type SourceMutation =
     }
   | {
       name: SubagentName;
-      authored?: AgentProfileDocument | null;
+      authored?: NamedAgentProfileDocument | null;
       kind: 'agent';
     }
   | {
@@ -5138,10 +5138,6 @@ export type SourceResolutionFailure =
  * via the `definition` "ScopeCapability".
  */
 export type ScopeCapability =
-  | {
-      kind: 'agent';
-      identity: SubagentName;
-    }
   | {
       kind: 'workflow';
       identity: WorkflowId;
@@ -10086,23 +10082,13 @@ export interface BackgroundStatusConfig {
   enabled?: boolean;
 }
 /**
- * Project-instruction selection from admitted workspace resources.
+ * Whether to include the automatically discovered AGENTS.md guidance chain.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AgentProjectInstructionsDocument".
  */
 export interface AgentProjectInstructionsDocument {
-  /**
-   * Whether the invoking generation's normal project instruction chain is
-   * prepended to the explicit files.
-   */
   inherit?: boolean;
-  /**
-   * Explicit agent-owned project instruction files, in deterministic
-   * configured order. Relative paths resolve against the owning
-   * configuration document's directory at launch resolution.
-   */
-  files?: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -10196,18 +10182,12 @@ export interface AppServerPolicy {
   shutdown_deadline_ms?: number;
 }
 /**
- * Strict Agent Profile authoring shared by root and named Agents.
- *
- * Complete selected intent resolves against admitted resources. Execution
- * scope controls child lifecycle applicability. Dynamic child
- * invocations may replace only Tools, Skills and Extensions within their
- * frozen delegation ceiling; the other dimensions remain authored defaults.
+ * A complete named Agent resource profile.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AgentProfileDocument".
+ * via the `definition` "NamedAgentProfileDocument".
  */
-export interface AgentProfileDocument {
-  agents?: SubagentName[];
+export interface NamedAgentProfileDocument {
   workflows?: WorkflowId[];
   /**
    * The bounded model-facing routing description. Empty defaults stay omitted
@@ -10246,20 +10226,10 @@ export interface ToolSelectionDocument {
   };
 }
 /**
- * Project-instruction selection from admitted workspace resources.
+ * Whether to include the automatically discovered AGENTS.md guidance chain.
  */
 export interface AgentProjectInstructionsDocument1 {
-  /**
-   * Whether the invoking generation's normal project instruction chain is
-   * prepended to the explicit files.
-   */
   inherit?: boolean;
-  /**
-   * Explicit agent-owned project instruction files, in deterministic
-   * configured order. Relative paths resolve against the owning
-   * configuration document's directory at launch resolution.
-   */
-  files?: string[];
 }
 /**
  * Closed native Extension composition. Omission selects none. Root
@@ -18607,6 +18577,67 @@ export interface NativeToolsLayer {
   bash?: NativePolicyOverrideDocument | null;
 }
 /**
+ * Root Agent profile. Only the root can delegate to named Agents.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AgentProfileDocument".
+ */
+export interface AgentProfileDocument {
+  agents?: SubagentName[];
+  workflows?: WorkflowId[];
+  /**
+   * The bounded model-facing routing description. Empty defaults stay omitted
+   * in native source projections and complete-resource serialization.
+   */
+  description?: string;
+  /**
+   * Explicit primary Agent instructions authored as TOML data.
+   */
+  instructions?: string;
+  /**
+   * The explicit model this agent runs on. Omit to inherit the invoking
+   * attempt's frozen effective model configuration.
+   */
+  model?: ModelLayer | null;
+  /**
+   * The optional maximum wall-clock duration of the complete child
+   * lifecycle, in milliseconds. The model cannot override or extend it.
+   */
+  timeout_ms?: string | null;
+  tools?: ToolSelectionDocument1;
+  /**
+   * Skill descriptions advertised in the prompt: "all", exact names, or [].
+   */
+  skills?: AgentSkillSelection | null;
+  agents_md?: AgentProjectInstructionsDocument2;
+  plugins?: NativeAgentExtensionsDocument1;
+}
+/**
+ * The exact source-qualified capability selection.
+ */
+export interface ToolSelectionDocument1 {
+  builtin?: string[];
+  sources?: {
+    [k: string]: SourceToolSelection;
+  };
+}
+/**
+ * Whether to include the automatically discovered AGENTS.md guidance chain.
+ */
+export interface AgentProjectInstructionsDocument2 {
+  inherit?: boolean;
+}
+/**
+ * Closed native Extension composition. Omission selects none. Root
+ * product defaults are an explicit lower-priority authoring layer,
+ * independent of this complete document's semantics.
+ */
+export interface NativeAgentExtensionsDocument1 {
+  agent_status?: AgentStatusExtensionDocument1;
+  todo?: TodoExtensionDocument1;
+  goal?: GoalExtensionDocument1;
+}
+/**
  * The static current-runtime context policy document.
  *
  * There is deliberately no context window here: the window belongs to the
@@ -19241,7 +19272,7 @@ export interface AgentSourceView {
 export interface SourceView4 {
   path: string;
   revision: string;
-  authored?: AgentProfileDocument | null;
+  authored?: NamedAgentProfileDocument | null;
   diagnostic?: string | null;
 }
 /**
@@ -21287,7 +21318,7 @@ export interface BackgroundStatusConfig1 {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ToolSelectionDocument".
  */
-export interface ToolSelectionDocument1 {
+export interface ToolSelectionDocument2 {
   builtin?: string[];
   sources?: {
     [k: string]: SourceToolSelection;
@@ -21304,7 +21335,7 @@ export interface ToolSelectionDocument1 {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "NativeAgentExtensionsDocument".
  */
-export interface NativeAgentExtensionsDocument1 {
+export interface NativeAgentExtensionsDocument2 {
   agent_status?: AgentStatusExtensionDocument1;
   todo?: TodoExtensionDocument1;
   goal?: GoalExtensionDocument1;

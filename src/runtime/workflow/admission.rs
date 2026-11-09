@@ -66,7 +66,6 @@ impl WorkflowCatalog {
         servers: &crate::tools::mcp::McpServerBindings,
         leaf: &dyn Fn(&crate::tools::types::ToolDefinition) -> bool,
     ) {
-        let names = agents.names().into_iter().cloned().collect();
         // One-shot children cannot invoke Workflows. Supplying discovered ids
         // lets the shared resolver report scope, without a publication cycle.
         let workflows = self.entries.keys().cloned().collect();
@@ -74,7 +73,6 @@ impl WorkflowCatalog {
             tools: available,
             availability,
             skills,
-            agents: &names,
             workflows: &workflows,
             scope: AgentScope::OneShotChild,
         };

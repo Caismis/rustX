@@ -3,8 +3,6 @@ import type { AgentProjectInstructionsDocument, RuntimeLayer, SourceSettings } f
 import { Switch } from '../../../presentation/primitives/Switch';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
 import { UnitForm } from '../forms/bridge';
-import { Names } from '../forms/controls';
-import { Advanced } from '../primitives/aria';
 import { SettingsNotice } from '../SettingsFeedback';
 import css from './AgentPage.module.css';
 
@@ -28,17 +26,11 @@ export function AgentPage({ config, globalGuidance }: {
 
     {config && <UnitForm<AgentProjectInstructionsDocument> title={tx('settings:agent-page.project-guidance')} authored={config.document.agent?.agents_md ?? undefined}
       blank={{}} revision={config.revision} allowUnchangedDraft={false} mutation={authored => ({ kind: 'config', mutation: { unit: 'project_guidance', authored } })}>
-      {(value, change) => <>
-        <div className={css.guidanceRow}>
-          <p className={settings.hint}>{tx('settings:agent-page.automatic-guidance-description')}</p>
-          <Switch label={tx('settings:agent-page.automatic-guidance')} checked={value.inherit ?? true}
-            onChange={inherit => change({ ...value, inherit })} />
-        </div>
-        <Advanced title={tx('settings:agent-page.advanced-options')}>
-          <Names label={tx('settings:agent-page.guidance-files')} value={value.files ?? []} change={files => change({ ...value, files })} />
-          <p className={settings.hint}>{tx('settings:agent-page.guidance-files-description')}</p>
-        </Advanced>
-      </>}
+      {(value, change) => <div className={css.guidanceRow}>
+        <p className={settings.hint}>{tx('settings:agent-page.automatic-guidance-description')}</p>
+        <Switch label={tx('settings:agent-page.automatic-guidance')} checked={value.inherit ?? true}
+          onChange={inherit => change({ inherit })} />
+      </div>}
     </UnitForm>}
   </section>;
 }

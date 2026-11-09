@@ -11,11 +11,10 @@ fn cfg274_agent_source() -> WorkflowProgram {
 }
 
 fn cfg274_agents(document: &str) -> crate::runtime::subagent::AgentCatalog {
-    use crate::runtime::agent_profile::{AgentProfile, AgentProfileKind};
     let document = crate::local_runtime::agent_resources::parse(document).unwrap();
     crate::runtime::subagent::AgentCatalog::new([NamedAgentDefinition::new(
         profile("reviewer"),
-        AgentProfile::from_document(&document, AgentProfileKind::Named, Vec::new()).unwrap(),
+        document.lower().unwrap(),
         "reviewer.toml".into(),
     )
     .unwrap()])
@@ -93,7 +92,6 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
             tools: &available,
             availability: &ready,
             skills: &skills,
-            agents: &BTreeSet::new(),
             workflows: &BTreeSet::new(),
             scope: AgentScope::OneShotChild,
         },
@@ -511,8 +509,7 @@ fn cfg274_model_exposure_requires_agent_selection_and_enabled_admission() {
     let ordinary = definition();
     let definitions = vec![&workflow, &ordinary];
     let mut activation = crate::capabilities::AgentActivation {
-        profile: crate::local_runtime::agent_resources::parse("workflows=['test_workflow']")
-            .unwrap(),
+        profile: toml::from_str("workflows=['test_workflow']").unwrap(),
         admitted_workflows: catalog.enabled_ids(),
         ..Default::default()
     };

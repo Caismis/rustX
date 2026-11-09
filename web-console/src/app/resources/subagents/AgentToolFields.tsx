@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AgentProfileDocument, ResourceDefinition, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolSource } from '../../../../../protocol/app-server/v77';
+import type { NamedAgentProfileDocument, ResourceDefinition, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolSource } from '../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Switch } from '../../../presentation/primitives/Switch';
@@ -8,8 +8,8 @@ import { Choice } from '../../settings/primitives/aria';
 import { SettingsNotice } from '../../settings/SettingsFeedback';
 import css from './Subagents.module.css';
 
-type Tools = NonNullable<AgentProfileDocument['tools']>;
-type Grants = Pick<AgentProfileDocument, 'tools' | 'workflows'>;
+type Tools = NonNullable<NamedAgentProfileDocument['tools']>;
+type Grants = Pick<NamedAgentProfileDocument, 'tools' | 'workflows'>;
 export type LoadMcpTools = (server: string) => Promise<WorkflowToolSource | undefined>;
 
 export function AgentToolFields({ source, scope, value, change, loadMcpTools }: {

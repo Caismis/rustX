@@ -65,7 +65,6 @@ impl ProspectiveSessionConfig {
         ContextBinding {
             configuration: self.runtime_configuration(models),
             project_context_files: self.project_context_files.clone(),
-            root_agent_project_files: self.root_agent_project_files.clone(),
             skills: Arc::new(crate::skills::SkillSnapshot::from_discovery(
                 self.skill_discovery.clone(),
             )),
@@ -149,7 +148,6 @@ impl ProspectiveSessionConfig {
         ContextBinding {
             configuration,
             project_context_files: self.project_context_files.clone(),
-            root_agent_project_files: self.root_agent_project_files.clone(),
             skills: Arc::new(crate::skills::SkillSnapshot::from_discovery(
                 self.skill_discovery.clone(),
             )),

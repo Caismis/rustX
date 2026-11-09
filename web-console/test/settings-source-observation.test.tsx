@@ -24,12 +24,12 @@ class Native {
   connections = 32;
   revision = 'user-1';
   /** Authored marker independent of application version, for equal-version races. */
-  guidanceFile?: string;
+  inheritGuidance?: boolean;
   application: ConfigurationApplication | null = null;
   projection(): SourceSettings {
     const source = cfg3Source();
     source.user.revision = this.revision;
-    if (this.guidanceFile !== undefined) source.user.authored = { ...source.user.authored, agent: { agents_md: { files: [this.guidanceFile] } } };
+    if (this.inheritGuidance !== undefined) source.user.authored = { ...source.user.authored, agent: { agents_md: { inherit: this.inheritGuidance } } };
     source.process_policy_impacts = { max_connections: 'hot' };
     source.process_bindings = { max_resident_runtimes: 8, max_connections: this.connections };
     source.application = this.application ? structuredClone(this.application) : null;
@@ -220,12 +220,12 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   // The acknowledgement captured revision B at application version 7.
-  native.revision = 'user-2'; native.guidanceFile = 'revision-b.md';
+  native.revision = 'user-2'; native.inheritGuidance = true;
   s.commit(write);
   // A causally later external edit advances the authored source to revision C;
   // native coordination has not republished, so the application version is
   // still 7 — equal application versions cannot order the two projections.
-  native.revision = 'user-3'; native.guidanceFile = 'revision-c.md';
+  native.revision = 'user-3'; native.inheritGuidance = false;
   s.commit(read); // The authoritative read observes C at the same version 7.
   await deliver(s, read);
   await waitForSettingsRevision('user-3');
@@ -240,8 +240,7 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   await waitForSettingsSave();
   expect(observedRevision('user-3')).toBeTruthy();
   const agent = agentPage();
-  fireEvent.click(agent.getByRole('button', { name: 'Advanced options' }));
-  expect(agent.getByRole('textbox', { name: 'Guidance files 1' })).toHaveProperty('value', 'revision-c.md');
+  expect(agent.getByRole('switch', { name: 'Automatically load project guidance' }).getAttribute('aria-checked')).toBe('false');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
 });
@@ -665,7 +664,7 @@ it('MCP refresh is one read and an unrelated native source update never replays 
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3));
   native.revision = 'user-2';
-  native.guidanceFile = 'unrelated-guidance-edit.md';
+  native.inheritGuidance = false;
   native.application = native.applied('1', 'applied');
   await publish(s, native.application);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(4));

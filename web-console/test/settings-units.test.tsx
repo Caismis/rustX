@@ -266,9 +266,9 @@ it('writes Native and MCP invocation policies independently, and an empty policy
   await waitFor(() => expect(write.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'mcp_policy', id: 'search', authored: {} } }));
 });
 
-it('round-trips an independent Agent profile with delegation, guidance and model', async () => {
+it('round-trips an independent Agent profile with guidance and model', async () => {
   const source = cfg3Source();
-  const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', profile: 'deep', max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5, nested: [null] } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
+  const authored = { description: 'Review', instructions: 'Inspect', workflows: ['audit'], model: { model: 'main', profile: 'deep', max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5, nested: [null] } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false }, timeout_ms: '30000', plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-r1', authored } }];
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={['main']} profiles={{}} name="reviewer" />, { source, context: source });
   // Opening an authored profile authors nothing new, so a no-op Save is
@@ -347,23 +347,15 @@ it('replaces default model intent on the Models page', async () => {
   } }, 'root-r1'));
 });
 
-it('saves project guidance and supplemental files after collapsing Advanced options', async () => {
+it('saves the automatic project guidance switch', async () => {
   const { writes: write } = await renderEditor(<AgentPage config={{ document: {}, revision: 'root-r1' }} />);
   const guidance = within(screen.getByRole('form', { name: 'Project guidance' }));
   const automatic = guidance.getByRole('switch', { name: 'Automatically load project guidance' });
   expect(automatic.getAttribute('aria-checked')).toBe('true');
-  const advanced = guidance.getByRole('button', { name: 'Advanced options' });
-  expect(advanced.getAttribute('aria-expanded')).toBe('false');
-  expect(guidance.queryByRole('button', { name: 'Add Guidance files' })).toBeNull();
+  expect(guidance.queryByRole('button', { name: 'Advanced options' })).toBeNull();
   fireEvent.click(automatic);
   fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'project_guidance', authored: { inherit: false } } }, 'root-r1'));
-  fireEvent.click(advanced);
-  fireEvent.click(guidance.getByRole('button', { name: 'Add Guidance files' }));
-  fireEvent.change(guidance.getByRole('textbox', { name: 'Guidance files 1' }), { target: { value: 'REVIEW.md' } });
-  fireEvent.click(advanced);
-  fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
-  await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { inherit: false, files: ['REVIEW.md'] } } }));
 });
 
 it('a named Agent preserves and edits the complete explicit Summary Model independently', async () => {

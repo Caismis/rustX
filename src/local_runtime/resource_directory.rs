@@ -121,7 +121,7 @@ pub(crate) const SOURCE_ENTRIES: [&str; 4] = ["agents", "mcp.toml", "tools", "wo
 fn source_entry_names() -> impl Iterator<Item = &'static str> {
     SOURCE_ENTRIES
         .into_iter()
-        .chain(crate::runtime::resources::PROJECT_CONTEXT_FILENAMES)
+        .chain([crate::runtime::resources::PROJECT_CONTEXT_FILENAME])
 }
 
 /// Revision of authored resource bytes, including malformed and shadowed entries.

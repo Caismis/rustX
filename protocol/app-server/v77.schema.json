@@ -21128,22 +21128,6 @@
           "properties": {
             "kind": {
               "type": "string",
-              "const": "agent"
-            },
-            "identity": {
-              "$ref": "#/$defs/SubagentName"
-            }
-          },
-          "required": [
-            "kind",
-            "identity"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "kind": {
-              "type": "string",
               "const": "workflow"
             },
             "identity": {
@@ -26216,21 +26200,12 @@
       "additionalProperties": false
     },
     "AgentProjectInstructionsDocument": {
-      "description": "Project-instruction selection from admitted workspace resources.",
+      "description": "Whether to include the automatically discovered AGENTS.md guidance chain.",
       "type": "object",
       "properties": {
         "inherit": {
-          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
           "type": "boolean",
           "default": true
-        },
-        "files": {
-          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
         }
       },
       "additionalProperties": false
@@ -26566,7 +26541,7 @@
       "additionalProperties": false
     },
     "AgentProfileDocument": {
-      "description": "Strict Agent Profile authoring shared by root and named Agents.\n\nComplete selected intent resolves against admitted resources. Execution\nscope controls child lifecycle applicability. Dynamic child\ninvocations may replace only Tools, Skills and Extensions within their\nfrozen delegation ceiling; the other dimensions remain authored defaults.",
+      "description": "Root Agent profile. Only the root can delegate to named Agents.",
       "type": "object",
       "properties": {
         "agents": {
@@ -26633,8 +26608,7 @@
           "description": "The project-instruction policy of this agent.",
           "$ref": "#/$defs/AgentProjectInstructionsDocument",
           "default": {
-            "inherit": true,
-            "files": []
+            "inherit": true
           }
         },
         "plugins": {
@@ -28225,7 +28199,7 @@
         "authored": {
           "anyOf": [
             {
-              "$ref": "#/$defs/AgentProfileDocument"
+              "$ref": "#/$defs/NamedAgentProfileDocument"
             },
             {
               "type": "null"
@@ -28243,6 +28217,94 @@
         "path",
         "revision"
       ]
+    },
+    "NamedAgentProfileDocument": {
+      "description": "A complete named Agent resource profile.",
+      "type": "object",
+      "properties": {
+        "workflows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowId"
+          },
+          "default": []
+        },
+        "description": {
+          "description": "The bounded model-facing routing description. Empty defaults stay omitted\nin native source projections and complete-resource serialization.",
+          "type": "string"
+        },
+        "instructions": {
+          "description": "Explicit primary Agent instructions authored as TOML data.",
+          "type": "string"
+        },
+        "model": {
+          "description": "The explicit model this agent runs on. Omit to inherit the invoking\nattempt's frozen effective model configuration.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelLayer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timeout_ms": {
+          "description": "The optional maximum wall-clock duration of the complete child\nlifecycle, in milliseconds. The model cannot override or extend it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "tools": {
+          "description": "The exact source-qualified capability selection.",
+          "$ref": "#/$defs/ToolSelectionDocument",
+          "default": {
+            "builtin": [],
+            "sources": {}
+          }
+        },
+        "skills": {
+          "description": "Skill descriptions advertised in the prompt: \"all\", exact names, or [].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentSkillSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agents_md": {
+          "description": "The project-instruction policy of this agent.",
+          "$ref": "#/$defs/AgentProjectInstructionsDocument",
+          "default": {
+            "inherit": true
+          }
+        },
+        "plugins": {
+          "description": "Closed native Extension composition. Omission selects none. Root\nproduct defaults are an explicit lower-priority authoring layer,\nindependent of this complete document's semantics.",
+          "$ref": "#/$defs/NativeAgentExtensionsDocument",
+          "default": {
+            "agent_status": {
+              "enabled": false,
+              "time": {
+                "enabled": true
+              },
+              "background": {
+                "enabled": true
+              }
+            },
+            "todo": {
+              "enabled": false
+            },
+            "goal": {
+              "enabled": false
+            }
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "SourceField": {
       "type": "object",
@@ -38242,7 +38304,7 @@
             "authored": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/AgentProfileDocument"
+                  "$ref": "#/$defs/NamedAgentProfileDocument"
                 },
                 {
                   "type": "null"

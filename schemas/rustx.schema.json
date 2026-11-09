@@ -68,19 +68,10 @@
     },
     "AgentProjectInstructionsDocument": {
       "additionalProperties": false,
-      "description": "Project-instruction selection from admitted workspace resources.",
+      "description": "Whether to include the automatically discovered AGENTS.md guidance chain.",
       "properties": {
-        "files": {
-          "default": [],
-          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "inherit": {
           "default": true,
-          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
           "type": "boolean"
         }
       },

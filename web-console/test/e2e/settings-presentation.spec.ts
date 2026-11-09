@@ -343,16 +343,10 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await openSettingsPage(page, 'Agent');
   const guidance = settings.getByRole('form', { name: 'Project guidance' });
   const automatic = guidance.getByRole('switch', { name: 'Automatically load project guidance' });
-  const advanced = guidance.getByRole('button', { name: 'Advanced options' });
-  const addFile = guidance.getByRole('button', { name: 'Add Guidance files' });
   await expect(automatic).toBeChecked();
-  await expect(advanced).toHaveAttribute('aria-expanded', 'false');
-  await expect(addFile).toBeHidden();
+  await expect(guidance.getByRole('button', { name: 'Advanced options' })).toHaveCount(0);
   await automatic.press('Space');
   await expect(automatic).not.toBeChecked();
-  await advanced.click();
-  await addFile.click();
-  await guidance.getByRole('textbox', { name: 'Guidance files 1' }).fill('docs/REVIEW.md');
   await expect(guidance.getByRole('button', { name: 'Save Project guidance' })).toBeEnabled();
   await expectNoHorizontalOverflow(page);
   await expectAccessible(page, settingsScope);
@@ -368,6 +362,9 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await expectAccessible(page, '[data-resource-module="subagents"]');
   await expectStableScreenshot(page,'subagent-narrow-dark.png');
+  await agents.getByRole('button', { name: 'Advanced options' }).click();
+  await expect(agents.getByText('Delegated Agents', { exact: true })).toHaveCount(0);
+  await expect(agents.getByText('Project guidance files', { exact: true })).toHaveCount(0);
   await openSettingsPage(page,'Extensions');
 
   // Escape preserves the Settings page when no transient layer is open.

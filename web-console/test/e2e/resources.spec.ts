@@ -141,7 +141,10 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await draftMcp.getByRole('button', { name: 'View tools global-server' }).click();
   await draftMcp.getByRole('checkbox', { name: 'render_image' }).check();
   await draftWorkflows.getByRole('checkbox', { name: 'global_flow' }).check();
-  await expect(naming.getByRole('switch', { name: 'Include AGENTS.md' })).toBeChecked();
+  const guidance = naming.getByRole('switch', { name: 'Include AGENTS.md' });
+  await expect(guidance).toBeChecked();
+  await guidance.click();
+  await expect(guidance).not.toBeChecked();
   expect(await naming.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await captureEvidence(agents, `new-subagent-${width}`);
   await saveNew.click();
@@ -151,6 +154,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   expect(savedAgent).toContain('builtin = ["read"]');
   expect(savedAgent).toContain('global-server = ["render_image"]');
   expect(savedAgent).toContain('workflows = ["global_flow"]');
+  expect(savedAgent).toContain("inherit = false");
   expect(savedAgent).not.toContain('local-server');
   expect(savedAgent).not.toContain('local_flow');
   await agents.getByRole('button', { name: 'auditor', exact: true }).click();

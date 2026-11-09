@@ -140,7 +140,7 @@ pub struct SourceView<T> {
 pub struct AgentSourceView {
     pub scope: SourceScope,
     pub name: crate::runtime::subagent::SubagentName,
-    pub source: SourceView<super::super::config::AgentProfileDocument>,
+    pub source: SourceView<super::super::config::NamedAgentProfileDocument>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct McpView {
@@ -361,7 +361,7 @@ pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
     },
     Agent {
         name: crate::runtime::subagent::SubagentName,
-        authored: Option<super::super::config::AgentProfileDocument>,
+        authored: Option<super::super::config::NamedAgentProfileDocument>,
     },
     /// One whole-file edit of exactly `<scope>/.agents/workflows/<id>.yaml`
     /// (Issue #491). The expected revision is that file's.
@@ -1472,12 +1472,7 @@ impl UserConfigManager {
                 }
                 SourceMutation::Agent { name, authored, .. } => authored
                     .map(|profile| {
-                        let resolved = crate::runtime::agent_profile::AgentProfile::from_document(
-                            &profile,
-                            crate::runtime::agent_profile::AgentProfileKind::Named,
-                            vec![],
-                        )
-                        .map_err(|_| SettingsError::Invalid)?;
+                        let resolved = profile.lower().map_err(|_| SettingsError::Invalid)?;
                         crate::runtime::subagent::NamedAgentDefinition::new(
                             name,
                             resolved,

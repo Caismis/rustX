@@ -5084,13 +5084,8 @@ chat_reasoning_replay = "omit"
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: false,
-                        files: Vec::new(),
-                    },
+                inherit_project_instructions: false,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             plane.dir.path().join("reviewer.md"),

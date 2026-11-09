@@ -3118,7 +3118,7 @@ the launch-boundary policy inheritance.
   replace atomically. Agent selection never overrides invocation policy. Process
   bindings and User-only `app_server` policy remain process-owned.
 - **Project resource authority follows provenance, not absolute spelling.**
-  Project-origin Skills, Subagent instruction/agents_md files and path-valued
+  Project-origin Skills, Subagent definitions, AGENTS.md and path-valued
   MCP command/cwd must resolve within the canonical Workspace. Traversal,
   absolute paths, symlink targets and external `--config` cannot widen that
   authority. Initial preparation rechecks frozen path authority; candidate preparation rechecks

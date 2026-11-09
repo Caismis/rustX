@@ -398,9 +398,7 @@ impl CapabilityInspection {
 mod tests {
     use super::*;
     use crate::capabilities::selection::{SourceResolutionFailure, ToolSelectionError};
-    use crate::runtime::agent_profile::{
-        AgentProfile, AgentProfileAuthority, AgentProfileKind, AgentScope, resolve_agent_profile,
-    };
+    use crate::runtime::agent_profile::{AgentProfileAuthority, AgentScope, resolve_agent_profile};
     use crate::runtime::identity::McpServerId;
 
     #[test]
@@ -493,11 +491,10 @@ mod tests {
     #[test]
     fn cfg275_online_reason_and_redaction_are_owned_before_inspection() {
         let source = ToolSourceId::Mcp(McpServerId::new("optional"));
-        let document = crate::toml_authoring::parse::<crate::local_runtime::config::AgentProfileDocument>(
+        let document = crate::toml_authoring::parse::<crate::local_runtime::config::NamedAgentProfileDocument>(
             b"description = 'SECRET_DESCRIPTION'\ninstructions = 'SECRET_INSTRUCTIONS'\n[tools.sources]\noptional = ['inspect']\n",
         ).unwrap();
-        let profile =
-            AgentProfile::from_document(&document, AgentProfileKind::Named, Vec::new()).unwrap();
+        let profile = document.lower().unwrap();
         let tools = crate::capabilities::AvailableToolCatalog::metadata([]);
         let skills = SkillSnapshot::new(Vec::new());
         let resolve = |state| {
@@ -509,7 +506,6 @@ mod tests {
                     tools: &tools,
                     availability: &availability,
                     skills: &skills,
-                    agents: &std::collections::BTreeSet::new(),
                     workflows: &std::collections::BTreeSet::new(),
                     scope: AgentScope::OneShotChild,
                 },

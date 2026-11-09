@@ -1543,18 +1543,12 @@ async fn global_instruction_capture_uses_fixed_home_and_freezes_sources() {
         second.source_revisions[&global]
     );
     assert_eq!(second.project_context_files[0].content, "Global guidance B");
-    std::fs::write(global_root.join("AGENTS.override.md"), "Global override").unwrap();
-    let third = manager.resolve_session(&input).unwrap();
-    assert_eq!(third.project_context_files[0].content, "Global override");
-    assert_ne!(second.component_revisions, third.component_revisions);
-
     let admitted = first.admit(|| f.credentials.clone()).unwrap();
     let product = compose_admitted(&admitted).await.unwrap();
     let resources = product.runtime().runtime_resources();
     let prompt = resources.project_instructions().unwrap();
     assert!(prompt.contains("Global guidance A"));
     assert!(!prompt.contains("Global guidance B"));
-    assert!(!prompt.contains("Global override"));
     assert!(!prompt.contains("Wrong config-relative global"));
     product.shutdown().await.unwrap();
 }
@@ -1570,22 +1564,11 @@ async fn bom_instructions_are_valid_for_root_and_named_agents_with_inheritance_d
         "\u{feff}Workspace guidance",
     )
     .unwrap();
-    std::fs::write(
-        f.host.launch_directory.join("root.md"),
-        "\u{feff}Root guidance",
-    )
-    .unwrap();
-    // A second BOM is content, not another optional file encoding marker.
-    std::fs::write(
-        f.host.launch_directory.join("named.md"),
-        "\u{feff}\u{feff}Named guidance",
-    )
-    .unwrap();
-    f.project(json!({"agent":{"agents_md":{"inherit":false,"files":["root.md"]}}}));
+    f.project(json!({"agent":{"agents_md":{"inherit":false}}}));
     f.role(
         false,
         "reader",
-        json!({"description":"Reader", "agents_md":{"files":["named.md"]}}),
+        json!({"description":"Reader", "agents_md":{"inherit":false}}),
         "Read carefully",
     );
     let launch = f.resolve();
@@ -1594,24 +1577,14 @@ async fn bom_instructions_are_valid_for_root_and_named_agents_with_inheritance_d
         launch.project_context_files[1].content,
         "Workspace guidance"
     );
-    assert_eq!(launch.root_agent_project_files[0].content, "Root guidance");
     let product = compose_admitted(&launch).await.unwrap();
     let resources = product.runtime().runtime_resources();
-    assert_eq!(
-        resources.project_instructions(),
-        Some(format!(
-            "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nRoot guidance\n</project_instructions>",
-            f.host.launch_directory.join("root.md").display()
-        ).as_str())
-    );
+    assert_eq!(resources.project_instructions(), None);
     let reader = resources
         .subagents()
         .get(&crate::runtime::subagent::SubagentName::parse("reader").unwrap())
         .unwrap();
-    assert_eq!(
-        reader.project_instructions().files[0].content,
-        "\u{feff}Named guidance"
-    );
+    assert!(!reader.inherits_project_instructions());
     product.shutdown().await.unwrap();
 }
 
@@ -2053,20 +2026,6 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
     );
 
     assert!(resolve(&f.request, &f.host).is_ok(), "revocation is scoped");
-    let outside = host.launch_directory.join("untrusted.md");
-    std::fs::write(&outside, "other worktree").unwrap();
-    f.role(
-        false,
-        "other",
-        json!({"description": "other", "agents_md": {"files":[outside]}}),
-        "role",
-    );
-    f.project(json!({"agent":{"agents":["other"]}}));
-    assert!(
-        resolve(&f.request, &f.host)
-            .unwrap_err()
-            .contains("outside workspace boundary")
-    );
 }
 
 #[tokio::test]
@@ -2299,12 +2258,11 @@ fn workspace_authors_global_tool_policies_without_granting_root_tools() {
 }
 
 #[tokio::test]
-async fn selected_workspace_guidance_cannot_escape_its_resource_root() {
+async fn root_rejects_supplemental_guidance_and_retains_named_agent_discovery() {
     let f = Fixture::new();
-    let outside = f.root.path().join("outside.md");
-    std::fs::write(&outside, "Outside body").unwrap();
-    f.project(json!({"agent":{"agents_md":{"files":[outside]}}}));
-    assert!(resolve(&f.request, &f.host).is_err());
+    f.project(json!({"agent":{"agents_md":{"files":["notes.md"]}}}));
+    let error = resolve(&f.request, &f.host).unwrap_err();
+    assert!(error.contains("files"), "{error}");
     f.project(json!({}));
     f.role(
         true,
@@ -2385,10 +2343,6 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     let other = f.root.path().join("B");
     std::fs::create_dir(&other).unwrap();
     std::fs::write(other.join("file"), "B").unwrap();
-    std::os::unix::fs::symlink(&other, f.host.launch_directory.join("link")).unwrap();
-    f.project(json!({"agent":{"agents_md":{"files":["link/file"]}}}));
-    assert!(resolve(&f.request, &f.host).is_err());
-    f.project(json!({}));
     std::os::unix::fs::symlink(&other, f.host.launch_directory.join(".agents")).unwrap();
     let candidate = analyze(&f.request, &f.host).unwrap();
     assert!(!candidate.inspection.resource_diagnostics.is_empty());
@@ -2992,18 +2946,17 @@ mod session_resolution {
     }
 
     #[tokio::test]
-    async fn root_explicit_instruction_capture_survives_edit_and_fresh_resolution_refreshes() {
+    async fn workspace_agents_md_capture_survives_edit_and_fresh_resolution_refreshes() {
         let f = Fixture::new();
-        let file = f.host.launch_directory.join("root-instructions.md");
+        let file = f.host.launch_directory.join("AGENTS.md");
         std::fs::write(&file, "instruction A").unwrap();
-        f.project(json!({"agent":{"agents_md":{"files":["root-instructions.md"]}}}));
         let (manager, input) = f.request.session_input(&f.host).unwrap();
         let a = manager.resolve_session(&input).unwrap();
         let inspection_a = a.inspection.clone();
-        assert_eq!(a.root_agent_project_files[0].content, "instruction A");
+        assert_eq!(a.project_context_files[0].content, "instruction A");
         std::fs::write(&file, "instruction B").unwrap();
         let b = manager.resolve_session(&input).unwrap();
-        assert_eq!(b.root_agent_project_files[0].content, "instruction B");
+        assert_eq!(b.project_context_files[0].content, "instruction B");
         // Removal cannot cause a semantic reread failure at initial composition.
         std::fs::remove_file(&file).unwrap();
         let admitted_a = a.admit(|| f.credentials.clone()).unwrap();
@@ -3015,21 +2968,11 @@ mod session_resolution {
             .unwrap();
         let resources_a = product_a.runtime().runtime_resources();
         assert_eq!(
-            resources_a
-                .root_profile()
-                .unwrap()
-                .project_instructions
-                .files[0]
-                .content,
+            resources_a.project_context_files()[0].content,
             "instruction A"
         );
         assert_eq!(resources_a.inspection(), &inspection_a);
-        let old_files = resources_a
-            .root_profile()
-            .unwrap()
-            .project_instructions
-            .files
-            .clone();
+        let old_file = resources_a.project_context_files()[0].clone();
         drop(resources_a);
         product_a.shutdown().await.unwrap();
         drop(product_a);
@@ -3040,16 +2983,11 @@ mod session_resolution {
             .unwrap();
         let resources_b = product_b.runtime().runtime_resources();
         assert_eq!(
-            resources_b
-                .root_profile()
-                .unwrap()
-                .project_instructions
-                .files[0]
-                .content,
+            resources_b.project_context_files()[0].content,
             "instruction B"
         );
         assert_eq!(resources_b.inspection(), &inspection_b);
-        assert_eq!(old_files[0].content, "instruction A");
+        assert_eq!(old_file.content, "instruction A");
     }
 
     #[test]

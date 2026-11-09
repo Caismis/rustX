@@ -430,7 +430,8 @@ fn native_whitelist_empty_replaces_while_absence_inherits() {
 
 #[test]
 fn skills_all_exact_and_empty_are_valid_for_both_agent_kinds() {
-    use rustx::runtime::agent_profile::{AgentProfile, AgentProfileKind, AgentSkillSelection};
+    use rustx::local_runtime::config::{AgentProfileDocument, NamedAgentProfileDocument};
+    use rustx::runtime::agent_profile::AgentSkillSelection;
     for (text, selection) in [
         ("skills = 'all'", AgentSkillSelection::All),
         (
@@ -439,16 +440,10 @@ fn skills_all_exact_and_empty_are_valid_for_both_agent_kinds() {
         ),
         ("skills = []", AgentSkillSelection::Exact(vec![])),
     ] {
-        let document: rustx::local_runtime::config::AgentProfileDocument =
-            toml::from_str(text).unwrap();
-        for kind in [AgentProfileKind::Root, AgentProfileKind::Named] {
-            assert_eq!(
-                AgentProfile::from_document(&document, kind, vec![])
-                    .unwrap()
-                    .skills,
-                selection
-            );
-        }
+        let root: AgentProfileDocument = toml::from_str(text).unwrap();
+        let named: NamedAgentProfileDocument = toml::from_str(text).unwrap();
+        assert_eq!(root.skills.as_ref(), Some(&selection));
+        assert_eq!(named.skills, Some(selection));
     }
 }
 
@@ -977,7 +972,7 @@ fn named_agent_save_validates_complete_definition_before_committing() {
         .read_source_settings(&rustx_target(&input.cwd))
         .unwrap();
     let name = rustx::runtime::subagent::SubagentName::parse("reviewer").unwrap();
-    let mut profile = rustx::local_runtime::config::AgentProfileDocument {
+    let mut profile = rustx::local_runtime::config::NamedAgentProfileDocument {
         description: "Review changes".into(),
         instructions: "x".repeat(64 * 1024 + 1),
         ..Default::default()

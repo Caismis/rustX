@@ -74,16 +74,6 @@ pub(super) fn capture(
             .map(|(id, error)| (id, error.to_string()))
             .collect::<Vec<_>>(),
     )?;
-    for definition in catalog.definitions() {
-        for file in &definition.profile().project_instructions.files {
-            include_source(
-                &mut hash,
-                workspace.unwrap_or(&agent_root),
-                &file.path,
-                crate::bounded_file::MAX_RESOURCE_BYTES,
-            )?;
-        }
-    }
     include_source(
         &mut hash,
         root,

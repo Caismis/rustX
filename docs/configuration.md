@@ -471,17 +471,11 @@ Workspace that does not shadow it, and a Workspace enables its own files. The Wo
 file at a time (`workflow_enabled`). Dispatcher capabilities follow admission
 of those selections. Definition existence never selects a resource.
 
-`agents_md.inherit` defaults true and `files` defaults empty inside its winning
-object. Automatic instruction discovery loads one global file from
-`~/rustx/.agents/`, then one file from the resolved Workspace root. In each
-directory the first regular file wins in this order: `AGENTS.override.md`,
-`AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`. The global resource directory
-stays bound to the User home even with an explicit `--config`. Workspace
-ancestors are not searched, and coincident global and Workspace paths contribute
-only once.
-
-Explicit `files` are appended in authored order. Setting `inherit = false`
-excludes both automatically discovered scopes while retaining explicit files.
+`agents_md.inherit` defaults to true. Automatic instruction discovery reads
+`AGENTS.md` from `~/rustx/.agents/`, then from the resolved Workspace root.
+The global directory stays bound to the User home even with an explicit
+`--config`. Coincident global and Workspace paths contribute only once.
+Setting `inherit = false` excludes both scopes from the prompt.
 All instruction files must be UTF-8; one optional leading BOM is removed.
 Each nonempty file is rendered in the System Prompt as
 `<project_instructions path="/absolute/source/path">` followed by its content
@@ -608,7 +602,7 @@ units; there is no recursive TOML merge.
 | Plugins | Complete `agent.plugins.<plugin>` object | Empty object defaults off; omitted contributors use that Plugin's defaults |
 | Agent delegation | Complete `agent.agents` array | `[]` permits no named Agents and composes no Agent controls |
 | Workflow enablement | `agent.workflows` array, merged across User and Workspace | `[]` adds none; it never disables a Global Workflow |
-| Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true, files=[] |
+| Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true |
 | Native invocation policy | Complete `native_tools.<tool>` object | `{}` restores that Tool's product defaults |
 | MCP invocation policy | Complete `mcp_tool_policies.<server>` object | `{}` restores domain defaults |
 | Context | Complete `context` object | `{}` restores product defaults |
@@ -1039,10 +1033,9 @@ file; the User resource root `~/rustx/.agents` for `mcp.toml`, with its
 `agents`, `tools` and `workflows` directories recursively (its parent
 until it exists), plus Skill collections and grouping directories non-recursively
 for discovery changes and instruction replacement; each Workspace that holds source authority or a Session's
-configuration, for `rustx.toml`, root `*.md` and the guidance files; and that
-Workspace's `.agents` in the same way. The guidance files are exactly the
-loader's (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`,
-`CLAUDE.MD`), at a Workspace root and at the User resource root. Anything else
+configuration, for `rustx.toml` and `AGENTS.md`; and that Workspace's
+`.agents` in the same way. The User resource root also watches its
+`AGENTS.md`. Anything else
 under `.agents`, such as Session uploads, is neither watched nor routed. A
 notification for a watched directory or its ancestor may mean it was replaced at
 the same path, so those watches are registered again, and only a watch that
