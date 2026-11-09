@@ -667,7 +667,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "25ac038275e9305409691bbc086114b3bf89e2713fae33a3e0e1fdbbd30f3403"
+      "local_sha256": "f73b35c1a0ecd4a2df4a3eef1414177e6b0b6fd1a26954741c6927ade2d6b452"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -3496,7 +3496,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "36b24ffd6865ea99121a0dda1bd26a85b72e1df76345815890985cf7e101b261",
+      "local_sha256": "87001a37ce925340c9f1e6edf7b41d0cc974bd4692322ef345bf77af77308cdf",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -3961,7 +3961,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "8f8425238c3fb7702c0f8dca63d24d72f9f52ec5beb000694ba1c12ec5e642c0"
+      "local_sha256": "59ac4497839daa3c7162ea49c60cd22be7b33f172528402c2a4cd08e37db9c24"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

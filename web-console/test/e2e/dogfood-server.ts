@@ -178,10 +178,19 @@ timezone = "UTC"
     const workspaceHost = await startWorkspaceHost(hostConfig);
     const hostConfigFile = join(directory, 'host-config.json');
     writeFileSync(hostConfigFile, JSON.stringify(hostConfig), { mode: 0o600 });
+    const startOnSameEndpoint = async () => {
+      const restarted = await startApp(endpoint);
+      if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
+    };
     return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
+      async restartApp() {
+        app!.kill('SIGTERM');
+        await exited(app!);
+        await startOnSameEndpoint();
+      },
       /** Public creation materializes defaults. Seed inherited intent only
        * before the browser connects, with the native owner physically stopped. */
       async seedInheritedSession(modelFields: string) {
@@ -198,8 +207,7 @@ timezone = "UTC"
         delete catalog.sessions[id].state.model;
         writeFileSync(catalogPath, JSON.stringify(catalog));
         writeSettings(primaryModel, modelFields);
-        const restarted = await startApp(endpoint);
-        if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
+        await startOnSameEndpoint();
         return id;
       },
       async stop(check = true) {

@@ -427,14 +427,19 @@ impl CurrentRuntimeConfig {
     ///
     /// Returns the first validation failure.
     pub fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
-        self.validate_authored().map_err(|failure| failure.error)?;
-        // Composition facts: a root model and the `.agents` MCP servers that
-        // policy overlays name.
+        self.validate_resources()?;
         if self.agent.model.is_none() {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "agent.model.model is required for root".into(),
             });
         }
+        Ok(())
+    }
+
+    /// Validate the runtime's resource configuration even if its catalog
+    /// has no model for a new Session yet.
+    pub(crate) fn validate_resources(&self) -> Result<(), CurrentRuntimeConfigError> {
+        self.validate_authored().map_err(|failure| failure.error)?;
         // Duplicate MCP identity is structurally impossible: `mcpServers` is
         // a keyed map. Normalization is the remaining semantic gate, and it
         // runs here so a malformed entry fails at parse time rather than at

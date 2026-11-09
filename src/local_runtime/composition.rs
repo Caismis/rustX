@@ -603,7 +603,9 @@ impl LocalConversationCore {
                 .validate_resource_authority()
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
             let project_context_files = paths.project_context_files.clone();
-            SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
+            if let Some(default) = &runtime_config.agent.model {
+                SessionModelState::new(registry.clone(), default.clone())?;
+            }
             // A persisted selection the catalog no longer admits composes an
             // unavailable Session: it loads, advertises this catalog and admits
             // nothing until a valid selection is committed.
@@ -612,7 +614,10 @@ impl LocalConversationCore {
                 session_state
                     .model
                     .clone()
-                    .unwrap_or_else(|| runtime_config.initial_model().clone()),
+                    .or_else(|| runtime_config.agent.model.clone())
+                    .ok_or_else(|| LocalRuntimeError::Capability {
+                        detail: "Session has no configured model".into(),
+                    })?,
             )?;
 
             // Initial Root Plugin selection comes from the resolved CFG3 profile.

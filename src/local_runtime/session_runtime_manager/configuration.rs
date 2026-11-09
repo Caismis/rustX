@@ -775,8 +775,16 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let target = target.clone();
         tokio::task::spawn_blocking(move || {
+            use super::super::configuration::settings::{ConfigMutation, SourceMutation};
             target.validate().map_err(SourceSettingsError::Source)?;
             let mut application = owner.applications.lock();
+            let removed_model = match &mutation {
+                SourceMutation::Config {
+                    mutation: ConfigMutation::Model { id, authored: None },
+                    ..
+                } => crate::model::catalog::ModelRef::parse(id).ok(),
+                _ => None,
+            };
             let result = owner
                 .configuration
                 .write_source_settings(&target, &expected, mutation);
@@ -787,6 +795,13 @@ impl SessionRuntimeManager {
                 )
             {
                 owner.capture_source_consumers(&mut application, &target);
+                if let Some(model) = removed_model {
+                    application.publish_model_removal(
+                        target.workspace(),
+                        &model,
+                        &owner.credentials,
+                    );
+                }
                 owner.applications.notify(&application);
             }
             let configuration_revision = application

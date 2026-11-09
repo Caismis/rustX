@@ -475,6 +475,21 @@ def web_model_errors() -> Scenario:
 SCENARIOS["web_model_errors"] = web_model_errors
 
 
+def web_model_deletion() -> Scenario:
+    def reply(model: str, prompt: str, answer: str) -> Step:
+        return Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=model, body_contains=(prompt,)),
+                    Stream(Text(answer), Finish()))
+
+    return Scenario("web_model_deletion",
+        reply("console-model", "Before model deletion", "Existing conversation history."),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="second-model", body_contains=("Start with the replacement",)),
+             Stream(Gate("new-conversation-ready"), Text("New conversation uses the replacement."), Finish())),
+        reply("second-model", "Continue the old conversation", "Old conversation continues after reselecting."))
+
+
+SCENARIOS["web_model_deletion"] = web_model_deletion
+
+
 def web_timeout_retry() -> Scenario:
     expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
     timeout = HttpError(408, {"error": {"message": "Fixture model response timeout", "type": "timeout"}})

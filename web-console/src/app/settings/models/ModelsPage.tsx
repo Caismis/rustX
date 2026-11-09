@@ -263,15 +263,15 @@ type ModelSelectionProps = { value: ModelLayer; change: (next: ModelLayer) => vo
 function DefaultModelSelection({ value, change, models, profiles }: ModelSelectionProps) {
   const tx = useTranslation();
   const choices = new Set(models);
-  if (value.model) choices.add(value.model);
+  const model = value.model && choices.has(value.model) ? value.model : null;
   // A new primary selection uses its own preset's parameters and output
   // budget. The auxiliary models are configured independently in the source.
   const { profile, request_params: _params, max_output_tokens: _limit, ...selection } = value;
   return <>
-    <Choice label={tx('settings:models-page.model')} value={value.model ?? null} placeholder={tx('settings:copy.select-model')} disabled={choices.size === 0}
+    <Choice label={tx('settings:models-page.model')} value={model} placeholder={tx('settings:copy.select-model')} disabled={choices.size === 0}
       options={[...choices].map(id => [id, id])} onChange={model => change({ ...selection, model })}/>
-    <ModelProfileChoice label={tx('settings:models-page.profile')} profile={profile} profiles={profiles[value.model ?? ''] ?? []}
-      onChange={profile => change(profile ? { ...selection, profile } : selection)}/>
+    {model && <ModelProfileChoice label={tx('settings:models-page.profile')} profile={profile} profiles={profiles[model] ?? []}
+      onChange={profile => change(profile ? { ...selection, profile } : selection)}/>}
   </>;
 }
 

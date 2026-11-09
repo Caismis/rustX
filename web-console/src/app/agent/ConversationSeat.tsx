@@ -60,7 +60,7 @@ export function ConversationSeat({ visible = true, client, host, authority, asso
         context={view && <ConversationDocks key={view.id} client={client} sessionId={view.id} disabled={disabled}/>}
         active={view ? {
           initialContent: restored?.conversation === (view.nodeConversationId ?? view.target?.conversation_id ?? view.snapshot?.conversation_id) ? restored?.content : undefined,
-          submissionTarget: view.target, submitDisabled: false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
+          submissionTarget: view.target, submitDisabled: view.snapshot?.model_status?.available === false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
           lineageSwitchSafe: lineageSwitchSafe(view), hasGoal: !!goalDock(view.snapshot), onCommand,
           consumed, cancellationAvailable: !!cancellation, cancellationOnly: !attached && !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,

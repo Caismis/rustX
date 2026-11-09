@@ -198,19 +198,20 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   expect(server.requests.some(row => row.request.method === 'configuration/sourceWrite')).toBe(false);
 });
 
-it('an unavailable saved selection remains visibly invalid and cannot submit a silently substituted default', async () => {
+it('a removed recent model yields to the native default for a new conversation', async () => {
   modelPreferences().select(endpoint, { model: 'removed/provider-model', profile: 'removed-profile' });
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
   fireEvent.click(screen.getByRole('button', { name: 'Choose Workspace' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace A' })));
-  fireEvent.change(input(), { target: { value: 'must not substitute' } });
-  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('removed/provider-model');
-  fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
-  expect(screen.getByText(/removed\/provider-model is unavailable/)).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
-  fireEvent.keyDown(input(), { key: 'Enter' });
-  expect(server.requests.some(row => row.request.method === 'thread/start')).toBe(false);
+  fireEvent.change(input(), { target: { value: 'Use the Workspace default' } });
+  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('fixture/root');
+  server.held.add('thread/start');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  const started = await server.waitFor('thread/start', 1);
+  if (started.method !== 'thread/start') throw new Error('Expected thread/start.');
+  expect(started.params).toMatchObject({ settings: { cwd: '/workspace/A' } });
+  expect(started.params.settings).not.toHaveProperty('model');
   expect(modelPreferences().read(endpoint)!.model).toBe('removed/provider-model');
 });
 

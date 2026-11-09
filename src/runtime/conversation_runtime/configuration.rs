@@ -745,7 +745,7 @@ impl ConversationRuntime {
             .configuration
             .as_ref()
             .ok_or("candidate has no configuration")?;
-        let model = SessionModelState::new(generation.models.clone(), selection)
+        let model = SessionModelState::restore(generation.models.clone(), selection)
             .map_err(|error| error.to_string())?;
         validate_model_context(&generation.config.context_policy(), &model)
             .map_err(|error| error.message)?;

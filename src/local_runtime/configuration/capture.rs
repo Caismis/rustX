@@ -190,8 +190,14 @@ impl UserConfigManager {
         let process = layers.merged.app_server.clone().unwrap_or_default();
         process.validate()?;
         let (context, read) = crate::bounded_file::recording_reads(|| {
-            self.resolve_captured_layers(layers)
-                .and_then(Self::resolve_runtime_configuration)
+            self.resolve_captured_layers(layers, true)
+                .and_then(|capture| {
+                    capture
+                        .config
+                        .validate_resources()
+                        .map_err(|e| e.to_string())?;
+                    Ok(capture)
+                })
                 .and_then(|capture| self.resolve_resources(request, capture))
                 .map_err(|error| error.diagnostic.reason)
         });
@@ -238,7 +244,7 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         layers: LayerCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let capture = self.resolve_captured_layers(layers)?;
+        let capture = self.resolve_captured_layers(layers, false)?;
         let config = &capture.config;
         config.context.validate().map_err(|e| e.to_string())?;
         let (primary, summary) = crate::model::session::analyze_session_model_config(
@@ -392,6 +398,7 @@ impl UserConfigManager {
     fn resolve_captured_layers(
         &self,
         capture: LayerCapture,
+        allow_unselected: bool,
     ) -> Result<SourceCapture, LaunchFailure> {
         let LayerCapture {
             mut revisions,
@@ -440,11 +447,12 @@ impl UserConfigManager {
                 e.to_string(),
             )
         };
-        if merged
-            .agent
-            .as_ref()
-            .and_then(|agent| agent.model.as_ref())
-            .is_none_or(|model| model.model.is_none())
+        if !allow_unselected
+            && merged
+                .agent
+                .as_ref()
+                .and_then(|agent| agent.model.as_ref())
+                .is_none_or(|model| model.model.is_none())
         {
             // Incomplete only when everything the composition decides holds;
             // an independently invalid value is invalid with or without a
@@ -468,8 +476,38 @@ impl UserConfigManager {
             return Err(error);
         }
         let models = model_result.map_err(model_failure)?;
+        if !allow_unselected && models.model_refs().next().is_none() {
+            return Err(model_failure(
+                crate::model::catalog::ModelCatalogError::EmptyCatalog,
+            ));
+        }
         let effective = merged.clone();
         let mut config = merged.resolve()?;
+        if allow_unselected
+            && config
+                .agent
+                .model
+                .as_ref()
+                .is_none_or(|selection| models.model(&selection.model).is_err())
+        {
+            // An authored preference can outlive its model. Project a new
+            // default from visible choices without rewriting that preference
+            // or the selection carried by an existing Session.
+            config.agent.model = models
+                .selectable_model_refs()
+                .cloned()
+                .map(crate::model::session::SessionModelConfig::of)
+                .find(|selection| {
+                    crate::model::session::analyze_session_model_config(&models, selection)
+                        .is_ok_and(|(primary, _)| {
+                            let budget = (primary.context_window, primary.max_output_tokens);
+                            config
+                                .context_policy()
+                                .validate_budgets(budget, budget)
+                                .is_ok()
+                        })
+                });
+        }
         let mcp = super::super::mcp_resources::load(
             &self.sources.home_directory.join("rustx/.agents"),
             Some(&locations.workspace),

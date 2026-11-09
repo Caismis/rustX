@@ -358,7 +358,8 @@ impl ApplicationState {
             input
                 .model
                 .clone()
-                .unwrap_or_else(|| capture.config.initial_model().clone()),
+                .or_else(|| capture.config.agent.model.clone())
+                .ok_or(NO_CONVERSATION_MODEL)?,
         );
         Self::validate_selection(&capture, credentials, persisted)?;
         capture.admit(|| credentials.clone())
@@ -374,11 +375,26 @@ impl ApplicationState {
         credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<std::borrow::Cow<'_, super::ProspectiveSessionConfig>, String> {
         if let Some(capture) = self.available.get(key) {
+            // An empty catalog has no launch binding to retain. A validated
+            // model added later can bootstrap a new Session without requiring
+            // an existing Session worker to publish it first.
+            if capture.config.agent.model.is_none()
+                && let Some(desired) = self
+                    .desired_sources
+                    .get(key)
+                    .and_then(|input| input.as_ref().ok())
+                    .and_then(|input| input.context.as_ref().ok())
+                && desired.config.agent.model.is_some()
+                && Self::validate_default(desired, credentials).is_ok()
+                && desired.validate_resource_authority().is_ok()
+            {
+                return Ok(std::borrow::Cow::Owned(desired.clone()));
+            }
             return Ok(std::borrow::Cow::Borrowed(capture));
         }
         let capture = configuration
-            .resolve_session(&super::SessionConfigInput::new(key.to_path_buf()))
-            .map_err(|error| error.to_string())?;
+            .capture_application(&super::SessionConfigInput::new(key.to_path_buf()))?
+            .context?;
         Self::validate_default(&capture, credentials)?;
         capture.validate_resource_authority()?;
         Ok(std::borrow::Cow::Owned(capture))
@@ -401,6 +417,12 @@ impl ApplicationState {
     > {
         let key = super::capture::canonical_directory(cwd)?;
         let capture = self.creation_capture(configuration, &key, credentials)?;
+        let default = capture
+            .config
+            .agent
+            .model
+            .clone()
+            .ok_or(NO_CONVERSATION_MODEL)?;
         let catalog = capture
             .models
             .resolve(credentials)
@@ -409,7 +431,7 @@ impl ApplicationState {
             crate::model::invocation::ModelBindingRegistry::new(catalog)
                 .map_err(|error| error.to_string())?
                 .catalog_view(),
-            capture.config.initial_model().clone(),
+            default,
         ))
     }
 
@@ -468,7 +490,7 @@ impl ApplicationState {
     ) -> Result<(), String> {
         capture
             .config
-            .validate()
+            .validate_resources()
             .map_err(|error| error.to_string())?;
         for name in &capture.admitted_agent_dependencies() {
             if capture.subagents.get(name).is_none() {
@@ -500,6 +522,9 @@ impl ApplicationState {
         capture: &super::ProspectiveSessionConfig,
         credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<(), String> {
+        if capture.config.agent.model.is_none() {
+            return Ok(());
+        }
         let mut default = capture.clone();
         default.input.model = None;
         Self::validate_selection(&default, credentials, false)
@@ -709,6 +734,43 @@ impl ApplicationState {
             .insert(source.to_path_buf(), input.clone());
         if let Ok(input) = input {
             self.desired_process = Some(input.process.clone());
+        }
+    }
+
+    /// A removed model stops being a choice for new Sessions at the source
+    /// commit, even in a Workspace with no Session worker to apply that edit.
+    /// Only the catalog unit is published here. The captured generation still
+    /// travels through the ordinary worker for existing Sessions.
+    pub(crate) fn publish_model_removal(
+        &mut self,
+        workspace: Option<&std::path::Path>,
+        removed: &crate::model::catalog::ModelRef,
+        credentials: &crate::credentials::CredentialSnapshot,
+    ) {
+        for (directory, available) in &mut self.available {
+            if workspace.is_some_and(|workspace| workspace != directory)
+                || available.models.model(removed).is_err()
+            {
+                continue;
+            }
+            let Some(desired) = self
+                .desired_sources
+                .get(directory)
+                .and_then(|input| input.as_ref().ok())
+                .and_then(|input| input.context.as_ref().ok())
+            else {
+                continue;
+            };
+            if desired.models.model(removed).is_ok() {
+                // Removing a Workspace override can expose the User model.
+                continue;
+            }
+            let candidate = available.clone().with_published_catalog(desired);
+            if candidate.preserves_adopted_models(available)
+                && Self::validate_default(&candidate, credentials).is_ok()
+            {
+                *available = candidate;
+            }
         }
     }
 
@@ -963,6 +1025,8 @@ impl ApplicationState {
         true
     }
 }
+
+const NO_CONVERSATION_MODEL: &str = "No model is available. Add or enable a model in Settings.";
 
 #[cfg(test)]
 mod tests {

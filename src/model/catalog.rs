@@ -844,10 +844,15 @@ impl ModelCatalog {
     pub fn from_toml_slice(bytes: &[u8]) -> Result<Self, ModelCatalogError> {
         let document: super::authoring::Catalog = crate::toml_authoring::parse(bytes)
             .map_err(|detail| ModelCatalogError::Syntax { detail })?;
-        Self::from_authoring(document)
+        let catalog = Self::from_authoring(document)?;
+        if catalog.models.is_empty() {
+            return Err(ModelCatalogError::EmptyCatalog);
+        }
+        Ok(catalog)
     }
 
-    /// Validate the complete catalog, then index only visible model choices.
+    /// Validate the authored catalog, then index only visible model choices.
+    /// Source settings may publish an empty catalog to existing Sessions.
     pub(crate) fn from_authoring(
         document: super::authoring::Catalog,
     ) -> Result<Self, ModelCatalogError> {
@@ -874,7 +879,11 @@ impl ModelCatalog {
     ///
     /// Returns the first validation failure.
     pub fn from_document(document: ModelCatalogDocument) -> Result<Self, ModelCatalogError> {
-        Self::from_document_with_choices(document, |_| true)
+        let catalog = Self::from_document_with_choices(document, |_| true)?;
+        if catalog.models.is_empty() {
+            return Err(ModelCatalogError::EmptyCatalog);
+        }
+        Ok(catalog)
     }
 
     fn from_document_with_choices(
@@ -882,9 +891,6 @@ impl ModelCatalog {
         visible: impl Fn(&ModelRef) -> bool,
     ) -> Result<Self, ModelCatalogError> {
         let (providers, models) = Self::validated_entries(document)?;
-        if providers.is_empty() || models.is_empty() {
-            return Err(ModelCatalogError::EmptyCatalog);
-        }
         let model_ordinals: Arc<[_]> = models
             .keys()
             .filter(|reference| visible(reference))
@@ -1014,6 +1020,11 @@ impl ModelCatalog {
     /// Every model reference in deterministic presentation order.
     pub fn model_refs(&self) -> impl Iterator<Item = ModelRef> + '_ {
         self.models.keys().cloned()
+    }
+
+    /// Visible choices in the same order as the published catalog.
+    pub(crate) fn selectable_model_refs(&self) -> impl Iterator<Item = &ModelRef> {
+        self.model_ordinals.iter()
     }
 
     /// Captures credential inputs for every provider without requiring unused keys.
