@@ -636,6 +636,7 @@ impl SubagentRegistry {
                 CancellationSignal,
                 tokio::sync::watch::Sender<AdmissionSettlement>,
                 Option<crate::runtime::types::LifecycleAdmission>,
+                ResumeActivity,
             ),
         }
         if caller_cancellation.is_cancelled() {
@@ -744,6 +745,7 @@ impl SubagentRegistry {
                                 cancellation,
                                 completion,
                                 admission,
+                                ResumeActivity::new_under_lock(self),
                             )
                         }
                         _ => return Err(AgentControlError::Stopping),
@@ -817,11 +819,12 @@ impl SubagentRegistry {
                     resumed: false,
                 })
             }
-            Decision::Resume(spec, mut identity, cancellation, completion, admission) => {
+            Decision::Resume(spec, mut identity, cancellation, completion, admission, activity) => {
                 // The owner retains staging/rollback even if the caller drops
                 // its response future after the reservation committed.
                 let registry = self.clone();
                 let owner_task = tokio::spawn(async move {
+                    let _activity = activity;
                     let _admission = admission;
                     #[cfg(test)]
                     let mut test_gates = registry.state.lock().unwrap().resume_test_gates.take();
@@ -1030,13 +1033,27 @@ impl SubagentRegistry {
                         } else if matches!(&result, Err(SubagentStartError::Rollback { .. })) {
                             // The unproven rollback stays this reservation's own
                             // absorbing admission failure.
-                            if let Some(reservation) = &agent.resuming {
+                            if let Some(reservation) = &mut agent.resuming {
                                 reservation
                                     .completion
                                     .send_replace(AdmissionSettlement::Failed);
                             }
                         } else {
                             agent.finish_resume(&identity.activation_id);
+                        }
+                        if state.agents[&identity.agent_id]
+                            .resuming
+                            .as_ref()
+                            .is_some_and(|reservation| {
+                                matches!(
+                                    *reservation.completion.borrow(),
+                                    AdmissionSettlement::Failed
+                                )
+                            })
+                        {
+                            state.failed_admissions.insert(identity.agent_id.clone());
+                        } else {
+                            state.failed_admissions.remove(&identity.agent_id);
                         }
                         let index =
                             state.index[&state.agents[&identity.agent_id].latest_activation];
@@ -1405,6 +1422,7 @@ impl SubagentRegistry {
                     cancellation: CancellationSignal::new(),
                     completion,
                 });
+                state.failed_admissions.insert(agent_id);
                 state.recovery_pending.insert(activation_id);
             }
         }
@@ -1421,9 +1439,37 @@ impl SubagentRegistry {
                 state.records[index].publication_abandoned = true;
             }
         }
+        for index in 0..state.records.len() {
+            state.refresh_activity(index);
+        }
         drop(state);
         self.reconcile_recovered_settlements();
         self.start_recovery_reconciliation();
         Ok(())
+    }
+}
+
+struct ResumeActivity {
+    count: Arc<std::sync::atomic::AtomicUsize>,
+    changes: tokio::sync::watch::Sender<u64>,
+}
+impl ResumeActivity {
+    fn new_under_lock(registry: &SubagentRegistry) -> Self {
+        registry
+            .resume_activity
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        registry
+            .state_version
+            .send_modify(|revision| *revision += 1);
+        Self {
+            count: registry.resume_activity.clone(),
+            changes: registry.state_version.clone(),
+        }
+    }
+}
+impl Drop for ResumeActivity {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        self.changes.send_modify(|revision| *revision += 1);
     }
 }

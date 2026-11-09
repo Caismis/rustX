@@ -3,6 +3,7 @@ import { expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { routeFixture } from './shell-navigation-fixture';
 import { WorkspaceAssociations } from '../src/workspaces/associations';
+import { preferredWorkspace } from '../src/workspaces/preferred';
 import type { AppServerClient } from '../src/client/app-server';
 import type { ClientView } from '../src/client/contracts';
 import { WorkspaceHostError, type ProductHostWorkspaces, type SessionLocation, type WorkspaceCatalog } from '../src/workspaces/host';
@@ -29,7 +30,7 @@ async function fixture(listWorkspaces: ProductHostWorkspaces['listWorkspaces'] =
       maxActive = Math.max(maxActive, ++active);
       readWaiters.get(reads.length)?.(); return gate.promise.finally(() => { --active; });
     }),
-    adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
+    adoptWorkspace: vi.fn(), removeWorkspace: vi.fn(), renameWorkspace: vi.fn(), selectWorkspace: async () => {}, reorderWorkspace: vi.fn(), resolveWorkspace: vi.fn(),
   };
   const client = { onAuthorityRetired: () => () => {}, onDispose: () => () => {}, recheckAdmissions: () => {}, subscribeSessionDeletion: (listener: (id: string) => void) => { deletions.add(listener); return () => deletions.delete(listener); }, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); } } as unknown as AppServerClient;
   const navigation = routeFixture(client);
@@ -59,6 +60,17 @@ it('retains confirmed evidence during cloned, title-only, reordered and disconne
   expect(f.host.resolveWorkspace).not.toHaveBeenCalled(); expect(f.host.adoptWorkspace).not.toHaveBeenCalled();
   f.stop(); expect(f.listeners.size).toBe(1); // The browser-lifetime Shell authority observer remains.
   f.navigation.stop(); expect(f.listeners.size).toBe(0);
+});
+it('retains recent native activity across metadata searches without another classification read', async () => {
+  const f = await fixture(); await f.accept(0);
+  const a = { ...row('A'), updated_at: '2026-11-01T00:00:00Z' }, b = { ...row('B'), updated_at: '2026-11-06T00:00:00Z' };
+  f.publish({ sessions: [b, a] });
+  expect(preferredWorkspace(f.owner.getSnapshot(), f.state())).toBe('B');
+  f.publish({ sessions: [a] });
+  expect(preferredWorkspace(f.owner.getSnapshot(), f.state())).toBe('B');
+  expect(f.reads).toHaveLength(1);
+  f.remove('B'); expect(preferredWorkspace(f.owner.getSnapshot(), f.state())).toBe('A');
+  f.stop();
 });
 it('correlates captured IDs with duplicate cwds and retains unrelated page metadata', async () => {
   const f = await fixture(); await f.accept(0);

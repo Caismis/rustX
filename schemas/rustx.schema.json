@@ -140,6 +140,15 @@
     "AppServerPolicy": {
       "additionalProperties": false,
       "properties": {
+        "environment_roots": {
+          "default": [],
+          "description": "Instance-wide native roots for standalone commands and filesystem RPCs.\nEmpty denies these operations. Only User/Host configuration owns grants.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
         "idle_grace_ms": {
           "default": 300000,
           "format": "uint64",

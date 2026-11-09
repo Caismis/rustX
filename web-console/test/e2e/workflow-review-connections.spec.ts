@@ -31,7 +31,7 @@ for (const renamed of [false, true]) test(`Human Input middle exit connects and 
     writeFileSync(file, JSON.stringify(document).replace('"timeout_ms":"60000"', '"timeout_ms":60000'));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'review_connections', exact: true }).click();
     const canvas = page.getByRole('region', { name: 'Workflow canvas' });
     const human = canvas.getByLabel('Human Input node human', { exact: true });

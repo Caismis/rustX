@@ -175,6 +175,9 @@ impl SessionCatalog {
         )?;
         let now = Utc::now();
         let node = SessionNode {
+            name: None,
+            archived: false,
+            dynamic_tools: Vec::new(),
             ordinal: 1,
             id: node_id.clone(),
             parent: None,

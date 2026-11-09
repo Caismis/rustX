@@ -1,10 +1,10 @@
 import { useTranslation } from '../../../locale/react';
-import { useRef, useState, type Key, type ReactNode, type RefObject } from 'react';
-import { DialogSurface, useDialogPortal } from '../../../presentation/primitives/DialogSurface';
+import { useContext, useEffect, useRef, useState, type Key, type ReactNode, type RefObject } from 'react';
+import { DialogSurface, useDialogPortal, useOverlayActive } from '../../../presentation/primitives/DialogSurface';
 import clsx from 'clsx';
 import {
   Button as AriaButton, Disclosure, DisclosurePanel, GridList, GridListItem, Heading, Input, Label,
-  ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, Popover as AriaPopover, SearchField, Select, SelectValue,
+  ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, OverlayTriggerStateContext, Popover as AriaPopover, SearchField, Select, SelectValue,
   Switch as AriaSwitch, Tab, TabList, TabPanel, Tabs, Text,
 } from 'react-aria-components';
 import { IconTrashOutline16 } from '../../../presentation/primitives/icons';
@@ -14,6 +14,9 @@ import contentCss from '../../../presentation/settings/SettingsContent.module.cs
 
 function Popover(props: React.ComponentProps<typeof AriaPopover>) {
   const container = useDialogPortal();
+  const active = useOverlayActive();
+  const state = useContext(OverlayTriggerStateContext);
+  useEffect(() => { if (!active && state?.isOpen) state.close(); }, [active, state]);
   return <AriaPopover {...props} UNSTABLE_portalContainer={container} />;
 }
 

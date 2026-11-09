@@ -298,9 +298,15 @@ impl SqliteConversationStore {
         }
         ensure_surface_head(transaction)?;
 
-        let items = load_pending_until(transaction, watermark)?;
+        let steering_only = attempt_id.is_some();
+        let mut items = load_pending_until(transaction, watermark)?;
+        if steering_only {
+            items.retain(|item| {
+                item.message.kind != crate::message::types::InboundKind::QueuedMessage
+            });
+        }
         for item in &items {
-            let block = MessageBlock::User(item.message.clone());
+            let block = crate::durable::canonical_block(&item.message);
             let cursor = validation.append(transaction, &block, Some(&item.message_id))?;
             if cursor != item.transcript_cursor {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -309,10 +315,13 @@ impl SqliteConversationStore {
                 )));
             }
         }
-        transaction
+        // The active attempt adopts only steering input. The queued rows keep
+        // their exact identities and remain available to the next admission.
+        let removed = transaction
             .execute_cached(
-                "DELETE FROM pending_inbound WHERE sequence <= ?1",
-                [seq_to_i64(watermark.get())?],
+                "DELETE FROM pending_inbound WHERE sequence <= ?1
+                 AND (NOT ?2 OR json_extract(message_json, '$.kind') IS NOT 'queued_message')",
+                params![seq_to_i64(watermark.get())?, steering_only],
             )
             .map_err(|error| {
                 crate::durable::sqlite::sqlite_error(
@@ -320,6 +329,11 @@ impl SqliteConversationStore {
                     format!("adopt pending delete: {error}"),
                 )
             })?;
+        if removed != items.len() {
+            return Err(ConversationStoreError::InvalidReference(
+                "pending adoption deleted a different set of rows".into(),
+            ));
+        }
         for item in &items {
             // The removed native pending row fences these derived bytes even
             // if cleanup fails; their deletion cannot refuse adoption.
@@ -512,15 +526,18 @@ impl SqliteConversationStore {
                 (Some(adopted), None)
             } else {
                 let pending: bool = transaction
-                    .query_row_cached("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
-                        row.get(0)
-                    })
+                    .query_row_cached(
+                        "SELECT EXISTS(SELECT 1 FROM pending_inbound
+                         WHERE json_extract(message_json, '$.kind') IS NOT 'queued_message')",
+                        [],
+                        |row| row.get(0),
+                    )
                     .map_err(|error| {
                         crate::durable::sqlite::sqlite_error(&error, error.to_string())
                     })?;
                 if pending {
                     return Err(ConversationStoreError::PublicationViolation(
-                        "empty model boundary has pending inbound".into(),
+                        "empty model boundary has pending steering input".into(),
                     ));
                 }
                 #[cfg(test)]

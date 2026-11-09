@@ -209,6 +209,18 @@ pub enum HostConstructionError {
     Durable(String),
 }
 
+/// Leaf retirement notice; it carries no native interaction settlement authority.
+pub(crate) trait InteractionLifecycleSink: Send + Sync {
+    fn pending(
+        &self,
+        thread: &ConversationId,
+        header: &crate::observation::interaction::RuntimeClientInteractionHeader,
+        owner: Weak<ClientInner>,
+    );
+    fn retired(&self, interaction: &InteractionRef);
+    fn origin_retired(&self, conversation: &ConversationId);
+}
+
 impl core::fmt::Display for HostConstructionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -233,8 +245,6 @@ impl std::error::Error for HostConstructionError {}
 
 /// The host-owned attachment state.
 pub(crate) struct AttachmentState {
-    /// The attachment identity.
-    attachment_id: AttachmentId,
     /// Shared with the handle and submission permits; detach revokes it before
     /// removing this registration or admitting a successor controller.
     authority: Arc<Mutex<bool>>,
@@ -247,13 +257,8 @@ pub(crate) struct ClientState {
     /// The Runtime Client projection: snapshot read model, cursor,
     /// bounded replay, subscribers.
     projection: RuntimeClientProjection,
-    /// The one control-capable Runtime Client attachment. Read-only
-    /// inspection attachments are kept separately so observation subscribers
-    /// do not compete with execution/control ownership.
-    control_attachment: Option<AttachmentState>,
-    /// Read-only Runtime Client inspection attachments. They share the one
-    /// projection and replay ring, but never acquire control authority.
-    read_only_attachments: BTreeMap<AttachmentId, AttachmentState>,
+    /// Independently closable clients sharing the native Conversation writer.
+    attachments: BTreeMap<AttachmentId, AttachmentState>,
     /// The next attachment identity sequence.
     next_attachment_seq: u64,
 }
@@ -462,6 +467,7 @@ enum ProjectionWorker {
 
 /// The shared Runtime Client host state.
 pub(crate) struct ClientInner {
+    interaction_lifecycle: std::sync::OnceLock<Arc<dyn InteractionLifecycleSink>>,
     pub(super) conversation_id: ConversationId,
     agent_id: crate::runtime::identity::AgentId,
     /// The live conversation runtime this host observes and controls. A
@@ -595,6 +601,12 @@ impl core::fmt::Debug for RuntimeClientHost {
 }
 
 impl RuntimeClientHost {
+    pub(crate) fn install_interaction_lifecycle(&self, sink: Arc<dyn InteractionLifecycleSink>) {
+        assert!(
+            self.inner.interaction_lifecycle.set(sink).is_ok(),
+            "one interaction lifecycle sink"
+        );
+    }
     /// The conversation identity of this host.
     #[must_use]
     pub fn conversation_id(&self) -> &ConversationId {
@@ -627,8 +639,7 @@ impl RuntimeClientHost {
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::UnsupportedProtocolVersion`] for an
-    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when the
-    /// control attachment is active, and
+    /// unsupported version and
     /// [`RuntimeClientError::ProjectionExhausted`] once the observation
     /// stream is over.
     pub fn attach(

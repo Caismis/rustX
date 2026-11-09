@@ -1,5 +1,5 @@
 import { assign, raise, setup, type ActorRefFrom } from 'xstate';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v73';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v76';
 import { emptyFacts, sameClaim, type Admission, type Attached, type LifecycleFacts, type Observation, type SessionLifecyclePort } from './port';
 
 type Kind = 'open' | 'release' | 'switch' | 'delete' | 'recover' | 'inspect';
@@ -127,7 +127,7 @@ async function execute(self: { getSnapshot(): { context: LifecycleContext }; sen
           if (admitted()) {
             self.send({ type: 'NODE', token: op.token, node, conversation });
             submit();
-            const result = await port.attach(node, { current: admitted, sent: proof.sent, validate: async signal => {
+            const result = await port.attach(node, conversation, { current: admitted, sent: proof.sent, validate: async signal => {
               const valid = await admission.validate(signal);
               if (valid && admitted()) port.cold(admitted);
               return valid && admitted();

@@ -124,14 +124,14 @@ async fn t14_t20_two_execution_intents_bypass_six_waits_and_eight_unpolled_obser
         let agent_cancel = admitted(&child, 301, Method::AgentInterrupt { target: child.target.clone(), agent_id: child.agent.clone() });
         refused(&child, 302, Method::ServerInfo {}, ErrorData::RequestCapacity).await;
         refused(&child, 303, Method::AgentObserve { target: child.target.clone(), agent_id: AgentId::new("ninth-unpolled"), after: None }, ErrorData::ObservationCapacityExceeded).await;
-        refused(&child, 304, Method::TurnCancel { target: child.target.clone() }, ErrorData::RequestCapacity).await;
+        refused(&child, 304, Method::TurnCancel { turn_id: crate::runtime::identity::AttemptId::new("obsolete-turn"), target: child.target.clone() }, ErrorData::RequestCapacity).await;
         let job_reply = job_cancel.await;
         let agent_reply = agent_cancel.await;
         assert!(matches!(job_reply.produced(), Response::Success(response) if matches!(&response.result, MethodResult::JobCancellationAccepted { job_id: captured } if captured == &job_id)));
         assert!(matches!(agent_reply.produced(), Response::Success(response) if matches!(&response.result, MethodResult::AgentInterruptionAccepted { agent_id, activation_id: Some(captured) } if agent_id == &child.agent && captured == &activation)));
         // Future completion is not response disposition: both control slots
         // remain owned while their real outbound records have accepted no bytes.
-        refused(&child, 305, Method::TurnCancel { target: child.target.clone() }, ErrorData::RequestCapacity).await;
+        refused(&child, 305, Method::TurnCancel { turn_id: crate::runtime::identity::AttemptId::new("obsolete-turn"), target: child.target.clone() }, ErrorData::RequestCapacity).await;
         assert_pending(&mut waits);
         assert!(cancellation.lock().unwrap().as_ref().unwrap().is_cancelled());
         assert_eq!(runtime.tool_runtime().background().snapshot(&job_id).unwrap().state, crate::tools::background::BackgroundLifecycle::Cancelling);

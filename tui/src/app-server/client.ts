@@ -1,6 +1,8 @@
+import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-server/callbacks.ts';
+import { InputReceipts } from './input-receipts.ts';
 import { transferUpload } from '../../../protocol/app-server/upload.ts';
 import { ATTACHMENT_REQUEST_CAPACITY, requestEffect, requestLane, type MethodEffect, type RequestLane } from '../../../protocol/app-server/method-policy.ts';
-import type { Request1 } from '../../../protocol/app-server/v73.ts';
+import type { Request1 } from '../../../protocol/app-server/v76.ts';
 /**
  * The one typed App Server client.
  *
@@ -46,7 +48,7 @@ import type { Request1 } from '../../../protocol/app-server/v73.ts';
  */
 
 import { retainSourceRepair, sourceRepairKey } from "../../../protocol/app-server/source-repair.ts";
-import { decodeProtocolMessage } from "../protocol/decoder.ts";
+import { decodeServerOutput } from "../protocol/decoder.ts";
 
 import {
   describeRpcError,
@@ -73,7 +75,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 73;
+export const APP_SERVER_PROTOCOL_VERSION = 76;
 
 /** Notifications retained before the first subscription; level-triggered
  * owners re-announce or reread anything beyond this. */
@@ -128,8 +130,9 @@ export class UncertainOutcomeError extends Error {
   readonly method: MethodName;
   /** The transport failure that lost the response. */
   readonly transportFailure: TransportClosedError;
+  readonly input?: { inputId: string; conversationId: string };
 
-  constructor(method: MethodName, cause: TransportClosedError) {
+  constructor(method: MethodName, cause: TransportClosedError, input?: {inputId:string;conversationId:string}) {
     super(
       `the connection ended before ${method} was answered; whether the server accepted it is unknown`,
       { cause },
@@ -137,6 +140,7 @@ export class UncertainOutcomeError extends Error {
     this.name = "UncertainOutcomeError";
     this.method = method;
     this.transportFailure = cause;
+    this.input = input;
   }
 }
 
@@ -144,6 +148,7 @@ export class UncertainOutcomeError extends Error {
 export type DeliveryMethod = "delivery/read" | "delivery/locate";
 
 interface PendingRequest {
+  readonly input?: {inputId:string;conversationId:string};
   readonly method: MethodName;
   readonly expect: ResultType;
   readonly effect: MethodEffect;
@@ -175,9 +180,11 @@ export interface AppServerClientOptions {
 }
 
 export class AppServerClient {
+  installHostToolHandler(namespace: string | undefined, name: string, handler: HostToolHandler) { return this.callbacks.installHandler(namespace, name, handler); }
   uploadCarrier = transferUpload;
   uploadEndpoint?: string;
   readonly #transport: AppServerTransport;
+  readonly callbacks: ServerCallbacks;
   readonly #pending = new Map<AppServerRequestId, PendingRequest>();
   /** Aborted delivery requests whose cancellation awaits the cancel slot, in
    * abort order. An entry leaves when its cancel is sent or its request
@@ -205,13 +212,16 @@ export class AppServerClient {
     sourceRepairs: new Map(),
   };
   readonly #closeListeners = new Set<CloseListener>();
+  #metadataCapacity?: {promise:Promise<void>;resolve:()=>void};
   #nextAppServerRequestId = 1;
   #capabilities: ServerCapabilities | undefined;
   #authorityId = "";
+  inputReceipts = new InputReceipts();
   #closed: TransportClosedError | undefined;
 
   private constructor(transport: AppServerTransport) {
     this.#transport = transport;
+    this.callbacks = new ServerCallbacks(message => transport.send(message));
     transport.onMessage((record) => this.#dispatch(record));
     transport.onClose((error) => this.#settleTerminally(error));
   }
@@ -380,6 +390,11 @@ export class AppServerClient {
     const id = this.#nextAppServerRequestId;
     this.#nextAppServerRequestId += 1;
 
+    const input=method==='inbound/queue'||method==='turn/start'||method==='turn/steer'?inputCorrelation(params):undefined;
+    if(input) {
+      try { this.inputReceipts.reserve(this.#authorityId,input.conversationId,input.inputId); }
+      catch(error) { return Promise.reject(error); }
+    }
     return new Promise<MethodResult>((resolve, reject) => {
       const cancel = () => {
         if (!this.#pending.has(id)) return;
@@ -394,10 +409,11 @@ export class AppServerClient {
       };
       this.#pending.set(id, {
         method,
+        ...(input ? {input} : {}),
         expect,
         effect: requestEffect({ method, params } as Request1),
-        resolve: (result) => { release(); resolve(result); },
-        reject: (error) => { release(); reject(error); },
+        resolve: (result) => { release(); if(input)this.inputReceipts.release(this.#authorityId,input.conversationId,input.inputId); resolve(result); },
+        reject: (error) => { release(); if(input&&!(error instanceof UncertainOutcomeError)&&!(error instanceof AppServerRequestError&&error.kind==='outcome_unknown'))this.inputReceipts.release(this.#authorityId,input.conversationId,input.inputId); reject(error); },
       });
       signal?.addEventListener("abort", cancel, { once: true });
       void this.#transport
@@ -411,6 +427,27 @@ export class AppServerClient {
 
   #occupied(lane: keyof typeof REQUEST_CAPACITY): number {
     return [...this.#pending.values()].filter(request => requestLane(request.method) === lane).length;
+  }
+
+  get metadataAvailable():boolean {
+    return this.#closed===undefined&&this.#occupied('metadata')<REQUEST_CAPACITY.metadata;
+  }
+
+  /** One shared capacity wake, without queuing or reserving an RPC. The status
+   * repair owner retains its bounded identities and rechecks before dispatch. */
+  waitForMetadataCapacity():Promise<void> {
+    if(this.#closed!==undefined||this.metadataAvailable)return Promise.resolve();
+    if(!this.#metadataCapacity){
+      let resolve!:()=>void;
+      const promise=new Promise<void>(done=>{resolve=done;});
+      this.#metadataCapacity={promise,resolve};
+    }
+    return this.#metadataCapacity.promise;
+  }
+
+  #wakeMetadataCapacity():void {
+    if(this.#closed===undefined&&!this.metadataAvailable)return;
+    const waiting=this.#metadataCapacity;this.#metadataCapacity=undefined;waiting?.resolve();
   }
 
   /** Sends the oldest waiting cancellation when the cancel slot is free. Its
@@ -435,11 +472,13 @@ export class AppServerClient {
       return;
     }
 
-    const record = decodeProtocolMessage(untrusted);
+    const record = decodeServerOutput(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v73 protocol message");
+      this.#fail("invalid App Server v76 protocol message");
       return;
     }
+
+    if (this.callbacks.receive(record)) return;
 
     if (isNotification(record)) {
       if (this.#unrouted !== undefined) {
@@ -485,6 +524,7 @@ export class AppServerClient {
       return;
     }
     this.#pending.delete(record.id);
+    this.#wakeMetadataCapacity();
 
     if (isFailure(record)) {
       pending.reject(new AppServerRequestError(pending.method, record.error));
@@ -505,6 +545,7 @@ export class AppServerClient {
       return;
     }
     this.#closed = error;
+    this.callbacks.clear();
 
     // Every pending request settles exactly once, explicitly. A request that
     // could have changed server state settles as *unknown*, never as failed:
@@ -512,10 +553,11 @@ export class AppServerClient {
     // accepted.
     const pending = [...this.#pending.values()];
     this.#pending.clear();
+    this.#wakeMetadataCapacity();
     for (const request of pending) {
       request.reject(
         request.effect === "side_effecting"
-          ? new UncertainOutcomeError(request.method, error)
+          ? new UncertainOutcomeError(request.method, error, request.input)
           : error,
       );
     }
@@ -567,12 +609,12 @@ export function isStaleAttachment(error: unknown): boolean {
   );
 }
 
-/** Whether another client already holds this Session's writable control. */
-export function isControllerInUse(error: unknown): boolean {
-  return (
-    error instanceof AppServerRequestError && error.kind === "controller_in_use"
-  );
-}
-
 /** Whether two targets address the same attachment in every identity domain. */
 export type { AttachmentTarget };
+
+function inputCorrelation(params: unknown): {inputId:string;conversationId:string}|undefined {
+  if (!params || typeof params !== 'object' || !('inputId' in params) || typeof params.inputId !== 'string' || !('target' in params)) return;
+  const target = params.target;
+  if (!target || typeof target !== 'object' || !('conversation_id' in target) || typeof target.conversation_id !== 'string') return;
+  return {inputId:params.inputId,conversationId:target.conversation_id};
+}

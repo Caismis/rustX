@@ -14,8 +14,11 @@ pub(super) struct BashInput {
     /// The command handed to one `/bin/bash -c` invocation.
     #[schemars(length(min = 1))]
     pub command: String,
-    /// Optional presentation intent, never execution or approval authority.
+    /// A concise, active-voice explanation of why this command is being run,
+    /// shown beside Bash in the UI. Supply description before command, e.g.
+    /// "Check installed spreadsheet libraries" or "Run the UI regression tests".
     /// One to 160 Unicode scalar values; whitespace-only values are rejected.
+    /// Presentation only, never execution or approval authority.
     #[schemars(length(min = 1, max = 160))]
     pub description: Option<String>,
     /// The invocation deadline in seconds. When omitted, no executor-local

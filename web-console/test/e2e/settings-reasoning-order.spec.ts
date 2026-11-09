@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { closeSettings, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { returnHome, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -25,10 +25,10 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A');
     await openSettingsPage(page, 'Models');
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const repair = settings.getByRole('form', { name: 'Repair invalid source', exact: true });
     await expect(repair).toBeVisible();
     await expect(settings.getByRole('alert')).toContainText('invalid Model reasoning Profile order at models.*.reasoning_profile_order');
@@ -79,11 +79,11 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page).toHaveTitle(/rustX/);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await closeSettings(page);
-    const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+    await returnHome(page);
+    const expand = page.getByRole('button', { name: 'Home', exact: true });
     if (await expand.isVisible()) await expand.click();
     await openWorkspaceSettings(page, 'Workspace A');
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     await settings.getByRole('button', { name: /^All Models/ }).click();
     const open = async () => {
       await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'ordered', exact: true }).click();

@@ -2,6 +2,7 @@
 use super::*;
 use crate::app_server::transport::websocket;
 use crate::local_runtime::session_runtime_manager::Entry;
+use base64::Engine;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -46,9 +47,13 @@ async fn connect(url: &str, child: &ChildDelivery) -> (Socket, AttachmentTarget)
     let mut request = url.into_client_request().unwrap();
     request.headers_mut().insert(
         "sec-websocket-protocol",
-        format!("{}, rustx-token.{TOKEN}", websocket::SUBPROTOCOL)
-            .parse()
-            .unwrap(),
+        format!(
+            "{}, rustx-token.{}",
+            websocket::SUBPROTOCOL,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(TOKEN)
+        )
+        .parse()
+        .unwrap(),
     );
     eprintln!("global reconnect: TCP handshake start");
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
@@ -75,8 +80,7 @@ async fn connect(url: &str, child: &ChildDelivery) -> (Socket, AttachmentTarget)
         &mut socket,
         1,
         Method::SessionAttach {
-            session_id: child.target.session_id.clone(),
-            node_id: None,
+            thread_id: child.target.conversation_id.clone(),
         },
     )
     .await;

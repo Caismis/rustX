@@ -42,12 +42,12 @@ it.each([true, false])('same adapter, callback and native authority reject delay
     old.resolve([{ authorized: true }]);
     await expect(pending).rejects.toThrow('Authority changed before dispatch');
     expect(requests.map(row => row.method)).toEqual(['list', 'classify', 'list']);
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(0);
     expect(server.client.getSnapshot().authorityId).toBe(native);
     expect(server.client.getSnapshot().generation).toBe(generation);
     if (authorized) await server.client.attach('A');
     else await expect(server.client.attach('A')).rejects.toThrow('not authorized');
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(authorized ? 1 : 0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(authorized ? 1 : 0);
     expect(server.client.getSnapshot().views.A.attachment).toBe(authorized ? 'attached' : 'error');
   } finally { server.client.disconnect(); }
 });
@@ -73,7 +73,7 @@ it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at t
   const request = server.client.request.bind(server.client);
   vi.spyOn(server.client, 'request').mockImplementation((...args) => {
     const result = request(...args);
-    if (args[0].method === 'session/attach') queued.resolve();
+    if (args[0].method === 'thread/resume') queued.resolve();
     return result;
   });
   const reservations = [deferred<boolean>(), deferred<boolean>()];
@@ -95,13 +95,13 @@ it.each(['host', 'callback'] as const)('queued attach rechecks %s authority at t
     expect(server.requests.filter(row => row.request.method === 'session/summary')).toHaveLength(0);
     verification.resolve(); await queued.promise;
     expect(lists).toBe(1); // Final Host observation waits for a validation reservation.
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(0);
     if (replacement === 'host') hostId = 'replacement-host';
     else server.client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
     reservations[0].resolve(true);
     await server.waitFor('session/summary', 1);
     await refused;
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(0);
     reservations[1].resolve(true);
     await server.waitFor('session/summary', 2);
     for (const row of server.requests.filter(row => row.request.method === 'session/summary')) server.reply(row.request);
@@ -134,12 +134,12 @@ it.each(['host', 'callback', 'native', 'unavailable'] as const)('final in-flight
     const pending = server.client.attach('A');
     const refused = expect(pending).rejects.toThrow();
     await entered.promise;
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(0);
     if (replacement === 'host') { hostId = 'replacement-host'; await authority.observe(); }
     if (replacement === 'callback') server.client.setSessionAdmission(async () => ({ current: () => true, validate: async () => true }));
     if (replacement === 'native') server.client.disconnect();
     release.resolve(); await refused;
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
     if (replacement === 'host') expect(authority.getCatalog()?.authorityId).toBe('replacement-host');
   } finally { server.client.disconnect(); }
@@ -184,8 +184,8 @@ async function stalledFinalValidations(retirement: 'navigation' | 'callback' | '
   expect(stalled).toHaveLength(2); expect(live()).toBe(2);
   // Cancellation of already-running native work crosses the socket at once,
   // without any Host read settling or any validation deadline elapsing.
-  const cancel = server.client.request({ method: 'turn/cancel', params: { target: server.client.target('B') } }, 'cancellation_accepted');
-  expect(sent('turn/cancel')).toHaveLength(1);
+  const cancel = server.client.request({ method: 'turn/interrupt', params: { turnId:'attempt-1', target: server.client.target('B') } }, 'cancellation_accepted');
+  expect(sent('turn/interrupt')).toHaveLength(1);
   await expect(cancel).resolves.toMatchObject({ type: 'cancellation_accepted' });
   expect(sent('session/summary')).toHaveLength(0);
   return { retire: () => { presentationCurrent = false; server.client.recheckAdmissions(); }, server, authority, admit, owner, stalled, live, validations, refused, settled, sent, unstall: () => { stall = false; }, replace: (id: string) => { hostId = id; } };
@@ -243,7 +243,7 @@ it.each(['navigation', 'callback', 'cleanup', 'reinstall', 'host', 'timeout'] as
     // with no owner installed, fresh admission fails closed.
     if (retirement === 'cleanup') await expect(f.server.client.attach('A')).rejects.toThrow('No Web attachment admission owner');
     else await f.server.client.attach('A');
-    expect(f.sent('session/attach')).toHaveLength(retirement === 'cleanup' ? 0 : 1);
+    expect(f.sent('thread/resume')).toHaveLength(retirement === 'cleanup' ? 0 : 1);
     // Late Host answers (still authorizing after retirement) cannot send, settle or release again.
     const summaries = f.sent('session/summary').length;
     f.stalled.forEach(row => row.release());
@@ -278,12 +278,12 @@ it.each(['a different callback', 'the same callback reinstalled'] as const)('a s
     await server.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary');
     expect(signal.aborted).toBe(false);
     release.resolve(); await attach;
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
     expect(await server.client.admitSessionOperation('B')).not.toBe(false);
     // Only the newer incarnation's own cleanup removes it; fresh admission then fails closed.
     releaseNew();
     await expect(server.client.attach('B')).rejects.toThrow('No Web attachment admission owner');
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
   } finally { server.client.disconnect(); }
 });
 
@@ -355,7 +355,7 @@ it.each([['another endpoint', 'ws://127.0.0.1:9090/', false], ['a normalized-equ
     expect(authority.getCatalog()).toMatchObject({ authorityId: 'host', endpoint: reported });
     // A foreign scope is never asked to classify native endpoint A.
     expect(classified).toEqual(dispatches ? [endpoint, endpoint] : [endpoint]);
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(dispatches ? 1 : 0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(dispatches ? 1 : 0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally { server.client.disconnect(); }
 });

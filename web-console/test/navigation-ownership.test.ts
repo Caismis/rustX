@@ -1,3 +1,4 @@
+import { threadFor } from '../../protocol/app-server/testing.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { waitFor } from 'xstate';
 import { Server, snapshot } from './fixture';
@@ -15,14 +16,14 @@ async function fixture() {
   return { ...f, server };
 }
 const idle = (actor: ShellNavigationActor) => waitFor(actor, snapshot => snapshot.matches('idle'));
-const mutations = (server: Server) => server.requests.filter(row => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start'].includes(row.request.method)).map(row => row.request);
+const mutations = (server: Server) => server.requests.filter(row => ['thread/resume', 'session/detach', 'session/switchNode', 'inbound/queue'].includes(row.request.method)).map(row => row.request);
 it('opens the original task node directly from the task page without first activating the Session default node', async () => {
   const f = await fixture(), original = f.server.client.target('A');
   const history = snapshot('task-origin'); f.server.nodeSnapshots.set('task-node', history);
   f.actor.send({ type: 'SCHEDULES' });
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', nodeId: 'task-node', conversationId: history.conversation_id, sidebar: false } });
-  const attach = await f.server.waitFor('session/attach', 3);
-  expect(attach.params).toMatchObject({ session_id: 'C', node_id: 'task-node' });
+  const attach = await f.server.waitFor('thread/resume', 3);
+  expect(attach.params).toMatchObject({threadId:'conversation-task-origin'});
   await idle(f.actor);
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' });
   expect(f.server.client.target('C')?.conversation_id).toBe(history.conversation_id);
@@ -40,14 +41,14 @@ it('opens an original task node in an already attached Session through the nativ
   expect(f.server.client.target('A')?.conversation_id).toBe(original.conversation_id);
   expect(f.actor.getSnapshot().context.binding).toBeGreaterThan(binding);
   expect(f.server.client.target('B')).toBe(other);
-  expect(f.server.requests.some(row => row.request.method === 'turn/start' || row.request.method === 'turn/cancel')).toBe(false);
+  expect(f.server.requests.some(row => row.request.method === 'inbound/queue' || row.request.method === 'turn/interrupt')).toBe(false);
 });
 it('reselecting the same cold task node preserves its local editor identity while attachment is held', async () => {
   const f = await fixture(), original = snapshot('task-cold'); f.server.nodeSnapshots.set('task-cold-node', original);
-  f.server.held.add('session/attach');
+  f.server.held.add('thread/resume');
   const destination = { kind: 'session' as const, sessionId: 'C', nodeId: 'task-cold-node', conversationId: original.conversation_id, sidebar: false };
   f.actor.send({ type: 'OPEN', destination });
-  const attached = await f.server.waitFor('session/attach', 3), binding = f.actor.getSnapshot().context.binding;
+  const attached = await f.server.waitFor('thread/resume', 3), binding = f.actor.getSnapshot().context.binding;
   f.actor.send({ type: 'OPEN', destination });
   expect(f.actor.getSnapshot().context.binding).toBe(binding);
   f.server.reply(attached); await idle(f.actor);
@@ -57,8 +58,8 @@ it('reselecting the same cold task node preserves its local editor identity whil
 it('failed cold selection keeps its local draft and preserves previous native attachment authority without refresh', async () => {
   const f = await fixture(), controls = f.capture(), target = f.server.client.target('A'), proof = f.server.client.getSnapshot().views.A.attachmentObservation;
   const count = mutations(f.server).length, snapshots = f.server.requests.filter(row => row.request.method === 'session/checkpoint').length;
-  f.server.held.add('session/attach'); f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
-  const request = await f.server.waitFor('session/attach', 3);
+  f.server.held.add('thread/resume'); f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
+  const request = await f.server.waitFor('thread/resume', 3);
   expect(controls()).toBe(false); expect(f.server.client.target('A')).toBe(target);
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'C' });
   f.server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'refused', data: { kind: 'operation_failed' } } });
@@ -69,18 +70,18 @@ it('failed cold selection keeps its local draft and preserves previous native at
   expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
 });
 it('an authoritatively attached destination commits synchronously and supersedes held cold settlement', async () => {
-  const f = await fixture(); f.server.held.add('session/attach');
+  const f = await fixture(); f.server.held.add('thread/resume');
   f.server.held.add('session/checkpoint'); f.server.held.add('session/subscribe');
   const checkpointCount = f.server.requests.filter(row => row.request.method === 'session/checkpoint').length;
   const subscriptionCount = f.server.requests.filter(row => row.request.method === 'session/subscribe').length;
   const controlCurrent = () => f.server.client.isAttachmentControlCurrent('C', f.server.client.getSnapshot().views.C.attachmentObservation);
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
-  const request = await f.server.waitFor('session/attach', 3);
+  const request = await f.server.waitFor('thread/resume', 3);
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: true } });
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'B' });
   f.server.reply(request);
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'B' }); expect(f.actor.getSnapshot().context.error).toBeUndefined();
-  expect(mutations(f.server).filter(request => request.method === 'session/attach')).toHaveLength(3);
+  expect(mutations(f.server).filter(request => request.method === 'thread/resume')).toHaveLength(3);
   const read = await f.server.waitFor('session/checkpoint', checkpointCount + 1);
   const target = f.server.client.target('C');
   expect(read.method).toBe('session/checkpoint');
@@ -100,28 +101,30 @@ it('an authoritatively attached destination commits synchronously and supersedes
   expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'B' });
   expect(f.server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(checkpointCount + 1);
   expect(f.server.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(subscriptionCount + 1);
-  expect(mutations(f.server).filter(request => request.method === 'session/attach')).toHaveLength(3);
-  expect(mutations(f.server).filter(request => request.method !== 'session/attach')).toHaveLength(0);
+  expect(mutations(f.server).filter(request => request.method === 'thread/resume')).toHaveLength(3);
+  expect(mutations(f.server).filter(request => request.method !== 'thread/resume')).toHaveLength(0);
 });
-for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'rustX')]) it(`Settings ${target.kind} preserves the selected Session owner while retiring only sidebar closure`, async () => {
-  const f = await fixture(), controls = f.capture(); f.server.held.add('session/attach');
+for (const target of [userSettingsTarget, workspaceSettingsTarget('project', 'rustX')]) it(`Settings ${target.kind} opens a page while the selected cold Session continues natively`, async () => {
+  const f = await fixture(), controls = f.capture(); f.server.held.add('thread/resume');
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
-  const request = await f.server.waitFor('session/attach', 3);
-  const pending = f.actor.getSnapshot().context.pending;
+  const request = await f.server.waitFor('thread/resume', 3);
   f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target } });
   expect(f.settings.getSnapshot().context.target).toEqual(target); expect(controls()).toBe(false);
-  expect(f.actor.getSnapshot().context.pending).toBe(pending);
-  expect(f.actor.getSnapshot().context.dismissedSidebar).toBe(pending);
+  expect(f.actor.getSnapshot().context.pending).toBeUndefined();
+  expect(f.actor.getSnapshot().context.home).toEqual({ kind: 'session-draft', sessionId: 'C' });
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'settings' });
   f.server.reply(request); await f.server.client.waitForAttachment('C', () => true); await idle(f.actor);
-  expect(f.actor.getSnapshot().context.publication?.sidebar).toBe(false);
-  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' }); expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(false);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'settings' });
+  f.actor.send({ type: 'HOME' }); await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' });
+  expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(controls()).toBe(false);
   expect(f.server.client.isAttachmentControlCurrent('A', f.server.client.getSnapshot().views.A.attachmentObservation)).toBe(true);
   expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
 });
 it('drawer dismissal retains the exact selected target but not the right to close a reopened drawer', async () => {
-  const f = await fixture(), original = f.server.client.target('A'); f.server.held.add('session/attach');
+  const f = await fixture(), original = f.server.client.target('A'); f.server.held.add('thread/resume');
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
-  const request = await f.server.waitFor('session/attach', 3), pending = f.actor.getSnapshot().context.pending;
+  const request = await f.server.waitFor('thread/resume', 3), pending = f.actor.getSnapshot().context.pending;
   f.actor.send({ type: 'SIDEBAR.DISMISS' });
   expect(f.actor.getSnapshot().context.pending).toBe(pending);
   expect(f.actor.getSnapshot().context.dismissedSidebar).toBe(pending);
@@ -133,9 +136,9 @@ it('drawer dismissal retains the exact selected target but not the right to clos
 });
 it('a newer selection and explicit cancellation still retire a dismissed cold target owner', async () => {
   for (const next of ['newer', 'cancel'] as const) {
-    const f = await fixture(); f.server.held.add('session/attach');
+    const f = await fixture(); f.server.held.add('thread/resume');
     f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
-    const request = await f.server.waitFor('session/attach', 3);
+    const request = await f.server.waitFor('thread/resume', 3);
     f.actor.send({ type: 'SIDEBAR.DISMISS' });
     if (next === 'newer') f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: true } });
     else f.actor.send({ type: 'CANCEL' });
@@ -148,15 +151,15 @@ it('a newer selection and explicit cancellation still retire a dismissed cold ta
 
 it('idle Settings and overlay dismissal preserve committed controls; publication replaces only old controls', async () => {
   const f = await fixture(), controls = f.capture();
-  f.actor.send({ type: 'SIDEBAR.DISMISS' }); f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } }); f.settings.send({ type: 'CLOSE' });
+  f.actor.send({ type: 'SIDEBAR.DISMISS' }); f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } }); f.settings.send({ type: 'SUSPEND' });
   expect(controls()).toBe(true);
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: true } });
   const next = f.capture(); f.actor.send({ type: 'SIDEBAR.DISMISS' }); expect(next()).toBe(true); expect(controls()).toBe(false);
 });
 it('authority replacement retires preparation and old controls without admitted-operation replay', async () => {
-  const f = await fixture(), controls = f.capture(); f.server.held.add('session/attach');
+  const f = await fixture(), controls = f.capture(); f.server.held.add('thread/resume');
   f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: true } });
-  const request = await f.server.waitFor('session/attach', 3);
+  const request = await f.server.waitFor('thread/resume', 3);
   f.actor.send({ type: 'AUTHORITY', generation: f.server.client.getSnapshot().generation, authority: (f.server.client.getSnapshot().authorityRevision ?? 0) + 1 });
   f.server.reply(request); await f.server.client.waitForAttachment('C', () => true);
   expect(controls()).toBe(false); expect(f.actor.getSnapshot().context.route.kind).toBe('new-conversation'); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
@@ -184,7 +187,7 @@ it.each(['cancel', 'newer Session', 'new authority'] as const)('cold reconnect c
     : outcome === 'newer Session' ? { kind: 'session', sessionId: 'B' } : { kind: 'new-conversation' });
   expect(f.actor.getSnapshot().context.pending).toBeUndefined();
   expect(f.actor.getSnapshot().context.draftSession).toBeUndefined();
-  expect(f.server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach'].includes(row.request.method))).toEqual([]);
+  expect(f.server.requests.filter(row => ['session/submissionIntent', 'inbound/queue', 'turn/steer', 'turn/interrupt', 'session/detach'].includes(row.request.method))).toEqual([]);
 });
 
 it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native draft creation keeps settlement while %s supersedes its route publication', async destination => {
@@ -192,35 +195,35 @@ it.each(['Settings', 'newer Session', 'newer cold Session'] as const)('native dr
   const control = f.actor.getSnapshot().context.control, generation = f.server.client.getSnapshot().generation, binding = String(f.actor.getSnapshot().context.binding);
   const { firstSubmitPort } = await import('../src/app/new-conversation/port');
   const host = { ...f.server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) };
-  f.server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A-created', active_node: 'created-node', active_conversation_id: 'created-conversation', node_count: 1, created_at: '0', updated_at: '0' } }));
+  f.server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'A-created', active_node: 'created-node', active_conversation_id: 'created-conversation', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'A-created', active_node: 'created-node', active_conversation_id: 'created-conversation', node_count: 1, created_at: '0', updated_at: '0' } }));
   f.server.summaries.set('A-created', { cwd: '/workspace/A' }); f.server.snapshots.set('A-created', { ...snapshot('A-created'), conversation_id: 'created-conversation' }); f.server.nodeSnapshots.set('created-node', f.server.snapshots.get('A-created')!);
-  f.server.held.add('session/create');
+  f.server.held.add('thread/start');
   const port = firstSubmitPort(f.server.client, host, f.capture(), () => {
     f.actor.send({ type: 'CREATE', control, binding }); const pending = f.actor.getSnapshot().context.pending;
     return sessionId => { f.actor.send({ type: 'CREATED', sessionId, control, generation, pending }); return f.capture(); };
   });
   const work = firstSubmissions(f.server.client).submit(binding, { workspaceId: 'workspace-a', text: 'Native execution intent', files: [] }, port);
-  const request = await f.server.waitFor('session/create', 1);
+  const request = await f.server.waitFor('thread/start', 1);
   if (destination === 'Settings') f.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } });
   else {
-    if (destination === 'newer cold Session') f.server.held.add('session/attach');
+    if (destination === 'newer cold Session') f.server.held.add('thread/resume');
     f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: destination === 'newer cold Session' ? 'C' : 'B', sidebar: false } });
   }
-  const cold = destination === 'newer cold Session' ? await f.server.waitFor('session/attach', 3) : undefined;
+  const cold = destination === 'newer cold Session' ? await f.server.waitFor('thread/resume', 3) : undefined;
   f.server.reply(request); await work;
   if (cold) {
     expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'C' });
     expect(f.actor.getSnapshot().context.pending?.destination).toMatchObject({ kind: 'session', sessionId: 'C' });
-    expect(f.server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === 'A-created')).toHaveLength(0);
+    expect(f.server.requests.filter(row => row.request.method === 'thread/resume' && f.server.sessionForThread(row.request.params.threadId) === 'A-created')).toHaveLength(0);
     f.server.reply(cold); await idle(f.actor);
   }
-  expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-  expect(f.actor.getSnapshot().context.route).toEqual(destination === 'Settings' ? { kind: 'new-conversation', workspaceId: 'workspace-a' } : { kind: 'session', sessionId: destination === 'newer cold Session' ? 'C' : 'B' });
+  expect(f.server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
+  expect(f.actor.getSnapshot().context.route).toEqual(destination === 'Settings' ? { kind: 'settings' } : { kind: 'session', sessionId: destination === 'newer cold Session' ? 'C' : 'B' });
   expect(f.actor.getSnapshot().context.error).toBeUndefined(); expect(Object.keys(f.actor.getSnapshot().children)).toEqual(['nativeAuthority', 'draftOwnership']);
   expect(firstSubmissions(f.server.client).draft(binding)?.session?.id).toBe('A-created');
-  expect(f.server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(destination === 'Settings' ? 1 : 0);
+  expect(f.server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(destination === 'Settings' ? 1 : 0);
   if (destination === 'Settings') {
-    f.settings.send({ type: 'CLOSE' });
+    f.settings.send({ type: 'SUSPEND' });
     f.actor.send({ type: 'DRAFT', workspaceId: 'workspace-b' });
     expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'new-conversation', workspaceId: 'workspace-b' });
     expect(String(f.actor.getSnapshot().context.binding)).not.toBe(binding);
@@ -244,7 +247,7 @@ it('a native attachment ready proof publishes its route across a later same-clai
     expect(f.server.client.isAttachmentObservationCurrent('C', proof)).toBe(true);
     expect(f.server.client.isAttachmentControlCurrent('C', proof)).toBe(false);
     expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' });
-    expect(mutations(f.server).filter(request => request.method === 'session/attach')).toHaveLength(3);
+    expect(mutations(f.server).filter(request => request.method === 'thread/resume')).toHaveLength(3);
   } finally { intercept.mockRestore(); }
 });
 
@@ -296,6 +299,6 @@ it.each(['cancel', 'newer Session', 'new authority'] as const)('same-generation 
   await idle(f.actor);
   expect(f.actor.getSnapshot().context.route).toEqual(outcome === 'cancel' ? { kind: 'session-draft', sessionId: 'C' } : outcome === 'newer Session' ? { kind: 'session', sessionId: 'B' } : { kind: 'new-conversation' });
   expect(f.actor.getSnapshot().context.draftSession).toBeUndefined();
-  expect(f.server.requests.filter(row => row.request.method === 'session/attach' && row.request.params.session_id === 'C')).toHaveLength(1);
-  expect(f.server.requests.filter(row => ['session/submissionIntent', 'turn/start', 'turn/steer', 'turn/cancel', 'session/detach'].includes(row.request.method))).toEqual([]);
+  expect(f.server.requests.filter(row => row.request.method === 'thread/resume' && f.server.sessionForThread(row.request.params.threadId) === 'C')).toHaveLength(1);
+  expect(f.server.requests.filter(row => ['session/submissionIntent', 'inbound/queue', 'turn/steer', 'turn/interrupt', 'session/detach'].includes(row.request.method))).toEqual([]);
 });

@@ -21,8 +21,8 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
       if (zh) {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       await editor.fill('Fork source'); await editor.press('Enter');
       await expect(page.getByText('Completed fork answer.', { exact: true })).toBeVisible();
@@ -65,7 +65,7 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
       await page.screenshot({ path: `/tmp/rustx-feedback-action-${width}.png` });
       await expect(toast).toHaveCount(0, { timeout: 9000 });
       await expect(editor).toHaveValue('/not-a-command');
-      expect(wire.requests.filter(row => row.method === 'turn/start')).toHaveLength(1);
+      expect(wire.requests.filter(row => row.method === 'inbound/queue')).toHaveLength(1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
       passed = true;

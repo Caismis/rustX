@@ -217,3 +217,41 @@ fn t14_t20_goal_receipt_owns_pending_and_journal_atomically() {
     assert_eq!(native.read_cut.read, accepted.read_cut);
     assert_eq!(native.journal_range, Some((2, 2)));
 }
+
+#[test]
+fn active_steering_adopts_exact_rows_and_keeps_interleaved_queue_pending() {
+    let store = store();
+    let first = store.accept_inbound(draft("steer-before")).unwrap();
+    let mut queued = draft("explicit-next-attempt");
+    queued.kind = crate::message::types::InboundKind::QueuedMessage;
+    let queued = store.accept_inbound(queued).unwrap();
+    let last = store.accept_inbound(draft("steer-after")).unwrap();
+    let adopted = store
+        .adopt_pending_batch(
+            last.sequence,
+            Some(crate::runtime::identity::AttemptId::new("active")),
+        )
+        .unwrap();
+    assert_eq!(
+        adopted
+            .items
+            .iter()
+            .map(|item| item.sequence)
+            .collect::<Vec<_>>(),
+        vec![first.sequence, last.sequence]
+    );
+    assert_eq!(
+        store
+            .load_pending()
+            .unwrap()
+            .iter()
+            .map(|item| item.sequence)
+            .collect::<Vec<_>>(),
+        vec![queued.sequence]
+    );
+    let next = store.adopt_pending_batch(queued.sequence, None).unwrap();
+    assert_eq!(next.items.len(), 1);
+    assert_eq!(next.items[0].sequence, queued.sequence);
+    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(store.load_canonical().unwrap().len(), 3);
+}

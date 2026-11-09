@@ -33,7 +33,7 @@ async function observeLatency(page: Page) {
             row.end = performance.now(); row.bytes = event.data.length;
             row.error = reply.error ? reply.error.data?.kind || 'untyped_rpc_error' : undefined;
             row.resultType = reply.result?.type;
-            if (row.method === 'session/attach' && !row.error) row.target = attachmentIdentity(reply.result?.target);
+            if (row.method === 'thread/resume' && !row.error) row.target = attachmentIdentity(reply.result?.target);
             this.calls.delete(reply.id);
           }
         });
@@ -114,13 +114,13 @@ test('measure native Fork, warm navigation and resident reattachment', async ({ 
     await expect(page.getByText('Completed fork answer.', { exact: true })).toBeVisible();
     await expect(page.getByRole('alert')).toHaveCount(0);
     const evidence = await report(page, info);
-    expect(evidence.rpc.filter(row => row.method === 'session/fork')).toHaveLength(1);
-    expect(evidence.rpc.filter(row => row.method === 'session/attach')).toHaveLength(3);
+    expect(evidence.rpc.filter(row => row.method === 'thread/fork')).toHaveLength(1);
+    expect(evidence.rpc.filter(row => row.method === 'thread/resume')).toHaveLength(3);
     expect(evidence.rpc.filter(row => row.method === 'session/detach')).toHaveLength(1);
-    expect(evidence.rpc.filter(row => row.method === 'turn/start')).toHaveLength(1);
+    expect(evidence.rpc.filter(row => row.method === 'inbound/queue')).toHaveLength(1);
     const start = evidence.marks.find(row => row.kind === 'phase' && row.name === 'warm')!.time;
     const end = evidence.marks.find(row => row.kind === 'phase' && row.name === 'close-view')!.time;
-    expect(evidence.rpc.filter(row => row.method === 'session/attach' && row.start > start && row.start < end)).toHaveLength(0);
+    expect(evidence.rpc.filter(row => row.method === 'thread/resume' && row.start > start && row.start < end)).toHaveLength(0);
     passed = true;
   } finally { await page.close(); await fixture.stop(passed); }
 });
@@ -155,8 +155,8 @@ test('measure Retry preparation separately from model generation', async ({ page
     const evidence = await report(page, info);
     const branch = evidence.rpc.filter(row => row.method === 'session/branch');
     const switching = evidence.rpc.filter(row => row.method === 'session/switchNode');
-    const attach = evidence.rpc.filter(row => row.method === 'session/attach').at(-1)!;
-    const input = evidence.rpc.filter(row => row.method === 'turn/start');
+    const attach = evidence.rpc.filter(row => row.method === 'thread/resume').at(-1)!;
+    const input = evidence.rpc.filter(row => row.method === 'inbound/queue');
     expect(branch).toHaveLength(1); expect(switching).toHaveLength(1); expect(input).toHaveLength(3);
     expect(switching[0].start).toBeGreaterThanOrEqual(branch[0].end!);
     expect(attach.start).toBeGreaterThanOrEqual(switching[0].end!);

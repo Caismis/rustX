@@ -33,6 +33,28 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use std::sync::Arc;
 
 impl InboxStore for SqliteConversationStore {
+    fn lookup_inbound(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<crate::durable::inbox::InboundAcceptance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let row: Option<(i64, String)> = connection
+            .query_row(
+                "SELECT sequence, message_id FROM inbound_correlation WHERE correlation=?1",
+                [correlation],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| storage(e.to_string()))?;
+        row.map(|(sequence, id)| {
+            Ok(crate::durable::inbox::InboundAcceptance {
+                message_id: MessageId::new(id),
+                inbound_sequence: InboundSequence::new(sequence_from_i64(sequence)?),
+            })
+        })
+        .transpose()
+    }
+
     fn load_goal(&self) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
         read_goal(&*self.lock()?)
     }
@@ -982,8 +1004,14 @@ impl SqliteConversationStore {
         };
         // Producer-correlated runtime work is not user-authored queue content.
         if item.message.source != UserSource::Human
-            || item.message.kind != InboundKind::Message
-            || item.correlation.is_some()
+            || !matches!(
+                item.message.kind,
+                InboundKind::Message | InboundKind::QueuedMessage
+            )
+            || item
+                .correlation
+                .as_deref()
+                .is_some_and(|id| !id.starts_with("app-server:"))
         {
             return Ok(Outcome::InvalidItem);
         }

@@ -45,6 +45,95 @@ pub(super) fn agent_control_error(
 }
 
 impl ClientInner {
+    pub(crate) fn lifecycle(&self) -> Option<crate::runtime::types::ConversationLifecycle> {
+        self.runtime
+            .as_ref()
+            .map(crate::runtime::conversation_runtime::ConversationRuntime::lifecycle)
+    }
+
+    pub(crate) fn with_pending_interaction_header<T>(
+        &self,
+        interaction: &InteractionRef,
+        publish: impl FnOnce(&crate::observation::interaction::RuntimeClientInteractionHeader) -> T,
+    ) -> Option<T> {
+        self.runtime
+            .as_ref()?
+            .with_pending_interaction_header(interaction, publish)
+    }
+
+    pub(crate) fn pending_interaction_headers(
+        &self,
+    ) -> Vec<crate::observation::interaction::RuntimeClientInteractionHeader> {
+        self.runtime.as_ref().map_or_else(
+            Vec::new,
+            crate::runtime::conversation_runtime::ConversationRuntime::pending_interaction_headers,
+        )
+    }
+    pub(crate) fn admit_turn(
+        &self,
+        content: Vec<crate::message::types::UserContentBlock>,
+        expected: Option<&crate::runtime::identity::AttemptId>,
+        input_id: &str,
+    ) -> Result<crate::runtime::conversation_runtime::TurnInputAdmission, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        self.runtime
+            .as_ref()
+            .expect("writable runtime")
+            .start_or_steer(content, expected, input_id)
+            .map_err(input_admission_error)
+    }
+
+    pub(crate) fn lookup_input(
+        &self,
+        input_id: &str,
+    ) -> Result<Option<crate::durable::inbox::InboundAcceptance>, RuntimeClientError> {
+        self.runtime
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "Thread runtime is not live".into(),
+            })?
+            .lookup_input(input_id)
+            .map_err(|e| RuntimeClientError::InvalidState {
+                message: e.to_string(),
+            })
+    }
+    pub(crate) fn queue_inbound(
+        &self,
+        content: Vec<crate::message::types::UserContentBlock>,
+        input_id: &str,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        let accepted = self
+            .runtime
+            .as_ref()
+            .expect("writable runtime")
+            .queue_inbound(content, input_id)
+            .map_err(input_admission_error)?;
+        Ok(RuntimeClientResult::InboundAccepted {
+            message_id: accepted.message_id,
+            inbound_sequence: accepted.inbound_sequence,
+        })
+    }
+
+    pub(crate) fn interrupt_turn(
+        &self,
+        expected: &crate::runtime::identity::AttemptId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        self.runtime
+            .as_ref()
+            .expect("writable runtime")
+            .cancel_current_attempt(expected)
+            .map(|attempt_id| RuntimeClientResult::AttemptCancellationAccepted { attempt_id })
+            .map_err(|error| match error {
+                CancelAttemptError::NoCurrentAttempt => RuntimeClientError::NoCurrentAttempt,
+                CancelAttemptError::GoalPauseFailed { diagnostic } => {
+                    RuntimeClientError::InvalidState {
+                        message: diagnostic,
+                    }
+                }
+            })
+    }
     pub(crate) fn workspace_changes(&self) -> Option<Arc<crate::workspace_changes::ChangesStore>> {
         self.runtime
             .as_ref()
@@ -53,20 +142,11 @@ impl ClientInner {
     /// Admits one attachment: the internal primitive behind the
     /// `initialize` protocol method.
     ///
-    /// The Runtime Client host allows one control attachment. A second
-    /// simultaneous control attach fails deterministically and never evicts
-    /// the first; explicitly read-only inspection attachments use a separate
-    /// subscriber set and may coexist with it. Initialization returns only
-    /// the admitted identity and finite capabilities; a checkpoint is read
-    /// separately against the current observation-source state.
+    /// Each attachment has an independent close gate and subscription. The
+    /// native Conversation remains the only execution writer.
     ///
     /// # Errors
-    ///
-    /// Returns [`RuntimeClientError::UnsupportedProtocolVersion`] for an
-    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when the
-    /// control attachment is active, and
-    /// [`RuntimeClientError::ProjectionExhausted`] once the observation
-    /// stream is over.
+    /// Rejects unsupported versions and exhausted identity sequences.
     pub(crate) fn attach(
         self: &Arc<Self>,
         protocol_version: u16,
@@ -81,7 +161,7 @@ impl ClientInner {
     }
 
     /// Admits one explicitly read-only attachment. Read-only attachments may
-    /// coexist with the one control attachment and with one another; they
+    /// coexist with writable attachments and with one another; they
     /// consume only projection subscription state and never change provider
     /// admission or runtime lifecycle state.
     pub(crate) fn attach_read_only(
@@ -143,11 +223,6 @@ impl ClientInner {
         self.ensure_worker();
         let read_only_attachment = self.read_only || read_only_attachment;
         let mut state = self.state.lock().expect("native projection lock");
-        if !read_only_attachment && let Some(existing) = &state.control_attachment {
-            return Err(RuntimeClientError::AttachmentInUse {
-                existing_attachment_id: existing.attachment_id.clone(),
-            });
-        }
         let sequence = state
             .next_attachment_seq
             .checked_add(1)
@@ -155,18 +230,11 @@ impl ClientInner {
         let attachment_id = AttachmentId::new(format!("attachment-{sequence}"));
         let authority = Arc::new(super::Mutex::new(true));
         let admission = AttachmentState {
-            attachment_id: attachment_id.clone(),
             authority: authority.clone(),
             subscriber_id: None,
         };
         state.next_attachment_seq = sequence;
-        if read_only_attachment {
-            state
-                .read_only_attachments
-                .insert(attachment_id.clone(), admission);
-        } else {
-            state.control_attachment = Some(admission);
-        }
+        state.attachments.insert(attachment_id.clone(), admission);
         drop(state);
         Ok(super::super::attachment::RuntimeAttachment::new(
             attachment_id,
@@ -184,7 +252,7 @@ impl ClientInner {
         self.state
             .lock()
             .expect("native projection lock")
-            .read_only_attachments
+            .attachments
             .get(attachment_id)
             .and_then(|attachment| attachment.subscriber_id)
     }
@@ -202,31 +270,15 @@ impl ClientInner {
         // for an admitted mutation. Transfer/cancel may publish into Projection.
         let authority = {
             let state = self.state.lock().expect("native projection lock");
-            let attachment = state
-                .control_attachment
-                .as_ref()
-                .filter(|attachment| attachment.attachment_id == *attachment_id)
-                .or_else(|| state.read_only_attachments.get(attachment_id));
+            let attachment = state.attachments.get(attachment_id);
             let Some(attachment) = attachment else { return };
             attachment.authority.clone()
         };
         let mut current = authority.lock().expect("attachment authority");
         *current = false;
         let mut state = self.state.lock().expect("native projection lock");
-        let control = state
-            .control_attachment
-            .as_ref()
-            .is_some_and(|attachment| attachment.attachment_id == *attachment_id);
-        let attachment = if control {
-            state
-                .control_attachment
-                .take()
-                .expect("the control attachment identity was just checked")
-        } else {
-            let Some(attachment) = state.read_only_attachments.remove(attachment_id) else {
-                return;
-            };
-            attachment
+        let Some(attachment) = state.attachments.remove(attachment_id) else {
+            return;
         };
         if let Some(subscriber_id) = attachment.subscriber_id {
             state.projection.remove_subscriber(subscriber_id);
@@ -324,7 +376,10 @@ impl ClientInner {
                 }
                 // The activation guidance seal belongs to the child plane;
                 // the human submit path never enters that class.
-                error @ InboundAdmissionError::GuidanceSealed => RuntimeClientError::InvalidState {
+                error @ (InboundAdmissionError::GuidanceSealed
+                | InboundAdmissionError::StaleAttempt
+                | InboundAdmissionError::NotSteerable
+                | InboundAdmissionError::InvalidInputId) => RuntimeClientError::InvalidState {
                     message: error.to_string(),
                 },
             })?;
@@ -778,5 +833,21 @@ impl ClientInner {
     /// observation stream is over.
     pub(crate) fn model_catalog(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.domain_page("model_catalog.models", 0, 32)
+    }
+}
+
+fn input_admission_error(error: InboundAdmissionError) -> RuntimeClientError {
+    match error {
+        error @ InboundAdmissionError::ModelUnavailable { .. } => {
+            RuntimeClientError::InvalidModelConfiguration {
+                message: error.to_string(),
+            }
+        }
+        InboundAdmissionError::Mailbox(crate::runtime::inbound::MailboxError::Durable(
+            crate::durable::ConversationStoreError::Storage(_),
+        )) => RuntimeClientError::OutcomeUnknown,
+        error => RuntimeClientError::InvalidState {
+            message: error.to_string(),
+        },
     }
 }

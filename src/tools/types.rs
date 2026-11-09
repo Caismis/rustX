@@ -208,6 +208,11 @@ pub enum ToolReplayPolicy {
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum ToolOrigin {
+    /// An application callback declared for this native Thread.
+    Host {
+        namespace: Option<String>,
+        name: String,
+    },
     /// A tool built into the runtime. Platform communication tools such as
     /// future Fleet messaging are represented as built-in tools as well.
     Builtin,
@@ -223,7 +228,7 @@ impl ToolOrigin {
     pub fn source(&self) -> Option<crate::capabilities::ToolSourceId> {
         use crate::capabilities::ToolSourceId;
         match self {
-            Self::Builtin => None,
+            Self::Builtin | Self::Host { .. } => None,
             Self::Mcp { server_id } => Some(ToolSourceId::Mcp(server_id.clone())),
             Self::ManagedPython { package } => Some(ToolSourceId::ManagedPython(package.clone())),
         }

@@ -1,3 +1,4 @@
+import { threadFor } from '../../../protocol/app-server/testing.ts';
 import {traceRefreshed} from '../fixture';
 import{traceReceipt}from'../fixture';
 import { domainReceipt } from '../fixture';
@@ -12,7 +13,7 @@ import { childMessageContinuation } from './child-message-continuation';
 import { childObservationRecovery } from './child-observation-recovery';
 import { childParentMessages } from './child-parent-messages';
 import { messageAttachments } from './message-attachments';
-import { liveTrace } from './trace-live';
+import { liveTrace, traceFollowing } from './trace-live';
 import { agentMetrics } from '../agent-statistics-fixture';
 import { createRoot } from 'react-dom/client';
 import { ComposerDraft } from '../../src/app/composer/draft';
@@ -24,7 +25,7 @@ import { Server, snapshot, checkpoint, childConversation, readingWindow } from '
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/errors';
-import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v73';
+import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v76';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -48,7 +49,12 @@ server.handlers.set('session/model', request => {
 server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace/A' });
 server.workspaceHost.classifyLocations = async paths => paths.map(() => ({ authorized: true, workspaceId: 'workspace-a' }));
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
+let releaseSource!: () => void;
+const sourceGate = new Promise<void>(resolve => { releaseSource = resolve; });
+if (!new URL(location.href).searchParams.has('source-gate')) releaseSource();
 server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
+const configureWorkspace = server.workspaceHost.configureWorkspace;
+server.workspaceHost.configureWorkspace = async (...args) => { await sourceGate; return configureWorkspace(...args); };
 if (new URL(location.href).searchParams.has('models')) {
   const saved = server.snapshots.get('A')!;
   saved.model = cfg3Effective().effective_model;
@@ -190,31 +196,33 @@ const releaseChildObservation = new URL(location.href).searchParams.has('subagen
 if (new URL(location.href).searchParams.has('parent-messages')) childParentMessages(server);
 if (new URL(location.href).searchParams.has('message-attachments')) messageAttachments(server);
 if (new URL(location.href).searchParams.has('trace-live')) liveTrace(server);
+if (new URL(location.href).searchParams.has('trace-following')) traceFollowing(server, new URL(location.href).searchParams.has('trace-history'));
 if (new URL(location.href).searchParams.has('child-turn-navigation')) childNavigation(server);
 if (new URL(location.href).searchParams.has('child-message-continuation')) childMessageContinuation(server);
 let nativeDefault = 'fixture/native';
-server.handlers.set('session/create', request => {
-  if (request.method !== 'session/create') throw Error('Wrong method');
+server.handlers.set('thread/start', request => {
+  if (request.method !== 'thread/start') throw Error('Wrong method');
   const model = request.params.settings.model ?? { model: nativeDefault };
   server.snapshots.set('created', { ...snapshot('created'), model: { ...cfg3Effective().effective_model!, configured: model, effective: { ...cfg3Effective().effective_model!.effective, model: model.model } } as NonNullable<ReturnType<typeof snapshot>['model']> });
   server.invalidateSummary('created', server.socket, true);
-  return { type: 'session_transition', session: { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
+  return {  thread: threadFor({ id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
 });
 await server.connect();
-for (const method of ['session/create', 'session/attach', 'session/list', 'session/summary', 'turn/start'] as const) server.held.add(method);
+for (const method of ['thread/start', 'thread/resume', 'session/list', 'session/summary', 'inbound/queue'] as const) server.held.add(method);
 const workspaceAuthority = new WorkspaceAuthority(server.workspaceHost);
 server.client.setSessionAdmission(new WorkspaceSessionAdmission(workspaceAuthority, server.client).admit);
 const repairAcknowledgements = new RepairAcknowledgements();
 const settings = createActor(settingsNavigationMachine, { input: { lookup: createOwnerLookup(server.workspaceHost, server.client), inspected: inspectionAcknowledger(server.client, repairAcknowledgements) } }).start();
-const navigation = createActor(shellNavigationMachine, { input: { client: server.client, settings } }).start();
 const connection = new ConnectionController(server.client);
 let root = createRoot(document.getElementById('root')!);
 const composerDraft = new ComposerDraft();
 const workflows = createActor(workflowSurfaceMachine, { input: { ports: scope => createWorkflowPort({ client: server.client, host: () => server.workspaceHost, hostAuthority: workspaceAuthority.capture(), scope }) } }).start();
+const navigation = createActor(shellNavigationMachine, { input: { client: server.client, settings, host: server.workspaceHost, workspaces: workspaceAuthority, workflows } }).start();
 const render = () => root.render(<AppSurface composerDraft={composerDraft} client={server.client} workspaceHost={server.workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation} repairAcknowledgements={repairAcknowledgements} workflows={workflows}/>);
 render();
 const handled = new Set<Request>(server.requests.filter(row => row.request.method === 'initialize' || row.request.method === 'session/list').map(row => row.request));
 (window as any).startupFixture = {
+  releaseSource,
   releaseChildObservation: () => releaseChildObservation?.(),
   advanceHistory: () => advanceHistory?.(),
   history: () => server.client.getSnapshot().views.A?.history,
@@ -266,5 +274,5 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
   allow(method: Request['method']) { server.held.delete(method); },
   remount() { root.unmount(); root = createRoot(document.getElementById('root')!); render(); },
   disconnect() { server.socket.close(); },
-  async reconnect() { server.held.delete('session/list'); server.held.delete('session/attach'); server.held.delete('session/summary'); await server.connect(); },
+  async reconnect() { server.held.delete('session/list'); server.held.delete('thread/resume'); server.held.delete('session/summary'); await server.connect(); },
 };

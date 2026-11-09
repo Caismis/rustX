@@ -2,7 +2,7 @@ import {traceRefreshed} from './fixture';
 import{traceReceipt}from'./fixture';
 import { afterEach, expect, it } from 'vitest';
 import { Server, snapshot,checkpoint } from './fixture';
-import { beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace,traceInterestBatches, traceInterests, TRACE_DETAIL_LIMIT, TRACE_DETAIL_MAX_BYTES } from '../src/client/trace';
+import { beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace,traceInterestBatches, traceInterests, TRACE_DETAIL_LIMIT, TRACE_DETAIL_MAX_BYTES } from '../src/client/trace';
 import { requestDetail as detail, traceRecord as entry } from './trace-fixture';
 const rootCut=()=>checkpoint(snapshot()).read_cut;
 let server: Server;
@@ -125,16 +125,17 @@ it('prepends overlapping pages exactly once and retains native numeric order', (
   expect(prependTrace(next, { records: [entry(9), entry(10)], next_cursor: 'trace:9' })).toEqual(next);
   expect(prependTrace(next, { records: [] }).page.next_cursor).toBeUndefined();
 });
-it('overlapping refresh preserves history; a disconnected tail establishes a new interval', () => {
+it('live refresh preserves loaded history and represents disjoint tails with native paging boundaries', () => {
   const first = replaceTrace({ records: [entry(8), entry(9)], next_cursor: 'trace:8' });
   const live = refreshTrace(first, { records: [entry(9), entry(10)], next_cursor: 'trace:9' });
   expect(live.epoch).toBe(first.epoch);
   expect(live.page.next_cursor).toBe(first.page.next_cursor);
   expect(live.page.records?.map(item => item.id)).toEqual(['trace:8', 'trace:9', 'trace:10']);
   const gap = refreshTrace(live, { records: [entry(20)], next_cursor: 'trace:20' });
-  expect(gap.epoch).toBeGreaterThan(live.epoch);
-  expect(gap.page.next_cursor).toBe('trace:20');
-  expect(gap.page.records.map(item => item.id)).toEqual(['trace:20']);
+  expect(gap.epoch).toBe(live.epoch);
+  expect(gap.page.next_cursor).toBe('trace:8');
+  expect(gap.page.records.map(item => item.id)).toEqual(['trace:8', 'trace:9', 'trace:10', 'trace:20']);
+  expect(gap.gaps).toEqual([{ after: 'trace:10', before: 'trace:20', cursor: 'trace:20' }]);
 });
 it('a fuller head carries its own older boundary beyond a short checkpoint tail', () => {
   const retained = replaceTrace({ records: [entry(10)], next_cursor: null });
@@ -212,15 +213,15 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   expect(server.requests.filter(item => item.request.method === 'session/trace')).toHaveLength(1);
 });
 
-it('native lifecycle patches repair a selected old record separately from rebased history', () => {
+it('native lifecycle patches repair selected history alongside a disjoint live tail', () => {
   const old = { ...entry(1), state: 'running' as const };
   const first = selectTrace(replaceTrace({ records: [old, entry(2)], next_cursor: 'trace:1' }), old.id);
   const updated = refreshTrace(first, { records: [entry(100)] }, [
     { fields:old.fields,collections:old.collections,id: old.id, location: old.location, state: 'completed', attachments: [], truncated: false, timing: { ...old.timing, duration_ms: '123' } },
   ]);
-  expect(updated.epoch).toBeGreaterThan(first.epoch);
-  expect(updated.page.next_cursor).toBeUndefined();
-  expect(updated.page.records.map(item => item.id)).toEqual(['trace:100']);
+  expect(updated.epoch).toBe(first.epoch);
+  expect(updated.page.next_cursor).toBe('trace:1');
+  expect(updated.page.records.map(item => item.id)).toEqual(['trace:1', 'trace:2', 'trace:100']);
   expect(updated.selection).toMatchObject({ state: 'completed', timing: { ...old.timing, duration_ms: '123' } });
 });
 
@@ -264,48 +265,47 @@ it('the first repaired tail restores older paging in a new resync epoch', () => 
   expect(repaired.page.next_cursor).toBe('trace:100');
 });
 
-it('forty new anchors rebase history, retain one exact selection, and bound interests', () => {
+it('forty new anchors retain history, exact selection, and bounded interest batches', () => {
   const old = entry(4, { state: 'running' });
   const cache = selectTrace(replaceTrace({ records: [old, entry(8), entry(9), entry(10)], next_cursor: 'before-four' }), old.id);
   const committed = Array.from({ length: 40 }, (_, index) => entry(11 + index));
   const tail = { records: committed.slice(-32), next_cursor: 'before-nineteen' };
   const next = refreshTrace(cache, tail);
-  expect(next.page).toEqual(tail);
-  expect(next.epoch).toBeGreaterThan(cache.epoch);
+  expect(next.page.records).toEqual([...cache.page.records, ...tail.records]);
+  expect(next.gaps).toEqual([{ after: 'trace:10', before: 'trace:19', cursor: 'before-nineteen' }]);
+  expect(next.epoch).toBe(cache.epoch);
   expect(next.selection).toEqual(old);
   expect(traceInterests(next)[0]).toBe(old.position);
   const settled = refreshTrace(next, tail, [{ fields:old.fields,collections:old.collections,id: old.id, location: old.location, state: 'completed', timing: old.timing, attachments: [], truncated: false }]);
   expect(settled.selection).toMatchObject({ id: old.id, state: 'completed' });
-  expect(settled.page.records).toEqual(tail.records);
-  expect(settled.page.records.some(row => row.id === old.id)).toBe(false);
+  expect(settled.page.records.slice(-32)).toEqual(tail.records);
+  expect(settled.page.records[0]).toMatchObject({id:old.id,state:'completed'});
   const batches=traceInterestBatches({ ...settled, page: { records: Array.from({ length: 1024 }, (_, i) => entry(i + 100)) } });
   expect(batches.flat()).toHaveLength(1025);
   expect(batches.every(batch=>batch.length<=8)).toBe(true);
 });
-it('non-overlap rebase fences a pending older page and uses the new interval cursor', async () => {
+it('disjoint appends preserve an in-flight older read and its native continuation', async () => {
   server = new Server(); server.snapshots.set('A', { ...snapshot(), trace: { records: [entry(8), entry(9), entry(10)], next_cursor: 'before-eight' } });
   await server.attached('A'); server.held.add('session/trace');
   server.client.selectTrace('A', 'trace:8');
   const older = server.client.loadEarlierTrace('A'); const request = await server.waitFor('session/trace', 1);
   await server.update('A', { ...snapshot(), trace: { records: [entry(20), entry(21), entry(22)], next_cursor: 'before-twenty' } });
-  server.socket.success(request, {refreshed:traceRefreshed(request), type: 'trace', page: {read_cut:rootCut(), records: [entry(7)] } }); await older;
-  expect(server.client.getSnapshot().views.A.trace?.page.records.map(row => row.id)).toEqual(['trace:20', 'trace:21', 'trace:22']);
-  expect(server.client.getSnapshot().views.A.trace?.selection?.id).toBe('trace:8');
-  const next = server.client.loadEarlierTrace('A'); const nextRequest = await server.waitFor('session/trace', 2);
-  expect(nextRequest.params).toMatchObject({ before: 'before-twenty' });
-  server.socket.success(nextRequest, {refreshed:traceRefreshed(nextRequest), type: 'trace', page: {read_cut:rootCut(), records: [entry(19)] } });
-  const repair = await server.waitFor('session/trace', 3);
-  server.socket.success(repair, {refreshed:traceRefreshed(repair), type: 'trace', page: {read_cut:rootCut(), records: [entry(20), entry(21), entry(22)], next_cursor: 'before-twenty' } }); await next;
-  expect(server.client.getSnapshot().views.A.trace?.page.records.map(row => row.id)).toEqual(['trace:19', 'trace:20', 'trace:21', 'trace:22']);
+  server.socket.success(request, {refreshed:traceRefreshed(request), type: 'trace', page: {read_cut:rootCut(), records: [entry(7)] } });
+  const repair = await server.waitFor('session/trace', 2);
+  server.socket.success(repair, {refreshed:traceRefreshed(repair), type: 'trace', page: {read_cut:rootCut(), records: [entry(20), entry(21), entry(22)], next_cursor: 'before-twenty' } }); await older;
+  const trace = server.client.getSnapshot().views.A.trace!;
+  expect(trace.page.records.map(row => row.id)).toEqual(['trace:7', 'trace:8', 'trace:9', 'trace:10', 'trace:20', 'trace:21', 'trace:22']);
+  expect(trace.selection?.id).toBe('trace:8');
+  expect(trace.page.next_cursor).toBeUndefined();
+  expect(trace.gaps).toEqual([{ after:'trace:10', before:'trace:20', cursor:'before-twenty' }]);
 });
 
 it('a detail reply is fenced by the epoch it was requested in', () => {
   const cache = selectTrace(replaceTrace({ records: [entry(1)], next_cursor: null }), 'trace:1');
   const requested = beginTraceDetail(cache, 'trace:1');
   expect(requested.details['trace:1']).toMatchObject({ epoch: cache.epoch, loading: true });
-  // A rebase onto a disconnected tail starts a new interval, and therefore a
-  // new epoch. The in-flight detail reply describes the interval that is gone.
-  const rebased = refreshTrace(requested, { records: [entry(50)], next_cursor: null });
+  // Explicit navigation replaces the read domain and retires its pending detail.
+  const rebased = replaceTrace({ records: [entry(50)], next_cursor: null }, requested);
   expect(rebased.epoch).toBeGreaterThan(cache.epoch);
   const stale = completeTraceDetail(rebased, 'trace:1', cache.epoch, detail(1));
   expect(stale).toBe(rebased);
@@ -438,7 +438,7 @@ it('native TraceChanged coalesces burst reads independently of Session enrichmen
   server = new Server(); await server.attached('A');
   server.held.add('session/trace');
   let cursor = 0;
-  const emit = (event: import('../../protocol/app-server/v73').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
+  const emit = (event: import('../../protocol/app-server/v76').RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++cursor), event } });
   emit({ type: 'read_domains_updated', transcript: { entries: [] }, trace: {records:[],next_cursor:null} });
   expect(server.requests.filter(row => row.request.method === 'session/trace')).toHaveLength(0);
   emit({ type: 'trace_changed' });
@@ -508,11 +508,11 @@ it('421: Web consumes the generated bounded Tool vocabulary through the actual c
 });
 
 it('cold trace supports paging and details without runtime attachment, and retires late reads', async () => {
-  server = new Server(); await server.connect(); server.held.add('session/attach');
+  server = new Server(); await server.connect(); server.held.add('thread/resume');
   server.handlers.set('session/traceHistory', request => ({ type: 'session_trace_history', conversation_id: 'conversation-A', page: request.method === 'session/traceHistory' && request.params.before ? {read_cut:rootCut(), records: [entry(9)], next_cursor: null } : {read_cut:rootCut(), records: [entry(10)], next_cursor: 'trace:10' } }));
   server.handlers.set('session/traceHistoryDetail', request => {if(request.method!=='session/traceHistoryDetail')throw Error('method');return {type:'session_trace_history_detail',conversation_id:'conversation-A',page:traceReceipt(detail(Number(request.params.record_id.slice(6)))).page};});
   const attach = server.client.attach('A');
-  const opening = await server.waitFor('session/attach', 1);
+  const opening = await server.waitFor('thread/resume', 1);
   await new Promise(resolve => setTimeout(resolve, 0));
   expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toEqual([entry(10)]);
   expect(server.client.getSnapshot().views.A.target).toBeUndefined();
@@ -543,4 +543,61 @@ it('bounds encoded detail bytes while preserving selection and native interval',
   expect(cache.details['trace:1']?.detail).toBeDefined();
   expect(cache.selection?.id).toBe('trace:1');
   expect(cache.page.records.map(row=>row.id)).toEqual(['trace:1','trace:2','trace:3']);
+});
+
+it('fills disjoint history in bounded pages while retaining newer events and row cuts', () => {
+  const old = entry(1), second = entry(2), oldCut = { ...rootCut(), revision:'1' };
+  let cache = selectTrace(replaceTrace({ records:[old,second], read_cut:oldCut, next_cursor:'oldest' }), old.id);
+  cache = completeTraceDetail(beginTraceDetail(cache, old.id), old.id, cache.epoch, detail(1));
+  const evidence = cache.details[old.id];
+  cache = refreshTrace(cache, { records:[entry(8),entry(9)], next_cursor:'before-eight', read_cut:rootCut() });
+  cache = fillTraceGap(cache, cache.gaps![0]!, { records:[entry(6),entry(7)], next_cursor:'before-six', read_cut:rootCut() });
+  expect(cache.gaps).toEqual([{ after:'trace:2', before:'trace:6', cursor:'before-six' }]);
+  cache = refreshTrace(cache, { records:[entry(9),entry(10)], next_cursor:'before-nine', read_cut:rootCut() });
+  cache = fillTraceGap(cache, cache.gaps![0]!, { records:[entry(2,{preview:{text:'Older paging body',truncated:false}}),entry(3),entry(4),entry(5)], next_cursor:'before-two', read_cut:rootCut() });
+  expect(cache.page.records.map(row=>row.id)).toEqual(Array.from({length:10},(_,i)=>`trace:${i+1}`));
+  expect(cache.gaps).toEqual([]); expect(cache.page.next_cursor).toBe('oldest');
+  expect(cache.details[old.id]).toBe(evidence); expect(cache.readCuts![old.id]).toBe(oldCut);
+  expect(cache.page.records[1]).toBe(second); expect(cache.readCuts![second.id]).toBe(oldCut);
+});
+it('native overlap closes gaps and empty live pages preserve the reading window', () => {
+  const old = replaceTrace({records:[entry(1),entry(2)],next_cursor:'oldest'});
+  const live = refreshTrace(old,{records:[entry(5)],next_cursor:'before-five'});
+  const bridged = refreshTrace(live,{records:[entry(2),entry(3),entry(4),entry(5),entry(6)],next_cursor:'before-two'});
+  expect(bridged.gaps).toEqual([]);
+  expect(bridged.page.records.map(row=>row.id)).toEqual(Array.from({length:6},(_,i)=>`trace:${i+1}`));
+  expect(refreshTrace(bridged,{records:[]}).page.records).toEqual(bridged.page.records);
+});
+it.each(['history', 'live'] as const)('a %s page crossing another gap advances its boundary until all history is connected', source => {
+  const rows = (first: number, last: number) => Array.from({ length: last - first + 1 }, (_, index) => entry(first + index));
+  const oldCut = { ...rootCut(), revision: '1' }, middleCut = { ...rootCut(), revision: '2' };
+  const pagingCut = { ...rootCut(), revision: '3' };
+  let cache = replaceTrace({ records: rows(1, 2), next_cursor: 'oldest', read_cut: oldCut });
+  cache = refreshTrace(cache, { records: rows(50, 51), next_cursor: 'before-fifty', read_cut: middleCut });
+  const resident = cache.page.records.find(record => record.id === 'trace:50');
+  const last = source === 'history' ? 106 : 74;
+  cache = refreshTrace(cache, { records: rows(source === 'history' ? 75 : 65, last), next_cursor: 'newest-gap' });
+  const oldGap = cache.gaps![0]!;
+  const page = { records: rows(43, 74), next_cursor: 'before-forty-three', read_cut: pagingCut };
+  expect(page.records).toHaveLength(32);
+  cache = source === 'history' ? fillTraceGap(cache, cache.gaps![1]!, page) : refreshTrace(cache, page);
+  expect(cache.gaps).toEqual([{ after: 'trace:2', before: 'trace:43', cursor: 'before-forty-three' }]);
+  expect(cache.readCuts!['trace:50']).toBe(middleCut);
+  if (source === 'history') expect(cache.page.records.find(record => record.id === 'trace:50')).toBe(resident);
+  // An older in-flight read cannot use the obsolete boundary to close the gap.
+  expect(fillTraceGap(cache, oldGap, { records: rows(18, 49), next_cursor: 'stale-boundary' })).toBe(cache);
+  cache = fillTraceGap(cache, cache.gaps![0]!, { records: rows(11, 42), next_cursor: 'before-eleven', read_cut: pagingCut });
+  expect(cache.gaps).toEqual([{ after: 'trace:2', before: 'trace:11', cursor: 'before-eleven' }]);
+  cache = fillTraceGap(cache, cache.gaps![0]!, { records: rows(1, 10), next_cursor: null, read_cut: pagingCut });
+  cache = refreshTrace(cache, { records: rows(last - 31, last), next_cursor: 'latest-page' });
+  expect(cache.gaps).toEqual([]);
+  expect(cache.page.records.map(record => record.id)).toEqual(rows(1, last).map(record => record.id));
+  expect(cache.page.next_cursor).toBe('oldest');
+  expect(cache.readCuts!['trace:1']).toBe(oldCut);
+  expect(cache.readCuts!['trace:50']).toBe(middleCut);
+});
+it('a disjoint append keeps an in-flight detail read valid', () => {
+  const pending = beginTraceDetail(selectTrace(replaceTrace({records:[entry(1)]}),'trace:1'),'trace:1');
+  const live = refreshTrace(pending,{records:[entry(50)],next_cursor:'before-fifty'});
+  expect(completeTraceDetail(live,'trace:1',pending.epoch,detail(1)).details['trace:1']?.detail).toEqual(detail(1));
 });

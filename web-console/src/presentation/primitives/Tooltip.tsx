@@ -44,9 +44,8 @@ type TooltipLabel = string | (() => string)
  */
 export function Tooltip({ label, shortcutKeys, side = 'right', delayMs = 0, disabled = false, maxWidth, children }: { label: TooltipLabel; shortcutKeys?: readonly string[] | undefined; side?: TooltipSide; delayMs?: number; disabled?: boolean; maxWidth?: number; children: ReactElement<AnchorProps> }) {
   const anchor = useRef<HTMLElement | null>(null)
-  // React 18 keeps the element's ref outside props; forward it so wrapping an
-  // anchor in Tooltip never silently severs the owner's ref.
-  const childRef = (children as ReactElement<AnchorProps> & { ref?: Ref<HTMLElement> }).ref
+  // React 19 exposes ref as a prop; forward it alongside the tooltip's anchor.
+  const childRef = children.props.ref
   const mergedRef = useCallback((el: HTMLElement | null) => {
     anchor.current = el
     if (typeof childRef === 'function') childRef(el)

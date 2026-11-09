@@ -7,7 +7,7 @@ import { withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-s
 import type { ProductHostWorkspaces } from '../src/workspaces/host';
 import type { WorkspaceAuthorityObservation } from '../src/workspaces/authority';
 import { exampleSource } from './workflow-fixtures';
-import type { WorkflowFileDocument } from '../../protocol/app-server/v73';
+import type { WorkflowFileDocument } from '../../protocol/app-server/v76';
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(accept => { resolve = accept; }); return { promise, resolve }; }
 

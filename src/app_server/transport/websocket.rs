@@ -29,43 +29,10 @@ use tokio_util::sync::CancellationToken;
 pub const MAX_CLIENTS: usize = 32;
 /// Incomplete/authentication handshakes cannot retain slots indefinitely.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Browser clients offer this protocol plus `rustx-token.<dedicated token>`.
-pub const SUBPROTOCOL: &str = "rustx.app-server.v73";
+/// Browser clients offer this protocol plus `rustx-token.<base64url-no-pad encoded bearer>`.
+pub const SUBPROTOCOL: &str = "rustx.app-server.v76";
 
-/// Dedicated transport credential. Deliberately has no Debug/Serialize.
-#[derive(Clone)]
-pub struct Credential(String);
-impl Credential {
-    pub(crate) fn offered(&self, offered: &[&str], prefix: &str) -> bool {
-        let expected = format!("{prefix}{}", self.0);
-        offered.iter().any(|value| {
-            value.len() == expected.len()
-                && value
-                    .bytes()
-                    .zip(expected.bytes())
-                    .fold(0u8, |different, (a, b)| different | (a ^ b))
-                    == 0
-        })
-    }
-    pub(crate) fn same_secret(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-    /// Require a bounded URL/header-safe secret (at least 256 random bits when generated).
-    /// # Errors
-    /// Rejects empty, short, long or non-token characters.
-    pub fn new(value: String) -> io::Result<Self> {
-        if !(43..=128).contains(&value.len())
-            || !value
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
-            return Err(failure(
-                "transport token must contain 43..128 base64url characters",
-            ));
-        }
-        Ok(Self(value))
-    }
-}
+pub use super::auth::Credential;
 
 /// One WebSocket stream, shared by a connection's reader and its writer in
 /// place of `SplitStream`/`SplitSink`.
@@ -292,8 +259,8 @@ enum Admission {
     /// The private one-read Product Host lane and its native authority.
     ProductHost(CancellationToken),
     ProductHostObserver(CancellationToken),
-    /// The ordinary lane, with delivery access when its separate credential was offered.
-    Ordinary(Option<CancellationToken>),
+    /// The ordinary trusted-client lane.
+    Ordinary,
 }
 
 fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Option<Admission> {
@@ -301,7 +268,10 @@ fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Op
         .headers()
         .get_all("sec-websocket-protocol")
         .iter()
-        .filter_map(|value| value.to_str().ok())
+        .map(|value| value.to_str())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?
+        .into_iter()
         .flat_map(|value| value.split(',').map(str::trim))
         .collect();
     if request.uri().query().is_some() {
@@ -324,16 +294,12 @@ fn admit(host: &AppServerHost, credential: &Credential, request: &Request) -> Op
             .map(Admission::ProductHostObserver);
     }
     if request.uri().path() != "/"
-        || !offered.contains(&SUBPROTOCOL)
-        || !credential.offered(&offered, "rustx-token.")
+        || (!offered.is_empty() && !offered.contains(&SUBPROTOCOL))
+        || !super::auth::authorize(credential, request.headers(), &offered)
     {
         return None;
     }
-    // Delivery access is additive to, never a substitute for, the ordinary
-    // transport credential. A wrong one fails closed instead of downgrading.
-    host.authenticate_delivery_access(&offered)
-        .ok()
-        .map(Admission::Ordinary)
+    Some(Admission::Ordinary)
 }
 
 pub(crate) async fn connection<S>(
@@ -370,13 +336,15 @@ where
             Admission::ProductHostObserver(_) => {
                 crate::app_server::product_host::OBSERVE_SUBPROTOCOL
             }
-            Admission::Ordinary(_) => SUBPROTOCOL,
+            Admission::Ordinary => SUBPROTOCOL,
         };
         *admitted.lock().expect("handshake admission") = Some(admission);
-        response.headers_mut().insert(
-            "sec-websocket-protocol",
-            http::HeaderValue::from_static(selected),
-        );
+        if request.headers().get("sec-websocket-protocol").is_some() {
+            response.headers_mut().insert(
+                "sec-websocket-protocol",
+                http::HeaderValue::from_static(selected),
+            );
+        }
         Ok(response)
     };
     let socket = tokio::select! {
@@ -390,7 +358,7 @@ where
     .map_err(io::Error::other) } => socket?,
     };
     let admitted = admission.lock().expect("handshake admission").take();
-    let delivery = match admitted {
+    match admitted {
         Some(Admission::ProductHost(authority)) => {
             return crate::app_server::product_host::serve(socket, host, authority, shutdown).await;
         }
@@ -400,9 +368,9 @@ where
             )
             .await;
         }
-        Some(Admission::Ordinary(delivery)) => delivery,
+        Some(Admission::Ordinary) => {}
         None => return Err(failure("WebSocket admission missing")),
-    };
+    }
     let socket = Socket::new(socket);
     let socket = &socket;
     let incoming = futures_util::stream::poll_fn(|cx| socket.poll_next(cx))
@@ -415,10 +383,10 @@ where
                 Err(error) => Some(Err(io::Error::other(error))),
             }
         });
-    let endpoint = Arc::new(match delivery {
-        Some(authorization) => AppServerConnection::with_delivery_access(host, authorization),
-        None => AppServerConnection::new(host),
-    });
+    let endpoint = Arc::new(AppServerConnection::with_connection_lifetime(
+        host,
+        shutdown.child_token(),
+    ));
     let result = super::serve(
         endpoint.clone(),
         incoming,
@@ -446,24 +414,4 @@ where
         );
     }
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn credential_is_bounded_and_header_safe() {
-        for length in [43, 128] {
-            assert!(Credential::new("x".repeat(length)).is_ok());
-        }
-        for value in [
-            String::new(),
-            "x".repeat(42),
-            "x".repeat(129),
-            format!("{}\n", "x".repeat(43)),
-            format!("{}=", "x".repeat(43)),
-        ] {
-            assert!(Credential::new(value).is_err());
-        }
-    }
 }

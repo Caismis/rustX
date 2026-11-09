@@ -1,3 +1,4 @@
+import {summaryFor} from '../../protocol/app-server/testing.ts';
 import { METHOD_POLICY, requestEffect, requestLane } from "../../protocol/app-server/method-policy.ts";
 import { jobReceipt, domainReceipt } from './support/fixtures.ts';
 import { checkpoint } from "./support/fixtures.ts";
@@ -41,6 +42,7 @@ import type {
 } from "../src/protocol/app-server.ts";
 import {
   FakeTransport,
+  resolveThreadMetadata,
   notification,
   paramsOf,
   tick,
@@ -49,7 +51,7 @@ import { backgroundExecution, subagent, runtimeCursor, sessionView, snapshot } f
 
 const CAPABILITIES = {
   upload_policy: nativeUploadPolicy, multi_session: true,
-  single_writable_controller: true,
+  shared_writable_clients: true,
   headless_interactions: true, delivery_access: false,
   experimental_methods: [],
 };
@@ -92,10 +94,11 @@ async function attached(
   transport: FakeTransport,
   attachmentTarget = target(),
 ): Promise<AppServerSession> {
-  const attaches = transport.log.count("session/attach") + 1;
+  const attaches = transport.log.count("thread/resume") + 1;
   const pending = AppServerSession.attach(client, attachmentTarget.session_id);
-  const attach = (await transport.log.awaitMethod("session/attach", attaches)).at(-1)!;
-  transport.respond(attach.id, {type:'attached', target: attachmentTarget, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+  await resolveThreadMetadata(transport, sessionView({id:attachmentTarget.session_id,active_conversation_id:attachmentTarget.conversation_id}));
+  const attach = (await transport.log.awaitMethod("thread/resume", attaches)).at(-1)!;
+  transport.respond(attach.id, {type:'attached', target: attachmentTarget, configuration_revision:'0', attachment_kind:'writable', observation_source:'live'});
   const read=(await transport.log.awaitMethod('session/checkpoint',attaches)).at(-1)!;
   transport.respond(read.id,{type:'checkpoint',checkpoint:checkpoint({...snapshot(),conversation_id:attachmentTarget.conversation_id},runtimeCursor(5))});
   const subscribe=(await transport.log.awaitMethod('session/subscribe',attaches)).at(-1)!;
@@ -109,7 +112,7 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(APP_SERVER_PROTOCOL_VERSION, 73);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 76);
     assert.equal(params.protocol_version, APP_SERVER_PROTOCOL_VERSION);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
@@ -138,7 +141,7 @@ describe("initialization", () => {
     assert.ok(transport.closed, "failed initialization releases its physical transport");
   });
 
-  it("refuses a v56 server before using the v73 protocol contract", async () => {
+  it("refuses a v56 server before using the v76 protocol contract", async () => {
     const transport = new FakeTransport();
     const pending = AppServerClient.initialize({ transport });
     const [request] = await transport.log.awaitMethod("initialize");
@@ -147,7 +150,7 @@ describe("initialization", () => {
       protocol_version: 56,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 56, this client speaks 73/);
+    await assert.rejects(pending, /negotiated protocol 56, this client speaks 76/);
     assert.equal(transport.log.count("initialize"), 1);
     assert.ok(transport.closed, "invalid initialization does not retain a listener slot");
   });
@@ -169,7 +172,7 @@ describe("request correlation", () => {
 
     // Answer the *second* request first. Correlation is by id and nothing
     // else, so neither promise may take the other's result.
-    transport.respond(list.id, { type: "sessions", sessions: [], next_offset: null });
+    transport.respond(list.id, { type: "sessions", sessions: ([]).map(row=>summaryFor(row)), next_offset: null });
     transport.respond(info.id, { type: "server_info", capabilities: CAPABILITIES });
 
     assert.equal((await second).type, "sessions");
@@ -191,8 +194,8 @@ describe("request correlation", () => {
     const [request] = await transport.log.awaitMethod("server/info");
     transport.respondError(request!.id, {
       code: -32000,
-      message: "controller in use",
-      data: { kind: "controller_in_use" },
+      message: "Thread is not admissible",
+      data: { kind: "invalid_state" },
     });
     await assert.rejects(pending, AppServerRequestError);
     // A protocol error is a well-formed answer from a healthy server.
@@ -273,7 +276,7 @@ describe("uncertain mutations", () => {
     const { client, transport } = await initialized();
     const submitted = client.call(
       "turn/start",
-      { target: target(), content: [{ type: "text", text: "ship it" }] },
+      { inputId:crypto.randomUUID(), target: target(), content: [{ type: "text", text: "ship it" }] },
       "inbound_accepted",
     );
     await transport.log.awaitMethod("turn/start");
@@ -534,9 +537,8 @@ describe("attachment release", () => {
     // Detach is the only thing that was sent: no cancellation, no unload, no
     // shutdown, no interaction settlement.
     const methods = transport.log.requests.map((message) => message.method);
-    assert.ok(!methods.includes("turn/cancel"));
+    assert.ok(!methods.includes("turn/interrupt"));
     assert.ok(!methods.includes("session/switchNode"));
-    assert.ok(!methods.includes("interaction/cancel"));
     assert.equal(session.released, true);
   });
 
@@ -640,7 +642,7 @@ describe("generated-contract ingress", () => {
       client.onClose(() => { closes += 1; assert.equal(client.closed?.reason, "protocol_error"); });
       const read = client.call("session/list", { query: null, offset: 0, limit: 1 }, "sessions")
         .then(() => assert.fail("invalid response accepted"), (error: unknown) => { reads += 1; return error; });
-      const mutation = client.call("turn/cancel", { target: target() }, "cancellation_accepted")
+      const mutation = client.call("turn/interrupt", { turnId:'attempt-1', target: target() }, "cancellation_accepted")
         .then(() => assert.fail("mutation falsely completed"), (error: unknown) => { mutations += 1; return error; });
       await transport.log.awaitRequests(3);
       assert.doesNotThrow(() => transport.deliver(record));
@@ -654,7 +656,7 @@ describe("generated-contract ingress", () => {
       assert.ok(mutationError instanceof UncertainOutcomeError);
       assert.equal(mutationError.transportFailure, client.closed);
       assert.deepEqual([deliveries, closes, reads, mutations], [0, 1, 1, 1]);
-      assert.equal(transport.log.count("turn/cancel"), 1);
+      assert.equal(transport.log.count("turn/interrupt"), 1);
     });
   }
 
@@ -708,8 +710,8 @@ describe("bounded request ownership", () => {
       await tick(); // Drain the transport's serialized writes before counting.
       assert.equal(transport.log.count(method), 6);
       await assert.rejects(scheduled(6), /rpc capacity/);
-      const control = client.call('turn/cancel', { target: target() }, 'cancellation_accepted');
-      const [cancel] = await transport.log.awaitMethod('turn/cancel');
+      const control = client.call('turn/interrupt', { turnId:'attempt-1', target: target() }, 'cancellation_accepted');
+      const [cancel] = await transport.log.awaitMethod('turn/interrupt');
       transport.respond(cancel!.id, { type: 'cancellation_accepted', attempt_id: 'attempt-current' }); await control;
       await assert.rejects(scheduled(6), /rpc capacity/, 'Stop releases only its own lane');
       const [first] = await transport.log.awaitMethod(method);
@@ -736,8 +738,8 @@ describe("bounded request ownership", () => {
       assert.equal(transport.log.count('session/projections'), 0, 'ordinary overflow never sends');
       const observation = client.call('agent/observe', { target: target(), agent_id: 'child', after: null }, 'agent_observe');
       const observationSettled = Promise.allSettled([observation]);
-      const control = client.call('turn/cancel', { target: target() }, 'cancellation_accepted');
-      const [cancel] = await transport.log.awaitMethod('turn/cancel');
+      const control = client.call('turn/interrupt', { turnId:'attempt-1', target: target() }, 'cancellation_accepted');
+      const [cancel] = await transport.log.awaitMethod('turn/interrupt');
       transport.respond(cancel!.id, { type: 'cancellation_accepted', attempt_id: 'attempt-current' }); await control;
       await transport.log.awaitMethod('agent/observe');
       transport.respond(requests[0]!.id, method === 'conversation/changes'
@@ -766,10 +768,10 @@ describe("bounded request ownership", () => {
     await transport.log.awaitRequests(17);
     await assert.rejects(client.call('session/read',{session_id:target().session_id},'session'),/metadata capacity/);
     assert.equal(transport.log.count('session/read'),1,'metadata overflow never sends');
-    const controls=[client.call('session/submissionIntent',{session_id:target().session_id,node_id:sessionView().active_node},'submission_intent_accepted'),client.call('turn/cancel',{target:target()},'cancellation_accepted')];
+    const controls=[client.call('session/submissionIntent',{session_id:target().session_id,node_id:sessionView().active_node},'submission_intent_accepted'),client.call('turn/interrupt',{ turnId:'attempt-1',target:target()},'cancellation_accepted')];
     const controlSettled=Promise.allSettled(controls);await transport.log.awaitRequests(19);
     assert.equal(client.pendingCount,18);assert.equal(client.closed,undefined);
-    await assert.rejects(client.call('turn/cancel',{target:target()},'cancellation_accepted'),/control capacity/);
+    await assert.rejects(client.call('turn/interrupt',{ turnId:'attempt-1',target:target()},'cancellation_accepted'),/control capacity/);
     const [read]=await transport.log.awaitMethod('session/read');transport.respond(read!.id,{type:'session',session:sessionView({id:target().session_id})});
     await metadata[0];assert.equal(client.pendingCount,17);
     const nextMetadata=client.call('session/settings',{session_id:target().session_id},'settings');const nextMetadataSettled=nextMetadata.catch(error=>error);
@@ -777,8 +779,8 @@ describe("bounded request ownership", () => {
     await assert.rejects(client.call('session/read',{session_id:target().session_id},'session'),/metadata capacity/);
     const [intent]=await transport.log.awaitMethod('session/submissionIntent');transport.respond(intent!.id,{type:'submission_intent_accepted'});
     await controls[0];assert.equal(client.pendingCount,17);
-    const next=client.call('turn/cancel',{target:target()},'cancellation_accepted');const nextSettled=next.catch(error=>error);
-    await transport.log.awaitMethod('turn/cancel',2);assert.equal(client.pendingCount,18);
+    const next=client.call('turn/interrupt',{ turnId:'attempt-1',target:target()},'cancellation_accepted');const nextSettled=next.catch(error=>error);
+    await transport.log.awaitMethod('turn/interrupt',2);assert.equal(client.pendingCount,18);
     transport.fail('input_eof');const results=await held;await controlSettled;
     assert.equal(results.filter(result=>result.status==='rejected').length,15);
     assert.ok((results[8] as PromiseRejectedResult).reason instanceof TransportClosedError);
@@ -793,27 +795,27 @@ describe("bounded request ownership", () => {
   it("thirty-two attachment lifetimes preserve metadata, ordinary and control capacity with a fifty-request bound", async t => {
     const {client,transport}=await initialized();t.after(()=>client.close());
     const ids=Array.from({length:33},(_,i)=>`ses_01900000-0000-7000-8000-${String(i).padStart(12,'0')}`);
-    const attachments=ids.slice(0,32).map(session_id=>client.call('session/attach',{session_id},'attached'));
+    const attachments=ids.slice(0,32).map(session_id=>client.call('thread/resume',{threadId:session_id.replace(/^ses_/,'conv_')},'attached'));
     const attachmentResults=Promise.allSettled(attachments);
-    await transport.log.awaitMethod('session/attach',32);
-    await assert.rejects(client.call('session/attach',{session_id:ids[32]!},'attached'),/attachment capacity/);
-    assert.equal(transport.log.count('session/attach'),32,'overflow has no request identity or send');
-    const creation=client.call('session/create',{settings:{cwd:'/workspace'}},'session_transition');
+    await transport.log.awaitMethod('thread/resume',32);
+    await assert.rejects(client.call('thread/resume',{threadId:(ids[32]!).replace(/^ses_/, 'conv_')},'attached'),/attachment capacity/);
+    assert.equal(transport.log.count('thread/resume'),32,'overflow has no request identity or send');
+    const creation=client.call('thread/start',{settings:{cwd:'/workspace'}},'session_transition');
     const metadata=client.call('session/read',{session_id:ids[0]!},'session');
     const observations=Array.from({length:8},(_,i)=>client.call('agent/observe',{target:target(),agent_id:`child-${i}`,after:null},'agent_observe'));
     const waits=Array.from({length:6},(_,i)=>client.call('job/wait',{target:target(),job_id:`job-${i}`},'job_outcome'));
-    const controls=[client.call('session/submissionIntent',{session_id:ids[0]!,node_id:sessionView().active_node},'submission_intent_accepted'),client.call('turn/cancel',{target:target()},'cancellation_accepted')];
+    const controls=[client.call('session/submissionIntent',{session_id:ids[0]!,node_id:sessionView().active_node},'submission_intent_accepted'),client.call('turn/interrupt',{ turnId:'attempt-1',target:target()},'cancellation_accepted')];
     const otherResults=Promise.allSettled([creation,metadata,...observations,...waits,...controls]);
     await transport.log.awaitRequests(51);
     assert.equal(client.pendingCount,50);
     await assert.rejects(client.call('session/settings',{session_id:ids[0]!},'settings'),/metadata capacity/);
     await assert.rejects(client.call('agent/list',{target:target()},'domain_page'),/rpc capacity/);
-    await assert.rejects(client.call('turn/cancel',{target:target()},'cancellation_accepted'),/control capacity/);
-    const [first]=await transport.log.awaitMethod('session/attach');
-    transport.respond(first!.id,{type:'attached',target:target({session_id:ids[0]!}),configuration_revision:'0',attachment_kind:'controller',observation_source:'live'});
+    await assert.rejects(client.call('turn/interrupt',{ turnId:'attempt-1',target:target()},'cancellation_accepted'),/control capacity/);
+    const [first]=await transport.log.awaitMethod('thread/resume');
+    transport.respond(first!.id,{type:'attached',target:target({session_id:ids[0]!}),configuration_revision:'0',attachment_kind:'writable',observation_source:'live'});
     await attachments[0];assert.equal(client.pendingCount,49);
-    const next=client.call('session/attach',{session_id:ids[32]!},'attached');const nextResult=next.catch(error=>error);
-    const replacement=(await transport.log.awaitMethod('session/attach',33)).at(-1)!;
+    const next=client.call('thread/resume',{threadId:(ids[32]!).replace(/^ses_/, 'conv_')},'attached');const nextResult=next.catch(error=>error);
+    const replacement=(await transport.log.awaitMethod('thread/resume',33)).at(-1)!;
     assert.equal(replacement.id,Number(first!.id)+50,'refused admissions allocate no identity');
     assert.equal(client.pendingCount,50);
     transport.fail('input_eof');
@@ -823,7 +825,7 @@ describe("bounded request ownership", () => {
     assert.ok((remaining[0] as PromiseRejectedResult).reason instanceof UncertainOutcomeError,'creation keeps mutation response-loss semantics');
     assert.ok((remaining[1] as PromiseRejectedResult).reason instanceof TransportClosedError);
     assert.ok(await nextResult instanceof UncertainOutcomeError);
-    assert.equal(client.pendingCount,0);assert.equal(transport.log.count('session/attach'),33);
+    assert.equal(client.pendingCount,0);assert.equal(transport.log.count('thread/resume'),33);
   });
   it("T20 classified ordinary responses release exactly one capacity slot", async t => {
     const {client,transport}=await initialized();t.after(()=>client.close());
@@ -893,11 +895,11 @@ describe("request-scoped delivery cancellation", () => {
   it("reaches the server through its reserved slot when every other lane is full, never as a fifty-first request", async t => {
     const { client, transport } = await initialized(); t.after(() => client.close());
     const pending: Promise<unknown>[] = [];
-    for(let i=0;i<32;i++)pending.push(client.call('session/attach',{session_id:`ses_01900000-0000-7000-8000-${String(i).padStart(12,'0')}`},'attached'));
+    for(let i=0;i<32;i++)pending.push(client.call('thread/resume',{threadId:(`ses_01900000-0000-7000-8000-${String(i).padStart(12,'0')}`).replace(/^ses_/, 'conv_')},'attached'));
     // All32attachments+8observe+6ordinary+2metadata+2control fill the50-request envelope.
     for(let i=0;i<8;i++)pending.push(client.call('agent/observe',{target:target(),agent_id:`child-${i}`,after:null},'agent_observe'));
     for(let i=0;i<3;i++)pending.push(client.call('job/wait',{target:target(),job_id:`wait-${i}`},'job_outcome'));
-    for(let i=0;i<2;i++)pending.push(client.call('turn/cancel',{target:target()},'cancellation_accepted'));
+    for(let i=0;i<2;i++)pending.push(client.call('turn/interrupt',{ turnId:'attempt-1',target:target()},'cancellation_accepted'));
     pending.push(client.call('session/read',{session_id:target().session_id},'session'));
     pending.push(client.call('session/settings',{session_id:target().session_id},'settings'));
     const owners=[new AbortController(),new AbortController(),new AbortController()];
@@ -905,13 +907,13 @@ describe("request-scoped delivery cancellation", () => {
     const settled=Promise.allSettled(pending),reads=await transport.log.awaitMethod('delivery/read',3);
     await transport.log.awaitRequests(51);assert.equal(client.pendingCount,50);
     await assert.rejects(client.call('agent/list',{target:target()},'domain_page'),/rpc capacity/);
-    await assert.rejects(client.call('turn/cancel',{target:target()},'cancellation_accepted'),/control capacity/);
+    await assert.rejects(client.call('turn/interrupt',{ turnId:'attempt-1',target:target()},'cancellation_accepted'),/control capacity/);
 
     // Three reads cancelled together: one cancel in flight, the others wait
     // for the slot, so the server never sees a fifty-first request.
     for (const owner of owners) owner.abort();
     await drained();assert.equal(transport.log.count('delivery/cancel'),0,'cancel waits without becoming a fifty-first request');
-    const [control]=await transport.log.awaitMethod('turn/cancel');transport.respond(control!.id,{type:'cancellation_accepted',attempt_id:'attempt-a'});
+    const [control]=await transport.log.awaitMethod('turn/interrupt');transport.respond(control!.id,{type:'cancellation_accepted',attempt_id:'attempt-a'});
     const [first] = await transport.log.awaitMethod("delivery/cancel");
     await drained();
     assert.equal(transport.log.count("delivery/cancel"), 1);
@@ -1043,7 +1045,7 @@ it('T13 a lost native read-only MCP probe preserves connection-failure classific
 });
 
 it("derives parameter-sensitive Goal reads and lanes from the one shared method policy", () => {
-  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v73.ts").Request1;
+  const goal = (action: "show" | "mutate") => ({ method: "goal/control", params: { target: target(), control: { action } } }) as unknown as import("../../protocol/app-server/v76.ts").Request1;
   assert.equal(requestEffect(goal("show")), "read");
   assert.equal(requestEffect(goal("mutate")), "side_effecting");
   for (const [method, policy] of Object.entries(METHOD_POLICY)) {
@@ -1052,9 +1054,9 @@ it("derives parameter-sensitive Goal reads and lanes from the one shared method 
   }
   assert.equal(METHOD_POLICY["delivery/cancel"].lane, "control");
   assert.equal(METHOD_POLICY["agent/observe"].lane, "observation");
-  assert.equal(METHOD_POLICY["session/create"].lane, "metadata");
-  assert.equal(METHOD_POLICY["session/attach"].lane, "attachment");
-  assert.equal(METHOD_POLICY["session/attach"].unbounded, true);
+  assert.equal(METHOD_POLICY["thread/start"].lane, "metadata");
+  assert.equal(METHOD_POLICY["thread/resume"].lane, "attachment");
+  assert.equal(METHOD_POLICY["thread/resume"].unbounded, true);
   assert.equal(METHOD_POLICY["session/read"].lane, "metadata");
   assert.equal(METHOD_POLICY["session/settings"].lane, "metadata");
   assert.equal(METHOD_POLICY["session/settingsValueRead"].lane, undefined);
@@ -1065,24 +1067,40 @@ it('the shared method policy has exactly the native admission special lanes', ()
   // Complete special-case set from src/app_server/admission.rs::for_method.
   // Every other generated method must share the native ordinary/rpc lane.
   const nativeSpecialLanes = {
-    'session/attach': 'attachment',
+    'thread/resume': 'attachment',
+    'thread/read':'metadata', 'thread/list':'metadata', 'thread/loaded/list':'metadata', 'thread/name/set':'metadata', 'thread/archive':'metadata', 'thread/unarchive':'metadata',
     'agent/observe': 'observation',
     'session/read': 'metadata',
     'session/settings': 'metadata',
-    'session/create': 'metadata',
+    'thread/start': 'metadata',
+    'command/exec/terminate': 'control',
+    'fs/unwatch': 'control',
     'auxiliary/cancel': 'control',
     'agent/observeCancel': 'control',
     'delivery/cancel': 'control',
-    'turn/cancel': 'control',
+    'turn/interrupt': 'control',
     'agent/interrupt': 'control',
     'job/cancel': 'control',
     'session/detach': 'control',
     'mcp/draftCancel': 'control',
     'session/submissionIntent': 'control',
     'session/retryInitialization': 'control',
-    'interaction/cancel': 'control',
   } satisfies Partial<Record<MethodName, ReturnType<typeof requestLane>>>;
   const methods = Object.keys(METHOD_POLICY) as MethodName[];
   assert.deepEqual(Object.fromEntries(methods.filter(method => requestLane(method) !== 'rpc')
     .map(method => [method, requestLane(method)])), nativeSpecialLanes);
+});
+
+
+it('a mismatched Thread receipt closes its physical transport before any observation',async()=>{
+  const {client,transport}=await initialized(),expected=target();
+  const attaching=AppServerSession.attach(client,expected.session_id,undefined,undefined,undefined,new Set(),expected.conversation_id);
+  const rejected=assert.rejects(attaching,/Mismatched Thread resume identity/);
+  const [request]=await transport.log.awaitMethod('thread/resume');
+  transport.respond(request!.id,{type:'attached',target:{...expected,conversation_id:'conv_01900000-0000-7000-8000-000000009999'},configuration_revision:'0',attachment_kind:'writable',observation_source:'live'});
+  await rejected;
+  assert.ok(transport.closed);
+  assert.equal(transport.log.count('session/checkpoint'),0);
+  assert.equal(transport.log.count('session/subscribe'),0);
+  assert.equal(transport.log.count('session/detach'),0,'do not mutate an unproved returned target');
 });

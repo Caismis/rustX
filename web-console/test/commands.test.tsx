@@ -1,3 +1,4 @@
+import { threadFor } from '../../protocol/app-server/testing.ts';
 import { cfg3Effective } from './cfg3-data';
 import { domainReceipt, compactReceipt, settingsReceipt } from './fixture';
 import { localeController } from '../src/locale/controller';
@@ -16,7 +17,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v73';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v76';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -114,21 +115,21 @@ function nativeFixture() {
   server.handlers.set('session/boundaries', () => ({ type: 'boundaries', surface_revision: boundary.surface_revision, boundaries: [boundary] }));
   server.handlers.set('session/tree', request => ({ type: 'tree', nodes: request.method === 'session/tree' && request.params.session_id === 'B' ? [{ id: 'node-B', conversation_id: 'conversation-B', ordinal: '1', origin: { type: 'new' } }] : nodes }));
   const transition = (request: Request): MethodResult => {
-    if (request.method !== 'session/fork' && request.method !== 'session/branch') throw new Error('wrong method');
-    if (request.params.surface_revision !== boundary.surface_revision || !(request.params.boundary?.type==='by_message_id' && request.params.boundary.message_id === boundary.message!.id || request.method === 'session/fork' && request.params.side === 'after' && request.params.boundary?.type==='by_message_id' && request.params.boundary.message_id === 'original-assistant')) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
-    const id = request.method === 'session/fork' ? 'child' : 'A';
-    const nodeId = request.method === 'session/fork' ? 'node-child' : 'branch-A';
-    const conversation = request.method === 'session/fork' ? 'conversation-child' : 'conversation-branch-A';
+    if (request.method !== 'thread/fork' && request.method !== 'session/branch') throw new Error('wrong method');
+    if (request.params.surface_revision !== boundary.surface_revision || !(request.params.boundary?.type==='by_message_id' && request.params.boundary.message_id === boundary.message!.id || request.method === 'thread/fork' && request.params.side === 'after' && request.params.boundary?.type==='by_message_id' && request.params.boundary.message_id === 'original-assistant')) throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision or user boundary' });
+    const id = request.method === 'thread/fork' ? 'child' : 'A';
+    const nodeId = request.method === 'thread/fork' ? 'node-child' : 'branch-A';
+    const conversation = request.method === 'thread/fork' ? 'conversation-child' : 'conversation-branch-A';
     nodes.push({ ordinal: String(nodes.length + 1), id: nodeId, parent: id === 'A' ? 'node-A' : null, conversation_id: conversation, origin: { type: 'fork', source_session: 'A', source_node: 'node-A', source_surface_revision: boundary.surface_revision, side: "before", source_message: boundary.message!.id } });
     if (id === 'child') server.snapshots.set(id, snapshot(id));
     server.nodeSnapshots.set(nodeId, { ...snapshot(), conversation_id: conversation });
-    const result: Extract<MethodResult, { type: 'session_transition' }> = { type: 'session_transition', session: { id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' }, editor:server.editor({ id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' },content.map(block => block.type === 'upload' ? { ...block, session_id: id, token: id === 'child' ? 'native-destination-receipt' : block.token } : block)) };
+    const result: Extract<MethodResult, { type: 'session_transition' }> = {  thread: threadFor({ id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' }, editor:server.editor({ id, active_node: nodeId, active_conversation_id: conversation, node_count: nodes.length, created_at: '0', updated_at: '0' },content.map(block => block.type === 'upload' ? { ...block, session_id: id, token: id === 'child' ? 'native-destination-receipt' : block.token } : block)) };
     committed.push(result); return result;
   };
-  server.handlers.set('session/fork', transition); server.handlers.set('session/branch', transition);
-  server.handlers.set('session/create', () => {
+  server.handlers.set('thread/fork', transition); server.handlers.set('session/branch', transition);
+  server.handlers.set('thread/start', () => {
     server.snapshots.set('child', snapshot('child'));
-    const result: Extract<MethodResult, { type: 'session_transition' }> = { type: 'session_transition', session: { id: 'child', active_node: 'node-child', active_conversation_id: 'conversation-child', node_count: 1, created_at: '0', updated_at: '0' } };
+    const result: Extract<MethodResult, { type: 'session_transition' }> = {  thread: threadFor({ id: 'child', active_node: 'node-child', active_conversation_id: 'conversation-child', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'child', active_node: 'node-child', active_conversation_id: 'conversation-child', node_count: 1, created_at: '0', updated_at: '0' } };
     committed.push(result); return result;
   });
   server.handlers.set('context/compact', () => (compactReceipt({ compaction_in_progress: false, compaction_count: 1 })));
@@ -165,9 +166,9 @@ describe('shared Fork naming', () => {
   it('freezes the source title before dispatch and finishes naming after navigation retires', async () => {
     server.summaries.set('A', { name: 'Original' });
     const { scope, selection, navigation } = await subject();
-    server.held.add('session/fork');
+    server.held.add('thread/fork');
     const work = scope.transition('fork', selection);
-    const request = await server.waitFor('session/fork', 1), response = server.commit(request);
+    const request = await server.waitFor('thread/fork', 1), response = server.commit(request);
     await server.client.renameSession('A', 'Later source title');
     navigation.invalidate(); server.socket.deliver(response);
     expect(await work).toBeUndefined();
@@ -184,7 +185,7 @@ describe('shared Fork naming', () => {
     expect(server.snapshots.has('child')).toBe(true);
     expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
     expect(server.client.getSnapshot().views.child?.target).toBeUndefined();
-    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+    expect(methods().filter(method => method === 'thread/fork')).toHaveLength(1);
   });
 });
 
@@ -212,9 +213,9 @@ describe('successful command draft consumption', () => {
     await act(async () => server.reply(pending));
     expect(input).toHaveProperty('value', 'next draft');
     expect(methods().filter(method => method === 'context/compact')).toHaveLength(1);
-    expect(methods()).not.toContain('turn/start');
+    expect(methods()).not.toContain('inbound/queue');
   });
-  it.each([['Branch into a new Session', 'session/fork', 'after'], ['Regenerate', 'session/branch', 'before']] as const)('%s runs on the click without a chooser and locks the response actions until it settles', async (name, method, side) => {
+  it.each([['Branch into a new Session', 'thread/fork', 'after'], ['Regenerate', 'session/branch', 'before']] as const)('%s runs on the click without a chooser and locks the response actions until it settles', async (name, method, side) => {
     await subject();
     localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
@@ -242,9 +243,9 @@ describe('successful command draft consumption', () => {
     const { scope } = await subject();
     localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
     render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
-    for (const method of ['session/branch', 'session/switchNode', 'session/attach', 'turn/start'] as const) server.held.add(method);
+    for (const method of ['session/branch', 'session/switchNode', 'thread/resume', 'inbound/queue'] as const) server.held.add(method);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
-    for (const [method, count] of [['session/branch', 1], ['session/switchNode', 1], ['session/attach', 3], ['turn/start', 1]] as const) {
+    for (const [method, count] of [['session/branch', 1], ['session/switchNode', 1], ['thread/resume', 3], ['inbound/queue', 1]] as const) {
       const request = await server.waitFor(method, count);
       if (method === 'session/switchNode') await act(async () => server.socket.deliver({ jsonrpc: '2.0', method: 'session/closed', params: { target: scope.target } }));
       expect(screen.getByLabelText('Session status').textContent).toContain('Preparing a new response…');
@@ -254,20 +255,20 @@ describe('successful command draft consumption', () => {
       await act(async () => server.reply(request));
     }
     expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
-    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+    expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
   });
   it('repeated Fork gestures share the in-flight native transition', async () => {
     const { fixture, navigation } = await subject();
-    server.held.add('session/fork');
+    server.held.add('thread/fork');
     const response = fixture.original.transcript.entries![0].completed_response!;
     const destination = { kind: 'transition' as const, sessionId: 'A', action: 'fork' as const, response };
     navigation.actor.send({ type: 'OPEN', destination });
-    const request = await server.waitFor('session/fork', 1), pending = navigation.actor.getSnapshot().context.pending;
+    const request = await server.waitFor('thread/fork', 1), pending = navigation.actor.getSnapshot().context.pending;
     navigation.actor.send({ type: 'OPEN', destination: { ...destination, response: structuredClone(response) } });
     expect(navigation.actor.getSnapshot().context.pending).toBe(pending);
     server.reply(request);
     await waitFor(() => expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'child' }));
-    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+    expect(methods().filter(method => method === 'thread/fork')).toHaveLength(1);
   });
   it.each(['/model', '/mdl', '/', '/模型'])('%s is consumed only after successful selection', async draft => {
     const input = await open(draft);
@@ -290,7 +291,7 @@ describe('successful command draft consumption', () => {
     expect(await screen.findByText('Original assistant response')).toBeTruthy();
     expect(document.querySelector('.chat-reading-surface')).toBe(surface);
     expect(document.querySelector('[data-chat-running]')).toBeNull();
-    expect(methods()).not.toContain('turn/start');
+    expect(methods()).not.toContain('inbound/queue');
     expect(methods()).not.toContain('session/switchNode');
   });
   it('leaving during Retry retires its reading prefix and a late commit cannot send input or replace the new route', async () => {
@@ -304,7 +305,7 @@ describe('successful command draft consumption', () => {
     await act(async () => server.socket.deliver(response));
     expect(screen.getByRole('button', { name: 'Open Session B', current: 'page' })).toBeTruthy();
     expect(document.querySelector('[data-chat-running]')).toBeNull();
-    expect(methods()).not.toContain('turn/start'); expect(methods()).not.toContain('session/switchNode');
+    expect(methods()).not.toContain('inbound/queue'); expect(methods()).not.toContain('session/switchNode');
   });
   it('dismissal preserves a fuzzy invocation', async () => {
     const input = await open('/mdl');
@@ -343,28 +344,29 @@ describe('successful command draft consumption', () => {
 
 describe('inbound transport frontier', () => {
   it('counts inbound already in the bounded client pipeline before a socket slot is available', async () => {
-    await subject(); server.held.add('resources/read'); server.held.add('turn/start');
+    await subject(); server.held.add('resources/read'); server.held.add('inbound/queue');
     server.handlers.set('resources/read', () => (domainReceipt('capabilities',[{ configured_tools: [], revision: '0' }])));
     const reads = Array.from({ length: 6 }, () => server.client.request({ method: 'resources/read', params: { target: server.client.target('A') } }, 'domain_page'));
     const work = server.client.send('A', 'queued transport');
-    expect(methods()).not.toContain('turn/start');
+    expect(methods()).not.toContain('inbound/queue');
     expect(server.client.getSnapshot().views.A.inboundRequests).toBe(1);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
     for (let index = 1; index <= 6; index++) server.reply(await server.waitFor('resources/read', index));
-    server.reply(await server.waitFor('turn/start', 1));
+    server.reply(await server.waitFor('inbound/queue', 1));
     await Promise.all([...reads, work]);
     expect(server.client.getSnapshot().views.A.inboundRequests).toBe(0);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
   });
   it.each(['send', 'steer'] as const)('%s commit without response delivery blocks lineage, then atomically hands off to acknowledged identity', async delivery => {
     const { scope, selection, fixture } = await subject();
+    if(delivery==='steer')await server.update('A',{...fixture.original,attempt:{attempt_id:'attempt-A',turn:1,phase:{type:'running'}}});
     const view = () => server.client.getSnapshot().views.A;
-    const method = delivery === 'send' ? 'turn/start' : 'turn/steer';
+    const method = delivery === 'send' ? 'inbound/queue' : 'turn/steer';
     server.held.add(method);
     const states: boolean[] = [];
     const unsubscribe = server.client.subscribe(() => states.push(lineageSwitchSafe(view())));
     const work = server.client.send('A', 'accepted task', [], delivery);
-    expect(view().inboundRequests).toBe(1); expect(executionIdle(view())).toBe(true);
+    expect(view().inboundRequests).toBe(1); expect(executionIdle(view())).toBe(delivery==='send');
     expect(lineageSwitchSafe(view())).toBe(false);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.B)).toBe(true);
     const request = await server.waitFor(method, 1), response = server.commit(request);
@@ -373,7 +375,7 @@ describe('inbound transport frontier', () => {
     await expect(scope.transition('retry', selection)).rejects.toThrow('accepted inbound');
     await expect(scope.openNode('other', 'other-conversation')).rejects.toThrow('accepted inbound');
     expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/switchNode');
-    expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
+    expect(methods().filter(method => method === 'thread/resume')).toHaveLength(2);
     server.socket.deliver(response); await work;
     expect(view().inboundRequests).toBe(0);
     expect(view().submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
@@ -385,23 +387,23 @@ describe('inbound transport frontier', () => {
     expect(lineageSwitchSafe(view())).toBe(true);
   });
   it('concurrent known refusals decrement exact pending ownership without creating submissions', async () => {
-    await subject(); server.held.add('turn/start'); server.held.add('turn/steer');
+    await subject(); server.held.add('inbound/queue'); server.held.add('turn/steer');
     const fail = () => { throw new RpcFailure({ code: -32602, message: 'Known native refusal' }); };
-    server.handlers.set('turn/start', fail); server.handlers.set('turn/steer', fail);
-    const first = server.client.send('A', 'one'), second = server.client.send('A', 'two', [], 'steer');
+    server.handlers.set('inbound/queue', fail); server.handlers.set('turn/steer', fail);
+    const first = server.client.send('A', 'one'), second = server.client.send('A', 'two');
     const rejectedFirst = expect(first).rejects.toBeInstanceOf(RpcFailure), rejectedSecond = expect(second).rejects.toBeInstanceOf(RpcFailure);
     const view = () => server.client.getSnapshot().views.A;
     expect(view().inboundRequests).toBe(2);
-    server.reply(await server.waitFor('turn/start', 1)); await rejectedFirst;
+    server.reply(await server.waitFor('inbound/queue', 1)); await rejectedFirst;
     expect(view().inboundRequests).toBe(1); expect(lineageSwitchSafe(view())).toBe(false);
-    server.reply(await server.waitFor('turn/steer', 1)); await rejectedSecond;
+    server.reply(await server.waitFor('inbound/queue', 2)); await rejectedSecond;
     expect(view().inboundRequests).toBe(0); expect(view().submissions ?? []).toEqual([]);
     expect(lineageSwitchSafe(view())).toBe(true);
   });
   it('lost inbound response is uncertain, fences old commands, and reconnect clears only old transport ownership', async () => {
-    const { scope, selection, fixture } = await subject(); server.held.add('turn/start');
+    const { scope, selection, fixture } = await subject(); server.held.add('inbound/queue');
     const work = server.client.send('A', 'possibly accepted'), rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
-    const response = server.commit(await server.waitFor('turn/start', 1)), oldSocket = server.socket;
+    const response = server.commit(await server.waitFor('inbound/queue', 1)), oldSocket = server.socket;
     const generation = server.client.getSnapshot().generation;
     server.client.disconnect(); await rejected;
     expect(server.client.getSnapshot().generation).toBeGreaterThan(generation);
@@ -414,15 +416,16 @@ describe('inbound transport frontier', () => {
     expect(server.client.getSnapshot().views.A.inboundRequests ?? 0).toBe(0);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
     const repaired = server.client.getSnapshot(); oldSocket.deliver(response); expect(server.client.getSnapshot()).toBe(repaired);
-    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
-    expect(repaired.uncertain.some(item => item.method === 'turn/start')).toBe(true);
-    await server.update('A', fixture.original);
+    expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
+    expect(repaired.uncertain.some(item => item.method === 'inbound/queue')).toBe(false);
+    expect(repaired.views.A.submissions??[]).toEqual([]);
+    await server.update('A',{...fixture.original,messages:[...fixture.original.messages,{role:'user',id:'accepted-user',source:'human',content:[{type:'text',text:'possibly accepted'}]}]});
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(true);
   });
   it('Fork and Compact remain allowed while source inbound acknowledgement is held', async () => {
-    const { scope, selection } = await subject(); server.held.add('turn/start'); server.held.add('context/compact');
+    const { scope, selection } = await subject(); server.held.add('inbound/queue'); server.held.add('context/compact');
     const work = server.client.send('A', 'in transit');
-    const request = await server.waitFor('turn/start', 1);
+    const request = await server.waitFor('inbound/queue', 1);
     server.client.compact('A');
     await server.waitFor('context/compact', 1);
     expect((await scope.transition('fork', selection))?.session.id).toBe('child');
@@ -431,11 +434,11 @@ describe('inbound transport frontier', () => {
     server.reply(await server.waitFor('context/compact', 1));
   });
   it.each(['branch', 'retry'] as const)('%s committed before an unresolved inbound request stops before unload', async action => {
-    const { scope, selection, fixture } = await subject(); server.held.add('session/branch'); server.held.add('turn/start');
+    const { scope, selection, fixture } = await subject(); server.held.add('session/branch'); server.held.add('inbound/queue');
     const branch = scope.transition(action, selection), rejected = expect(branch).rejects.toThrow('Branch branch-A committed');
     const branchResponse = server.commit(await server.waitFor('session/branch', 1));
     const send = server.client.send('A', 'racing inbound');
-    const turn = await server.waitFor('turn/start', 1), turnResponse = server.commit(turn);
+    const turn = await server.waitFor('inbound/queue', 1), turnResponse = server.commit(turn);
     server.socket.deliver(branchResponse); await rejected;
     expect(fixture.committed).toHaveLength(1); expect((await scope.tree()).nodes.some(node => node.id === 'branch-A')).toBe(true);
     expect(methods()).not.toContain('session/switchNode');
@@ -455,7 +458,7 @@ describe('restored native editor content', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Remove draft upload' })[index]);
     expect(screen.getAllByText('Native restored upload batch same-batch')).toHaveLength(1);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-    const request = await server.waitFor('turn/start', 1);
+    const request = await server.waitFor('inbound/queue', 1);
     expect(request.params).toMatchObject({ content: [uploads[1 - index], { type: 'text', text: 'unchanged text' }] });
     expect(errors).not.toHaveBeenCalled();
   });
@@ -478,15 +481,15 @@ describe('restored native editor content', () => {
     expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([2, 8, 'backward']);
     expect(card.getAttribute('data-editor-incarnation')).toBe(incarnation); expect(card.getAttribute('data-editor-revision')).toBe(revision);
     expect(server.client.target('child')).toBe(target);
-    expect(server.requests.slice(before).filter(row => /^(turn\/|session\/(attach|detach|switchNode|uploadPrepare|snapshot)$)/.test(row.request.method))).toEqual([]);
-    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+    expect(server.requests.slice(before).filter(row => /^(turn\/|thread\/(start|resume|fork)$|inbound\/(queue|edit|remove)$|session\/(detach|switchNode|uploadPrepare)$)/.test(row.request.method))).toEqual([]);
+    expect(methods().filter(method => method === 'thread/fork')).toHaveLength(1);
   });
   it('supported restored input round-trips exact native order without changes', async () => {
     await server.attached('A');
     const content: UserInputBlock[] = [...uploads, { type: 'text', text: 'original\ntext' }];
     render(<AgentComposer disabled={false} busy={false} active={false} initialContent={content} onSend={async (text, receipts, delivery) => { await server.client.send('A', text, receipts, delivery); return true; }} onUpload={async () => []} onCancel={() => {}} />);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
-    expect((await server.waitFor('turn/start', 1)).params).toMatchObject({ content });
+    expect((await server.waitFor('inbound/queue', 1)).params).toMatchObject({ content });
   });
   it.each([
     [{ type: 'text', text: 'before' }, uploads[0], { type: 'text', text: 'after' }],
@@ -514,10 +517,10 @@ describe('typed native operations and continuation fencing', () => {
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const pending = { revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Accepted task' }] } };
     if (source === 'acknowledgement') {
-      server.held.add('turn/start');
+      server.held.add('inbound/queue');
       let work!: Promise<unknown>;
       act(() => { work = server.client.send('A', 'Accepted task'); });
-      const request = await server.waitFor('turn/start', 1);
+      const request = await server.waitFor('inbound/queue', 1);
       expect(server.client.getSnapshot().views.A.submissions ?? []).toEqual([]);
       expectTailSwitching(true);
       fireEvent.click(screen.getByRole('button', { name: 'Session actions' }));
@@ -576,7 +579,7 @@ describe('typed native operations and continuation fencing', () => {
     expect((await scope.tree()).nodes.some(node => node.id === 'branch-A')).toBe(true);
     expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
     expect(methods()).not.toContain('session/switchNode');
-    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+    expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
     expect(server.client.target('A').conversation_id).toBe('conversation-A');
   });
   it('independent Fork remains safe with accepted source work', async () => {
@@ -592,10 +595,10 @@ describe('typed native operations and continuation fencing', () => {
     render(<CommandPanel request={{ id }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} navigate={() => {}} />);
     const row = await screen.findByRole('option');
     expect(row).toHaveProperty('disabled', false);
-    server.held.add('turn/start');
+    server.held.add('inbound/queue');
     let work!: Promise<unknown>;
     act(() => { work = server.client.send('A', 'accepted'); });
-    const request = await server.waitFor('turn/start', 1), response = server.commit(request);
+    const request = await server.waitFor('inbound/queue', 1), response = server.commit(request);
     expect(row).toHaveProperty('disabled', true);
     fireEvent.click(row);
     expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/switchNode');
@@ -613,24 +616,24 @@ describe('typed native operations and continuation fencing', () => {
     expect(methods().some(method => method.includes('command'))).toBe(false);
     expect(JSON.stringify(server.requests.map(item => item.request.params))).not.toContain('/model');
   });
-  it.each(['session/create'] as const)('%s uses its native owner and cannot continue across lost responses', async method => {
+  it.each(['thread/start'] as const)('%s uses its native owner and cannot continue across lost responses', async method => {
     const { scope, fixture } = await subject(); server.held.add(method);
-    const work = method === 'session/create' ? firstSubmitPort(server.client, { ...server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } satisfies ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'workspace-a', text: 'hello', files: [] }, () => {}) : Promise.reject(new Error('unreachable'));
+    const work = method === 'thread/start' ? firstSubmitPort(server.client, { ...server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } satisfies ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'workspace-a', text: 'hello', files: [] }, () => {}) : Promise.reject(new Error('unreachable'));
     const rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); server.commit(request); server.client.disconnect(); await rejected;
     server.held.delete(method); await server.connect();
     await server.client.waitForAttachment('A', () => true);
     expect(methods().filter(item => item === method)).toHaveLength(1);
-    if (method === 'session/create') expect(fixture.committed).toHaveLength(1);
+    if (method === 'thread/start') expect(fixture.committed).toHaveLength(1);
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
   });
   it('a new Session committed after navigation does not acquire a child attachment', async () => {
-    const { scope, navigation, fixture } = await subject(); server.held.add('session/create');
-    const work = firstSubmitPort(server.client, { ...server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } satisfies ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'workspace-a', text: 'hello', files: [] }, () => {}), request = await server.waitFor('session/create', 1);
+    const { scope, navigation, fixture } = await subject(); server.held.add('thread/start');
+    const work = firstSubmitPort(server.client, { ...server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/A' }) } satisfies ProductHostWorkspaces, scope.current, () => (() => {})).create({ workspaceId: 'workspace-a', text: 'hello', files: [] }, () => {}), request = await server.waitFor('thread/start', 1);
     const response = server.commit(request); navigation.invalidate(); server.socket.deliver(response);
     expect(await work).toMatchObject({ id: fixture.committed[0].session.id }); expect(fixture.committed).toHaveLength(1);
     expect(methods()).not.toContain('session/submissionIntent');
-    expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
+    expect(methods().filter(method => method === 'thread/resume')).toHaveLength(2);
   });
   it.each(['session/setModel'] as const)('late %s commits but cannot reread or affect the navigated UI', async method => {
     const { scope, navigation, fixture } = await subject(); server.held.add(method);
@@ -644,7 +647,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['fork', 'branch', 'retry'] as const)('%s commit/held response/navigation/release leaves the mutation valid without continuation', async action => {
     const { scope, selection, navigation, fixture } = await subject();
-    const method = action === 'fork' ? 'session/fork' : 'session/branch'; server.held.add(method);
+    const method = action === 'fork' ? 'thread/fork' : 'session/branch'; server.held.add(method);
     const work = scope.transition(action, selection); const request = await server.waitFor(method, 1);
     expect(request.params).toEqual({ side: 'before', session_id: 'A', node_id: 'node-A', surface_revision: fixture.boundary.surface_revision, boundary: {type:'by_message_id',message_id:'user-cut'} });
     const response = server.commit(request); expect(fixture.committed).toHaveLength(1);
@@ -657,18 +660,18 @@ describe('typed native operations and continuation fencing', () => {
     const { scope, selection } = await subject();
     selection.boundary = { ...selection.boundary, surface_revision: '999999999999999999' };
     await expect(scope.transition('fork', selection)).rejects.toThrow('Invalid historical Surface');
-    expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+    expect(methods().filter(method => method === 'thread/fork')).toHaveLength(1);
     expect(methods().filter(method => method === 'session/boundaries')).toHaveLength(1);
   });
   it('Fork attaches only after success and uses destination receipts supplied by the native owner', async () => {
-    const { scope, selection, fixture } = await subject(); server.held.add('session/fork');
-    const work = scope.transition('fork', selection); const request = await server.waitFor('session/fork', 1);
-    expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
+    const { scope, selection, fixture } = await subject(); server.held.add('thread/fork');
+    const work = scope.transition('fork', selection); const request = await server.waitFor('thread/fork', 1);
+    expect(methods().filter(method => method === 'thread/resume')).toHaveLength(2);
     server.reply(request); const result = await work;
     expect(result?.session.id).toBe('child');
     expect(result?.content[1]).toMatchObject({ type: 'upload', session_id: 'child', token: 'native-destination-receipt' });
     expect(fixture.original).toEqual(fixture.originals); expect(methods()).not.toContain('session/uploadPrepare');
-    expect(methods()).not.toContain('turn/start');
+    expect(methods()).not.toContain('inbound/queue');
   });
   it('Fork publishes only after native checkpoint and subscription, without waiting for settings details', async () => {
     const { navigation, fixture } = await subject();
@@ -684,7 +687,7 @@ describe('typed native operations and continuation fencing', () => {
     server.reply(subscription);
     await waitFor(() => expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'child' }));
     expect(server.client.isAttachmentControlCurrent('child', server.client.getSnapshot().views.child.attachmentObservation)).toBe(true);
-    expect(methods()).not.toContain('turn/start');
+    expect(methods()).not.toContain('inbound/queue');
     server.held.delete('session/settings');
     for (const row of server.requests) if (row.request.method === 'session/settings' && row.request.params.session_id === 'child') server.reply(row.request);
   });
@@ -708,7 +711,7 @@ describe('typed native operations and continuation fencing', () => {
       expect(fixture.committed).toHaveLength(1);
       expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
       expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
-      expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+      expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
       expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
       // The initial cold read and its attachment's supplementary read occupy
       // both metadata slots. Retry must finish before either is answered.
@@ -731,39 +734,39 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['branch', 'retry'] as const)('%s creates a native node, unloads then attaches exactly; only retry executes returned input once', async action => {
     const { scope, selection, fixture } = await subject();
-    server.held.add('session/branch'); server.held.add('session/switchNode'); server.held.add('session/attach');
+    server.held.add('session/branch'); server.held.add('session/switchNode'); server.held.add('thread/resume');
     const work = scope.transition(action, selection);
     const branch = await server.waitFor('session/branch', 1); server.reply(branch);
     const unload = await server.waitFor('session/switchNode', 1);
-    expect(methods()).not.toContain('turn/start'); server.reply(unload);
-    const attach = await server.waitFor('session/attach', 3);
-    expect(attach.params).toEqual({ session_id: 'A', node_id: 'branch-A' });
-    expect(methods()).not.toContain('turn/start'); server.reply(attach);
+    expect(methods()).not.toContain('inbound/queue'); server.reply(unload);
+    const attach = await server.waitFor('thread/resume', 3);
+    expect(attach.params).toEqual({threadId:'conversation-branch-A'});
+    expect(methods()).not.toContain('inbound/queue'); server.reply(attach);
     const result = await work;
     expect(result?.session.active_conversation_id).toBe('conversation-branch-A');
     expect(server.client.target('A').conversation_id).toBe('conversation-branch-A');
     expect(fixture.original).toEqual(fixture.originals);
     expect(server.client.getSnapshot().views.A.history?.page.entries).toEqual([]);
     if (action === 'retry') {
-      const turn = await server.waitFor('turn/start', 1);
-      expect(turn.params).toEqual({ target: server.client.target('A'), content: fixture.content });
-      expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+      const turn = await server.waitFor('inbound/queue', 1);
+      expect(turn.params).toEqual({ target: server.client.target('A'), content: fixture.content, inputId: expect.any(String) });
+      expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
       expect(result?.content).toEqual([]);
-    } else { expect(methods()).not.toContain('turn/start'); expect(result?.content).toEqual(fixture.content); }
+    } else { expect(methods()).not.toContain('inbound/queue'); expect(result?.content).toEqual(fixture.content); }
     expect(methods()).not.toContain('session/uploadPrepare');
   });
-  it.each(['session/switchNode', 'session/attach', 'turn/start'] as const)('retry stops after lost %s response and never repeats the branch or execution', async method => {
+  it.each(['session/switchNode', 'thread/resume', 'inbound/queue'] as const)('retry stops after lost %s response and never repeats the branch or execution', async method => {
     const { scope, selection, fixture } = await subject(); server.held.add(method);
     const count = server.requests.filter(item => item.request.method === method).length + 1;
     const work = scope.transition('retry', selection); const rejection = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, count); server.commit(request); server.client.disconnect(); await rejection;
     expect(fixture.committed).toHaveLength(1);
-    expect(methods().filter(item => item === 'turn/start')).toHaveLength(method === 'turn/start' ? 1 : 0);
+    expect(methods().filter(item => item === 'inbound/queue')).toHaveLength(method === 'inbound/queue' ? 1 : 0);
     expect(server.client.getSnapshot().uncertain.some(item => item.method === method)).toBe(true);
   });
-  it.each(['session/fork', 'session/branch', 'session/setModel'] as const)('%s response loss is uncertain, never replayed, and reconnect repairs authority', async method => {
+  it.each(['thread/fork', 'session/branch', 'session/setModel'] as const)('%s response loss is uncertain, never replayed, and reconnect repairs authority', async method => {
     const { scope, selection, fixture } = await subject(); server.held.add(method);
-    const work = method === 'session/setModel' ? scope.setModel('fixture/second') : scope.transition(method === 'session/fork' ? 'fork' : 'branch', selection);
+    const work = method === 'session/setModel' ? scope.setModel('fixture/second') : scope.transition(method === 'thread/fork' ? 'fork' : 'branch', selection);
     const rejection = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); const response = server.commit(request), oldSocket = server.socket;
     server.client.disconnect(); await rejection;
@@ -776,23 +779,23 @@ describe('typed native operations and continuation fencing', () => {
     const repaired = new CommandSession(server.client, 'A', () => true);
     expect((await repaired.models()).current.configured.model).toBe(fixture.model());
     if (method === 'session/branch') expect((await repaired.tree()).nodes).toHaveLength(2);
-    if (method === 'session/fork') expect(server.client.getSnapshot().sessions.some(session => session.id === 'child')).toBe(true);
+    if (method === 'thread/fork') expect(server.client.getSnapshot().sessions.some(session => session.id === 'child')).toBe(true);
     await expect(scope.setModel('fixture/first')).rejects.toThrow('Obsolete');
   });
   it('Shell reports a rejected stale history mutation once and preserves the original attachment', async () => {
     const { navigation, selection } = await subject(); const original = server.client.target('A');
-    server.handlers.set('session/fork', () => { throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision' }); });
+    server.handlers.set('thread/fork', () => { throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision' }); });
     navigation.actor.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: 'A', action: 'fork', selection } });
     await vi.waitFor(() => expect(navigation.actor.getSnapshot().context.error).toContain('Invalid historical Surface revision'));
     expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'A' });
-    expect(server.client.target('A')).toBe(original); expect(methods().filter(method => method === 'session/fork')).toHaveLength(1);
+    expect(server.client.target('A')).toBe(original); expect(methods().filter(method => method === 'thread/fork')).toHaveLength(1);
   });
   it.each(['before', 'after'] as const)('Retry retires its prefix when canonical adoption arrives %s the acknowledgement, with no mounted Chat', async order => {
     const { navigation, fixture } = await subject();
     const response = fixture.original.transcript.entries![0].completed_response!;
-    server.held.add('turn/start');
+    server.held.add('inbound/queue');
     navigation.actor.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: 'A', action: 'retry', response } });
-    const request = await server.waitFor('turn/start', 1);
+    const request = await server.waitFor('inbound/queue', 1);
     expect(navigation.actor.getSnapshot().context.retry).toBeTruthy();
     const adopt = async () => {
       const view = server.client.getSnapshot().views.A;
@@ -809,7 +812,7 @@ describe('typed native operations and continuation fencing', () => {
       await adopt();
     }
     expect(navigation.actor.getSnapshot().context.retry).toBeUndefined();
-    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+    expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1);
   });
   it('an unavailable historical message cannot be replaced with another displayed boundary', async () => {
     const { navigation } = await subject();
@@ -825,16 +828,16 @@ describe('typed native operations and continuation fencing', () => {
     fireEvent.change(input, { target: { value: `/${action}` } });
     await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
     const row = await screen.findByRole('option', { name: /Try this/ });
-    const method = action === 'fork' ? 'session/fork' : 'session/branch'; server.held.add(method);
+    const method = action === 'fork' ? 'thread/fork' : 'session/branch'; server.held.add(method);
     fireEvent.click(row);
     const request = await server.waitFor(method, 1), response = server.commit(request);
     expect(fixture.committed).toHaveLength(1);
     expect(screen.queryByRole('dialog')).toBeNull();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
-    const attachments = methods().filter(method => method === 'session/attach').length;
+    const attachments = methods().filter(method => method === 'thread/resume').length;
     await act(async () => server.socket.deliver(response));
     expect(screen.getByRole('button', { name: 'Open Session B', current: 'page' })).toBeTruthy();
-    expect(methods().filter(method => method === 'session/attach')).toHaveLength(attachments);
+    expect(methods().filter(method => method === 'thread/resume')).toHaveLength(attachments);
     expect(methods()).not.toContain('session/switchNode');
     expect(fixture.committed).toHaveLength(1);
   });
@@ -893,7 +896,7 @@ it('keeps file intake available without a command host and never dispatches a fi
 it.each(['before dispatch', 'after dispatch', 'after commit'] as const)('explicit Node Switch ownership survives UI supersession: %s', async phase => {
   const { scope, navigation } = await subject();
   server.nodeSnapshots.set('other-node', { ...snapshot('A'), conversation_id: 'other-conversation' });
-  const original = server.client.target('A'), before = methods().filter(method => method === 'session/attach').length;
+  const original = server.client.target('A'), before = methods().filter(method => method === 'thread/resume').length;
   if (phase === 'before dispatch') {
     navigation.invalidate(); await expect(scope.openNode('other-node', 'other-conversation')).rejects.toThrow('Obsolete');
     expect(methods()).not.toContain('session/switchNode'); expect(server.client.target('A')).toBe(original); return;
@@ -907,24 +910,24 @@ it.each(['before dispatch', 'after dispatch', 'after commit'] as const)('explici
   const view = server.client.getSnapshot().views.A;
   expect(view).toMatchObject({ attachment: 'detached', nodeId: 'other-node', nodeConversationId: 'other-conversation' });
   expect(view.target).toBeUndefined(); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
-  expect(methods().filter(method => method === 'session/attach')).toHaveLength(before); expect(methods()).not.toContain('turn/start');
+  expect(methods().filter(method => method === 'thread/resume')).toHaveLength(before); expect(methods()).not.toContain('inbound/queue');
   // Explicit recovery uses the truthful selected Node; it does not replay Switch.
   server.held.delete('session/switchNode'); await server.client.attach('A');
   expect(server.client.target('A').conversation_id).toBe('other-conversation'); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
 });
 it.each(['branch', 'retry'] as const)('%s admitted attachment settles after supersession without Retry execution or route publication', async action => {
-  const { scope, selection, navigation } = await subject(); server.held.add('session/attach');
-  const work = scope.transition(action, selection); const request = await server.waitFor('session/attach', 3);
+  const { scope, selection, navigation } = await subject(); server.held.add('thread/resume');
+  const work = scope.transition(action, selection); const request = await server.waitFor('thread/resume', 3);
   navigation.invalidate(); server.reply(request); expect(await work).toBeUndefined();
   expect(server.client.target('A').conversation_id).toBe('conversation-branch-A');
   expect(methods().filter(method => method === 'session/branch')).toHaveLength(1); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1);
-  expect(methods().filter(method => method === 'session/attach')).toHaveLength(3); expect(methods()).not.toContain('turn/start');
+  expect(methods().filter(method => method === 'thread/resume')).toHaveLength(3); expect(methods()).not.toContain('inbound/queue');
 });
 it('Retry already dispatched input settles once after supersession and never replays', async () => {
-  const { scope, selection, navigation } = await subject(); server.held.add('turn/start');
-  const work = scope.transition('retry', selection); const request = await server.waitFor('turn/start', 1), response = server.commit(request);
+  const { scope, selection, navigation } = await subject(); server.held.add('inbound/queue');
+  const work = scope.transition('retry', selection); const request = await server.waitFor('inbound/queue', 1), response = server.commit(request);
   navigation.invalidate(); server.socket.deliver(response); expect(await work).toBeUndefined();
-  expect(methods().filter(method => method === 'turn/start')).toHaveLength(1); expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
+  expect(methods().filter(method => method === 'inbound/queue')).toHaveLength(1); expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
   expect(server.client.target('A').conversation_id).toBe('conversation-branch-A');
 });
 it('late committed Branch durability evidence survives UI retirement without native replay', async () => {
@@ -933,17 +936,17 @@ it('late committed Branch durability evidence survives UI retirement without nat
   if (!('result' in response) || response.result?.type !== 'session_transition') throw new Error('Wrong transition ACK');
   response.result.durability_diagnostic = 'fsync uncertainty'; navigation.invalidate(); server.socket.deliver(response);
   expect(await work).toBeUndefined(); expect(server.client.getSnapshot().uncertain).toMatchObject([{ method: 'session/branch', sessionId: 'A', committedNode: { sessionId: 'A', nodeId: 'branch-A' }, diagnostic: 'fsync uncertainty' }]);
-  expect(methods().filter(method => method === 'session/branch')).toHaveLength(1); expect(methods()).not.toContain('session/switchNode'); expect(methods()).not.toContain('turn/start');
+  expect(methods().filter(method => method === 'session/branch')).toHaveLength(1); expect(methods()).not.toContain('session/switchNode'); expect(methods()).not.toContain('inbound/queue');
 });
 it('UI retirement after committed Switch and before follow-up admission leaves authoritative detached state', async () => {
   const { scope, selection, navigation } = await subject(), originalAttach = server.client.attach.bind(server.client);
-  const before = methods().filter(method => method === 'session/attach').length;
+  const before = methods().filter(method => method === 'thread/resume').length;
   const attach = vi.spyOn(server.client, 'attach').mockImplementation((...args) => {
     expect(server.client.getSnapshot().views.A).toMatchObject({ attachment: 'detached', nodeId: 'branch-A', nodeConversationId: 'conversation-branch-A' });
     navigation.invalidate(); return originalAttach(...args);
   });
   expect(await scope.transition('retry', selection)).toBeUndefined(); expect(attach).toHaveBeenCalledOnce();
-  expect(methods().filter(method => method === 'session/attach')).toHaveLength(before); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1); expect(methods()).not.toContain('turn/start');
+  expect(methods().filter(method => method === 'thread/resume')).toHaveLength(before); expect(methods().filter(method => method === 'session/switchNode')).toHaveLength(1); expect(methods()).not.toContain('inbound/queue');
 });
 it('Retry retires queued input before dispatch without replaying the committed Branch or Switch', async () => {
   const { scope, selection, navigation } = await subject(), original = server.client.sendContent.bind(server.client);
@@ -953,11 +956,11 @@ it('Retry retires queued input before dispatch without replaying the committed B
   vi.spyOn(server.client, 'sendContent').mockImplementation((...args) => {
     server.held.add('resources/read');
     const target = server.client.target('A'); reads = Array.from({length:6}, () => server.client.request({method:'resources/read',params:{target}},'domain_page'));
-    const work = original(...args); expect(methods()).not.toContain('turn/start'); navigation.invalidate(); queued(); return work;
+    const work = original(...args); expect(methods()).not.toContain('inbound/queue'); navigation.invalidate(); queued(); return work;
   });
   const work = scope.transition('retry', selection), refused = expect(work).rejects.toThrow('Authority changed before dispatch');
   await staged;
   server.held.delete('resources/read'); for(const row of server.requests.filter(row => row.request.method === 'resources/read')) server.reply(row.request); await Promise.all(reads); await refused;
-  expect(methods()).not.toContain('turn/start'); expect(methods().filter(method=>method==='session/branch')).toHaveLength(1); expect(methods().filter(method=>method==='session/switchNode')).toHaveLength(1);
+  expect(methods()).not.toContain('inbound/queue'); expect(methods().filter(method=>method==='session/branch')).toHaveLength(1); expect(methods().filter(method=>method==='session/switchNode')).toHaveLength(1);
   expect(server.client.getSnapshot().views.A.inboundRequests).toBe(0); expect(server.client.target('A').conversation_id).toBe('conversation-branch-A');
 });

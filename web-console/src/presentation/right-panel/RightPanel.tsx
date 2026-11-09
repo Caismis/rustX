@@ -7,7 +7,7 @@ export function RightPanel({ open, width, canShow, title, fullscreen = false, do
 }) {
   const css = docked ? dockCss : previewCss;
   return <aside className={css.panel} role={open ? 'complementary' : 'presentation'} aria-label={open ? title : undefined} inert={!open && !docked} data-sidebar-right-open={open || undefined}
-    data-sidebar-right-panel={fullscreen || !canShow ? 'fullscreen' : 'normal'} style={{ width: !fullscreen && canShow ? width : '100%', '--dsh-sidebar-width': `${width}px` } as import('react').CSSProperties}>
+    data-sidebar-right-panel={fullscreen || !canShow ? 'fullscreen' : 'normal'} style={{ width: !fullscreen && canShow ? width : 'calc(100% - var(--dsh-primary-rail-width, 0px))', '--dsh-sidebar-width': `${width}px` } as import('react').CSSProperties}>
     <div className={css.extensionBody}>{children}</div>
   </aside>;
 }

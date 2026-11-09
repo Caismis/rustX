@@ -1,5 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "navigation.resolving": "Opening Settings for this Workspace…",
+  "navigation.unavailable": "Settings for this Workspace are unavailable. Open Settings again to return to your previous section.",
   "models-page.reasoning-order": "Reasoning order (low to high)",
   "models-page.configure-reasoning-order": "Configure reasoning order",
   "models-page.clear-reasoning-order": "Clear reasoning order",
@@ -207,7 +209,6 @@ export const en = {
   "settings-navigation-feedback.dismiss-settings-error": "Dismiss settings error",
   "settings-content.not-specified": "Not specified",
   "settings-root.settings-page-value": "Settings page: {p0}",
-  "settings-root.close-settings": "Close Settings",
   "settings-root.settings-pages": "Settings pages",
   "advanced-page.advanced": "Advanced",
   "advanced-page.runtime-limits-environment-process-policy-and-the-native-diagnos": "Runtime limits, environment, process policy and the native diagnostics behind every other page.",
@@ -543,7 +544,7 @@ export const en = {
   "tools-page.execution": "execution",
   "tools-page.concurrency": "concurrency",
   "tools-page.approval-2": "approval",
-  "copy.app-server-v73": "· App Server v73",
+  "copy.app-server-v76": "· App Server v76",
   "copy.language": "Language",
   "copy.light": "Light",
   "copy.dark": "Dark",
@@ -712,6 +713,8 @@ export const en = {
 } as const;
 export type SettingsKey = keyof typeof en;
 export const zh = {
+  "navigation.resolving": "正在打开此工作区的设置…",
+  "navigation.unavailable": "无法打开此工作区的设置。再次打开设置可返回上次使用的部分。",
   "models-page.reasoning-order": "推理顺序（由低到高）",
   "models-page.configure-reasoning-order": "配置推理顺序",
   "models-page.clear-reasoning-order": "清除推理顺序",
@@ -919,7 +922,6 @@ export const zh = {
   "settings-navigation-feedback.dismiss-settings-error": "关闭设置错误",
   "settings-content.not-specified": "未指定",
   "settings-root.settings-page-value": "设置页面：{p0}",
-  "settings-root.close-settings": "关闭设置",
   "settings-root.settings-pages": "设置页面",
   "advanced-page.advanced": "高级",
   "advanced-page.runtime-limits-environment-process-policy-and-the-native-diagnos": "运行时限制、环境、进程策略以及各页面背后的原生诊断。",
@@ -1255,7 +1257,7 @@ export const zh = {
   "tools-page.execution": "执行",
   "tools-page.concurrency": "并发",
   "tools-page.approval-2": "审批",
-  "copy.app-server-v73": "· App Server v73",
+  "copy.app-server-v76": "· App Server v76",
   "copy.language": "语言",
   "copy.light": "浅色",
   "copy.dark": "深色",

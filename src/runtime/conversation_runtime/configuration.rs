@@ -396,6 +396,39 @@ impl RuntimeInner {
                 committed.availability,
             )
         } else {
+            match self.capability.try_publish_context(
+                &self.capability_publication,
+                prepared.preview.capability(),
+                &prepared
+                    .preview
+                    .configuration()
+                    .expect("context configuration")
+                    .config
+                    .agent,
+            ) {
+                Ok(()) => {}
+                Err(crate::capabilities::CapabilityCommitError::Busy) => {
+                    state.configuration_commit_waiting = true;
+                    state.staged_configuration = Some(StagedConfiguration {
+                        prepared,
+                        desired,
+                        reason,
+                        retain,
+                        settled,
+                    });
+                    return;
+                }
+                Err(error) => {
+                    self.report_staged_outcome(
+                        None,
+                        settled,
+                        StagedOutcome::Failed {
+                            diagnostic: error.to_string(),
+                        },
+                    );
+                    return;
+                }
+            }
             (
                 Arc::new(prepared.preview.as_ref().clone().with_revision(revision)),
                 prepared.preview.capability_availability().clone(),

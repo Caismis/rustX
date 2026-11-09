@@ -74,6 +74,7 @@ impl LaunchFixture {
         rustx::local_runtime::LocalRuntimeError,
     > {
         let dependencies = rustx::local_runtime::LocalRuntimeDependencies {
+            host_tools: dependencies.host_tools.clone(),
             startup_session: self.startup_session.clone(),
             status_clock: dependencies.status_clock.clone(),
             credentials: dependencies.credentials.clone(),

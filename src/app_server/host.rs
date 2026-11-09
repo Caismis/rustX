@@ -13,6 +13,8 @@ use std::{
 };
 use tokio::sync::watch;
 
+const FILE_OBSERVERS: u32 = 32;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HostAdmissionError {
     ServerDraining,
@@ -43,15 +45,16 @@ impl HostState {
 }
 #[derive(Debug)]
 struct HostInner {
+    callbacks: Arc<super::callbacks::Callbacks>,
     #[cfg(test)]
     file_read_probe: Arc<super::product_host::ReadProbe>,
     product_host: Mutex<Option<super::product_host::Authority>>,
-    delivery_access: Mutex<Option<super::delivery_access::Grant>>,
     revocations: Arc<super::delivery_access::Revocations>,
     authority_id: String,
     manager: SessionRuntimeManager,
     state: Mutex<HostState>,
     requests: watch::Sender<usize>,
+    environment_stop: crate::runtime::CancellationSignal,
     /// A finite chain of admitted intent jobs. The host request limit bounds
     /// these owners; completion order, rather than reply polling, orders clocks.
     submission_intent_tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
@@ -99,6 +102,9 @@ impl Drop for AttachmentPermit {
 }
 
 impl AppServerHost {
+    pub(crate) fn callbacks(&self) -> &Arc<super::callbacks::Callbacks> {
+        &self.0.callbacks
+    }
     /// Accept intent synchronously, before a protocol future can be left unpolled.
     /// Each admitted job retains its counted host and association owners. Only
     /// target resolution and clock registration serialize; MCP waits never do.
@@ -169,24 +175,6 @@ impl AppServerHost {
         self.0.file_read_probe.authenticating.enter();
         authority.as_ref()?.authenticate(offered)
     }
-    /// Native process composition only, like the Product Host credential.
-    /// Replacing or removing it revokes every connection it admitted.
-    pub(crate) fn bind_delivery_access(
-        &self,
-        credential: Option<super::transport::websocket::Credential>,
-    ) {
-        #[cfg(test)]
-        let installed = {
-            let (probe, installed) = (self.0.file_read_probe.clone(), credential.clone());
-            move || probe.rotations.record(installed)
-        };
-        self.rotate(
-            &self.0.delivery_access,
-            credential.map(super::delivery_access::Grant::new),
-            #[cfg(test)]
-            installed,
-        );
-    }
     /// One authority transition of a credential slot, linearized in the
     /// exclusive side of [`Self::revocations`] and the slot's own mutex.
     ///
@@ -223,27 +211,6 @@ impl AppServerHost {
     pub(crate) fn revocations(&self) -> &Arc<super::delivery_access::Revocations> {
         &self.0.revocations
     }
-    /// `Ok(None)`: no delivery credential was offered. An offered credential
-    /// that does not authenticate fails the whole handshake closed.
-    pub(crate) fn authenticate_delivery_access(
-        &self,
-        offered: &[&str],
-    ) -> Result<Option<tokio_util::sync::CancellationToken>, ()> {
-        if !offered
-            .iter()
-            .any(|value| value.starts_with(super::delivery_access::CREDENTIAL_PREFIX))
-        {
-            return Ok(None);
-        }
-        let grant = self.0.delivery_access.lock().expect("credential slot");
-        #[cfg(test)]
-        self.0.file_read_probe.authenticating.enter();
-        grant
-            .as_ref()
-            .and_then(|grant| grant.authenticate(offered))
-            .map(Some)
-            .ok_or(())
-    }
     pub(super) fn register_file_route(&self, route: &Arc<super::connection::Route>) {
         let mut routes = self.0.file_routes.lock().expect("file routes");
         routes.retain(|_, route| {
@@ -272,6 +239,9 @@ impl AppServerHost {
     pub(crate) fn file_observers(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.file_observers.clone()
     }
+    pub(crate) fn environment_stop(&self) -> crate::runtime::CancellationSignal {
+        self.0.environment_stop.child()
+    }
     pub(crate) fn authority_id(&self) -> &str {
         &self.0.authority_id
     }
@@ -286,16 +256,21 @@ impl AppServerHost {
     #[must_use]
     pub fn new(manager: SessionRuntimeManager, policy: AppServerPolicy) -> Self {
         manager.bind_process_policy(policy);
+        manager.start_status_observer();
+        let callbacks = Arc::new(super::callbacks::Callbacks::default());
+        manager.bind_host_tools(Arc::new(callbacks.clone()));
+        manager.bind_interaction_lifecycle(Arc::new(callbacks.clone()));
         Self(Arc::new(HostInner {
+            callbacks,
             #[cfg(test)]
             file_read_probe: Arc::default(),
             product_host: Mutex::default(),
-            delivery_access: Mutex::default(),
             revocations: Arc::default(),
             authority_id: uuid::Uuid::new_v4().to_string(),
             manager,
             state: Mutex::default(),
             requests: watch::channel(0).0,
+            environment_stop: crate::runtime::CancellationSignal::new(),
             submission_intent_tail: Mutex::new(None),
             upload_operations: watch::channel(0).0,
             transport: Arc::default(),
@@ -305,7 +280,7 @@ impl AppServerHost {
                 crate::tools::session_files::SESSION_FILE_MAX_READS,
             )),
             file_routes: Mutex::default(),
-            file_observers: Arc::new(tokio::sync::Semaphore::new(32)),
+            file_observers: Arc::new(tokio::sync::Semaphore::new(FILE_OBSERVERS as usize)),
         }))
     }
     #[must_use]
@@ -419,8 +394,13 @@ impl AppServerHost {
             if state.lifecycle == ServerLifecycle::Accepting {
                 state.lifecycle = ServerLifecycle::Draining;
             }
+            // START grants and observable Host admission closure share the
+            // same cancellation boundary. No process I/O holds this mutex.
+            self.0.environment_stop.cancel();
             initializations
         };
+        // Independent commands retain request admission through physical
+        // settlement. Cancel them before drain waits for those same owners.
         // Native cancellation arbitrates with recovery under its own
         // coordinator. Neither host nor registry locks cover durable work.
         for initialization in initializations {
@@ -454,6 +434,7 @@ impl AppServerHost {
         self.uploads().settle_actors().await;
         failures.extend(self.manager().drain_all_runtimes().await);
         failures.extend(self.manager().mcp_drafts.settle().await);
+        failures.extend(self.manager().mcp_probes.failures());
         failures.sort();
         failures.dedup();
         if !failures.is_empty() {
@@ -461,17 +442,30 @@ impl AppServerHost {
         }
         failures
     }
+    /// Called after carrier teardown has dropped every native watch registry.
+    /// A notify handle's Drop requests shutdown; only callback destruction
+    /// returns its permit and proves that the native event loop has settled.
+    pub(crate) async fn settle_file_observers(&self) {
+        let _settled = self
+            .0
+            .file_observers
+            .acquire_many(FILE_OBSERVERS)
+            .await
+            .expect("file observer capacity stays open");
+    }
     pub(crate) fn finish_drain(&self) -> Result<(), String> {
         let mut state = self.0.state.lock().expect("host mutex");
         if state.lifecycle != ServerLifecycle::Draining
             || !self.manager().is_empty()
             || !self.manager().mcp_drafts.is_settled()
+            || !self.manager().mcp_probes.is_settled()
             || *self.0.requests.borrow() != 0
             || *self.0.upload_operations.borrow() != 0
             || !self.uploads().is_empty()
             || self.uploads().actor_count() != 0
             || state.attachments != 0
             || self.0.transport.has_connections()
+            || self.0.file_observers.available_permits() != FILE_OBSERVERS as usize
         {
             return Err("server settlement is not proven".into());
         }
@@ -483,12 +477,14 @@ impl AppServerHost {
             self.0.state.lock().expect("host mutex").shutdown_timeouts += 1;
         }
         format!(
-            "{}; pending_protocol_operations={}; physical_connections_remain={}; active_uploads={}; upload_actors={}",
+            "{}; pending_protocol_operations={}; physical_connections_remain={}; active_uploads={}; upload_actors={}; active_file_observers={}; mcp_management_failures={:?}",
             self.manager().unproven_resources(),
             *self.0.requests.borrow(),
             self.0.transport.has_connections(),
             *self.0.upload_operations.borrow(),
-            self.uploads().actor_count()
+            self.uploads().actor_count(),
+            FILE_OBSERVERS as usize - self.0.file_observers.available_permits(),
+            self.manager().mcp_probes.failures()
         )
     }
     /// Observations are never used as settlement or admission authority.

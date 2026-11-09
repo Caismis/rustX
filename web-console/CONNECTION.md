@@ -4,7 +4,7 @@ The dev launcher owns the App Server, exact endpoint, transport credential, brow
 launch credential, Host config, carrier and private scratch lifetime. Carrier
 authentication hands admission material to the browser; it adds no App Server RPC,
 proxy, native configuration or Workspace authority. The browser connects directly
-with the existing AppServerClient and App Server protocol **v73**.
+with the existing AppServerClient and App Server protocol **v76**.
 
 `GET /?token=<browser-launch-token>` accepts exactly one bounded 43-character
 base64url credential on the root route. Timing-safe comparison follows format checks.
@@ -47,8 +47,7 @@ Authenticated `GET /__rustx/bootstrap` returns only:
 {
   "connectionMode": "local",
   "appServerEndpoint": "ws://127.0.0.1:<native-port>/",
-  "appServerTransportToken": "<native-transport-token>",
-  "appServerDeliveryToken": "<separate-native-delivery-token>"
+  "appServerTransportToken": "<native-transport-token>"
 }
 ```
 
@@ -144,7 +143,7 @@ under that observation and the captured normalized endpoint; process identity al
 never re-admits. The transport checks that proof plus native generation, navigation
 and injected callback identity before send. At most two such validations reserve
 ordinary RPC slots at once; they cannot consume the independent two-request
-lifecycle-control lane used by `turn/cancel`. Ordinary RPC saturation cannot delay
+lifecycle-control lane used by `turn/interrupt`. Ordinary RPC saturation cannot delay
 an otherwise admissible exact cancellation; a full control lane refuses it locally
 before transmission. Host authority scope is `authorityId` plus normalized endpoint.
 Old successful classification cannot authorize a replacement Host, even with the same
@@ -157,9 +156,9 @@ The launcher generates a distinct process-ephemeral 256-bit secret, passes an
 owner-only file with `--product-host-token-file` to the native process and its value
 only to Node's private Host configuration. The browser receives neither. File reads
 use the private `/product-host/file-read` WebSocket lane, not an ordinary App Server
-Method. The browser never offers the separate delivery-access credential that
-`delivery/read` requires; that grant belongs to trusted App Server clients such as
-the TUI (see `docs/file-delivery.md`). The Host supplies current registered Workspace roots; configured picker
+Method. Ordinary authenticated clients can also use `delivery/read` under their
+own exact attachments and native delivery provenance. This does not grant the
+private Product Host's registered-root authority. The Host supplies current registered Workspace roots; configured picker
 locations or display classification alone do not authorize bytes. Root changes and
 Host retirement abort its owned reads. Native handshake authority, attachment and
 mapping fences independently prevent obsolete publication. See
@@ -226,7 +225,7 @@ browser secret or expiry database. Existing adapted Settings provenance is retai
 
 ## Native upload data lane
 
-App Server v73 advertises ordinary file policy at initialization. Upload prepare
+App Server v76 advertises ordinary file policy at initialization. Upload prepare
 is authenticated through the exact native attachment; a short-lived single-use
 capability authorizes a separate binary socket at the same selected native origin.
 No transport key, Product Host credential or local path appears in the descriptor.
@@ -289,10 +288,9 @@ Other Sessions remain usable. `connect()` completion establishes transport
 readiness; callers needing a live target await that Session's attachment and
 observation proof. Uncertain operations and retired claims are never replayed.
 
-The managed launcher creates a separate owner-only Delivery Access credential,
-passes it to the native server and returns it only through the authenticated,
-no-store bootstrap. The client retains it in page memory and offers the existing
-`rustx-delivery-access` subprotocol. Remote Settings accepts that separate token
-optionally. Temporary questions are enabled only when native initialization
-confirms `capabilities.delivery_access`; the transport credential alone cannot
-grant it. No delivery credential is written to browser storage or logs.
+Native initialization reports `capabilities.delivery_access` as common API
+availability for every authenticated ordinary client, including temporary questions.
+The former extra delivery credential, launcher field and subprotocol are removed.
+The existing Remote Settings Delivery Access input remains visible under the UI
+constraint, but its value is unused and never transmitted. The connection bearer
+is the sole ordinary credential; the private Product Host credential stays in Node.

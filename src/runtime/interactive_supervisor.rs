@@ -146,8 +146,8 @@ use crate::runtime::supervised_unit::{
     MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNER_ATTACHED,
     MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE, MSG_SIGNAL_ATTEMPT, MSG_START,
     MSG_TERMINAL_ACK, MSG_TERMINATE, POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT,
-    become_child_subreaper, contain_group, enforce_fixed_group_membership, ignore_group_term,
-    signal_group, write_frame,
+    become_child_subreaper, contain_group, enforce_fixed_group_membership,
+    protect_supervisor_signals, signal_group, write_frame,
 };
 
 /// The environment variable naming the rustX-facing control socket.
@@ -1356,7 +1356,7 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
         return INNER_EXIT_NORMAL;
     }
-    if let Err(error) = ignore_group_term() {
+    if let Err(error) = protect_supervisor_signals() {
         let _ = write_frame(
             &mut control,
             MSG_PROCESS_CONTROL_FAILURE,

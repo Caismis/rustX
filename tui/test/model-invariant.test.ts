@@ -1,7 +1,8 @@
+import {sessionView} from './support/fixtures.ts';
 import { checkpoint } from './support/fixtures.ts';
 import { domainReceipt } from './support/fixtures.ts';
 import { contentAdvance } from './support/fixtures.ts';
-import { followAttachment } from './support/app-server-peer.ts';
+import { followAttachment, resolveThreadMetadata } from './support/app-server-peer.ts';
 import { fixtures as uploadFixtures } from "../../protocol/app-server/fixtures.ts";
 const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
 const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
@@ -173,9 +174,10 @@ describe("session model A -> B invariant", () => {
     recovered.transport.respond(detach.id, { type: "detached" });
     await detaching;
     const attaching = recovered.host.attach(h.session.sessionId);
-    const attach = (await recovered.transport.log.awaitMethod("session/attach", 2)).at(-1)!;
+    await resolveThreadMetadata(recovered.transport,sessionView({id:h.session.sessionId,active_conversation_id:h.target.conversation_id}));
+    const attach = (await recovered.transport.log.awaitMethod("thread/resume", 2)).at(-1)!;
     const replacementTarget={...recovered.target,attachment_id:"att-2",runtime_incarnation:"2"};
-    recovered.transport.respond(attach.id,{type:"attached",target:replacementTarget,attachment_kind:"controller",observation_source:"live"});
+    recovered.transport.respond(attach.id,{type:"attached",target:replacementTarget,attachment_kind:"writable",observation_source:"live"});
     await followAttachment(recovered.transport,replacementTarget,{...initial,model:sessionModel(MODEL_B)},runtimeCursor(0));
     assert.equal((await attaching).modelSelectionOutcomeUnknown, true, "a replacement runtime still cannot prove the old request's outcome");
 
@@ -349,7 +351,7 @@ describe("session model A -> B invariant", () => {
       protocol_version: APP_SERVER_PROTOCOL_VERSION,
       capabilities: {
         upload_policy: nativeUploadPolicy, multi_session: true,
-        single_writable_controller: true,
+        shared_writable_clients: true,
         headless_interactions: true, delivery_access: false,
         experimental_methods: [],
       },
@@ -363,9 +365,10 @@ describe("session model A -> B invariant", () => {
       attachment_id: "att-1",
     };
     const attaching = AppServerSession.attach(client, target.session_id);
-    const attach = (await transport.log.awaitMethod("session/attach")).at(-1)!;
+    await resolveThreadMetadata(transport,sessionView({id:target.session_id,active_conversation_id:target.conversation_id}));
+    const attach = (await transport.log.awaitMethod("thread/resume")).at(-1)!;
     // Identity receipt, bounded cut and registration are independent boundaries.
-    transport.respond(attach.id, {type:'attached', target, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+    transport.respond(attach.id, {type:'attached', target, configuration_revision:'0', attachment_kind:'writable', observation_source:'live'});
     await followAttachment(transport,target,snapshot({model:sessionModel(MODEL_A)}),runtimeCursor(0));
     const session = await attaching;
     const stop = client.onNotification((message) =>
@@ -570,6 +573,6 @@ it('T05 T11 unavailable checkpoint keeps Applied and exposes an observation fail
   assert.match(h.session.observationError!, /Observation source unavailable/);
   assert.equal(h.session.state.attempt, undefined);
   assert.equal(h.transport.transportCount('session/subscribe'), 1);
-  assert.equal(h.transport.transportCount('turn/start'), 0);
+  assert.equal(h.transport.transportCount('inbound/queue'), 0);
   h.client.close();
 });

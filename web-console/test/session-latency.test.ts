@@ -6,7 +6,7 @@ const otherTarget = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 
 function evidence(): RequestTiming[] {
   return [
     { method: 'session/history', historyAt: 'latest', sessionId: 'session-a', nodeId: 'node-a', start: 10, end: 30, bytes: 100, error: 'stale_runtime' },
-    { method: 'session/attach', resultType: 'attached', sessionId: 'session-a', nodeId: 'node-a', target, start: 20, end: 40 },
+    { method: 'thread/resume', resultType: 'attached', sessionId: 'session-a', nodeId: 'node-a', target, start: 20, end: 40 },
     { method: 'session/checkpoint', resultType: 'checkpoint', target, start: 40, end: 50 },
     { method: 'session/subscribe', resultType: 'subscribed', target, start: 50, end: 60 },
   ];
@@ -107,7 +107,7 @@ describe('latency evidence for a cold preview superseded by attachment', () => {
     expect(supersededHistoryReads(rows)).toEqual([]);
   });
 
-  it.each(['session/fork', 'session/branch', 'session/switchNode', 'turn/start', 'session/attach', 'session/checkpoint', 'session/subscribe'])('never classifies a failed %s as a superseded preview', method => {
+  it.each(['thread/fork', 'session/branch', 'session/switchNode', 'inbound/queue', 'thread/resume', 'session/checkpoint', 'session/subscribe'])('never classifies a failed %s as a superseded preview', method => {
     const rows = evidence();
     const failure = { ...rows[0], method };
     rows.push(failure);

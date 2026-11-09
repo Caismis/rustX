@@ -121,45 +121,20 @@ impl ClientInner {
     ) -> Result<(EventSubscription, RuntimeClientResult), RuntimeClientError> {
         self.ensure_worker();
         let mut state = self.state.lock().expect("native projection lock");
-        let previous_subscriber = if state
-            .control_attachment
-            .as_ref()
-            .is_some_and(|attachment| attachment.attachment_id == *attachment_id)
-        {
-            state
-                .control_attachment
-                .as_ref()
-                .expect("the control attachment identity was just checked")
-                .subscriber_id
-        } else {
-            state
-                .read_only_attachments
-                .get(attachment_id)
-                .map_or(Err(RuntimeClientError::NotAttached), |attachment| {
-                    Ok(attachment.subscriber_id)
-                })?
-        };
+        let previous_subscriber = state
+            .attachments
+            .get(attachment_id)
+            .ok_or(RuntimeClientError::NotAttached)?
+            .subscriber_id;
         let (subscriber_id, notify) = state.projection.subscribe(after_cursor)?;
         if let Some(previous) = previous_subscriber {
             state.projection.remove_subscriber(previous);
         }
-        if state
-            .control_attachment
-            .as_ref()
-            .is_some_and(|attachment| attachment.attachment_id == *attachment_id)
-        {
-            state
-                .control_attachment
-                .as_mut()
-                .expect("the control attachment identity was just checked")
-                .subscriber_id = Some(subscriber_id);
-        } else {
-            state
-                .read_only_attachments
-                .get_mut(attachment_id)
-                .expect("the read-only attachment identity was just checked")
-                .subscriber_id = Some(subscriber_id);
-        }
+        state
+            .attachments
+            .get_mut(attachment_id)
+            .expect("admitted attachment")
+            .subscriber_id = Some(subscriber_id);
         drop(state);
         // Registration creates display demand without doing Store I/O under
         // the attachment lock. Retained semantic replay is unchanged.
@@ -195,10 +170,8 @@ impl ClientInner {
         }
         let state = self.state.lock().expect("native projection lock");
         state
-            .control_attachment
-            .as_ref()
-            .filter(|attachment| attachment.attachment_id == *attachment_id)
-            .or_else(|| state.read_only_attachments.get(attachment_id))
+            .attachments
+            .get(attachment_id)
             .and_then(|attachment| attachment.subscriber_id)
             .is_some_and(|current| current != observed.inner.subscriber_id)
     }

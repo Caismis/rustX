@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../../protocol/app-server/v73';
+import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../../protocol/app-server/v76';
 import type { QuestionRowView } from '../presentation/agent/QuestionRow';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

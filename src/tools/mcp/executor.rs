@@ -21,7 +21,7 @@ use super::runtime::McpServerRuntime;
 use super::{McpError, bound_error, connection, identity};
 
 /// A canonicalized MCP tool definition at the adapter boundary.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct CanonicalMcpTool {
     /// Remote model-facing name.
     pub name: String,

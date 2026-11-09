@@ -1,3 +1,4 @@
+import {threadFor} from '../../protocol/app-server/testing.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { firstSubmissions, type FirstSubmitPort } from '../src/app/new-conversation/first-submit';
 import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
@@ -21,13 +22,13 @@ async function fixture(overrides: Partial<ProductHostWorkspaces> = {}) {
 }
 it('passive Workspace observation starts no preparation or Session; selected authorized draft starts MCP only', async () => {
   const f = await fixture(); await f.authority.observe();
-  expect(f.requests().filter(row => row.method.startsWith('mcp/') || row.method === 'session/create')).toEqual([]);
+  expect(f.requests().filter(row => row.method.startsWith('mcp/') || row.method === 'thread/start')).toEqual([]);
   f.owner.follow('draft');
   await Promise.resolve(); expect(f.requests().some(row => row.method === 'mcp/draftPrepare')).toBe(false);
   f.owner.follow('draft', 'workspace-a');
   const request = await f.server.waitFor('mcp/draftPrepare', 1);
   expect(request.params).toMatchObject({ cwd: '/workspace/A', target: { host_authority: 'fixture-host' } });
-  expect(f.requests().some(row => ['session/create', 'turn/start', 'session/uploadPrepare'].includes(row.method))).toBe(false);
+  expect(f.requests().some(row => ['thread/start', 'inbound/queue', 'session/uploadPrepare'].includes(row.method))).toBe(false);
 });
 it('repeated navigation observations and same-Host remount retain exactly one preparation', async () => {
   const f = await fixture(); f.owner.follow('draft', 'workspace-a');
@@ -49,7 +50,7 @@ it('A to B to A correlates monotonic generations and ignores an obsolete authori
   if (a.method !== 'mcp/draftPrepare' || b.method !== 'mcp/draftPrepare') throw Error('wrong method');
   expect(a.params.target.generation).toBeGreaterThan(b.params.target.generation);
   expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([b, a]);
-  expect(f.requests().some(row => row.method === 'session/create')).toBe(false);
+  expect(f.requests().some(row => row.method === 'thread/start')).toBe(false);
 });
 it('Send seals an exact target; navigation after transfer cannot cancel it or retarget its continuation', async () => {
   const f = await fixture(); f.owner.follow('draft', 'workspace-a');
@@ -62,18 +63,18 @@ it('Send seals an exact target; navigation after transfer cannot cancel it or re
   await f.server.waitFor('mcp/draftPrepare', 2);
   expect(f.requests().filter(row => row.method === 'mcp/draftCancel').map(row => row.params)).toEqual([{ target: request.params.target }]);
 });
-it.each(['attachment', 'Settings', 'same Session', 'abandonment', 'discarded failure'] as const)('creation ACK preserves the submitted generation across %s, before native transfer can finish', async outcome => {
+it.each(['attachment', 'Settings', 'same Session', 'Workflows', 'discarded failure'] as const)('creation ACK preserves the submitted generation across %s, before native transfer can finish', async outcome => {
   const f = await fixture(), navigation = routeFixture(f.server.client, f.host, f.owner);
   navigation.actor.send({ type: 'DRAFT', workspaceId: 'workspace-a' });
   const prepared = await f.server.waitFor('mcp/draftPrepare', 1);
   if (prepared.method !== 'mcp/draftPrepare') throw Error('wrong method');
   const { binding, control } = navigation.actor.getSnapshot().context, generation = f.server.client.getSnapshot().generation;
   const session = { id: 'created', active_node: 'created-node', active_conversation_id: 'created-conversation', node_count: 1, created_at: '0', updated_at: '0' };
-  f.server.handlers.set('session/create', () => ({ type: 'session_transition', session }));
+  f.server.handlers.set('thread/start', () => ({thread:threadFor(session), type: 'session_transition', session }));
   f.server.summaries.set(session.id, { cwd: '/workspace/A' });
   f.server.snapshots.set(session.id, { ...snapshot(session.id), conversation_id: session.active_conversation_id });
   f.server.nodeSnapshots.set(session.active_node, f.server.snapshots.get(session.id)!);
-  f.server.held.add('session/create'); f.server.held.add('session/attach');
+  f.server.held.add('thread/start'); f.server.held.add('thread/resume');
   const port = firstSubmitPort(f.server.client, f.host, navigation.capture(), () => {
     navigation.actor.send({ type: 'CREATE', control, binding: String(binding) });
     const pending = navigation.actor.getSnapshot().context.pending;
@@ -81,22 +82,19 @@ it.each(['attachment', 'Settings', 'same Session', 'abandonment', 'discarded fai
   });
   const preparation = f.owner.seal(String(binding), 'workspace-a', 'fixture-host');
   const work = firstSubmissions(f.server.client).submit(String(binding), { workspaceId: 'workspace-a', text: 'One retained initialization', files: [], preparation }, port);
-  const create = await f.server.waitFor('session/create', 1);
+  const create = await f.server.waitFor('thread/start', 1);
   // Deliver only the ordinary ACK. Native composition/transfer is represented
   // by the held attachment; no rename or extra native work precedes this ACK.
   f.server.reply(create);
-  const attach = await f.server.waitFor('session/attach', 1);
+  const attach = await f.server.waitFor('thread/resume', 1);
   expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: session.id });
   expect(firstSubmissions(f.server.client).draft(String(binding))?.phase).toBe('attaching');
   expect(f.requests().filter(row => row.method === 'mcp/draftCancel')).toEqual([]);
   expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([prepared]);
   if (outcome === 'Settings') navigation.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } });
   else if (outcome === 'same Session') navigation.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: session.id, sidebar: true } });
-  if (outcome === 'abandonment') {
-    navigation.actor.send({ type: 'WORKFLOWS' });
-    const cancel = await f.server.waitFor('mcp/draftCancel', 1);
-    expect(cancel.params).toEqual({ target: preparation });
-  } else expect(f.requests().filter(row => row.method === 'mcp/draftCancel')).toEqual([]);
+  if (outcome === 'Workflows') navigation.actor.send({ type: 'WORKFLOWS' });
+  expect(f.requests().filter(row => row.method === 'mcp/draftCancel')).toEqual([]);
   if (outcome === 'discarded failure') {
     f.server.socket.deliver({ jsonrpc: '2.0', id: attach.id, error: { code: -32000, message: 'initialization failed', data: { kind: 'operation_failed' } } });
     expect(await work).toBe(false);
@@ -107,18 +105,17 @@ it.each(['attachment', 'Settings', 'same Session', 'abandonment', 'discarded fai
     await f.server.waitFor('mcp/draftCancel', 1);
     expect(observations).not.toHaveBeenCalled();
     expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([prepared]);
-    expect(f.requests().filter(row => row.method === 'session/create')).toHaveLength(1);
-    expect(f.requests().filter(row => row.method === 'turn/start')).toHaveLength(0);
+    expect(f.requests().filter(row => row.method === 'thread/start')).toHaveLength(1);
+    expect(f.requests().filter(row => row.method === 'inbound/queue')).toHaveLength(0);
     navigation.actor.send({ type: 'DRAFT', workspaceId: 'workspace-b' });
     await f.server.waitFor('mcp/draftPrepare', 2);
     return;
   }
   f.server.reply(attach);
-  expect(await work).toBe(outcome !== 'abandonment');
-  expect(navigation.actor.getSnapshot().context.route).toEqual(outcome === 'abandonment' ? { kind: 'workflows' }
-    : { kind: outcome === 'Settings' ? 'session-draft' : 'session', sessionId: session.id });
-  expect(f.requests().filter(row => row.method === 'session/create')).toHaveLength(1);
-  expect(f.requests().filter(row => row.method === 'turn/start')).toHaveLength(outcome !== 'abandonment' ? 1 : 0);
+  expect(await work).toBe(true);
+  expect(navigation.actor.getSnapshot().context.route).toEqual(outcome === 'Workflows' ? { kind: 'workflows' } : outcome === 'Settings' ? { kind: 'settings' } : { kind: 'session', sessionId: session.id });
+  expect(f.requests().filter(row => row.method === 'thread/start')).toHaveLength(1);
+  expect(f.requests().filter(row => row.method === 'inbound/queue')).toHaveLength(1);
 });
 it.each([
   { outcome: 'admitted', next: 'Workspace selection' }, { outcome: 'admitted', next: 'New Conversation' },
@@ -131,11 +128,11 @@ it.each([
   if (prepared.method !== 'mcp/draftPrepare') throw Error('wrong method');
   const { binding, control } = navigation.actor.getSnapshot().context, generation = f.server.client.getSnapshot().generation;
   const session = { id: 'created', active_node: 'created-node', active_conversation_id: 'created-conversation', node_count: 1, created_at: '0', updated_at: '0' };
-  f.server.handlers.set('session/create', () => ({ type: 'session_transition', session }));
+  f.server.handlers.set('thread/start', () => ({thread:threadFor(session), type: 'session_transition', session }));
   f.server.summaries.set(session.id, { cwd: '/workspace/A' });
   f.server.snapshots.set(session.id, { ...snapshot(session.id), conversation_id: session.active_conversation_id });
   f.server.nodeSnapshots.set(session.active_node, f.server.snapshots.get(session.id)!);
-  f.server.held.add('session/create'); f.server.held.add('session/attach');
+  f.server.held.add('thread/start'); f.server.held.add('thread/resume');
   const port = firstSubmitPort(f.server.client, f.host, navigation.capture(), () => {
     navigation.actor.send({ type: 'CREATE', control, binding: String(binding) });
     const pending = navigation.actor.getSnapshot().context.pending;
@@ -144,14 +141,14 @@ it.each([
   const preparation = f.owner.seal(String(binding), 'workspace-a', 'fixture-host');
   const submissions = firstSubmissions(f.server.client);
   const work = submissions.submit(String(binding), { workspaceId: 'workspace-a', text: 'One admitted message', files: [], preparation }, port);
-  const create = await f.server.waitFor('session/create', 1);
+  const create = await f.server.waitFor('thread/start', 1);
   navigation.actor.send({ type: 'SETTINGS', destination: { type: 'OPEN', target: userSettingsTarget } });
   navigation.actor.send({ type: 'DRAFT', workspaceId: 'workspace-b' });
-  expect(navigation.actor.getSnapshot().context).toMatchObject({ binding, route: { kind: 'new-conversation', workspaceId: 'workspace-a' } });
+  expect(navigation.actor.getSnapshot().context).toMatchObject({ binding, route: { kind: 'settings' }, home: { kind: 'new-conversation', workspaceId: 'workspace-a' } });
   expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toEqual([prepared]);
   f.server.reply(create);
-  const attach = await f.server.waitFor('session/attach', 1);
-  expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'new-conversation', workspaceId: 'workspace-a' });
+  const attach = await f.server.waitFor('thread/resume', 1);
+  expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'settings' });
   if (outcome === 'discarded failure') {
     f.server.socket.deliver({ jsonrpc: '2.0', id: attach.id, error: { code: -32000, message: 'initialization failed', data: { kind: 'operation_failed' } } });
     expect(await work).toBe(false);
@@ -164,7 +161,9 @@ it.each([
     expect(await work).toBe(true);
     expect(submissions.draft(String(binding))?.phase).toBe('admitted');
   }
-  navigation.settings.send({ type: 'CLOSE' });
+  navigation.actor.send({ type: 'HOME' });
+  await import('xstate').then(({ waitFor }) => waitFor(navigation.actor, state => state.matches('idle')));
+  if (next === 'Workspace picker') navigation.actor.send({ type: 'DRAFT' });
   if (next === 'Workspace picker') navigation.actor.send({ type: 'DRAFT.WORKSPACE', workspaceId: 'workspace-b' });
   else navigation.actor.send({ type: 'DRAFT', workspaceId: next === 'Workspace selection' ? 'workspace-b' : undefined });
   const fresh = navigation.actor.getSnapshot().context.binding;
@@ -176,8 +175,8 @@ it.each([
   if (replacement.method !== 'mcp/draftPrepare') throw Error('wrong method');
   expect(replacement.params.target.generation).toBeGreaterThan(prepared.params.target.generation);
   expect(submissions.draft(String(fresh))).toBeUndefined();
-  expect(f.requests().filter(row => row.method === 'session/create')).toHaveLength(1);
-  expect(f.requests().filter(row => row.method === 'turn/start')).toHaveLength(outcome === 'admitted' ? 1 : 0);
+  expect(f.requests().filter(row => row.method === 'thread/start')).toHaveLength(1);
+  expect(f.requests().filter(row => row.method === 'inbound/queue')).toHaveLength(outcome === 'admitted' ? 1 : 0);
 });
 it('leaving an unsent draft revokes only that generation and a different tab is independent', async () => {
   const f = await fixture(); const other = await fixture();
@@ -203,10 +202,10 @@ it('returning to an older submitted Session after a newer Send starts no draft p
     expect(await submissions.submit(binding, { workspaceId, text: 'Submitted input', files: [], preparation }, port)).toBe(true);
     navigation.actor.send({ type: 'WORKFLOWS' });
   }
-  f.server.held.add('session/attach');
+  f.server.held.add('thread/resume');
   const observations = vi.spyOn(f.authority, 'observe');
   navigation.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'A', sidebar: false } });
-  const attach = await f.server.waitFor('session/attach', 1);
+  const attach = await f.server.waitFor('thread/resume', 1);
   expect(navigation.actor.getSnapshot().context.route).toEqual({ kind: 'session-draft', sessionId: 'A' });
   expect(observations).not.toHaveBeenCalled();
   expect(f.requests().filter(row => row.method === 'mcp/draftPrepare')).toHaveLength(2);
@@ -235,7 +234,7 @@ it('a disconnected draft starts fresh native ownership after reconnect, without 
   const f = await fixture(); f.owner.follow('draft', 'workspace-a'); await f.server.waitFor('mcp/draftPrepare', 1);
   f.server.client.disconnect(); await f.server.connect();
   await f.server.waitFor('mcp/draftPrepare', 2);
-  expect(f.requests().some(row => row.method === 'session/create')).toBe(false);
+  expect(f.requests().some(row => row.method === 'thread/start')).toBe(false);
 });
 
 it('an unresolved first Send never prepares a second draft after transport reconnect', async () => {

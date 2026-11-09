@@ -146,6 +146,15 @@ pub enum PendingMutationOutcome {
     InvalidItem,
 }
 
+/// Durable acceptance evidence for a caller-owned input correlation. Lookup
+/// never replays a submission and remains valid after adoption or removal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InboundAcceptance {
+    pub message_id: MessageId,
+    pub inbound_sequence: InboundSequence,
+}
+
 /// One accepted-but-not-yet-adopted durable pending item.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingInboundItem {
@@ -561,6 +570,11 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// The conversation this capability serves.
     fn conversation_id(&self) -> &ConversationId;
 
+    fn lookup_inbound(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<InboundAcceptance>, ConversationStoreError>;
+
     /// Accepts one inbound item durably.
     fn accept_inbound(
         &self,
@@ -702,6 +716,13 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
     fn conversation_id(&self) -> &ConversationId {
         ConversationStore::conversation_id(self)
+    }
+
+    fn lookup_inbound(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<InboundAcceptance>, ConversationStoreError> {
+        InboxStore::lookup_inbound(self, correlation)
     }
 
     fn accept_inbound(
@@ -894,6 +915,13 @@ impl ConversationInboundCapability for StoreInboundCapability {
         self.store.conversation_id()
     }
 
+    fn lookup_inbound(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<InboundAcceptance>, ConversationStoreError> {
+        self.store.lookup_inbound(correlation)
+    }
+
     fn accept_inbound(
         &self,
         draft: InboundDraft,
@@ -1003,7 +1031,11 @@ impl ConversationInboundCapability for StoreInboundCapability {
 /// Convenience: the canonical [`MessageBlock`] for one accepted item.
 #[must_use]
 pub fn canonical_block(message: &UserMessageBlock) -> MessageBlock {
-    MessageBlock::User(message.clone())
+    let mut message = message.clone();
+    if message.kind == InboundKind::QueuedMessage {
+        message.kind = InboundKind::Message;
+    }
+    MessageBlock::User(message)
 }
 
 /// The Pending Inbound Inbox and Goal domain of the conversation Store.
@@ -1060,6 +1092,11 @@ pub trait InboxStore: Send + Sync + 'static {
             "Goal admission is unsupported by this store".to_owned(),
         ))
     }
+    fn lookup_inbound(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<InboundAcceptance>, ConversationStoreError>;
+
     /// Accepts one inbound item durably.
     ///
     /// # Errors

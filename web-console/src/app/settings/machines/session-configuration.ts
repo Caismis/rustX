@@ -1,5 +1,5 @@
 import { assign, fromPromise, setup, type SnapshotFrom } from 'xstate';
-import type { ConfigurationApplication } from '../../../../../protocol/app-server/v73';
+import type { ConfigurationApplication } from '../../../../../protocol/app-server/v76';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ClientView, ConnectionState } from '../../../client/contracts';
 

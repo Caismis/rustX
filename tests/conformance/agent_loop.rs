@@ -317,8 +317,7 @@ impl Driver {
         let attached = rpc(
             &connection,
             Method::SessionAttach {
-                session_id: session.id.clone(),
-                node_id: None,
+                thread_id: session.active_conversation_id.clone(),
             },
         )
         .await
@@ -493,9 +492,27 @@ impl Driver {
     }
 
     async fn cancel_current_attempt(&self) -> Result<MethodResult, RpcError> {
+        let MethodResult::Checkpoint { checkpoint } = rpc(
+            &self.connection,
+            Method::SessionCheckpoint {
+                target: self.target.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await?
+        else {
+            panic!("checkpoint")
+        };
+        let turn_id = checkpoint
+            .snapshot
+            .attempt
+            .expect("active Attempt")
+            .attempt_id
+            .expect("exact Attempt");
         rpc(
             &self.connection,
             Method::TurnCancel {
+                turn_id,
                 target: self.target.clone(),
             },
         )

@@ -7,7 +7,7 @@ import { useMcpProbes } from './mcp/useMcpProbes';
 import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v73';
+import type { SourceScope } from '../../../../protocol/app-server/v76';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
@@ -33,7 +33,7 @@ import { ExtensionsPage, type ExtensionFilter } from './extensions/ExtensionsPag
 import { AdvancedPage } from './advanced/AdvancedPage';
 import {
   catalogIdentities, catalogProfiles, configAuthoring, settingsLifecycle,
-  settingsTargetKey, settingsTargetLabel, settingsTargetScope, type SettingsTarget,
+  settingsTargetKey, settingsTargetLabel, settingsTargetScope, userSettingsTarget, type SettingsTarget,
 } from './projection';
 import {
   admitsFocus, connectionFocus, settingsPages,
@@ -46,7 +46,9 @@ export interface SettingsProps {
   /** The client-owned connection, rendered only where navigation admits the
    * Connection surface. Its presence authorizes nothing. */
   connection: ConnectionController;
-  /** The one owner of whether Settings is open, which target it is bound to,
+  /** Shell visibility; retained presentation never owns the primary route. */
+  visible?: boolean;
+  /** The owner of which target Settings is bound to,
    * which page it shows and which detail is focused inside that page. This
    * component renders shell navigation as it is; resource pages may select
    * their own configuration owner without retargeting the shell. */
@@ -100,13 +102,21 @@ export function settingsTransactionOwners(client: AppServerClient): readonly Tra
  * page, focusing a detail and switching target are presentation events; none of
  * them cancels a native commit or discards an editing transaction. */
 export function Settings(props: SettingsProps) {
+  const tx = useTranslation();
+  const visible = props.visible ?? true;
+  const [visited, setVisited] = useState(visible);
+  if (visible && !visited) setVisited(true);
   const view = useSelector(props.navigation, snapshot => ({
     target: snapshot.context.target, page: snapshot.context.page, focus: snapshot.context.focus,
+    targetReady: snapshot.context.targetReady, resolving: snapshot.matches('resolvingOwner'),
   }), shallowEqual);
-  return view.page && <SettingsDialog key={settingsTargetKey(view.target)} {...props} target={view.target} page={view.page} focus={view.focus} />;
+  if (!view.targetReady) return <section aria-label={tx('settings:settings.settings')} data-settings-owner-pending aria-busy={view.resolving}>
+    <p role="status">{tx(view.resolving ? 'settings:navigation.resolving' : 'settings:navigation.unavailable')}</p>
+  </section>;
+  return (visited || visible) && <SettingsPageContent key={settingsTargetKey(view.target)} {...props} visible={visible} target={view.target} page={view.page} focus={view.focus} />;
 }
 
-function SettingsDialog({ client, host, associations, theme = 'system', setTheme, connection, navigation, target, page: current, focus }: SettingsProps & {
+function SettingsPageContent({ client, host, associations, theme = 'system', setTheme, connection, navigation, target, page: current, focus, visible = true }: SettingsProps & {
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
   const tx = useTranslation();
@@ -121,7 +131,7 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   const scope: SourceScope = settingsTargetScope(activeTarget);
   // The fresh authoritative observation, and the last one demoted to stale
   // presentation data by a presentation or generation boundary. Rendering the
-  // stale value keeps the presentation continuous across a dialog reopen; it is
+  // stale value keeps the presentation continuous across a page return; it is
   // never treated as current — the machine owes a fresh read on every ATTACH,
   // and authoring stays closed until that read is adopted.
   const observed = useSelector(actor, snapshot => snapshot.context.observation);
@@ -204,16 +214,17 @@ function SettingsDialog({ client, host, associations, theme = 'system', setTheme
   </fieldset>;
 
   const pages = settingsPages(target).map(id => ({ id, label: tx(`settings:page.${id}`), icon: pageIcons[id]() }));
-  return <SettingsPanel pages={pages} activeId={current}
-    onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })} onClose={() => navigation.send({ type: 'CLOSE' })}
+  return <SettingsPanel pages={pages} activeId={current} visible={visible}
+    onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })}
     // Scope stays visible; internal observation metadata is not product copy.
     context={<div className={css.context} data-lifecycle={lifecycle}>
       <div className={css.contextTitle}>
         <h2>{settingsTargetLabel(tx, activeTarget)}</h2>
+        {target.kind === 'workspace' && <Button size="sm" onClick={() => navigation.send({ type: 'OPEN', target: userSettingsTarget })}>{tx('settings:copy.open-user-settings')}</Button>}
       </div>
       <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>
     </div>}>
-    <section className={`${css.settings} ${css.page}`} aria-label={tx('settings:settings.settings')} aria-busy={busy}>
+    <section className={`${css.settings} ${css.page}`} aria-busy={busy}>
       {/* Target-wide facts, each reported as itself: a read failure, a
           convergence report, an unknown save outcome and a maintenance
           failure are separate alerts, and none of them hides another. */}

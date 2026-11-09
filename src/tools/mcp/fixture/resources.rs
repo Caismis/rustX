@@ -34,6 +34,8 @@ pub struct ResourceFixtureState {
     pub observation_file: Option<PathBuf>,
     /// Optional correlated error for redaction and aggregation tests.
     pub error: Option<rmcp::ErrorData>,
+    /// Optional first opaque resource continuation for pagination boundary tests.
+    pub first_cursor: Option<String>,
 }
 
 impl ResourceFixtureState {
@@ -42,6 +44,15 @@ impl ResourceFixtureState {
     pub fn from_env() -> Self {
         Self {
             observation_file: std::env::var_os(RESOURCE_OBSERVATION_FILE_ENV).map(PathBuf::from),
+            first_cursor: std::env::var("RUSTX_FIXTURE_RESOURCE_CURSOR")
+                .ok()
+                .map(|cursor| {
+                    if cursor == "process" {
+                        format!("process-{}", std::process::id())
+                    } else {
+                        cursor
+                    }
+                }),
             ..Self::default()
         }
     }
@@ -83,10 +94,24 @@ impl ResourceFixtureState {
             None => {
                 result.resources =
                     vec![Resource::new("fixture://text", "text").with_mime_type("text/plain")];
-                result.next_cursor = Some("page-2".into());
+                result.next_cursor =
+                    Some(self.first_cursor.clone().unwrap_or_else(|| "page-2".into()));
             }
-            Some("page-2") => result.resources = vec![Resource::new("fixture://blob", "blob")],
+            Some("page-2" | "") => result.resources = vec![Resource::new("fixture://blob", "blob")],
             Some("cycle") => result.next_cursor = Some("cycle".into()),
+            Some(cursor)
+                if cursor.starts_with("process-")
+                    && self.first_cursor.as_deref() == Some(cursor) =>
+            {
+                result.resources = vec![Resource::new("fixture://blob", "blob")];
+            }
+            Some("too-many") => {
+                result.resources = (0..129)
+                    .map(|index| {
+                        Resource::new(format!("fixture://{index}"), format!("entry-{index}"))
+                    })
+                    .collect();
+            }
             Some("oversized") => {
                 result.resources = vec![
                     Resource::new("fixture://large", "large")
