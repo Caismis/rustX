@@ -874,7 +874,6 @@ impl CheckpointSeed {
         self.capture_foreground_prepared(capture, foreground, bindings, None)
     }
 
-    #[allow(clippy::too_many_lines)] // Keep one-pass bounded capture and exact source metadata together.
     fn capture_live_blocks_view<'a>(
         &self,
         capture: &mut crate::observation::capture::Capture,
@@ -944,8 +943,7 @@ impl CheckpointSeed {
                             "blocks".into(),
                             index.to_string(),
                             field.into(),
-                        ]
-                        .into(),
+                        ],
                         content_ref: reference.clone().into(),
                         deferred: deferred
                             || reference.readable_end > inline_block_bytes(&bounded, field),
@@ -958,14 +956,13 @@ impl CheckpointSeed {
                     "live_block_metadata",
                 )) {
                     bindings.push(crate::observation::cut::ContentBinding {
-                        source_path: Some(vec!["name".into()].into()),
+                        source_path: Some(vec!["name".into()]),
                         path: vec![
                             "attempt".into(),
                             "in_flight".into(),
                             "blocks".into(),
                             index.to_string(),
-                        ]
-                        .into(),
+                        ],
                         content_ref: reference.clone().into(),
                         deferred: true,
                     });
@@ -1026,8 +1023,7 @@ impl CheckpointSeed {
                         index.to_string(),
                         "state".into(),
                         "arguments".into(),
-                    ]
-                    .into(),
+                    ],
                     content_ref: reference.clone().into(),
                     deferred: arguments.len() as u64 != reference.readable_end,
                 });
@@ -1050,21 +1046,20 @@ impl CheckpointSeed {
                         index.to_string(),
                         "committed_result".into(),
                     ];
-                    path.extend(binding.path.iter().skip(2).cloned());
-                    binding.path = path.into();
+                    path.extend(binding.path.into_iter().skip(2));
+                    binding.path = path;
                     bindings.push(binding);
                 }
             }
             if let Some(reference) = &tool.result_metadata_ref {
                 bindings.push(crate::observation::cut::ContentBinding {
-                    source_path: Some(vec!["result".into()].into()),
+                    source_path: Some(vec!["result".into()]),
                     path: vec![
                         "attempt".into(),
                         "foreground".into(),
                         index.to_string(),
                         "committed_result".into(),
-                    ]
-                    .into(),
+                    ],
                     content_ref: reference.clone().into(),
                     deferred: tool.committed_result_deferred,
                 });

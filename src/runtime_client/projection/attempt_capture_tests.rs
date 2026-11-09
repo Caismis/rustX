@@ -214,8 +214,8 @@ fn foreground_admission_matches_old_fields_without_allocating_discarded_payloads
 fn attempt_bindings_reuse_only_identical_position_source_frontier_and_deferred_state() {
     let owners = super::super::prepared_capture::PreparedAttemptBindings::default();
     let binding = ContentBinding {
-        source_path: Some(vec!["result".into()].into()),
-        path: vec!["attempt".into(), "foreground".into(), "0".into()].into(),
+        source_path: Some(vec!["result".into()]),
+        path: vec!["attempt".into(), "foreground".into(), "0".into()],
         content_ref: content_reference().into(),
         deferred: false,
     };
@@ -230,7 +230,7 @@ fn attempt_bindings_reuse_only_identical_position_source_frontier_and_deferred_s
     let _ = unchanged[0].size();
     assert_eq!(crate::observation::metadata::take_work(), 0);
     let mut changes = vec![binding.clone(); 5];
-    std::sync::Arc::make_mut(&mut changes[0].path)[2] = "1".into();
+    changes[0].path[2] = "1".into();
     std::sync::Arc::make_mut(&mut changes[1].content_ref).content_revision += 1;
     std::sync::Arc::make_mut(&mut changes[2].content_ref).readable_end += 1;
     changes[3].deferred = true;
@@ -451,7 +451,7 @@ fn prepared_tool_admission_reads_current_result_sources_with_unchanged_attempt_o
         metadata: content_reference(),
         content: vec![ContentBinding {
             source_path: None,
-            path: vec!["tool".into(), "result".into(), "content".into(), "0".into()].into(),
+            path: vec!["tool".into(), "result".into(), "content".into(), "0".into()],
             content_ref: content_reference().into(),
             deferred: true,
         }],

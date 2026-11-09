@@ -49,7 +49,7 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
             capture.content.push(
                 crate::observation::cut::ContentBinding {
                     source_path: None,
-                    path: vec!["display".into()].into(),
+                    path: vec!["display".into()],
                     content_ref: reference.into(),
                     deferred: metadata_deferred,
                 }
@@ -80,7 +80,7 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
                 capture.content.push(
                     crate::observation::cut::ContentBinding {
                         source_path: None,
-                        path: path.into(),
+                        path,
                         content_ref: reference.into(),
                         deferred: true,
                     }
@@ -110,7 +110,7 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
                 capture.content.push(
                     crate::observation::cut::ContentBinding {
                         source_path: None,
-                        path: path.into(),
+                        path,
                         content_ref: reference.into(),
                         deferred: true,
                     }
@@ -470,8 +470,7 @@ fn entry_header(
                                 "audit".into(),
                                 "content".into(),
                                 index.to_string(),
-                            ]
-                            .into(),
+                            ],
                             content_ref: reference.into(),
                             deferred: true,
                         }
@@ -931,8 +930,7 @@ pub(in crate::durable::sqlite) fn audit_metadata_bindings(
                             "audit".into(),
                             "content".into(),
                             index.to_string(),
-                        ]
-                        .into(),
+                        ],
                         content_ref: reference.into(),
                         deferred: true,
                     }
@@ -990,7 +988,7 @@ pub(in crate::durable::sqlite) fn index_audit_blocks(
             )? {
                 content.push(ContentBinding {
                     source_path: None,
-                    path: vec![field.into()].into(),
+                    path: vec![field.into()],
                     content_ref: reference.into(),
                     deferred: true,
                 });
@@ -1003,7 +1001,7 @@ pub(in crate::durable::sqlite) fn index_audit_blocks(
             )? {
                 content.push(ContentBinding {
                     source_path: None,
-                    path: Vec::new().into(),
+                    path: Vec::new(),
                     content_ref: reference.into(),
                     deferred: true,
                 });

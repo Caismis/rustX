@@ -74,8 +74,8 @@ pub(crate) fn bind_original_provenance(
                 )
             })?;
         *message_id_source = Some(Box::new(crate::observation::cut::ContentBinding {
-            path: vec!["provenance".into(), "source".into(), "message_id".into()].into(),
-            source_path: Some(vec!["id".into()].into()),
+            path: vec!["provenance".into(), "source".into(), "message_id".into()],
+            source_path: Some(vec!["id".into()]),
             content_ref: original.content_ref.clone(),
             deferred: true,
         }));

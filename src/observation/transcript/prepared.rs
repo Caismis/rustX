@@ -111,7 +111,7 @@ impl PreparedTranscriptRow {
             for binding in &mut capture.content[content..] {
                 let mut value = (**binding).clone();
                 debug_assert_eq!(&value.path[..3], &["transcript", "entries", "0"]);
-                Arc::make_mut(&mut value.path)[2].clone_from(&index);
+                value.path[2].clone_from(&index);
                 *binding = value.into();
             }
             for frontier in &mut capture.collections[collections..] {

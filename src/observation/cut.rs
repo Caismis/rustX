@@ -46,14 +46,12 @@ pub struct CheckpointReadCut {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContentBinding {
-    // Display position and native read evidence can change independently.
-    // Sharing immutable parts avoids copying both when only one is replaced.
+    // Display positions vary across captures; native byte evidence is immutable
+    // and shared with the source-owned metadata root.
     /// Projection-owned structural selection inside `CanonicalJsonV1` bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<Vec<String>>")]
-    pub source_path: Option<Arc<[String]>>,
-    #[schemars(with = "Vec<String>")]
-    pub path: Arc<[String]>,
+    pub source_path: Option<Vec<String>>,
+    pub path: Vec<String>,
     #[schemars(with = "ContentRef")]
     pub content_ref: Arc<ContentRef>,
     pub deferred: bool,

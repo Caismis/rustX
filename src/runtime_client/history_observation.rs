@@ -151,7 +151,7 @@ fn message_page(
                 .into_iter()
                 .map(|mut binding| {
                     if binding.path.first().is_some_and(|field| field == "display") {
-                        binding.path = binding.path[1..].into();
+                        binding.path.remove(0);
                     }
                     binding
                 })
@@ -211,7 +211,7 @@ fn transcript_page(
                 .into_iter()
                 .map(|mut binding| {
                     if binding.path.first().is_some_and(|field| field == "display") {
-                        binding.path = binding.path[1..].into();
+                        binding.path.remove(0);
                     }
                     binding
                 })
