@@ -150,7 +150,14 @@ pub(crate) fn validate_bounded_prepared_request(
     })
 }
 
-fn prepared_wire_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum PreparedWireRequest<'a> {
+    Json(serde_json::Value),
+    Anthropic(super::anthropic::mapping::WireRequest<'a>),
+}
+
+fn prepared_wire_request(request: &ModelRequest) -> Result<PreparedWireRequest<'_>, ModelError> {
     #[cfg(test)]
     PREFLIGHTS.with(|v| v.set(v.get() + 1));
     #[cfg(feature = "issue-387-profile")]
@@ -159,15 +166,16 @@ fn prepared_wire_request(request: &ModelRequest) -> Result<serde_json::Value, Mo
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => {
             super::openai::chat_completions::translate_request(request)
+                .map(PreparedWireRequest::Json)
         }
         ModelProtocol::OpenAiResponses => super::openai::responses::translate_request(
             request,
             &tools,
             request.invocation.compat.responses_storage,
-        ),
-        ModelProtocol::AnthropicMessages => {
-            super::anthropic::mapping::translate_request(request, &tools)
-        }
+        )
+        .map(PreparedWireRequest::Json),
+        ModelProtocol::AnthropicMessages => super::anthropic::mapping::translate_request(request)
+            .map(PreparedWireRequest::Anthropic),
     }
 }
 
@@ -291,7 +299,8 @@ mod tests {
                 )]
                 .into_iter()
                 .collect();
-                let mut wire = super::prepared_wire_request(&request).unwrap();
+                let mut wire =
+                    serde_json::to_value(super::prepared_wire_request(&request).unwrap()).unwrap();
                 assert!(
                     crate::model::adapter::correlation::observed_correlations(&mut wire, protocol)
                         .is_empty()
