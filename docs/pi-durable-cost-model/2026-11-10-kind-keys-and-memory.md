@@ -38,7 +38,7 @@ The targeted indexes' WAL plus main-file traffic drops from approximately 33.5 t
 
 ## Ordinary fake-provider comparison
 
-Four independent balanced/interleaved pairs in each of the original four cells, without tracing. All 32 products and 552 complete semantic request comparisons pass. CPU includes the in-process conformance driver. Single-turn CPU endpoints have 10 ms granularity. Per-run P50/P95 distributions and every negative sample remain in the [summary](evidence/kind-keys-20261110/kind-ordinary-summary.json) and [per-run CSV](evidence/kind-keys-20261110/kind-ordinary-per-run.csv). Percent changes below are medians of within-pair changes, not ratios of side medians.
+Four independent balanced/interleaved pairs in each of the original four cells, without tracing. All 32 products and 552 complete semantic request comparisons pass. CPU includes the in-process conformance driver. Single-turn CPU endpoints have 10 ms granularity. Per-run P50/P95 distributions and every negative sample remain in the [summary](evidence/kind-keys-20261110/kind-ordinary-summary.json) and [per-run CSV](evidence/kind-keys-20261110/kind-ordinary-per-run.csv). The readable CSV uses LF line endings; the original CRLF export is retained inside the archive with identical numeric fields. Percent changes below are medians of within-pair changes, not ratios of side medians.
 
 | Case | P50 ms, side medians before → after | Paired P50 / P95 | CPU ms/turn, side medians before → after | Paired CPU | Hot write KiB/turn before → after | Paired writes |
 |---|---:|---:|---:|---:|---:|---:|
