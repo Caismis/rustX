@@ -1470,7 +1470,7 @@ fn translate_user_input<'a>(
                 });
             }
             crate::message::types::UserContentBlock::Image(image) => {
-                content.push(WirePart::Image(responses_image_part(image, images)?))
+                content.push(WirePart::Image(responses_image_part(image, images)?));
             }
             _ => {
                 return Err(unsupported(
