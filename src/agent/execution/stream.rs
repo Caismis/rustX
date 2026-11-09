@@ -95,7 +95,7 @@ impl AgentExecution<'_> {
             .model
             .primary()
             .adapter()
-            .stream(request, self.cancellation.model_cancellation());
+            .stream_prepared(request, self.cancellation.model_cancellation());
         #[cfg(feature = "issue-387-profile")]
         drop(adapter_dispatch_profile);
         let mut assembler = ModelEventAssembler::new();

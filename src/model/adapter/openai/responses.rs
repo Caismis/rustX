@@ -11,22 +11,20 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use async_openai::Client;
-use async_openai::config::OpenAIConfig;
 use async_openai::error::OpenAIError;
 use futures_util::StreamExt;
 
 use crate::message::types::AssistantContentBlock;
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
-use crate::model::adapter::openai::client::build_client;
+use crate::model::adapter::openai::client::OpenAiTransport;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{normalize_error, stream_retry_disposition};
 use crate::model::adapter::proposal::{accept_tool_call, resolve_tool_identity};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{ValidatedTools, validate_request};
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::catalog::ResponsesStorageMode;
 use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
@@ -45,8 +43,7 @@ use crate::runtime::identity::ToolCallId;
 /// ([`ModelCompat`](crate::model::catalog::ModelCompat)), so one adapter
 /// serves every Responses model of its provider.
 pub struct OpenAiResponsesAdapter {
-    client: Client<OpenAIConfig>,
-    http_client: reqwest::Client,
+    client: OpenAiTransport,
 }
 
 impl std::fmt::Debug for OpenAiResponsesAdapter {
@@ -61,10 +58,8 @@ impl OpenAiResponsesAdapter {
     #[must_use]
     pub fn new(config: OpenAiAdapterConfig) -> Self {
         let (api_key, api_base, http_client) = config.into_parts();
-        let http_client = http_client.unwrap_or_default();
         Self {
-            client: build_client(&api_key, &api_base, Some(http_client.clone())),
-            http_client,
+            client: OpenAiTransport::new(&api_key, &api_base, http_client),
         }
     }
 }
@@ -75,33 +70,27 @@ impl ModelAdapter for OpenAiResponsesAdapter {
     }
 
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile =
-            crate::model::adapter::profile::RequestScope::new(self.protocol(), "dispatch");
-        let validated = match validate_request(&request, self.protocol()) {
-            Ok(validated) => validated,
-            Err(error) => return model_stream_of_failure(error),
-        };
-        let storage_mode = request.invocation.compat.responses_storage;
-        let translated = match translate_request(&request, &validated, storage_mode) {
-            Ok(translated) => translated,
-            Err(error) => return model_stream_of_failure(error),
-        };
-        let client = if let Some(limit) = request.response_byte_limit {
-            self.client
-                .clone()
-                .with_http_service(super::client::NoRetryService::bounded(
-                    self.http_client.clone(),
-                    limit,
-                ))
-        } else {
-            self.client.clone()
-        };
-        let normalizer = ResponsesNormalizer::new(validated, storage_mode);
+        match prepare_request(request, self.protocol()) {
+            Ok(prepared) => self.stream_prepared(prepared, cancellation),
+            Err(error) => model_stream_of_failure(error),
+        }
+    }
+
+    fn stream_prepared(
+        &self,
+        request: PreparedModelRequest,
+        cancellation: CancellationSignal,
+    ) -> ModelStream {
+        let PreparedModelRequest { input, body, tools } = request;
+        if input.protocol() != self.protocol() {
+            return model_stream_of_failure(invalid_request("prepared request protocol mismatch"));
+        }
+        let normalizer = ResponsesNormalizer::new(tools, input.invocation.compat.responses_storage);
         Box::pin(futures_util::stream::unfold(
             ResponsesPhase::Preparing {
-                client,
-                request: crate::model::adapter::provider_request(translated),
+                client: self.client.clone(),
+                request: body,
+                response_byte_limit: input.response_byte_limit,
                 normalizer,
                 cancellation,
             },
@@ -115,6 +104,7 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelStreamItem,
         ResponsesPhase::Preparing {
             client,
             request,
+            response_byte_limit,
             normalizer,
             cancellation,
         } => {
@@ -134,6 +124,7 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelStreamItem,
                 ResponsesPhase::Opening {
                     client,
                     request,
+                    response_byte_limit,
                     normalizer,
                     cancellation,
                 },
@@ -142,12 +133,12 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelStreamItem,
         ResponsesPhase::Opening {
             client,
             request,
+            response_byte_limit,
             mut normalizer,
             cancellation,
         } => {
-            let api = client.responses();
             let outcome = tokio::select! {
-                outcome = api.create_stream_byot(&request) => outcome,
+                outcome = client.stream("/responses", request, response_byte_limit) => outcome,
                 () = cancellation.cancelled() => {
                     return Some((
                         ModelStreamItem::Event(ModelEvent::Failed {
@@ -287,14 +278,16 @@ fn cancelled_error() -> ModelError {
 
 enum ResponsesPhase {
     Preparing {
-        client: Client<OpenAIConfig>,
-        request: crate::model::adapter::ProviderRequest,
+        client: OpenAiTransport,
+        request: bytes::Bytes,
+        response_byte_limit: Option<usize>,
         normalizer: ResponsesNormalizer,
         cancellation: CancellationSignal,
     },
     Opening {
-        client: Client<OpenAIConfig>,
-        request: crate::model::adapter::ProviderRequest,
+        client: OpenAiTransport,
+        request: bytes::Bytes,
+        response_byte_limit: Option<usize>,
         normalizer: ResponsesNormalizer,
         cancellation: CancellationSignal,
     },
@@ -341,7 +334,7 @@ struct ToolAssembly {
 /// Normalizes Responses stream events into canonical events.
 #[derive(Debug)]
 struct ResponsesNormalizer {
-    tools: ValidatedTools,
+    tools: std::sync::Arc<ValidatedTools>,
     storage_mode: ResponsesStorageMode,
     blocks: BlockAllocator<ResponsesBlockKey>,
     tool_calls: BTreeMap<u32, ToolAssembly>,
@@ -356,7 +349,7 @@ struct ResponsesNormalizer {
 }
 
 impl ResponsesNormalizer {
-    fn new(tools: ValidatedTools, storage_mode: ResponsesStorageMode) -> Self {
+    fn new(tools: std::sync::Arc<ValidatedTools>, storage_mode: ResponsesStorageMode) -> Self {
         Self {
             tools,
             storage_mode,

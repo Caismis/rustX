@@ -72,7 +72,7 @@ tracing = "0.1"
 async-openai = { version = "0.41", default-features = true, features = ["chat-completion", "responses", "middleware", "byot"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 eventsource-stream = "0.2"
-tower = { version = "0.5", features = ["util"] }
+bytes = "1"
 # Upstream's generated meta validators avoid retaining runtime trees for all
 # bundled drafts. Authored schemas and tool arguments are still validated.
 jsonschema = { version = "0.60.2", features = ["macros"] }

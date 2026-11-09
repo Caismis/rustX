@@ -23,7 +23,7 @@ use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_i
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{ValidatedTools, validate_request};
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::error::{
     ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
 };
@@ -36,7 +36,7 @@ use crate::tools::types::ToolCallStart;
 
 use super::config::AnthropicAdapterConfig;
 use super::mapping::{
-    encode_request, is_refusal, map_finish_reason, normalize_http_error, normalize_usage,
+    invalid_request, is_refusal, map_finish_reason, normalize_http_error, normalize_usage,
     stream_retry_disposition,
 };
 use super::wire::{WireEvent, WireUsage, parse_event};
@@ -91,25 +91,29 @@ impl ModelAdapter for AnthropicMessagesAdapter {
     }
 
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile =
-            crate::model::adapter::profile::RequestScope::new(self.protocol(), "dispatch");
-        let validated = match validate_request(&request, self.protocol()) {
-            Ok(validated) => validated,
-            Err(error) => return model_stream_of_failure(error),
-        };
-        let wire_request = match encode_request(&request) {
-            Ok(translated) => translated,
-            Err(error) => return model_stream_of_failure(error),
-        };
+        match prepare_request(request, self.protocol()) {
+            Ok(prepared) => self.stream_prepared(prepared, cancellation),
+            Err(error) => model_stream_of_failure(error),
+        }
+    }
+
+    fn stream_prepared(
+        &self,
+        request: PreparedModelRequest,
+        cancellation: CancellationSignal,
+    ) -> ModelStream {
+        let PreparedModelRequest { input, body, tools } = request;
+        if input.protocol() != self.protocol() {
+            return model_stream_of_failure(invalid_request("prepared request protocol mismatch"));
+        }
         let state = AnthropicPhase::Preparing {
             api_key: self.api_key.clone(),
             url: format!("{}/v1/messages", self.api_base),
             anthropic_version: self.anthropic_version.clone(),
             http_client: self.http_client.clone(),
-            response_byte_limit: request.response_byte_limit,
-            wire_request,
-            normalizer: AnthropicStreamNormalizer::new(validated),
+            response_byte_limit: input.response_byte_limit,
+            wire_request: body,
+            normalizer: AnthropicStreamNormalizer::new(tools),
             cancellation,
         };
         Box::pin(futures_util::stream::unfold(state, anthropic_phase_next))
@@ -238,7 +242,7 @@ async fn open_stream(
     url: &str,
     anthropic_version: &str,
     http_client: &reqwest::Client,
-    wire_request: Vec<u8>,
+    wire_request: bytes::Bytes,
     response_byte_limit: Option<usize>,
     cancellation: CancellationSignal,
 ) -> OpeningOutcome {
@@ -402,7 +406,7 @@ enum AnthropicPhase {
         anthropic_version: String,
         http_client: reqwest::Client,
         response_byte_limit: Option<usize>,
-        wire_request: Vec<u8>,
+        wire_request: bytes::Bytes,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -412,7 +416,7 @@ enum AnthropicPhase {
         anthropic_version: String,
         http_client: reqwest::Client,
         response_byte_limit: Option<usize>,
-        wire_request: Vec<u8>,
+        wire_request: bytes::Bytes,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -478,7 +482,7 @@ enum AnthropicBlockState {
 /// Normalizes the Anthropic stream into canonical events.
 #[derive(Debug)]
 struct AnthropicStreamNormalizer {
-    tools: ValidatedTools,
+    tools: std::sync::Arc<ValidatedTools>,
     blocks: BlockAllocator<AnthropicBlockKey>,
     block_states: BTreeMap<u32, AnthropicBlockState>,
     message_start_usage: Option<WireUsage>,
@@ -491,7 +495,7 @@ struct AnthropicStreamNormalizer {
 }
 
 impl AnthropicStreamNormalizer {
-    fn new(tools: ValidatedTools) -> Self {
+    fn new(tools: std::sync::Arc<ValidatedTools>) -> Self {
         Self {
             tools,
             blocks: BlockAllocator::new(),

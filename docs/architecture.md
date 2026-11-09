@@ -2262,6 +2262,14 @@ The durable Event Journal owns historical execution facts; the observer is
 only the live projection seam. Adapters own provider protocol translation only; the validating
 [`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
 [`ToolExecutor`] implementations and never falls back id-first.
+The Agent Loop transfers the frozen logical input to adapter preparation before
+the request-start commit. The adapter returns immutable transport bytes and
+validated tool identities owned by that input. Dispatch starts only after
+the existing commit evidence is accepted. An ordinary retry shares the same
+bytes and input under a fresh committed start. The loop releases the prepared
+owner when the logical request finishes or is abandoned. The bytes are
+process-local and never serve as canonical or durable evidence.
+
 Continuation state propagates losslessly without fabrication, cancellation
 always settles as a terminal cancellation candidate, and a normally settled
 attempt commits exactly one terminal `RuntimeEvent`. A failed terminal append

@@ -27,8 +27,6 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use async_openai::Client;
-use async_openai::config::OpenAIConfig;
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
     ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
@@ -46,7 +44,7 @@ use serde::{Deserialize, Serialize};
 use crate::message::types::AssistantContentBlock;
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
-use crate::model::adapter::openai::client::build_client;
+use crate::model::adapter::openai::client::OpenAiTransport;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
     map_chat_finish_reason, normalize_chat_usage, normalize_error, stream_retry_disposition,
@@ -56,7 +54,7 @@ use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_i
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{ValidatedTools, validate_request};
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::catalog::{ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol};
 use crate::model::error::{
     MalformedToolProposalSource, ModelError, ModelErrorKind, is_context_window_error,
@@ -70,8 +68,7 @@ use crate::runtime::identity::ToolCallId;
 
 /// Adapter for the `OpenAI` Chat Completions protocol.
 pub struct OpenAiChatCompletionsAdapter {
-    client: Client<OpenAIConfig>,
-    http_client: reqwest::Client,
+    client: OpenAiTransport,
 }
 
 impl std::fmt::Debug for OpenAiChatCompletionsAdapter {
@@ -86,10 +83,8 @@ impl OpenAiChatCompletionsAdapter {
     #[must_use]
     pub fn new(config: OpenAiAdapterConfig) -> Self {
         let (api_key, api_base, http_client) = config.into_parts();
-        let http_client = http_client.unwrap_or_default();
         Self {
-            client: build_client(&api_key, &api_base, Some(http_client.clone())),
-            http_client,
+            client: OpenAiTransport::new(&api_key, &api_base, http_client),
         }
     }
 }
@@ -100,34 +95,29 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
     }
 
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile =
-            crate::model::adapter::profile::RequestScope::new(self.protocol(), "dispatch");
-        let validated = match validate_request(&request, self.protocol()) {
-            Ok(validated) => validated,
-            Err(error) => return model_stream_of_failure(error),
-        };
-        let translated = match translate_request(&request) {
-            Ok(translated) => translated,
-            Err(error) => return model_stream_of_failure(error),
-        };
-        let client = if let Some(limit) = request.response_byte_limit {
-            self.client
-                .clone()
-                .with_http_service(super::client::NoRetryService::bounded(
-                    self.http_client.clone(),
-                    limit,
-                ))
-        } else {
-            self.client.clone()
-        };
+        match prepare_request(request, self.protocol()) {
+            Ok(prepared) => self.stream_prepared(prepared, cancellation),
+            Err(error) => model_stream_of_failure(error),
+        }
+    }
+
+    fn stream_prepared(
+        &self,
+        request: PreparedModelRequest,
+        cancellation: CancellationSignal,
+    ) -> ModelStream {
+        let PreparedModelRequest { input, body, tools } = request;
+        if input.protocol() != self.protocol() {
+            return model_stream_of_failure(invalid_request("prepared request protocol mismatch"));
+        }
         Box::pin(futures_util::stream::unfold(
             ChatPhase::Preparing {
-                client,
-                request: crate::model::adapter::provider_request(translated),
+                client: self.client.clone(),
+                request: body,
+                response_byte_limit: input.response_byte_limit,
                 normalizer: ChatStreamNormalizer::new(
-                    validated,
-                    request.invocation.compat.chat_tool_protocol,
+                    tools,
+                    input.invocation.compat.chat_tool_protocol,
                 ),
                 cancellation,
             },
@@ -141,6 +131,7 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelStreamItem, ChatPhase
         ChatPhase::Preparing {
             client,
             request,
+            response_byte_limit,
             normalizer,
             cancellation,
         } => {
@@ -155,6 +146,7 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelStreamItem, ChatPhase
                 ChatPhase::Opening {
                     client,
                     request,
+                    response_byte_limit,
                     normalizer,
                     cancellation,
                 },
@@ -163,12 +155,12 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelStreamItem, ChatPhase
         ChatPhase::Opening {
             client,
             request,
+            response_byte_limit,
             mut normalizer,
             cancellation,
         } => {
-            let api = client.chat();
             let outcome = tokio::select! {
-                outcome = api.create_stream_byot(&request) => outcome,
+                outcome = client.stream("/chat/completions", request, response_byte_limit) => outcome,
                 () = cancellation.cancelled() => {
                     return Some((failed(cancelled_error()), ChatPhase::Finished));
                 }
@@ -303,14 +295,16 @@ fn cancelled_error() -> ModelError {
 #[allow(clippy::large_enum_variant)]
 enum ChatPhase {
     Preparing {
-        client: Client<OpenAIConfig>,
-        request: crate::model::adapter::ProviderRequest,
+        client: OpenAiTransport,
+        request: bytes::Bytes,
+        response_byte_limit: Option<usize>,
         normalizer: ChatStreamNormalizer,
         cancellation: CancellationSignal,
     },
     Opening {
-        client: Client<OpenAIConfig>,
-        request: crate::model::adapter::ProviderRequest,
+        client: OpenAiTransport,
+        request: bytes::Bytes,
+        response_byte_limit: Option<usize>,
         normalizer: ChatStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -573,7 +567,7 @@ struct ToolAssembly {
 /// Normalizes Chat Completions chunks into canonical events.
 #[derive(Debug)]
 struct ChatStreamNormalizer {
-    tools: ValidatedTools,
+    tools: std::sync::Arc<ValidatedTools>,
     /// The model's declared in-band tool protocol. It is the only evidence
     /// this adapter uses to recognize reserved tool-protocol markup that
     /// leaked into ordinary output; nothing is inferred from a provider name
@@ -590,7 +584,7 @@ struct ChatStreamNormalizer {
 }
 
 impl ChatStreamNormalizer {
-    fn new(tools: ValidatedTools, tool_protocol: ChatToolProtocol) -> Self {
+    fn new(tools: std::sync::Arc<ValidatedTools>, tool_protocol: ChatToolProtocol) -> Self {
         Self {
             tools,
             tool_protocol,
@@ -1937,7 +1931,7 @@ mod tests {
     #[test]
     fn chat_base_response_status_uses_structured_retry_evidence() {
         let mut normalizer =
-            ChatStreamNormalizer::new(ValidatedTools::default(), ChatToolProtocol::Native);
+            ChatStreamNormalizer::new(ValidatedTools::default().into(), ChatToolProtocol::Native);
         let error = normalizer
             .push(&json!({
                 "base_resp": {"status_code": 500, "status_msg": "upstream unavailable"}
