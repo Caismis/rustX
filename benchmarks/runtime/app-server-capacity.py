@@ -250,7 +250,9 @@ shutdown_deadline_ms = 30000
         async def sample(name):
             diagnostic = await client.call('server/diagnostics', {})
             phases.append({'phase': name, 'monotonic_ns': time.monotonic_ns(),
-                           'process': counter(process.pid), 'diagnostics': diagnostic['snapshot']})
+                           'process': counter(process.pid), 'diagnostics': diagnostic['snapshot'],
+                           'notifications': dict(sum((owner.notifications for owner in clients),
+                                                     collections.Counter()))})
             write(out / 'phases.json', phases)
 
         async def attach(session, observer=True, owner=client):
