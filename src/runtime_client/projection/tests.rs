@@ -5119,8 +5119,8 @@ fn t14_t20_retained_cut_lookup_uses_exact_metadata_and_bounded_cursor_index() {
             events: Vec::new(),
             metadata: super::super::checkpoint::ProjectionMetadata {
                 read_cut: cut.clone(),
-                collections: Default::default(),
-                content: Default::default(),
+                collections: Arc::default(),
+                content: Arc::default(),
             },
         },
         1,

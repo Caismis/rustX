@@ -38,8 +38,8 @@ fn metadata() -> ProjectionMetadata {
             domain_revisions: crate::observation::metadata::MetadataFragment::default(),
             collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         },
-        collections: Default::default(),
-        content: Default::default(),
+        collections: Arc::default(),
+        content: Arc::default(),
     }
 }
 fn encoded<T: Serialize + schemars::JsonSchema>(value: &T) -> serde_json::Result<Vec<u8>> {
