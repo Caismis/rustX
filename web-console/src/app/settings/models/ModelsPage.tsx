@@ -10,7 +10,7 @@ import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
-import { IconApiOutline14, IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconPlusOutline16, IconRefreshOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
+import { IconApiOutline14, IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconRefreshOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { TypedUnitForm, UnitForm, UnitOutcomeNotice, useUnitEditing, type UnitOptions } from '../forms/bridge';
 import { JsonObjectEditor } from '../forms/fields';
 import { Advanced, Choice, ConfirmAction, Search } from '../primitives/aria';
@@ -45,9 +45,8 @@ const emptyModel = (provider = '', id = ''): Model => ({
   capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false },
 });
 
-/** ZCode's provider navigation/detail split and model dialog, bound to rustX's
- * native semantic units. Each Provider owns its connection protocol; its Models
- * inherit it in native resolution and never author a separate API format. */
+/** Provider and model settings backed by rustX's native semantic units.
+ * Each model inherits its provider's connection protocol. */
 export function ModelsPage({ client, host, target, source, scope, revision, models, profiles, focus, onFocus, onRefresh, refreshing = false }: ModelsPageProps) {
   const tx = useTranslation();
   const landing = useRef<HTMLElement>(null);
@@ -103,17 +102,17 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
   const application = observedResult(unitApplication(source.application, 'provider'));
   const closeModel = () => onFocus(selected ? { kind: 'provider', id: selected } : undefined);
   return <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={cards.section}>
-    <h3 className={cards.title}>{tx('settings:models-page.models')}</h3>
     <div className={cards.toolbar}>
-      <p>{tx('settings:models.description')}</p>
+      <h3>{tx('settings:models-page.models')}</h3>
       <div className={cards.headerActions}>
         {onRefresh && <Button size="sm" variant="outline" aria-label={tx('settings:settings.reload-configuration')} title={tx('settings:settings.reload-configuration')} disabled={refreshing} onClick={onRefresh}><IconRefreshOutline16/></Button>}
-        <Button size="sm" variant="primary" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>
+        <Button size="sm" variant="outline" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>
       </div>
     </div>
+    <p className={cards.description}>{tx('settings:models.description')}</p>
     <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
-    <div className={cards.splitPanel} data-selected={!!selected}>
-      <div className={cards.navigation}>
+    <div className={cards.layout}>
+      {!!navigationProviders.length && <div className={cards.navigation}>
         <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
         <h4>{tx('settings:models.custom-providers')}</h4>
         <GridList className={cards.providers} aria-label={tx('settings:models-page.providers')} selectionMode="single" disallowEmptySelection selectedKeys={selected ? [selected] : []}
@@ -137,9 +136,8 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
           })}
         </GridList>
         {!navigation.length && <p className={cards.emptyNavigation}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
-      </div>
-      <div className={cards.detailPane}>
-        {selected ? <>
+      </div>}
+      {selected ? <div className={cards.detailPane}>
           <ProviderConnection key={selected} scope={scope} revision={revision} id={selected} authored={providerEntry?.authored}
             inherited={scope === 'workspace' ? (providerEntry?.authored ? source.user.authored?.providers?.[selected] : providerEntry?.effective) : undefined}
             hasModels={selectedModels.length > 0}/>
@@ -152,10 +150,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
               scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
               onOpen={() => onFocus({ kind: 'model', id: entry.id, provider: selected })}/>)}
           </GridList> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
-        </> : <div className={cards.unselected}><IconApiOutline14 size={28}/><p>{tx('settings:models.empty-providers')}</p>
-          <Button size="sm" variant="outline" icon={<IconPlusOutline16/>} onClick={() => setAdding('provider')}>{tx('settings:models-page.add-provider')}</Button>
-        </div>}
-      </div>
+      </div> : <div className={cards.unselected}><IconApiOutline14 size={24}/><p>{tx('settings:models.empty-providers')}</p></div>}
     </div>
     <Advanced title={tx('settings:models-page.default-model-for-new-sessions')}>
       <UnitForm<ModelLayer> title={tx('settings:models-page.default-model')} authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
@@ -208,7 +203,7 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
         renderTrigger={(open, ref) => <AriaButton ref={ref} className={cards.iconButton} aria-label={removeLabel} isDisabled={removeDisabled} onPress={open}>
           {restoresGlobal ? <IconRefreshOutline16 size={14}/> : <IconTrashOutline16 size={14}/>}
         </AriaButton>}/>}
-      <Switch className={cards.switch} checked={!model.hidden && !providerHidden} label={tx('settings:models.show-model', { p0: model.id })}
+      <Switch checked={!model.hidden && !providerHidden} label={tx('settings:models.show-model', { p0: model.id })}
         disabled={!entry.authored || providerHidden || !unit.admitted || unit.draft || unit.awaitingObservation}
         onChange={checked => unit.apply({ ...model, hidden: !checked })}/>
     </div>

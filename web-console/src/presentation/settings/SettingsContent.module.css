@@ -1,6 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted ModelsSection and plugin fields/inventory; see PROVENANCE.md. */
 .settings { display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0; max-width: 760px; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 22px; }
-.settings[data-settings-section=models] { max-width: 1040px; }
 .settings h2 { margin: 0; font-size: 20px; line-height: 28px; font-weight: 500; }
 .settings h3 { margin: 18px 0 10px; font-size: 16px; font-weight: 500; }
 .settings h4 { margin: 14px 0 8px; font-size: 14px; font-weight: 500; }

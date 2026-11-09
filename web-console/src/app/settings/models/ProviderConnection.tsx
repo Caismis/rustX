@@ -131,7 +131,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
           }}/>
           : <span>{name}</span>}
       </h3>
-      {!creating && <Switch className={cards.switch} checked={!value.hidden} label={tx('settings:models.show-provider', { p0: name })}
+      {!creating && <Switch checked={!value.hidden} label={tx('settings:models.show-provider', { p0: name })}
         disabled={!authored || locked || endpointError || credentialError} onChange={checked => edit({ ...value, hidden: !checked }, 'now')}/>}
       <ConfirmAction
         label={tx('settings:bridge.remove-value', { p0: title })}

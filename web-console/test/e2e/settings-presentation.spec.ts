@@ -119,7 +119,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     if (references[name]) await expectStableScreenshot(settings, references[name]);
   }
 
-  // Settings forms retain their geometry; Provider cards use pinned Harness ModelsSection geometry.
+  // Provider cards and the general Settings forms share the Harness spacing and radius.
   await openSettingsPage(page, 'Agent');
   const identity = settings.getByRole('form', { name: 'Agent name' });
   await expect(identity.getByRole('button', { name: 'Configuration details', exact: true })).toHaveCount(0);
@@ -134,7 +134,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
   });
-  expect(row.height).toBeGreaterThanOrEqual(32); expect(row.padding).toBe('4px 8px'); expect(row.radius).toBe('8px');
+  expect(row.height).toBeGreaterThanOrEqual(42); expect(row.padding).toBe('8px 12px'); expect(row.radius).toBe('16px');
 
   // Provider → detail keeps status and actions next to the object.
   await settings.getByRole('row', { name: 'transport', exact: true }).click();

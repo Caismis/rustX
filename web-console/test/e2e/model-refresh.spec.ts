@@ -319,7 +319,9 @@ test('deleting the default and then the last model preserves old conversations a
   } finally { await native.shutdown(); await fixture.stop(false); }
 });
 
-test('deleting a provider removes its models and keeps the workspace and old conversation usable', async ({page}) => {
+for (const replaceLastProvider of [false, true]) test(replaceLastProvider
+  ? 'replacing the last provider refreshes new and old conversation model pickers without a reload'
+  : 'deleting a provider removes its models and keeps the workspace and old conversation usable', async ({page}) => {
   const fixture = await startDogfood('web_model_deletion');
   const wire = await wireProbe(page);
   const native = await AppServerHost.connectRemote({endpoint:fixture.endpoint, token:fixture.token});
@@ -332,7 +334,8 @@ model = "fixture/console-model"
 [agent.model.title_model]
 mode = "explicit"
 model = "fixture/second-model"
-
+`);
+    if (!replaceLastProvider) appendFileSync(fixture.settings, `
 [providers.alternative]
 protocol = "openai_chat_completions"
 base_url = "${fixture.providerUrl}/v1"
@@ -380,11 +383,52 @@ compat = { chat_reasoning_replay = "omit" }
     const config = readFileSync(fixture.settings, 'utf8');
     expect(config).not.toContain('[providers.fixture]');
     expect(config).not.toContain('[models."fixture/');
-    expect(config).toContain('[providers.alternative]');
     expect(readFileSync(`${fixture.workspaceA}/rustx.toml`, 'utf8')).toContain('workspace-alias');
+    const oldRow = page.locator(`button[data-session-id="${oldId}"]`);
+    const unavailable = page.getByText('This conversation’s model is unavailable. Choose another model to continue.', {exact:true});
+    const replacementModel = replaceLastProvider ? 'alternative/second-model' : 'alternative/replacement';
+
+    if (replaceLastProvider) {
+      await chooseWorkspace(page, 'Workspace A');
+      await expect(page.getByText(/No model is available\. Add or enable a model in Settings\./).first()).toBeVisible();
+      await expect(send).toBeDisabled();
+      await oldRow.click();
+      await expect(history).toBeVisible();
+      await expect(unavailable).toBeVisible();
+      await openSettingsPage(page, 'Models');
+      await page.getByRole('button', {name:'+ Add Provider', exact:true}).click();
+      const naming = page.getByRole('dialog', {name:'Add Provider', exact:true});
+      await naming.getByLabel('New Provider identity', {exact:true}).fill('alternative');
+      await naming.getByRole('button', {name:'Continue', exact:true}).click();
+      const connection = page.getByRole('form', {name:'Provider alternative', exact:true});
+      await connection.getByLabel('Base URL', {exact:true}).fill(`${fixture.providerUrl}/v1`);
+      await connection.getByLabel('API Key', {exact:true}).fill('fixture-only');
+      await connection.getByLabel('API Key', {exact:true}).press('Enter');
+      const addModel = page.getByRole('button', {name:'+ Add Model', exact:true});
+      await expect(addModel).toBeEnabled();
+      await addModel.click();
+      const dialog = page.getByRole('dialog', {name:'Add Model', exact:true});
+      await dialog.getByLabel('Model ID', {exact:true}).fill('second-model');
+      await dialog.getByRole('button', {name:'Save Add Model', exact:true}).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(page.getByRole('row', {name:replacementModel, exact:true})).toBeVisible();
+
+      // The resident conversation must see the new catalog before another
+      // Session can bootstrap publication for its Workspace.
+      await returnHome(page);
+      await oldRow.click();
+      await expect(history).toBeVisible();
+      await expect(unavailable).toBeVisible();
+      await expect(trigger).toBeEnabled();
+      await trigger.click();
+      await expect(page.getByRole('menuitemradio', {name:replacementModel, exact:true})).toBeEnabled();
+      await page.keyboard.press('Escape');
+    } else {
+      expect(config).toContain('[providers.alternative]');
+    }
 
     await chooseWorkspace(page, 'Workspace A');
-    await expect(trigger).toContainText('alternative/replacement');
+    await expect(trigger).toContainText(replacementModel);
     await input.fill('Start with the replacement');
     wire.holdNext('thread/start');
     await send.click();
@@ -396,24 +440,25 @@ compat = { chat_reasoning_replay = "omit" }
     await fixture.release('new-conversation-ready');
     await expect(page.getByText('New conversation uses the replacement.', {exact:true})).toBeVisible();
 
-    await page.locator(`button[data-session-id="${oldId}"]`).click();
+    await oldRow.click();
     await expect(history).toBeVisible();
     await expect(trigger).toContainText('fixture/console-model');
-    await expect(page.getByText('This conversation’s model is unavailable. Choose another model to continue.', {exact:true})).toBeVisible();
+    await expect(unavailable).toBeVisible();
     await trigger.click();
     await expect(page.locator('[data-model-menu]')).toBeVisible();
     const drill = page.getByRole('menuitem', {name:'Model', exact:true});
     if (await drill.isVisible()) await drill.click();
     await expect(page.getByRole('menuitemradio', {name:'workspace-alias', exact:true})).toHaveCount(0);
-    const replacement = page.getByRole('menuitemradio', {name:'alternative/replacement', exact:true});
+    const replacement = page.getByRole('menuitemradio', {name:replacementModel, exact:true});
     await expect(replacement).toBeEnabled();
     await replacement.click();
-    await expect(trigger).toContainText('alternative/replacement');
+    await expect(trigger).toContainText(replacementModel);
     await input.fill('Continue the old conversation');
     await send.click();
     await expect(page.getByText('Old conversation continues after reselecting.', {exact:true})).toBeVisible();
     const selection = (await native.readSettings(oldId)).settings.model;
     expect(selection).toMatchObject({summaryModel:{mode:'session'}, titleModel:{mode:'session'}});
+    expect(wire.requests.filter(request => request.method === 'initialize')).toHaveLength(1);
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
     throw error;
