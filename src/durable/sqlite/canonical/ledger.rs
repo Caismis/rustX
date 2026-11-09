@@ -510,7 +510,7 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
     let _ = optional_display_layout(transaction, || {
         transaction
             .execute_cached(
-                "INSERT INTO transcript_observation_readiness(position,ready) VALUES(?1,0)",
+                "INSERT INTO transcript_observation_readiness(position) VALUES(?1)",
                 [position],
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;

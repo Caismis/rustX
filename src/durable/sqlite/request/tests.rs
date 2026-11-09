@@ -2247,11 +2247,8 @@ fn t19_t20_journal_readiness_is_exact_committed_and_recovered_on_reinstall() {
     assert_eq!(observer.ready.lock().unwrap().len(), wakes);
     assert_eq!(store.observation_ready_frontier(2, 3).unwrap(), 2);
     let connection = store.lock().unwrap();
-    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>0 AND sequence<=3", [], |row| row.get(3)).unwrap();
-    assert!(
-        plan.contains("event_observation_readiness_holes_idx"),
-        "{plan}"
-    );
+    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(sequence) FROM event_observation_readiness WHERE sequence>0 AND sequence<=3", [], |row| row.get(3)).unwrap();
+    assert!(plan.contains("USING INTEGER PRIMARY KEY"), "{plan}");
     drop(connection);
     drop(store);
     let reopened = Arc::new(SqliteConversationStore::open(id, &path).unwrap());

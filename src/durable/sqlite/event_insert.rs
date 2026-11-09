@@ -99,11 +99,9 @@ fn schema_versions(connection: &Connection) -> Result<(i64, i64), ConversationSt
 fn no_custom_triggers(connection: &Connection) -> Result<bool, ConversationStoreError> {
     #[cfg(test)]
     GUARD_SCANS.with(|count| count.set(count.get() + 1));
-    let event = "CREATE TRIGGER event_readiness_source_deleted AFTER DELETE ON main.events\n             BEGIN\n                 DELETE FROM event_observation_readiness WHERE sequence=OLD.sequence;\n             END";
-    let transcript = "CREATE TRIGGER transcript_readiness_source_deleted AFTER DELETE ON main.transcript_order\n             BEGIN\n                 DELETE FROM transcript_observation_readiness WHERE position=OLD.position;\n             END";
     connection.query_row_cached(
         "SELECT NOT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='trigger') AND NOT EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE type='trigger' AND (sql IS NULL OR sql NOT IN(?1,?2)))",
-        params![event, transcript], |row| row.get(0),
+        params![observation_readiness::EVENT_DELETION, observation_readiness::TRANSCRIPT_DELETION], |row| row.get(0),
     ).map_err(|error|super::sqlite_error(&error,error.to_string()))
 }
 

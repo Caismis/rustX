@@ -42,6 +42,13 @@ five-second deadline. Loaded bytes are caches. Native field/page ordinals, posit
 settlement heads and publication frontiers remain authority despite cache eviction
 (C1, N3). Native Journal readiness and direct-publication provenance index existing
 source facts; they create no second journal, client ACK registry or execution owner.
+Within a connection epoch, readiness retains only pending Journal and transcript
+positions. Releasing a native batch deletes its pending positions and unions its
+exact direct Journal runs in the same TEMP transaction. Direct ranges are
+disjoint and coalesced. A native deletion removes its position from the range;
+rollback restores the original range and holes. Independent opens start at the
+committed baseline with no direct claims. The publisher wakes readers only after
+the complete release commits.
 
 A successful manual compaction command returns its own native
 `ManualCompactionOutcome`: generation, checkpoint identity, activation identity,

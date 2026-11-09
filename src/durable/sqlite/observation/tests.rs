@@ -400,9 +400,6 @@ fn t14_t19_t20_transcript_ready_prefix_fences_prior_terminal_without_position_mi
     assert!(store.mark_observation_transcript_ready(75).is_err());
     assert!(store.mark_canonical_transcript_ready(1, 74).is_err());
     let connection = store.lock().unwrap();
-    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>0 AND position<=74",[],|row|row.get(3)).unwrap();
-    assert!(
-        plan.contains("transcript_observation_readiness_holes_idx"),
-        "{plan}"
-    );
+    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(position) FROM transcript_observation_readiness WHERE position>0 AND position<=74",[],|row|row.get(3)).unwrap();
+    assert!(plan.contains("USING INTEGER PRIMARY KEY"), "{plan}");
 }
