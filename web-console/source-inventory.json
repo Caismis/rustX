@@ -8357,6 +8357,7 @@
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
         "../../../../../protocol/app-server/v77",
+        "../../../client/app-server",
         "../../../locale/react",
         "../../../presentation/primitives/Button",
         "../../../presentation/primitives/Switch",
@@ -8366,11 +8367,11 @@
         "../../settings/SettingsFeedback",
         "../../settings/SettingsScopeMenu",
         "../../settings/forms/bridge",
-        "../../settings/forms/controls",
         "../../settings/models/ModelsPage",
         "../../settings/primitives/aria",
         "../../settings/projection",
         "../shared/inventory",
+        "./AgentSkillFields",
         "./AgentToolFields",
         "./Subagents.module.css",
         "react"
@@ -8414,7 +8415,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3f1e5550b88d1762b7fb8dfcd9c062a9d2262bebd71b610316a39ac8f984e8cf"
+      "local_sha256": "65c1af4aab616c91837fff33188fc04eb66de89d4f21bc54dc5e937b91b63cbd"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

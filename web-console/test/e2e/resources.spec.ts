@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {startDogfood} from './dogfood-server';
 import {routeWorkspaceHost} from './workspace-host';
-import {choose,confirmSettingsAction,connectRemote,newSubagent,openSettingsPage,returnHome} from './shell-actions';
+import {confirmSettingsAction,connectRemote,newSubagent,openSettingsPage,returnHome} from './shell-actions';
 import {captureEvidence} from './screenshot';
 import {wireProbe} from './wire-probe';
 
@@ -49,6 +49,8 @@ for(const width of [1440,390]) test(`independent resources have exact global and
    if(instructionFile!==skillFile)symlinkSync(instructionFile,skillFile);
    writeFileSync(join(root,'mcp.toml'),`[mcp_servers.${prefix}-server]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(mcpScript)}]\n`);
   }
+  const localMcp = join(workspaceRoot, 'mcp.toml');
+  writeFileSync(localMcp, readFileSync(localMcp, 'utf8') + '\n[mcp_servers.offline-server]\ntype = "stdio"\ncommand = "/missing-mcp-fixture"\n');
   const projectSkills=join(workspaceRoot,'skills','manual');
   mkdirSync(projectSkills,{recursive:true});
   writeFileSync(join(projectSkills,'manual.md'),'---\nname: manual-guide\ndescription: Manual skill.\ndisable-model-invocation: true\n---\n# Manual\nInstructions in a standalone file.');
@@ -123,13 +125,19 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
   await expect(naming.getByLabel('Name', { exact: true })).toHaveValue('auditor');
   await expect(naming.getByLabel('System prompt', { exact: true })).toHaveValue('Check the changes carefully.');
-  await choose(naming, 'Available tools', 'Choose tools');
   await naming.getByRole('checkbox', { name: 'read', exact: true }).check();
   const draftMcp = naming.getByRole('group', { name: 'MCP tools', exact: true });
   const draftWorkflows = naming.getByRole('group', { name: 'Workflows', exact: true });
-  await expect(draftMcp.getByRole('region', { name: 'Global' })).toContainText('global-server');
-  await draftMcp.getByRole('region', { name: 'Workspace' }).getByRole('button', { name: 'View tools local-server' }).click();
-  await draftMcp.getByRole('checkbox', { name: 'render_image' }).check();
+  await expect(draftMcp.getByRole('region', { name: 'Global' }).getByRole('checkbox', { name: 'render_image' })).toBeVisible();
+  const localTools = draftMcp.getByRole('region', { name: 'Workspace' });
+  await localTools.getByRole('checkbox', { name: 'render_image' }).check();
+  await expect(localTools.getByRole('button', { name: 'Retry discovering tools from offline-server' })).toBeVisible();
+  await captureEvidence(draftMcp, `subagent-mcp-${width}`);
+  const draftSkills = naming.getByRole('group', { name: 'Skills', exact: true });
+  await expect(naming.getByRole('heading', { name: 'Advanced options' })).toBeVisible();
+  await expect(draftSkills.getByRole('region', { name: 'Global' }).getByRole('checkbox', { name: 'catalog-33' })).toBeVisible();
+  await draftSkills.getByRole('region', { name: 'Workspace' }).getByRole('checkbox', { name: 'local-guide' }).check();
+  await expect(draftSkills.getByRole('checkbox', { name: 'manual-guide' })).toHaveCount(0);
   await expect(draftWorkflows.getByRole('group', { name: 'Global' }).getByRole('checkbox', { name: 'global_flow' })).toBeVisible();
   await draftWorkflows.getByRole('group', { name: 'Workspace' }).getByRole('checkbox', { name: 'local_flow' }).check();
   await naming.getByRole('button', { name: 'Configuration scope', exact: true }).click();
@@ -138,8 +146,9 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(naming.getByRole('checkbox', { name: 'read', exact: true })).toBeChecked();
   await expect(draftMcp.getByRole('region', { name: 'Workspace' })).toHaveCount(0);
   await expect(draftWorkflows.getByRole('group', { name: 'Workspace' })).toHaveCount(0);
-  await draftMcp.getByRole('button', { name: 'View tools global-server' }).click();
   await draftMcp.getByRole('checkbox', { name: 'render_image' }).check();
+  await expect(draftSkills.getByRole('region', { name: 'Workspace' })).toHaveCount(0);
+  await draftSkills.getByRole('checkbox', { name: 'global-guide' }).check();
   await draftWorkflows.getByRole('checkbox', { name: 'global_flow' }).check();
   const guidance = naming.getByRole('switch', { name: 'Include AGENTS.md' });
   await expect(guidance).toBeChecked();
@@ -154,6 +163,8 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   expect(savedAgent).toContain('builtin = ["read"]');
   expect(savedAgent).toContain('global-server = ["render_image"]');
   expect(savedAgent).toContain('workflows = ["global_flow"]');
+  expect(savedAgent).toContain('skills = ["global-guide"]');
+  expect(savedAgent).not.toContain('local-guide');
   expect(savedAgent).toContain("inherit = false");
   expect(savedAgent).not.toContain('local-server');
   expect(savedAgent).not.toContain('local_flow');
@@ -164,6 +175,8 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
   await agents.getByRole('button', { name: 'auditor', exact: true }).click();
   await expect(editor.getByLabel('Description', { exact: true })).toHaveValue('Reviews code');
+  await expect(editor.getByRole('group', { name: 'MCP tools', exact: true }).getByRole('checkbox', { name: 'render_image' })).toBeChecked();
+  await expect(editor.getByRole('group', { name: 'Skills', exact: true }).getByRole('checkbox', { name: 'global-guide' })).toBeChecked();
   await captureEvidence(agents, `edit-subagent-${width}`);
   await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
   await agents.getByRole('button', { name: 'New subagent', exact: true }).click();

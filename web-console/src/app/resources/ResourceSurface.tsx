@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
@@ -22,6 +22,7 @@ import { McpActions, McpPage } from './mcp/McpPage';
 import { useMcpProbes } from './mcp/useMcpProbes';
 import { ResourceBrowser } from './shared/ResourceBrowser';
 import { AgentEditor, type AgentDraft } from './subagents/AgentEditor';
+import type { LoadMcpTools } from './subagents/AgentToolFields';
 import { SubagentList } from './subagents/SubagentList';
 import type { ResourceModule, McpFocus } from './types';
 import css from './ResourceSurface.module.css';
@@ -89,18 +90,19 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     resetScope();
   }
   const changeCreationScope = (next: SettingsTarget, draft: AgentDraft) => {
-    const { tools, workflows: _workflows, ...fields } = draft;
+    const { tools, workflows: _workflows, skills: _skills, ...fields } = draft;
     setNewAgent(tools?.builtin?.length ? { ...fields, tools: { builtin: tools.builtin } } : fields);
     setQuery('');
     setTab(next.kind === 'user' ? 'global' : 'workspace');
     if (next.kind === 'workspace') { chosen.current = true; setWorkspace(next.id); }
   };
-  const loadMcpTools = async (server: string) => {
+  const loadMcpTools = useCallback<LoadMcpTools>(async (scope, server) => {
+    if (scope === 'workspace' && !workspaceId) return;
     const port = createWorkflowPort({ client, host: () => host, hostAuthority: authority.capture(),
-      scope: target.kind === 'workspace' ? { kind: 'workspace', workspaceId: target.id } : USER_SCOPE });
+      scope: scope === 'workspace' && workspaceId ? { kind: 'workspace', workspaceId } : USER_SCOPE });
     const catalog = await readToolCatalog(port, server);
     return catalog.sources.find(entry => entry.source_id === server);
-  };
+  }, [client, host, authority, workspaceId]);
   const listTitle = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef(false);
   useEffect(() => {
@@ -118,7 +120,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
       {available && source ? <SettingsActorContext value={actor}><SourceContext value={source}>
         <fieldset className={css.editor} disabled={!editable}>
           <AgentEditor source={source} target={target} host={host} name={resourceFocus} initialDraft={newAgent}
-            onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
+            client={client} discover={visible && editable} onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
             models={catalogIdentities(source, scope, 'models')} profiles={catalogProfiles(source, scope)} />
         </fieldset>
       </SourceContext></SettingsActorContext> : <>

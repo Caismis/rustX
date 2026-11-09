@@ -366,7 +366,6 @@ it('a named Agent preserves and edits the complete explicit Summary Model indepe
   const source = cfg3Source();
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={models} profiles={profiles} name="reviewer" />, { source, context: source });
-  fireEvent.click(screen.getByRole('button', { name: 'Advanced options' }));
   const commit = async (expected: ModelLayer) => {
     const before = write.mock.calls.length;
     const form = screen.getByRole('form', { name: 'Agent reviewer' }) as HTMLFormElement;
@@ -402,7 +401,6 @@ it('a named Agent preserves and edits the complete explicit Title Model independ
   const source = cfg3Source();
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={models} profiles={profiles} name="reviewer" />, { source, context: source });
-  fireEvent.click(screen.getByRole('button', { name: 'Advanced options' }));
   const commit = async (expected: ModelLayer) => {
     const before = write.mock.calls.length;
     const form = screen.getByRole('form', { name: 'Agent reviewer' }) as HTMLFormElement;
@@ -448,7 +446,6 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
       outer: screen.getByLabelText(tx('settings:models-page.request-parameter-overrides')) as HTMLElement,
     };
   };
-  fireEvent.click(screen.getByRole('button', { name: 'Advanced options' }));
   const english = labels('en');
   expect([english.limit.value, readJson(english.params), readJson(english.outer)]).toEqual(['2048', '{\n  "temperature": 0.2\n}', '{\n  "temperature": 0.7\n}']);
   expect(english.profile.textContent).toContain('deep');
@@ -481,7 +478,6 @@ it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an 
   const source = cfg3Source();
   source.agents = [{ name: 'optional', scope: 'workspace', source: { path: '/agent.toml', revision: 'optional-r1', authored } }];
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={[]} profiles={{}} name="optional" />, { source, context: source });
-  await chooseOption('Available tools', 'Choose tools');
   fireEvent.click(screen.getByLabelText('read'));
   expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Save Agent optional' }));

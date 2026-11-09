@@ -87,23 +87,17 @@
 .form textarea { min-height: 64px; height: 72px; }
 .validation { color: var(--dsw-alias-state-error-primary); font-size: 12px; }
 
-.tools { min-width: 0; }
-.tools > div:has(> button[aria-haspopup=listbox]) {
+.toolChoices, .advanced {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 6px 8px;
-  align-items: center;
-  padding: 0;
-
-  & > span:first-of-type { grid-column: 1 / -1; }
-  & > button { width: auto; }
-  & > [slot=description] { grid-column: 2; }
+  gap: 12px;
+  min-width: 0;
 }
-.toolChoices {
-  display: grid;
-  gap: 10px;
-  margin-top: 8px;
+.advanced {
+  padding-top: 14px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
 }
+.toolChoices h2, .advanced h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.toolChoicesHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
 .form fieldset:not(.body, .fields) {
   min-width: 0;
   border: 1px solid var(--dsw-alias-border-l2);
@@ -111,24 +105,19 @@
   margin: 8px 0;
   padding: 10px;
 }
-.form :is(.nativeTools, .toolOptions) > fieldset {
+.form .nativeTools > fieldset {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 116px), 1fr));
   gap: 4px 12px;
   margin: 0;
 }
-.form .toolOptions > fieldset {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 142px), 1fr));
-  padding: 0;
-  border: 0;
-}
 .toolChoices legend { margin-bottom: 6px; }
 .toolChoices label { overflow-wrap: anywhere; }
 .toolChoices input { flex: none; }
-.form fieldset.scopedTools { display: grid; gap: 10px; margin: 0; }
-.toolScope { min-width: 0; }
-.toolScope h4, .toolScope > fieldset > legend {
-  margin: 0 0 4px;
+.form fieldset.scopedTools { display: grid; gap: 12px; margin: 0; }
+.scopedChoices { min-width: 0; }
+.scopedChoices h4 {
+  margin: 0 0 6px;
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   font-weight: 500;
@@ -138,17 +127,54 @@
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
 }
+.serverList { display: grid; gap: 8px; }
 .toolServer {
+  min-width: 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3);
+}
+.toolServerHead, .skillControls, .toolSwitch, .toolStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.toolServerHead { min-width: 0; flex-wrap: wrap; padding: 8px 10px; }
+.toolServerHead svg { flex: none; color: var(--dsw-alias-label-secondary); }
+.toolServerHead strong { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.toolSwitch, .skillControls { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.skillControls { justify-content: flex-end; }
+.toolStatus { justify-content: space-between; padding: 6px 10px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.resourceChoices {
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 192px), 1fr));
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+.toolServer .resourceChoices { padding: 4px 6px 6px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.form .resourceChoice {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
   gap: 8px;
   min-width: 0;
-  padding: 6px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
 }
-.toolServer + .toolServer { border-top: 1px solid var(--dsw-alias-border-l2); }
-.toolServerHead, .toolSwitch { display: flex; align-items: center; gap: 8px; }
-.toolServerHead { flex-wrap: wrap; }
-.toolServerHead strong { margin-inline-end: auto; overflow-wrap: anywhere; }
-.toolSwitch { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.resourceChoice:hover, .resourceChoice:has(input:checked) { background: var(--dsw-alias-interactive-bg-hover); }
+.resourceChoice input { flex: none; margin-block-start: 2px; }
+.resourceChoice > span { min-width: 0; }
+.choiceName, .choiceDescription { display: block; overflow-wrap: anywhere; }
+.choiceName { color: var(--dsw-alias-label-primary); font-size: 13px; }
+.choiceDescription {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
 .form .guidance {
   display: flex;
   align-items: center;

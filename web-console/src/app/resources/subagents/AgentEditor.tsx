@@ -1,14 +1,14 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
 import { useEffect, useId, useRef } from 'react';
 import type { NamedAgentProfileDocument, SourceSettings } from '../../../../../protocol/app-server/v77';
+import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { IconChevronRightOutline14 } from '../../../presentation/primitives/icons';
 import { Switch } from '../../../presentation/primitives/Switch';
 import settings from '../../../presentation/settings/SettingsContent.module.css';
 import { DefinitionNotice, UnitOutcomeNotice, UnitReset, useUnitEditing } from '../../settings/forms/bridge';
-import { Selection } from '../../settings/forms/controls';
-import { Advanced, Choice, ConfirmAction } from '../../settings/primitives/aria';
+import { Choice, ConfirmAction } from '../../settings/primitives/aria';
 import { AgentModelOptions, ModelProfileChoice, type ModelProfiles } from '../../settings/models/ModelsPage';
 import { SettingsNotice } from '../../settings/SettingsFeedback';
 import { SettingsScopeMenu } from '../../settings/SettingsScopeMenu';
@@ -17,18 +17,20 @@ import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { extensionEntries } from '../shared/inventory';
 import css from './Subagents.module.css';
 import { AgentToolFields, ManagedToolSelections, type LoadMcpTools } from './AgentToolFields';
+import { AgentSkillFields } from './AgentSkillFields';
 
 export type AgentDraft = NamedAgentProfileDocument & { name?: string };
 
 interface Props {
   source: SourceSettings; target: SettingsTarget; host?: ProductHostWorkspaces; name?: string;
   models: string[]; profiles: ModelProfiles; initialDraft?: AgentDraft;
+  client?: AppServerClient; discover?: boolean;
   loadMcpTools?: LoadMcpTools;
   onScopeChange?: (target: SettingsTarget, draft: AgentDraft) => void;
   onClose: () => void;
 }
 
-export function AgentEditor({ source, target, host, name, models, profiles, initialDraft, loadMcpTools, onScopeChange, onClose }: Props) {
+export function AgentEditor({ source, target, host, name, models, profiles, initialDraft, client, discover = true, loadMcpTools, onScopeChange, onClose }: Props) {
   const tx = useTranslation();
   const scope = target.kind;
   const creating = name === undefined;
@@ -76,6 +78,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   const modelChoices = [...new Set([...models, ...(model?.model ? [model.model] : [])])];
   const update = (changes: Partial<AgentDraft>) => unit.edit({ ...value, ...changes });
   const guidance = value.agents_md ?? {};
+  const resourceScope = unit.definition === 'inherited' ? 'user' : scope;
 
   return <div className={css.editor}>
     <nav className={css.breadcrumb} aria-label={tx('resources:subagents.navigation')}>
@@ -131,8 +134,8 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
             <label>{tx('settings:extension-detail.description')}
               <input value={value.description ?? ''} onChange={event => update({ description: event.target.value })} />
             </label>
-            <AgentToolFields key={unit.resets} source={source} scope={unit.definition === 'inherited' ? 'user' : scope}
-              value={value} change={update} loadMcpTools={loadMcpTools} />
+            <AgentToolFields source={source} scope={resourceScope}
+              value={value} change={update} loadMcpTools={discover ? loadMcpTools : undefined} />
             <div className={css.prompt}>
               <label htmlFor={promptId}>{tx('resources:subagents.prompt')}</label>
               <textarea id={promptId} rows={3} value={value.instructions ?? ''} onChange={event => update({ instructions: event.target.value })} />
@@ -142,10 +145,12 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
               <Switch label={tx('resources:subagents.inject-guidance')} checked={guidance.inherit ?? true}
                 onChange={inherit => update({ agents_md: { ...guidance, inherit } })} />
             </div>
-            <Advanced title={tx('settings:agent-page.advanced-options')}>
+            <div className={css.advanced}>
+              <h2>{tx('settings:agent-page.advanced-options')}</h2>
+              <AgentSkillFields client={client} source={source} scope={resourceScope} active={discover}
+                value={value.skills ?? []} change={skills => update({ skills })} />
               {model && <AgentModelOptions value={model} change={next => update({ model: next })} models={models} profiles={profiles} />}
               <ManagedToolSelections tools={value.tools} change={tools => update({ tools })} />
-              <Selection label={tx('settings:extension-detail.skill-prompt-visibility')} value={value.skills ?? []} change={skills => update({ skills })} />
               <label>{tx('settings:extension-detail.child-timeout-ms')}
                 <input type="number" min="1" value={value.timeout_ms ?? ''} onChange={event => update({ timeout_ms: event.target.value || null })} />
               </label>
@@ -157,7 +162,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
                   {id === 'agent_status' ? tx('settings:extension-detail.agent-status') : id}
                 </label>)}
               </fieldset>
-            </Advanced>
+            </div>
           </fieldset>
           <UnitOutcomeNotice title={formName} outcome={unit.outcome} />
           <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx('settings:forms.changed-elsewhere') : undefined}/>

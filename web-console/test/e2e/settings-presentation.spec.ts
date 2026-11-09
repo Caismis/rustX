@@ -361,8 +361,9 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await expect(agents.getByLabel('Description',{exact:true})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   await expectAccessible(page, '[data-resource-module="subagents"]');
+  await expect(agents.getByRole('heading', { name: 'Advanced options' })).toBeVisible();
+  await expect(agents.getByRole('group', { name: 'Skills', exact: true }).getByRole('checkbox', { name: 'review' })).toBeChecked();
   await expectStableScreenshot(page,'subagent-narrow-dark.png');
-  await agents.getByRole('button', { name: 'Advanced options' }).click();
   await expect(agents.getByText('Delegated Agents', { exact: true })).toHaveCount(0);
   await expect(agents.getByText('Project guidance files', { exact: true })).toHaveCount(0);
   await openSettingsPage(page,'Extensions');

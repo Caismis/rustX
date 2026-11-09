@@ -164,6 +164,14 @@ if (variant.get('write') === 'held') {
     for (const release of releases.splice(0)) release();
   };
 }
+server.handlers.set('skills/list', request => {
+  if (request.method !== 'skills/list') throw new Error('Expected skill catalog');
+  return { type: 'skills', page: { data: [{
+    catalog: { name: 'review', description: 'Review changes and report findings.', location: '/workspace/.agents/skills/review/SKILL.md' },
+    provenance: { name: 'review', source: request.params.target.kind, location: '/workspace/.agents/skills/review/SKILL.md', shadowed: [] },
+    metadata_revision: 'review-1', disable_model_invocation: false,
+  }], diagnostics: [], diagnostics_truncated: false, revision: 'skills-1' } };
+});
 server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: {revision:'fixture',inline:effective,fields:[],collections:[]} }));
 // The native requests this page issued, for browser assertions of exact
 // identity, ordering and request counts. Test fixture only.
