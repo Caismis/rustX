@@ -1269,7 +1269,8 @@ async fn complete_stateless_output_replays_text_and_calls_once_and_rejects_edits
                 deliveries: Vec::new(),
                 truncation: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })),
     );
     let events = collect_events(&adapter(&server), request.clone()).await;
@@ -1391,7 +1392,8 @@ async fn continuation_tail_preserves_tool_then_users_order() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })),
         rustx::model::ModelInputMessage::Canonical(user("A")),
         rustx::model::ModelInputMessage::Canonical(user("B")),

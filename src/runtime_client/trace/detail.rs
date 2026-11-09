@@ -409,7 +409,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             });
             let detail = message_detail(&message).unwrap();
             assert_eq!(detail.truncated, oversized.is_some());

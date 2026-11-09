@@ -283,7 +283,7 @@ fn tool_message_with_tool(
         id: MessageId::new(message_id),
         tool_call_id: call_id.clone(),
         tool_id,
-        result: successful_tool_result(),
+        result: successful_tool_result().into(),
     })
 }
 
@@ -2042,7 +2042,8 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
                         truncation: None,
                         workflow: None,
                         managed_output: None,
-                    },
+                    }
+                    .into(),
                 },
             ),
             envelope(
@@ -2243,7 +2244,8 @@ fn canonical_proposal_can_execute_and_commit_its_tool_result() {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
         ))
         .expect("tool outcome");

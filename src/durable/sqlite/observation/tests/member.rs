@@ -252,7 +252,7 @@ pub(in crate::durable::sqlite) fn commit_original_tool_result(
         ),
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
-        result: result.clone(),
+        result: result.clone().into(),
     });
     let (committed, receipt) = store
         .append_canonical_with_event(
@@ -288,7 +288,7 @@ fn t08_t12_t19_successful_tool_j_before_c_keeps_original_content_and_available_s
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
-                result: result.clone(),
+                result: result.clone().into(),
             },
         ))
         .unwrap();

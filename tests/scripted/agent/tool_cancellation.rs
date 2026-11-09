@@ -594,7 +594,7 @@ async fn issue136_completion_wins_before_cancellation() {
         messages[0].result.status,
         ToolExecutionStatus::Success
     ));
-    assert_eq!(messages[0].result, success_result("real result"));
+    assert_eq!(messages[0].result.as_ref(), &success_result("real result"));
     assert_eq!(
         model.requests().len(),
         1,

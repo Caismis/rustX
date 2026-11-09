@@ -593,7 +593,8 @@ impl Capture {
                 ),
                 truncation: bounded_clone(&tool.result.truncation, 1024).flatten(),
                 managed_output: bounded_clone(&tool.result.managed_output, 1024).flatten(),
-            },
+            }
+            .into(),
         })
     }
 

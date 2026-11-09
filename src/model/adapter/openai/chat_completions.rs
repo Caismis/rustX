@@ -1849,7 +1849,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let encoded = serde_json::to_string(
             &translate_tool_message(
@@ -1900,7 +1901,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             };
             let encoded = serde_json::to_value(
                 translate_tool_message(
@@ -1960,7 +1962,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let encoded = serde_json::to_value(
             translate_tool_message(

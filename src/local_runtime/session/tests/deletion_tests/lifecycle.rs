@@ -1256,9 +1256,10 @@ fn cloned_history_keeps_source_locator_without_transferring_namespace_ownership(
     let MessageBlock::Tool(tool) = &mut history[2] else {
         panic!("tool");
     };
-    tool.result.managed_output = Some(Box::new(ManagedOutputContinuation::Complete {
-        locator: locator.clone(),
-    }));
+    std::sync::Arc::make_mut(&mut tool.result).managed_output =
+        Some(Box::new(ManagedOutputContinuation::Complete {
+            locator: locator.clone(),
+        }));
     let (_, _, node) = append_history(&catalog, &history);
     let source = store_for(&catalog, &source_session, &conversation);
     let revision = source.load_head().unwrap().revision;

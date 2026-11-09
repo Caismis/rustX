@@ -701,7 +701,7 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
-            result: success_result("listed"),
+            result: success_result("listed").into(),
         },
         RuntimeEvent::ToolMessageCommitted {
             message_id: MessageId::new("attempt-1-tool-1-0"),
@@ -877,7 +877,8 @@ async fn tool_result_passed_back_verbatim() {
         panic!("second request must contain the tool message");
     };
     assert_eq!(
-        tool_message.result, expected_result,
+        tool_message.result.as_ref(),
+        &expected_result,
         "result passed back verbatim"
     );
     assert_eq!(tool_message.tool_call_id, ToolCallId::new("call-1"));
@@ -1033,7 +1034,8 @@ async fn tool_execution_failure_is_passed_back_and_continues() {
         panic!("continuation must carry the failed tool result");
     };
     assert_eq!(
-        tool_message.result, failed,
+        tool_message.result.as_ref(),
+        &failed,
         "failed result passed back verbatim"
     );
     assert!(

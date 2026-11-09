@@ -1410,8 +1410,8 @@ async fn issue204_executor_proven_completion_survives_deadline_intent() {
     let messages = tool_messages(&audit);
     assert_eq!(messages.len(), 1);
     assert_eq!(
-        messages[0].result,
-        success_result("real completion"),
+        messages[0].result.as_ref(),
+        &success_result("real completion"),
         "a deadline winner never overwrites an executor-proven completion"
     );
     assert_eq!(
@@ -1485,7 +1485,7 @@ async fn issue204_physical_completion_winner_never_fires_a_deadline() {
 
     let messages = tool_messages(&audit);
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].result, success_result("immediate"));
+    assert_eq!(messages[0].result.as_ref(), &success_result("immediate"));
     assert!(
         deadline_kinds(&audit, "call-fast").is_empty(),
         "a completed execution never emits deadline intent"
@@ -1718,7 +1718,7 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
         messages[0].result.status,
         ToolExecutionStatus::TimedOut
     ));
-    assert_eq!(messages[1].result, success_result("sibling done"));
+    assert_eq!(messages[1].result.as_ref(), &success_result("sibling done"));
     assert_eq!(
         fact_sequence(&audit, "call-slow"),
         vec![
@@ -1816,7 +1816,7 @@ async fn issue204_admitted_executions_obey_their_own_frozen_policy() {
     controller.await.expect("P2 controller");
     let messages = tool_messages(&audit_p2);
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].result, success_result("released"));
+    assert_eq!(messages[0].result.as_ref(), &success_result("released"));
     assert!(deadline_kinds(&audit_p2, "call-frozen-2").is_empty());
 }
 
@@ -2337,8 +2337,8 @@ async fn issue204_idle_liveness_is_gated_by_progress_capability() {
     let messages = tool_messages(&audit);
     assert_eq!(messages.len(), 1);
     assert_eq!(
-        messages[0].result,
-        success_result("quiet done"),
+        messages[0].result.as_ref(),
+        &success_result("quiet done"),
         "a no-progress-capability executor is never idle-cancelled"
     );
     assert!(
@@ -2459,7 +2459,7 @@ async fn issue206_executor_panic_cannot_orphan_parallel_siblings() {
                 "private operation ownership reclaimed before commit"
             );
         }
-        assert_eq!(messages[1].result, failure);
+        assert_eq!(messages[1].result.as_ref(), &failure);
         assert!(matches!(
             messages[2].result.status,
             ToolExecutionStatus::Success

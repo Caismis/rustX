@@ -836,7 +836,7 @@ fn durable_history_fixture() -> DurableHistoryFixture {
         id: MessageId::new("child-tool-result"),
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
-        result: tool_result.clone(),
+        result: tool_result.clone().into(),
     });
     append_durable_history(
         &store,
@@ -912,7 +912,7 @@ fn append_durable_history(
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
-                result: tool_result.clone(),
+                result: tool_result.clone().into(),
             },
         ))
         .expect("tool completion");

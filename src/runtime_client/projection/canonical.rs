@@ -598,7 +598,7 @@ impl RuntimeClientProjection {
         attempt_id: &AttemptId,
         call_id: &ToolCallId,
         occurrence: Option<&crate::message::types::ToolCallOccurrenceRef>,
-        result: ToolExecutionResult,
+        result: &ToolExecutionResult,
     ) -> ForegroundSettlement {
         let Some(attempt) = self
             .snapshot
@@ -633,7 +633,10 @@ impl RuntimeClientProjection {
             return ForegroundSettlement::AlreadySettled;
         }
         let arguments = arguments_of(&slot.state);
-        slot.state = ForegroundToolState::Settled { arguments, result };
+        slot.state = ForegroundToolState::Settled {
+            arguments,
+            result: result.clone(),
+        };
         ForegroundSettlement::Applied
     }
 }

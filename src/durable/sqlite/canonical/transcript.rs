@@ -87,7 +87,7 @@ pub(in crate::durable::sqlite) fn load_transcript_tools(
                         && tool.tool_call_id == call.id
                         && tool.tool_id == call.tool_id =>
                 {
-                    Ok(tool.result)
+                    Ok(std::sync::Arc::unwrap_or_clone(tool.result))
                 }
                 _ => Err(storage(
                     "canonical Tool occurrence references a foreign result",

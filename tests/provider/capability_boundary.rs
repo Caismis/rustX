@@ -97,7 +97,8 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }),
         MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-u2"),
@@ -588,7 +589,7 @@ async fn file_tool_results_are_unsupported() {
             | ModelInputMessage::Derived(_) => None,
         })
         .expect("tool message expected");
-    tool_message.result.content = vec![ToolResultContent::File(
+    std::sync::Arc::make_mut(&mut tool_message.result).content = vec![ToolResultContent::File(
         rustx::message::content::FileReference {
             artifact_id: ArtifactId::new("artifact-file-1"),
             name: Some("report.pdf".to_owned()),
@@ -742,7 +743,7 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
                 .push(AssistantContentBlock::ToolCall(call));
         }
         if let ModelInputMessage::Canonical(MessageBlock::Tool(tool)) = &mut request.messages[2] {
-            tool.result.content = vec![
+            std::sync::Arc::make_mut(&mut tool.result).content = vec![
                 ToolResultContent::Text(TextBlock { text: "A".into() }),
                 ToolResultContent::Image(image.clone()),
                 ToolResultContent::Text(TextBlock { text: "B".into() }),

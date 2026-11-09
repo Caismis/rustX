@@ -837,7 +837,8 @@ pub(super) fn response_seed(count: usize) -> LineageSeed {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     });
     canonical.splice(
         1..1,

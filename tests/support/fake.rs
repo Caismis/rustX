@@ -686,7 +686,7 @@ pub fn classification_history_messages() -> Vec<rustx::message::types::MessageBl
                 MessageId::new("classify-proposal"),
                 ContentBlockIndex::new(0),
             ),
-            result: success_result("Tool data"),
+            result: success_result("Tool data").into(),
         }),
     ]
 }

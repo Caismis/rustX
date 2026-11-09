@@ -312,7 +312,8 @@ fn t08_t15_tool_result_headers_never_deserialize_historical_result_json() {
                 workflow: None,
                 managed_output: None,
                 deliveries: Vec::new(),
-            },
+            }
+            .into(),
         }),
     ];
     let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
@@ -800,7 +801,8 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
             workflow: None,
             truncation: None,
             managed_output: None,
-        },
+        }
+        .into(),
     });
     {
         let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
@@ -1428,7 +1430,9 @@ fn t14_t15_t20_canonical_todo_receipt_preserves_exact_bounded_head_and_allocator
     let MessageBlock::Tool(tool) = &mut messages[1] else {
         panic!("canonical Todo source");
     };
-    let crate::tools::types::ToolResultContent::Json { value } = &mut tool.result.content[0] else {
+    let crate::tools::types::ToolResultContent::Json { value } =
+        &mut std::sync::Arc::make_mut(&mut tool.result).content[0]
+    else {
         panic!("native Todo JSON");
     };
     value["next_id"] = serde_json::Value::from(u64::MAX);
@@ -1533,7 +1537,8 @@ fn todo_source_messages(description: &str) -> Vec<MessageBlock> {
                 workflow: None,
                 managed_output: None,
                 deliveries: Vec::new(),
-            },
+            }
+            .into(),
         }),
     ]
 }

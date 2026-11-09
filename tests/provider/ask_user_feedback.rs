@@ -141,7 +141,7 @@ fn rejection_history(protocol: ModelProtocol) -> ModelRequest {
                     ),
                     tool_call_id: call.id,
                     tool_id: call.tool_id,
-                    result,
+                    result: result.into(),
                 },
             )));
     }

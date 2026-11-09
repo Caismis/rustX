@@ -1844,7 +1844,8 @@ pub(super) fn tool_result_block(call: &str) -> MessageBlock {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 

@@ -53,7 +53,7 @@ fn prepared_trace_owner_reuses_exact_rows_and_retires_after_native_terminal_inst
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id,
                 tool_id: call.tool_id,
-                result: success_result(),
+                result: success_result().into(),
             },
             "prepared-trace-terminal",
         ))

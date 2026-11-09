@@ -111,7 +111,8 @@ fn canonical_result(store: &dyn ConversationStore, attempt: &str, owner: &str, f
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             }),
             event(
                 store,
@@ -1031,7 +1032,8 @@ fn process_content(store: &dyn ConversationStore, attempt: &str) {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }))
         .unwrap();
     assistant(store, attempt, &format!("{attempt}-intermediate"));

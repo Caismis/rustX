@@ -43,7 +43,8 @@ fn giant_selected_delivery(
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     });
     assert!(original.id().as_str().len() > 1_048_576);
     assert!(serde_json::to_vec(&original).unwrap().len() > 2 * 1_048_576);

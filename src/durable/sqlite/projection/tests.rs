@@ -3338,7 +3338,8 @@ fn auxiliary_history_excludes_the_incomplete_tool_batch_at_the_exact_cached_or_c
                     MessageId::new("pending-assistant"),
                     ContentBlockIndex::new(0),
                 ),
-                result: crate::scripted_suites::support::fake::success_result("First complete"),
+                result: crate::scripted_suites::support::fake::success_result("First complete")
+                    .into(),
             }))
             .unwrap();
         // Even a later committed inbound is outside the eligible prefix while
@@ -3377,7 +3378,8 @@ fn auxiliary_history_excludes_the_incomplete_tool_batch_at_the_exact_cached_or_c
                     MessageId::new("pending-assistant"),
                     ContentBlockIndex::new(1),
                 ),
-                result: crate::scripted_suites::support::fake::success_result("Tool complete"),
+                result: crate::scripted_suites::support::fake::success_result("Tool complete")
+                    .into(),
             }))
             .unwrap();
         let (after, cut) = store.auxiliary_history().unwrap();

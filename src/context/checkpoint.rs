@@ -678,7 +678,8 @@ mod tests {
                 deliveries: Vec::new(),
                 truncation: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     }
     fn target(item: u32, block: u32) -> CheckpointCallCoordinate {

@@ -797,7 +797,8 @@ mod tests {
                                         result:
                                             crate::scripted_suites::support::fake::success_result(
                                                 "result",
-                                            ),
+                                            )
+                                            .into(),
                                     })
                                     .into(),
                                 );

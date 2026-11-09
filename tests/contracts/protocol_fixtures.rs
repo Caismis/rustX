@@ -421,7 +421,7 @@ fn additional_event_variants_round_trip() {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }.into(),
     };
     let decoded: RuntimeEvent =
         serde_json::from_str(&serde_json::to_string(&outcome_unknown).expect("serialize"))

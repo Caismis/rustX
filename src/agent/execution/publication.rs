@@ -119,46 +119,48 @@ impl AgentExecution<'_> {
     /// a moving frontier.
     pub(super) fn commit_tool_result_batch(
         &mut self,
-        blocks: &[MessageBlock],
+        blocks: Vec<MessageBlock>,
+        todos: Option<crate::tools::todo::TodoBatch>,
     ) -> Result<Option<TranscriptCursor>, CanonicalCommitError> {
-        let mut prepared = Vec::with_capacity(blocks.len());
-        for block in blocks {
-            prepared.push(self.conversation.prepare_commit(block)?);
-        }
-        let events = blocks
+        let prepared = self.conversation.prepare_owned_batch(blocks)?;
+        let envelopes = prepared
+            .messages()
             .iter()
             .map(|block| {
-                Self::canonical_event(block).ok_or_else(|| {
-                    CanonicalCommitError::Durable(
-                        crate::durable::ConversationStoreError::InvalidReference(
-                            "a ToolResult batch contains a non-tool message".to_owned(),
-                        ),
-                    )
-                })
+                Self::canonical_event(block)
+                    .map(|event| self.event_envelope(event))
+                    .ok_or_else(|| {
+                        CanonicalCommitError::Durable(
+                            crate::durable::ConversationStoreError::InvalidReference(
+                                "a ToolResult batch contains a non-tool message".to_owned(),
+                            ),
+                        )
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let envelopes = events
-            .into_iter()
-            .map(|event| self.event_envelope(event))
-            .collect::<Vec<_>>();
         let (persisted_events, receipts) = self
             .store
-            .append_canonical_batch_with_events(blocks, &envelopes)
+            .append_canonical_batch_with_events(prepared.messages(), &envelopes)
             .map_err(CanonicalCommitError::Durable)?;
         let mut batch_anchor: Option<TranscriptCursor> = None;
-        for ((prepared, block), receipt) in prepared.into_iter().zip(blocks).zip(receipts) {
-            self.conversation.install_prepared(prepared);
-            if let Some(cursor) = receipt.transcript_cursor
-                && batch_anchor.is_none_or(|anchor| cursor > anchor)
-            {
-                batch_anchor = Some(cursor);
+        let mut todo_messages = Vec::new();
+        for (commit, receipt) in prepared.into_commits().zip(receipts) {
+            if todos.is_some() {
+                todo_messages.push(commit.message_id().clone());
             }
-            if let Some(observer) = self.observer {
-                observer.observe_committed(&self.request.attempt_id, block, &receipt);
-            }
+            self.install_observed_canonical(commit, &receipt);
+            batch_anchor = batch_anchor.max(receipt.transcript_cursor);
         }
         for event in persisted_events {
             self.record_persisted_event(event);
+        }
+        if let Some(todos) = todos {
+            todos.settle(todo_messages.iter().map(|id| {
+                self.conversation
+                    .ledger()
+                    .get(id)
+                    .expect("committed tool result")
+            }));
         }
         Ok(batch_anchor)
     }

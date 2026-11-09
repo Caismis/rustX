@@ -464,7 +464,8 @@ fn todo_result_message(
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 

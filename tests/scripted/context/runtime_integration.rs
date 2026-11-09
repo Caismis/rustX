@@ -822,7 +822,7 @@ async fn proactive_compaction_before_the_next_turn() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
-            result: success_result("ok"),
+            result: success_result("ok").into(),
         },
         RuntimeEvent::ToolMessageCommitted {
             message_id: MessageId::new("attempt-1-tool-1-0"),

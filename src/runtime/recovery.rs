@@ -771,7 +771,7 @@ impl RecoveryEvidence {
                         ToolRepairEvidence {
                             tool_id: tool_id.clone(),
                             lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
-                                result.clone(),
+                                result.as_ref().clone(),
                             )),
                         },
                     );
@@ -1762,7 +1762,7 @@ impl RecoveryPlan {
                     ),
                     tool_call_id: missing.call_id.clone(),
                     tool_id: missing.tool_id.clone(),
-                    result: missing.result.clone(),
+                    result: missing.result.clone().into(),
                 }));
                 events.push(self.recovery_envelope(
                     EventId::new(format!("recovery-tool-committed:{message_id}")),
@@ -2834,7 +2834,7 @@ mod tests {
                     RuntimeEvent::ToolExecutionCompleted {
                         tool_call_id: ToolCallId::new("call-1"),
                         tool_id: ToolId::new("tool-a"),
-                        result: unknown_outcome_result(),
+                        result: unknown_outcome_result().into(),
                     },
                     Some(a.clone()),
                 ),
@@ -3007,7 +3007,7 @@ mod tests {
                 RuntimeEvent::ToolExecutionCompleted {
                     tool_call_id: ToolCallId::new(format!("call-{call}")),
                     tool_id: ToolId::new("tool-a"),
-                    result: unknown_outcome_result(),
+                    result: unknown_outcome_result().into(),
                 },
                 Some(a.clone()),
             ));

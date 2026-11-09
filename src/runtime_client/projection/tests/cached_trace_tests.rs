@@ -207,7 +207,7 @@ fn commit_result_without_terminal_j(
             ),
             tool_call_id: call.id,
             tool_id: call.tool_id,
-            result: success_result(),
+            result: success_result().into(),
         }))
         .unwrap();
     let cursor = receipt.transcript_cursor.unwrap().get();
