@@ -655,7 +655,7 @@ impl AgentExecution<'_> {
         let projection = self.context_runtime.engine.build_projection_input(
             revision,
             projected,
-            &self.tool_registry().model_definitions(),
+            self.tool_registry().model_definition_refs(),
             self.reusable_observation(),
             &effective_system_prompt,
         );
@@ -886,7 +886,7 @@ impl AgentExecution<'_> {
         Ok(self.context_runtime.engine.build_projection_input(
             self.conversation.revision(),
             history.messages,
-            &self.tool_registry().model_definitions(),
+            self.tool_registry().model_definition_refs(),
             self.reusable_observation(),
             effective_system_prompt,
         ))

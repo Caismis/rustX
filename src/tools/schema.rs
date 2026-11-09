@@ -515,6 +515,16 @@ pub fn validate_execution_metadata_contract(
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    static MODEL_DEFINITION_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn take_model_definition_compiles() -> usize {
+    MODEL_DEFINITION_COMPILES.replace(0)
+}
+
 /// Compiles the canonical definition into the provider-neutral model-facing
 /// definition used by one model request.
 ///
@@ -531,6 +541,8 @@ pub fn validate_execution_metadata_contract(
 pub fn compile_model_definition(
     definition: &ToolDefinition,
 ) -> Result<ModelToolDefinition, SchemaError> {
+    #[cfg(test)]
+    MODEL_DEFINITION_COMPILES.set(MODEL_DEFINITION_COMPILES.get() + 1);
     validate_execution_metadata_contract(definition.execution_policy, &definition.input_schema)?;
     let mut input_schema = definition.input_schema.clone();
     let mut description = definition.description.clone();
