@@ -117,7 +117,7 @@ fn native_readiness_failure_rolls_back_release_and_reopen_recovers_history() {
         assert!(observer.wakes.lock().unwrap().is_empty());
     }
     store.lock().unwrap().execute_batch(
-        "CREATE TEMP TRIGGER fail_direct_release BEFORE UPDATE OF direct ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'release failure'); END;"
+        "CREATE TEMP TRIGGER fail_direct_release BEFORE INSERT ON event_observation_direct BEGIN SELECT RAISE(FAIL,'release failure'); END;"
     ).unwrap();
     assert!(store.mark_native_observation_ready(&batch).is_err());
     assert_eq!(readiness(&reader, 1), (0, 0, false));
@@ -296,4 +296,42 @@ fn native_readiness_releases_terminal_transcript_without_releasing_prior_journal
         .mark_native_observation_ready(started.observation.as_deref().unwrap())
         .unwrap();
     assert_eq!(store.observation_ready_frontier(0, 2).unwrap(), 2);
+}
+
+#[test]
+fn completed_history_keeps_only_direct_runs_and_pending_holes() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    for sequence in 1..=128 {
+        let batch = canonical_batch(&store, &format!("compact-{sequence}"));
+        if sequence <= 64 || sequence >= 66 {
+            store.mark_native_observation_ready(&batch).unwrap();
+        } else {
+            store.mark_observation_ready(sequence, sequence).unwrap();
+            store.mark_observation_transcript_ready(sequence).unwrap();
+        }
+    }
+    for _ in 0..2 {
+        assert_eq!(readiness(&store, 64), (64, 64, true));
+        assert_eq!(readiness(&store, 65), (65, 65, false));
+        assert_eq!(readiness(&store, 128), (128, 128, true));
+    }
+    let mut connection = store.lock().unwrap();
+    let counts: (u64, u64, u64) = connection.query_row(
+        "SELECT (SELECT count(*) FROM event_observation_readiness),
+                (SELECT count(*) FROM transcript_observation_readiness),
+                (SELECT count(*) FROM event_observation_direct)",
+        [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+    ).unwrap();
+    assert_eq!(counts, (0, 0, 2));
+    let transaction = connection.transaction().unwrap();
+    transaction.execute("DELETE FROM events WHERE sequence=32", []).unwrap();
+    let direct: Option<bool> = transaction.query_row(
+        "SELECT hi>=32 FROM event_observation_direct WHERE lo<=32 ORDER BY lo DESC LIMIT 1",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(direct, Some(false));
+    transaction.rollback().unwrap();
+    drop(connection);
+    assert_eq!(readiness(&store, 32), (32, 32, true));
 }

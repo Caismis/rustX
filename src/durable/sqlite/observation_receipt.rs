@@ -179,7 +179,7 @@ fn stored_events(
     }
     let sequence: [Option<u64>; 4] =
         std::array::from_fn(|index| inputs.get(index).map(|(event, _)| event.sequence));
-    let mut statement = connection.prepare_cached("SELECT e.sequence,e.observation_witness,COALESCE(r.direct=1 AND r.ready=1,0),(e.observation_readiness_missing AND e.sequence>(SELECT journal FROM observation_readiness_epoch WHERE id=1)) OR e.observation_unavailable,CASE WHEN e.sequence=?5 THEN e.observation_execution END FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence IN(?1,?2,?3,?4)").ok()?;
+    let mut statement = connection.prepare_cached("SELECT e.sequence,e.observation_witness,COALESCE((SELECT hi>=e.sequence FROM event_observation_direct WHERE lo<=e.sequence ORDER BY lo DESC LIMIT 1),0),(e.observation_readiness_missing AND e.sequence>(SELECT journal FROM observation_readiness_epoch WHERE id=1)) OR e.observation_unavailable,CASE WHEN e.sequence=?5 THEN e.observation_execution END FROM events e WHERE e.sequence IN(?1,?2,?3,?4)").ok()?;
     let mut rows = statement
         .query(super::params![
             sequence[0],

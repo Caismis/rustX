@@ -678,14 +678,14 @@ type FinalReadiness = (Vec<(u64, bool, bool)>, Vec<(u64, bool)>);
 fn final_readiness(store: &SqliteConversationStore) -> FinalReadiness {
     let connection = store.lock().unwrap();
     let journal = connection
-        .prepare("SELECT sequence,ready,direct FROM event_observation_readiness ORDER BY sequence")
+        .prepare("SELECT e.sequence,NOT EXISTS(SELECT 1 FROM event_observation_readiness r WHERE r.sequence=e.sequence),COALESCE((SELECT hi>=e.sequence FROM event_observation_direct WHERE lo<=e.sequence ORDER BY lo DESC LIMIT 1),0) FROM events e WHERE e.sequence>(SELECT journal FROM observation_readiness_epoch) AND e.observation_readiness_missing=0 ORDER BY e.sequence")
         .unwrap()
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let transcript = connection
-        .prepare("SELECT position,ready FROM transcript_observation_readiness ORDER BY position")
+        .prepare("SELECT t.position,NOT EXISTS(SELECT 1 FROM transcript_observation_readiness r WHERE r.position=t.position) FROM transcript_order t WHERE t.position>(SELECT transcript FROM observation_readiness_epoch) AND t.observation_readiness_missing=0 ORDER BY t.position")
         .unwrap()
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
         .unwrap()
@@ -1041,7 +1041,7 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
             .native_direct
     );
     fixture.store.lock().unwrap().execute_batch(&format!(
-        "CREATE TEMP TRIGGER refuse_final_release BEFORE UPDATE OF direct ON event_observation_readiness WHEN NEW.sequence={last} BEGIN SELECT RAISE(FAIL,'refuse final family release'); END;"
+        "CREATE TEMP TRIGGER refuse_final_release BEFORE INSERT ON event_observation_direct WHEN NEW.hi={last} BEGIN SELECT RAISE(FAIL,'refuse final family release'); END;"
     )).unwrap();
     assert!(fixture.store.mark_native_observation_ready(shared).is_err());
     assert_eq!(final_readiness(&reader), original);

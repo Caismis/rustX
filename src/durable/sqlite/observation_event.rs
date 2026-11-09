@@ -842,7 +842,7 @@ pub(super) fn witness_prepared(
         ));
     }
     let row: Option<(Option<Vec<u8>>, bool, bool)> = connection
-        .prepare_cached("SELECT e.observation_witness,COALESCE(r.direct=1 AND r.ready=1,0),(e.observation_readiness_missing AND e.sequence>(SELECT journal FROM observation_readiness_epoch WHERE id=1)) OR e.observation_unavailable FROM events e LEFT JOIN event_observation_readiness r ON r.sequence=e.sequence WHERE e.sequence=?1")
+        .prepare_cached("SELECT e.observation_witness,COALESCE((SELECT hi>=e.sequence FROM event_observation_direct WHERE lo<=e.sequence ORDER BY lo DESC LIMIT 1),0),(e.observation_readiness_missing AND e.sequence>(SELECT journal FROM observation_readiness_epoch WHERE id=1)) OR e.observation_unavailable FROM events e WHERE e.sequence=?1")
         .and_then(|mut statement| statement.query_row([sequence], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
         .optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let Some((Some(bytes), direct, missing)) = row else {
