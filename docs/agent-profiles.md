@@ -40,10 +40,10 @@ inherit = true
 | `model` | Root default or independent named selection. Omitted named selection inherits the invoking Attempt's complete frozen model. |
 | `tools.builtin` | Exact native whitelist; omission selects none. |
 | `tools.sources` | MCP identity or `python:<package>` to `"all"` (ordinary Tools and advertised MCP Resources), exact Tool names (Tools only), or `[]`. Definition or connection alone grants nothing. |
-| `skills` | `"all"`, exact names, or `[]`, for both Root and named Agents; default none. Prompt visibility only. |
+| `skills` | `"all"`, exact names, or `[]`, for both Root and named Agents; Root defaults to all, named Agents to none. Prompt visibility only. |
 | `plugins` | Closed Rust-owned Agent Status, Todo and Goal vocabulary, default off. Each Root Plugin object overlays atomically. |
 | `agents` | Root-only delegation allowlist. A nonempty list composes the five Agent controls automatically. |
-| `workflows` | Explicit invocation allowlist, subject to runtime scope. |
+| `workflows` | Root-only invocation allowlist. Child runtimes cannot invoke workflows or delegate another Agent. The child editor exposes neither capability. |
 | `description`, `instructions` | Agent prose. Named profiles can include task instructions. Root guidance lives in `AGENTS.md`. |
 | `agents_md` | Whether to include the global and Workspace `AGENTS.md` files. |
 | `timeout_ms` | Named child lifecycle policy only. Root rejects it. Every Agent runs in the shared Session workspace; an authored `worktree` table is refused. |
@@ -81,7 +81,7 @@ admitted child's finite demand through the existing source lifecycle owner.
 
 An Attempt pins one immutable generation. Child resolution consumes that Attempt's
 resource/catalog/model snapshot, then freezes exact Tool definitions, source
-bindings, Skill bytes and versions, model decision and policies. It does not read
+bindings, Skill metadata, dependencies and versions, model decision and policies. It does not read
 current files or current Root defaults. Subsequent configuration publication cannot mutate
 that child. Cold composition rereads current sources and validates deliberate
 Session model intent; materialized Agent profiles are not Session persistence.

@@ -10,8 +10,8 @@
 //!
 //! Discovery follows ordered User and Workspace collections, stopping
 //! recursion at the first SKILL.md in a directory. A standalone Markdown
-//! instruction file can also define a Skill. The first valid definition for a
-//! name wins. Skill metadata is frozen for a generation, and the prompt
+//! instruction file directly in a collection root can also define a Skill.
+//! The first valid definition for a name wins. Skill metadata is frozen for a generation, and the prompt
 //! contains the real path so the model can load instructions on demand.
 //!
 //! # Resource boundary
@@ -475,11 +475,7 @@ fn collect_automatic_source(
                 continue;
             }
         };
-        let collection = super::discovery::collect(
-            &canonical,
-            super::discovery::is_shared(&root.root),
-            cancellation,
-        );
+        let collection = super::discovery::collect(&canonical, cancellation);
         if let Some(error) = collection.error {
             diagnostics.push(SkillDiagnostic::SourceRootInvalid {
                 source,
@@ -820,28 +816,38 @@ mod frontmatter_tests {
         write_skill(&project.join(".pi/skills"), "project-pi", "Project Pi", "");
         write_skill(&local, "ignored", "Ignored", "");
         std::fs::write(local.join(".fdignore"), "ignored/\n").unwrap();
-        std::fs::create_dir_all(local.join("loose")).unwrap();
-        std::fs::write(
-            local.join("loose/guide.md"),
-            "---\ndescription: Fallback name\n---\n",
-        )
-        .unwrap();
+        for (root, name) in [(&local, "workspace-root"), (&global, "global-root")] {
+            std::fs::write(
+                root.join("guide.md"),
+                format!("---\nname: {name}\ndescription: Root instruction\n---\n"),
+            )
+            .unwrap();
+            std::fs::create_dir_all(root.join("loose")).unwrap();
+            std::fs::write(
+                root.join("loose/guide.md"),
+                "---\nname: nested\ndescription: Not a package marker\n---\n",
+            )
+            .unwrap();
+        }
 
         let project = Workspace::new(project).unwrap();
         let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig {
             automatic: automatic_skill_roots(Some(&home), project.root()),
         })
         .discover();
-        assert_eq!(names(&outcome.packages), ["duplicate", "global", "loose"]);
+        assert_eq!(
+            names(&outcome.packages),
+            ["duplicate", "global", "global-root", "workspace-root"]
+        );
         assert_eq!(outcome.packages[0].description(), "Workspace duplicate");
         assert!(
-            outcome.packages[2]
+            outcome.packages[3]
                 .location()
-                .ends_with(".agents/skills/loose/guide.md")
+                .ends_with(".agents/skills/guide.md")
         );
         assert_eq!(
             names(&SkillDiscovery::user(&home).discover().packages),
-            ["duplicate", "global"]
+            ["duplicate", "global", "global-root"]
         );
     }
 

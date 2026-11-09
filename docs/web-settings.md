@@ -26,17 +26,21 @@ a Session focus change never retargets an open editor, and a revoked or
 unregistered Workspace is fenced (its draft and error are retained) rather than
 redirected to User or another Workspace.
 
-Settings is organized by product task into seven sections:
+Settings is organized by product task into six sections:
 
 | Page | What it holds |
 | --- | --- |
 | **General** | Browser-owned preferences: Appearance (theme) and Language (English / 中文). Explicit User Settings opens here; the primary Settings item resumes its previous section. |
 | **Models** | Provider list → Provider detail (icon, Base URL, shared API format, API Key and its Models; credential source under Connection options) → one Model dialog (identity, limits, then capabilities and Model Profiles under Advanced). All Models and the default model for new Sessions follow the Provider panel. |
-| **Agent** | Root identity, description, instructions and project guidance. |
-| **Tools & Permissions** | Approval mode, Native Tools, Tool-source selections, Skill visibility, the Agent and Workflow delegation allowlists, and per-Tool/MCP policies under **Advanced Tool policies**. |
-| **MCP Servers** | Native MCP source definitions, permissions and observation for the exact Settings owner. |
-| **Extensions** | One searchable inventory of Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Built-in**. |
+| **Agent** | Direct editing of global `AGENTS.md` and the project-guidance switch. Root identity, description and inline instructions are not WebUI settings. |
+| **Tools & Permissions** | Approval mode, Native Tools, Managed Python source selections and per-Tool execution policies. Skill, Subagent and Workflow access is controlled in each independent module. |
+| **Extensions** | Managed Python sources and the native Todo, Goal and Agent Status extensions. |
 | **Advanced** | Context limits, timeouts, concurrent subagent limits, environment variables and **Rescan configuration files**. **Auto Repair** appears for a repair receipt, a malformed document or an explicit inspection request. **Connection** is a sub-surface of Advanced, not a separate Settings section. |
+
+MCP, Skills, Subagents and Workflows have independent modules with Global and
+Workspace scopes and card/list views. Skills are discovered and enabled here;
+the module does not edit Skill files. Subagent editors expose Native Tools, MCP
+Tools and Skills; they do not offer recursive Agent or Workflow delegation.
 
 Provider icons can be searched and selected from the locally bundled LobeHub catalog.
 The icon is automatically saved with the Provider under the same scope rules,

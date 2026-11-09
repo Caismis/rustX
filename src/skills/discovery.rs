@@ -25,12 +25,6 @@ pub(crate) struct Collection {
     pub error: Option<std::io::Error>,
 }
 
-pub(crate) fn is_shared(root: &Path) -> bool {
-    root.parent()
-        .and_then(Path::file_name)
-        .is_some_and(|name| name == ".agents")
-}
-
 pub(crate) fn is_markdown(path: &Path) -> bool {
     path.extension().is_some_and(|extension| extension == "md")
 }
@@ -50,9 +44,8 @@ pub(crate) fn canonical_root(path: &Path) -> std::io::Result<PathBuf> {
     Ok(canonical)
 }
 
-pub(crate) fn collect(root: &Path, shared: bool, signal: &CancellationSignal) -> Collection {
+pub(crate) fn collect(root: &Path, signal: &CancellationSignal) -> Collection {
     let mut scanner = Scanner {
-        shared,
         signal,
         ancestors: BTreeSet::new(),
         rules: Vec::new(),
@@ -71,7 +64,6 @@ pub(crate) fn collect(root: &Path, shared: bool, signal: &CancellationSignal) ->
 }
 
 struct Scanner<'a> {
-    shared: bool,
     signal: &'a CancellationSignal,
     ancestors: BTreeSet<PathBuf>,
     rules: Vec<Gitignore>,
@@ -210,7 +202,7 @@ impl Scanner<'_> {
                 {
                     return Err(error);
                 }
-            } else if metadata.is_file() && is_markdown(&entry) && self.shared == (depth > 0) {
+            } else if metadata.is_file() && is_markdown(&entry) && depth == 0 {
                 self.offer(entry)?;
             }
         }
@@ -237,7 +229,7 @@ mod tests {
     use super::*;
 
     fn rejected(root: &Path, message: &str) {
-        let collection = collect(root, true, &CancellationSignal::new());
+        let collection = collect(root, &CancellationSignal::new());
         let error = collection
             .error
             .expect("collection budget must stop discovery");
@@ -284,7 +276,9 @@ mod tests {
         let nested = root.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         for index in 0..=MAX_CANDIDATES {
-            std::fs::write(nested.join(format!("{index}.md")), []).unwrap();
+            let package = nested.join(index.to_string());
+            std::fs::create_dir(&package).unwrap();
+            std::fs::write(package.join(SKILL_MARKDOWN_FILE), []).unwrap();
         }
         rejected(&root, "candidate files");
 

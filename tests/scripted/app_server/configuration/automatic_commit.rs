@@ -2254,6 +2254,69 @@ async fn external_guidance_edits_commit_through_the_source_watch() {
     .await;
 }
 
+/// A standalone root Markdown skill is discovered and updated from its own
+/// file notifications, without a collection event or an explicit rescan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standalone_skill_file_notifications_publish_the_live_catalog() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let collection = fixture.workspaces[0].join(".agents/skills");
+        std::fs::create_dir_all(&collection).unwrap();
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        select_all_skills(&fixture).await;
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let descriptions = || {
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .iter()
+                .map(|entry| entry.description.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(descriptions().is_empty());
+        let facts = configuration_changes(&runtime).len();
+        injected_only(&fixture);
+        let stop = tokio_util::sync::CancellationToken::new();
+        let edit = async {
+            watch_settled(&fixture).await;
+            let mut changed = fixture.manager.configuration_changes();
+            let file = collection.join("guide.md");
+            for (kind, description) in [
+                (
+                    notify::EventKind::Create(notify::event::CreateKind::File),
+                    "First version",
+                ),
+                (
+                    notify::EventKind::Modify(notify::event::ModifyKind::Any),
+                    "Second version",
+                ),
+            ] {
+                std::fs::write(
+                    &file,
+                    format!("---\nname: guide\ndescription: {description}\n---\nbody\n"),
+                )
+                .unwrap();
+                assert!(
+                    fixture
+                        .manager
+                        .notify_source_watch(notify::Event::new(kind).add_path(file.clone()))
+                );
+                while descriptions() != [description] {
+                    changed.changed().await.unwrap();
+                }
+            }
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), edit);
+        watched.unwrap();
+        assert_eq!(configuration_changes(&runtime).len(), facts + 2);
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// Replacing a watched Skill directory at the same path re-registers its
 /// watch before the replacement is captured: an edit landing right after that
 /// capture, before the watch loop runs again, still commits.

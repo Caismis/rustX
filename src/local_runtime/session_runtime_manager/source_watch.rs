@@ -642,11 +642,7 @@ fn watch_plan(sources: &KnownSources) -> WatchPlan {
                 .or_insert(RecursiveMode::NonRecursive);
         }
         let signal = crate::runtime::CancellationSignal::new();
-        let scanned = crate::skills::discovery::collect(
-            root,
-            crate::skills::discovery::is_shared(root),
-            &signal,
-        );
+        let scanned = crate::skills::discovery::collect(root, &signal);
         let packages: std::collections::BTreeSet<_> = scanned
             .files
             .iter()

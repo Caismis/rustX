@@ -9,7 +9,7 @@ import { ResourceChoices, ScopedChoices, resourceScopes } from './ScopedChoices'
 import css from './Subagents.module.css';
 
 type Tools = NonNullable<NamedAgentProfileDocument['tools']>;
-type Grants = Pick<NamedAgentProfileDocument, 'tools' | 'workflows'>;
+type Grants = Pick<NamedAgentProfileDocument, 'tools'>;
 export type LoadMcpTools = (scope: SourceScope, server: string, owner: SourceScope, owns: () => boolean) => Promise<WorkflowToolSource | undefined>;
 
 export function AgentToolFields({ source, scope, value, change, loadMcpTools }: {
@@ -20,18 +20,16 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
   const heading = useId();
   const tools = value.tools ?? {};
   const sourceSelections = new Map(Object.entries(tools.sources ?? {}));
-  const workflows = value.workflows ?? [];
   const scopes = resourceScopes(scope);
   const entries = source.prospective_resources?.definitions.filter(entry => entry.valid && scopes.includes(entry.location.scope)) ?? [];
   const mcp = entries.filter(entry => entry.family === 'mcp');
-  const workflowEntries = entries.filter(entry => entry.family === 'workflow');
   const inherited = scope === 'user' && source.target.kind === 'workspace';
 
   return <section className={css.section} aria-labelledby={heading}>
     <div className={css.sectionHead}>
       <h2 id={heading}>{tx('resources:subagents.tools')}</h2>
-      {!!(tools.builtin?.length || sourceSelections.size || workflows.length) && <Button size="sm"
-        onClick={() => change({ tools: { builtin: [], sources: {} }, workflows: [] })}>{tx('resources:subagents.clear-tools')}</Button>}
+      {!!(tools.builtin?.length || sourceSelections.size) && <Button size="sm"
+        onClick={() => change({ tools: { builtin: [], sources: {} } })}>{tx('resources:subagents.clear-tools')}</Button>}
     </div>
     <div className={css.nativeTools}>
       <CheckboxList label={tx('settings:extension-detail.native-tools')} values={nativeTools}
@@ -56,20 +54,6 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
                 change({ tools: { ...tools, sources: Object.fromEntries(sources) } });
               }} />)}
           </div> : <p>{tx('resources:subagents.no-mcp-tools')}</p>}
-        </ScopedChoices>;
-      })}
-    </fieldset>
-    <fieldset className={css.choiceGroup}>
-      <legend>{tx('resources:subagents.workflows')}</legend>
-      {workflowEntries.length > 0 && <p>{tx('resources:subagents.workflows-help')}</p>}
-      {scopes.map(owner => {
-        const options = workflowEntries.filter(entry => entry.location.scope === owner).map(entry => ({ name: entry.name }));
-        const names = new Set(options.map(entry => entry.name));
-        return <ScopedChoices key={owner} owner={owner}>
-          {options.length ? <ResourceChoices label={tx(owner === 'workspace' ? 'resources:scope.workspace' : 'resources:scope.global')}
-            options={options} selected={workflows.filter(id => names.has(id))}
-            change={checked => change({ workflows: [...workflows.filter(id => !names.has(id)), ...checked] })} />
-            : <p>{tx('resources:subagents.no-workflows')}</p>}
         </ScopedChoices>;
       })}
     </fieldset>

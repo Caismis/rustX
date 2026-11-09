@@ -7,7 +7,8 @@ Skill discovery visits `<workspace>/.agents/skills` and then
 to the same instruction file are deduplicated. Discovery skips hidden entries,
 `node_modules`, and entries excluded by `.gitignore`, `.ignore` or `.fdignore`.
 It stops traversal at a `SKILL.md`. Standalone Markdown files with Skill
-frontmatter are discovered below the collection root.
+frontmatter are discovered directly in each collection root. Nested directories
+are searched for `SKILL.md` packages, not standalone Markdown files.
 
 Directory and file symlinks can point outside either collection. Discovered
 paths retain links below the collection root so package-relative references

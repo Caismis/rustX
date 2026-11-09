@@ -51,7 +51,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   }
   const localMcp = join(workspaceRoot, 'mcp.toml');
   writeFileSync(localMcp, readFileSync(localMcp, 'utf8') + '\n[mcp_servers.offline-server]\ntype = "stdio"\ncommand = "/missing-mcp-fixture"\n');
-  const projectSkills=join(workspaceRoot,'skills','manual');
+  const projectSkills=join(workspaceRoot,'skills');
   mkdirSync(projectSkills,{recursive:true});
   writeFileSync(join(projectSkills,'manual.md'),'---\nname: manual-guide\ndescription: Manual skill.\ndisable-model-invocation: true\n---\n# Manual\nInstructions in a standalone file.');
   // Descriptions beyond the native 32-item page must remain discoverable.
@@ -166,7 +166,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(naming.getByLabel('System prompt', { exact: true })).toHaveValue('Check the changes carefully.');
   await naming.getByRole('checkbox', { name: 'read', exact: true }).check();
   const draftMcp = naming.getByRole('group', { name: 'MCP tools', exact: true });
-  const draftWorkflows = naming.getByRole('group', { name: 'Workflows', exact: true });
+  await expect(naming.getByRole('group', { name: 'Workflows', exact: true })).toHaveCount(0);
   await expect(draftMcp.getByRole('region', { name: 'Global' }).getByRole('checkbox', { name: 'render_image' })).toBeVisible();
   const localTools = draftMcp.getByRole('region', { name: 'Workspace' });
   await localTools.getByRole('checkbox', { name: 'render_image' }).check();
@@ -177,14 +177,11 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(draftSkills.getByRole('region', { name: 'Global' }).getByRole('checkbox', { name: 'catalog-33' })).toBeVisible();
   await draftSkills.getByRole('region', { name: 'Workspace' }).getByRole('checkbox', { name: 'local-guide' }).check();
   await expect(draftSkills.getByRole('checkbox', { name: 'manual-guide' })).toHaveCount(0);
-  await expect(draftWorkflows.getByRole('group', { name: 'Global' }).getByRole('checkbox', { name: 'global_flow' })).toBeVisible();
-  await draftWorkflows.getByRole('group', { name: 'Workspace' }).getByRole('checkbox', { name: 'local_flow' }).check();
   await naming.getByRole('button', { name: 'Configuration scope', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Global', exact: true }).click();
   await expect(naming.getByLabel('Description', { exact: true })).toHaveValue('Reviews code');
   await expect(naming.getByRole('checkbox', { name: 'read', exact: true })).toBeChecked();
   await expect(draftMcp.getByRole('region', { name: 'Workspace' })).toHaveCount(0);
-  await expect(draftWorkflows.getByRole('group', { name: 'Workspace' })).toHaveCount(0);
   await draftMcp.getByRole('checkbox', { name: 'render_image' }).check();
   await expect(draftSkills.getByRole('region', { name: 'Workspace' })).toHaveCount(0);
   const filter = draftSkills.getByRole('searchbox', { name: 'Filter options in Global' });
@@ -198,7 +195,6 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(saveNew).toBeInViewport({ ratio: 1 });
   await filter.fill('global-guide');
   await expect(draftSkills.getByRole('checkbox', { name: 'global-guide' })).toBeChecked();
-  await draftWorkflows.getByRole('checkbox', { name: 'global_flow' }).check();
   const guidance = naming.getByRole('switch', { name: 'Include AGENTS.md' });
   await expect(guidance).toBeChecked();
   await guidance.click();
@@ -211,7 +207,8 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   expect(savedAgent).toContain('Check the changes carefully.');
   expect(savedAgent).toContain('builtin = ["read"]');
   expect(savedAgent).toContain('global-server = ["render_image"]');
-  expect(savedAgent).toContain('workflows = ["global_flow"]');
+  expect(savedAgent).toContain('workflows = []');
+  expect(savedAgent).not.toContain('global_flow');
   expect(savedAgent).toContain('skills = ["global-guide"]');
   expect(savedAgent).not.toContain('local-guide');
   expect(savedAgent).toContain("inherit = false");
