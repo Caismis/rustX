@@ -89,7 +89,7 @@ fn rebind_tool_block(
     index: usize,
 ) -> Result<(), ConversationStoreError> {
     let bytes: Vec<u8> = connection.query_row_cached(
-        "SELECT header_json FROM observation_block_headers WHERE message_id=?1 AND block_index=?2",
+        "SELECT header_json FROM observation_block_headers WHERE ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) AND block_index=?2",
         params![message.id().as_str(), index], |row| row.get(0),
     ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
@@ -113,7 +113,7 @@ fn rebind_tool_block(
     )?;
     if rebound != bytes {
         connection.execute_cached(
-            "UPDATE observation_block_headers SET header_json=?3 WHERE message_id=?1 AND block_index=?2",
+            "UPDATE observation_block_headers SET header_json=?3 WHERE ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) AND block_index=?2",
             params![message.id().as_str(), index, rebound],
         ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
