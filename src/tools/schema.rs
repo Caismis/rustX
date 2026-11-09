@@ -372,12 +372,37 @@ pub fn is_reserved_property(name: &str) -> bool {
 /// deterministic root-property decoration, and
 /// [`SchemaError::ReservedProperty`] for reserved property collisions.
 pub fn validate_canonical_schema(schema: &serde_json::Value) -> Result<(), SchemaError> {
+    compile_canonical_schema(schema).map(drop)
+}
+
+#[cfg(test)]
+thread_local! {
+    static VALIDATOR_COMPILATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn take_validator_compilations() -> usize {
+    VALIDATOR_COMPILATIONS.with(|count| count.replace(0))
+}
+
+fn compile_validator(
+    schema: &serde_json::Value,
+) -> Result<Validator, jsonschema::ValidationError<'static>> {
+    #[cfg(test)]
+    VALIDATOR_COMPILATIONS.with(|count| count.update(|count| count + 1));
+    Validator::new(schema)
+}
+
+pub(super) fn compile_canonical_schema(
+    schema: &serde_json::Value,
+) -> Result<Validator, SchemaError> {
     let object = schema.as_object().ok_or_else(|| {
         SchemaError::NotRootObjectSchema(
             "the canonical tool input schema must be a root object schema".to_owned(),
         )
     })?;
-    Validator::new(schema).map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
+    let validator =
+        compile_validator(schema).map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
     if object.get("type").and_then(serde_json::Value::as_str) != Some("object") {
         return Err(SchemaError::NotRootObjectSchema(
             "the canonical tool input schema must declare \"type\": \"object\"".to_owned(),
@@ -393,7 +418,7 @@ pub fn validate_canonical_schema(schema: &serde_json::Value) -> Result<(), Schem
             }
         }
     }
-    Ok(())
+    Ok(validator)
 }
 
 /// Validates the policy-dependent `execution_mode` reservation and the
@@ -786,7 +811,14 @@ pub fn validate_business_arguments(
     arguments: &serde_json::Value,
 ) -> Result<(), SchemaError> {
     let validator =
-        Validator::new(schema).expect("canonical schemas are validated at registration");
+        compile_validator(schema).expect("canonical schemas are validated at registration");
+    validate_compiled_arguments(&validator, arguments)
+}
+
+pub(super) fn validate_compiled_arguments(
+    validator: &Validator,
+    arguments: &serde_json::Value,
+) -> Result<(), SchemaError> {
     let mut errors = Vec::new();
     for error in validator.iter_errors(arguments) {
         errors.push(error.to_string());

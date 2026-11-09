@@ -117,7 +117,10 @@ impl AvailableToolCatalog {
 
     /// Creates an available catalog in deterministic registration order.
     #[must_use]
-    pub(crate) fn new(registrations: Vec<ToolRegistration>) -> Self {
+    pub(crate) fn new(mut registrations: Vec<ToolRegistration>) -> Self {
+        for registration in &mut registrations {
+            registration.bind_schema();
+        }
         Self {
             tools: registrations
                 .iter()
