@@ -238,6 +238,23 @@ it.each([false, true])('Connection Settings preserves startup restoration while 
   }
 });
 
+it('a committed Session stays selected across a disconnected Home return and a fresh page', async () => {
+  server = newServer(); await server.attached('A', 'B');
+  const ui = await mount(); await click(ui, 'Open Session B');
+  await click(ui, 'Settings');
+  await act(async () => server.client.disconnect());
+  await click(ui, 'Home');
+  expect(title()).toBe('Session B');
+  expect(document.querySelector('[data-shell-route="session-draft"]')).not.toBeNull();
+  expect(hints().route).toEqual({ kind: 'session', sessionId: 'B' });
+  await act(async () => server.connect());
+  await waitFor(() => expect(document.querySelector('[data-shell-route="session"]')).not.toBeNull());
+  expect(hints().route).toEqual({ kind: 'session', sessionId: 'B' });
+  await act(async () => ui.unmount()); await server.client.disconnect(); server = newServer();
+  await mount(); await act(async () => server.connect());
+  await waitFor(() => expect(title()).toBe('Session B'));
+});
+
 it('a failed startup hint survives Settings while its same Home return awaits authorization', async () => {
   seed({ kind: 'session', sessionId: 'B' }); server = newServer(); server.held.add('session/read');
   const ui = await mount(); await act(async () => server.connect());

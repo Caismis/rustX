@@ -1316,7 +1316,7 @@
       "destination": "web-console/src/presentation/agent/Conversation.module.css",
       "upstream_sha256": "03880a4702978e8403a882f9036205ab7ff791f80cc06e47fdafa4fef6971c67",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Issue #406: Resident hero centering and composer seat geometry; no lifecycle masking. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Trajectory composer fade repair: full-height overlay with measured seat clearance and fixed 36px theme fade, matching local Harness ConversationRoot and TrajectoryView layout.",
+      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Issue #406: Resident hero centering and composer seat geometry; no lifecycle masking. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Trajectory composer fade repair: full-height overlay with measured seat clearance and fixed 36px theme fade, matching local Harness ConversationRoot and TrajectoryView layout. Narrow conversation headers reduce utility spacing to retain child title space.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1325,7 +1325,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "79913b1544ae5113d7563ab652997451adef985b71109bde2b13c1b241294835",
+      "local_sha256": "f8a3d24438c6bb514be0cb0ed132e4dd17719a1a364fb7c5539a6cf9681e5a1a",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",

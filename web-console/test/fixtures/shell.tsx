@@ -69,7 +69,7 @@ server.workspaceHost.classifyLocations = async cwds => { await associationGate; 
 const settingsTargets: string[] = [];
 server.workspaceHost.configureWorkspace = async (id, _endpoint, operation) => {
   settingsTargets.push(id);
-  const projection = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace' } };
+  const projection = { ...cfg3Source(), prospective_approval_mode: 'policy' as const, target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: sourceReceipt(projection), reread: { status: 'observed', projection } } };
   if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
   return { kind: operation.kind, projection };

@@ -1,5 +1,5 @@
 import { createRef, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Workbench, type WorkbenchHandle } from '../src/app/components/Workbench';
 import { PreviewWorkspace } from '../src/app/components/PreviewWorkspace';
@@ -11,6 +11,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import type { GeometryDocumentProps } from '../src/app/components/documents/GeometryDocument';
 import type { PreviewSource } from '../src/client/session-files';
 import { Server } from './fixture';
+import { App } from '../src/app/App';
 
 const models = vi.hoisted(() => ({ imports: 0, live: 0, peak: 0, bytes: 4, copies: [] as { name: string; model: object; props: GeometryDocumentProps; disposed: boolean }[], reads: vi.fn() }));
 vi.mock('../src/app/components/documents/GeometryDocument', () => ({ preloadGeometry: vi.fn(), GeometryDocument: (props: GeometryDocumentProps) => {
@@ -113,6 +114,36 @@ it('artifact refresh replaces only the selected copy and close/mode changes full
   await act(async () => owner.closeTab(a)); expect(models.live).toBe(0);
   await act(async () => { owner.openPreview(artifact('b')); });
   await act(async () => owner.showWorkbench()); expect(models.live).toBe(0); expect(ui.queryAllByRole('tabpanel')).toHaveLength(0);
+});
+
+it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('parks the delivered geometry across %s and Home without replacing its canvas or copy', async destination => {
+  server.handlers.set('workflow/list', () => ({ type: 'workflow_library', library: { target: { kind: 'user' }, directory: '/workflows', absent_revision: 'missing', diagnostic: null, files: [] } }));
+  let owner!: PreviewWorkspaceOwner;
+  const start = PreviewWorkspaceOwner.prototype.start;
+  vi.spyOn(PreviewWorkspaceOwner.prototype, 'start').mockImplementation(function (this: PreviewWorkspaceOwner) {
+    owner = this; return start.call(this);
+  });
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
+  await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
+  await waitFor(() => expect(screen.getByLabelText('Session title').textContent).toBe('Session A'));
+  await act(async () => { owner.openPreview(artifact('delivered')); });
+  await waitFor(() => expect(models.imports).toBe(1));
+  const canvas = document.querySelector('[data-model="delivered.stl"]')!, copy = models.copies[0];
+  const tab = owner.getSnapshot().workspace!.tabs[0].id, lease = owner.getSnapshot().leases.get(tab)!;
+  const navigation = within(screen.getByRole('navigation', { name: 'Primary navigation' }));
+  expect(canvas.getAttribute('data-shown')).toBe('true');
+
+  await act(async () => fireEvent.click(navigation.getByRole('button', { name: destination })));
+  await waitFor(() => expect(navigation.getByRole('button', { name: destination }).getAttribute('aria-current')).toBe('page'));
+  expect(canvas.getAttribute('data-shown')).toBe('false');
+  expect(canvas.closest('[hidden]')).not.toBeNull(); expect(canvas.closest('[inert]')).not.toBeNull();
+  expect(copy.disposed).toBe(false); expect(lease.signal.aborted).toBe(false);
+
+  await act(async () => fireEvent.click(navigation.getByRole('button', { name: 'Home' })));
+  await waitFor(() => expect(canvas.getAttribute('data-shown')).toBe('true'));
+  expect(document.querySelector('[data-model="delivered.stl"]')).toBe(canvas);
+  expect(owner.getSnapshot().leases.get(tab)).toBe(lease);
+  expect(models.copies[0].model).toBe(copy.model); expect(models.imports).toBe(1); expect(models.reads).toHaveBeenCalledTimes(1);
 });
 it.each([4, 64 * 1024 * 1024 + 1])('Workbench keeps its mounted geometry through file tabs with bounded admission (%i bytes)', async size => {
   models.bytes = size;

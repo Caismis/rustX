@@ -149,9 +149,14 @@ fn interrupted_and_partial_writes_preserve_the_exact_offset() {
 #[test]
 fn closed_peer_is_a_channel_failure() {
     let (mut sender, receiver) = pair();
+    // A concurrent child can retain the peer until exec. Close the shared
+    // endpoint explicitly so that descriptor lifetime cannot race this test.
+    let inherited_receiver = receiver.try_clone().unwrap();
+    receiver.shutdown(Shutdown::Both).unwrap();
     drop(receiver);
     assert!(write_frame(&mut sender, MSG_PROCESS_CONTROL_FAILURE, b"failure").is_err());
     assert!(nix::unistd::write(&sender, b"next frame").is_err());
+    drop(inherited_receiver);
 }
 
 #[test]

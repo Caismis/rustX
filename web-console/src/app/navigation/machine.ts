@@ -412,9 +412,11 @@ export const shellNavigationMachine = setup({
       // Home revalidation retains the original selection's intent and revision.
       // Recovery of a cold explicit selection must not turn it into a saved
       // startup selection before Native publishes executable controls.
+      const restoringCommitted = returning && context.home.kind === 'session'
+        && 'sessionId' in output.route && context.home.sessionId === output.route.sessionId;
       const draftSession = output.route.kind === 'session-draft'
         ? context.draftSession?.sessionId === output.route.sessionId ? context.draftSession
-          : { sessionId: output.route.sessionId, intentRevision: context.intentRevision, intent: { recovery: true as const, destination: { kind: 'session' as const, sessionId: output.route.sessionId, sidebar: false }, route: output.route, generation: output.pending.generation, authority: output.pending.authority } }
+          : { sessionId: output.route.sessionId, intentRevision: context.intentRevision, intent: { recovery: true as const, destination: { kind: restoringCommitted ? 'restore-session' as const : 'session' as const, sessionId: output.route.sessionId, sidebar: false }, route: output.route, generation: output.pending.generation, authority: output.pending.authority } }
         : undefined;
       return { dismissedSidebar: undefined, retry: context.retry && output.replay ? { ...context.retry, replay: output.replay } : undefined, draftSession, binding: preserveDraft ? context.binding : context.binding + 1, control, route: output.route, pending: undefined, error: undefined,
         command: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && output.pending.destination.command ? { request: output.pending.destination.command, route: output.route, generation: output.pending.generation } : undefined,

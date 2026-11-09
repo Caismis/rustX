@@ -30,9 +30,8 @@ test('Dogfood teardown drains an intercepted Host request before closing its own
         await fixture.stop(check);
       }
     } }, false);
-    // unrouteAll removes producers synchronously before waiting for the held
-    // callback. A later browser request must not enter that Node proxy again.
-    await page.evaluate(request => fetch('/product-host/configuration', request).then(response => response.status), request);
+    // Retirement fences new Host work while the admitted callback drains.
+    expect(await page.evaluate(request => fetch('/product-host/configuration', request).then(response => response.status), request)).toBe(503);
     expect(routeEntries).toBe(1);
     expect(responseStatus).toBeUndefined();
     expect(page.isClosed()).toBe(false);
@@ -42,6 +41,38 @@ test('Dogfood teardown drains an intercepted Host request before closing its own
     expect(stopped).toBe(true);
   } finally {
     resume();
+    if (stopping) await stopping;
+    else await stopDogfoodPage(page, fixture, false);
+  }
+});
+
+test('Dogfood teardown drains staggered Host callbacks before removing interception', async ({ page }) => {
+  const fixture = await startDogfood();
+  const resumes: (() => void)[] = [];
+  let enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  let stopping: Promise<void> | undefined;
+  try {
+    await routeWorkspaceHost(page, fixture, {
+      before: () => new Promise<void>(resolve => { resumes.push(resolve); if (resumes.length === 2) enter(); }),
+      observed: async () => {},
+    });
+    await page.goto('/');
+    await page.evaluate(() => {
+      Object.assign(window, { proxyResponses: 0 });
+      for (let index = 0; index < 2; index++) void fetch('/product-host/configuration', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: { kind: 'write' } }),
+      }).then(() => { (window as unknown as { proxyResponses: number }).proxyResponses++; });
+    });
+    await entered;
+    stopping = stopDogfoodPage(page, fixture, false);
+    resumes[0]();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { proxyResponses: number }).proxyResponses)).toBe(1);
+    expect(page.isClosed()).toBe(false);
+    resumes[1]();
+    await stopping;
+  } finally {
+    resumes.forEach(resume => resume());
     if (stopping) await stopping;
     else await stopDogfoodPage(page, fixture, false);
   }

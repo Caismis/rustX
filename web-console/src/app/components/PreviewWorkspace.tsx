@@ -33,12 +33,12 @@ function focusTab(tab: HTMLElement | null | undefined) {
 }
 
 /** One keyed body tree; only pane selection/visibility changes its lease. */
-export function PreviewWorkspace({ owner, snapshot, focusRequest, returnFocus, openWorkbench, openSideQuestion }: {
-  owner: PreviewWorkspaceOwner; snapshot: PreviewWorkspaceSnapshot; focusRequest: number; returnFocus: () => void; openWorkbench?: () => void; openSideQuestion?: () => void;
+export function PreviewWorkspace({ owner, snapshot, active = true, focusRequest, returnFocus, openWorkbench, openSideQuestion }: {
+  owner: PreviewWorkspaceOwner; snapshot: PreviewWorkspaceSnapshot; active?: boolean; focusRequest: number; returnFocus: () => void; openWorkbench?: () => void; openSideQuestion?: () => void;
 }) {
   const tx = useTranslation(), root = useRef<HTMLDivElement>(null), pendingFocus = useRef<number | undefined>(undefined);
   const width = snapshot.width;
-  const workspace = snapshot.workspace, visible = snapshot.mode === 'preview' && !!workspace;
+  const workspace = snapshot.workspace, visible = active && snapshot.mode === 'preview' && !!workspace;
   const split = !!workspace && workspace.panes.length === 2 && splitFits(width);
   useLayoutEffect(() => {
     if (!visible) return;

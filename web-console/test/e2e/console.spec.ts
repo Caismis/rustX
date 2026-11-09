@@ -11,10 +11,10 @@ import { routeWorkspaceHost } from './workspace-host';
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host.ts';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { wireProbe } from './wire-probe';
 
-test('two real rustX Sessions, browser loss, native interactions, raw wire, and cold configuration resolution', async ({ page }) => {
+test('two real rustX Sessions, browser loss, native interactions, raw wire, and cold configuration resolution', async ({ page }, testInfo) => {
   const fixture = await startDogfood();
   const wire = await wireProbe(page);
   const closeView = async (id: string) => {
@@ -168,8 +168,8 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');
     expect(wire.requests.some(request => request.method === 'thread/resume')).toBe(true);
-    await page.screenshot({ path: 'test-results/console-desktop.png', fullPage: true });
-    await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: 'test-results/console-mobile.png', fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath('console-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: testInfo.outputPath('console-mobile.png'), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(fixture.token);
     expect(await page.locator('body').innerText()).not.toContain('fake-provider-only');
@@ -189,5 +189,5 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     expect((await fixture.control('requests')).requests).toHaveLength(8);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics(), await page.locator('.notice').allTextContents(), wire.responses); throw error; }
-  finally { await remote?.shutdown(); await page.close(); await fixture.stop(passed); }
+  finally { try { await remote?.shutdown(); } finally { await stopDogfoodPage(page, fixture, passed); } }
 });
