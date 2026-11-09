@@ -984,7 +984,7 @@ mod tests {
     #[test]
     fn ignored_skill_markers_do_not_hide_nested_source_events() {
         let temporary = tempfile::tempdir().unwrap();
-        let user = roots(temporary.path());
+        let user = roots(&temporary.path().canonicalize().unwrap());
         let collection = user.resources.join("skills/collection");
         let package = collection.join("package");
         std::fs::create_dir_all(&package).unwrap();
@@ -1409,15 +1409,16 @@ mod tests {
     /// it; a sibling no capture read routes nowhere.
     #[test]
     fn a_captured_input_file_is_watched_and_routed_to_its_readers() {
-        let root = tempfile::tempdir().unwrap();
-        let workspace = root.path().join("w");
-        let other = root.path().join("v");
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let workspace = root.join("w");
+        let other = root.join("v");
         for directory in ["w/docs", "w/.agents/skills/x", "v"] {
-            std::fs::create_dir_all(root.path().join(directory)).unwrap();
+            std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         let policy = workspace.join("docs/policy.md");
         let sources = KnownSources {
-            user: roots(&root.path().join("home")),
+            user: roots(&root.join("home")),
             workspaces: vec![workspace.clone(), other.clone()],
             inputs: vec![
                 (other.clone(), policy.clone()),
@@ -1915,45 +1916,47 @@ mod tests {
 
     #[test]
     fn the_watch_set_is_bounded_to_existing_source_directories() {
-        let home = tempfile::tempdir().unwrap();
-        let user = roots(home.path());
-        std::fs::create_dir_all(home.path().join("config")).unwrap();
-        std::fs::create_dir_all(home.path().join("rustx")).unwrap();
-        let workspace = tempfile::tempdir().unwrap();
-        let workspaces = vec![workspace.path().to_path_buf()];
+        let home_directory = tempfile::tempdir().unwrap();
+        let home = home_directory.path().canonicalize().unwrap();
+        let user = roots(&home);
+        std::fs::create_dir_all(home.join("config")).unwrap();
+        std::fs::create_dir_all(home.join("rustx")).unwrap();
+        let workspace_directory = tempfile::tempdir().unwrap();
+        let workspace = workspace_directory.path().canonicalize().unwrap();
+        let workspaces = vec![workspace.clone()];
         let watches = desired(&known(&user, &workspaces));
         assert_eq!(
             watches,
             BTreeMap::from([
-                (home.path().join("config"), RecursiveMode::NonRecursive),
-                (home.path().join("rustx"), RecursiveMode::NonRecursive),
-                (workspace.path().to_path_buf(), RecursiveMode::NonRecursive),
+                (home.join("config"), RecursiveMode::NonRecursive),
+                (home.join("rustx"), RecursiveMode::NonRecursive),
+                (workspace.clone(), RecursiveMode::NonRecursive),
             ])
         );
-        std::fs::create_dir_all(home.path().join("rustx/.agents/skills")).unwrap();
-        std::fs::create_dir_all(workspace.path().join(".agents/uploads")).unwrap();
-        std::fs::create_dir_all(workspace.path().join(".agents/workflows")).unwrap();
+        std::fs::create_dir_all(home.join("rustx/.agents/skills")).unwrap();
+        std::fs::create_dir_all(workspace.join(".agents/uploads")).unwrap();
+        std::fs::create_dir_all(workspace.join(".agents/workflows")).unwrap();
         let watches = desired(&known(&user, &workspaces));
         assert_eq!(
-            watches.get(&home.path().join("rustx/.agents")),
+            watches.get(&home.join("rustx/.agents")),
             Some(&RecursiveMode::NonRecursive)
         );
         assert_eq!(
-            watches.get(&home.path().join("rustx/.agents/skills")),
+            watches.get(&home.join("rustx/.agents/skills")),
             Some(&RecursiveMode::NonRecursive)
         );
         assert_eq!(
-            watches.get(&workspace.path().join(".agents/workflows")),
+            watches.get(&workspace.join(".agents/workflows")),
             Some(&RecursiveMode::Recursive)
         );
         // Uploads are never watched, however many batches they hold.
-        assert!(!watches.contains_key(&workspace.path().join(".agents/uploads")));
+        assert!(!watches.contains_key(&workspace.join(".agents/uploads")));
         assert!(
             watches
                 .keys()
-                .all(|path| !path.starts_with(workspace.path().join(".agents/uploads")))
+                .all(|path| !path.starts_with(workspace.join(".agents/uploads")))
         );
-        assert!(!watches.contains_key(&home.path().join("rustx")));
+        assert!(!watches.contains_key(&home.join("rustx")));
     }
 }
 

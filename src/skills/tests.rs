@@ -162,7 +162,7 @@ fn malformed_prefixes_are_diagnosed_and_large_definitions_are_loaded() {
 #[test]
 fn unterminated_frontmatter_stops_at_the_prefix_budget() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("SKILL.md");
+    let path = directory.path().canonicalize().unwrap().join("SKILL.md");
     let mut file = std::fs::File::create(&path).unwrap();
     file.write_all(b"---\nname: guide\ndescription: ").unwrap();
     file.set_len(64 * 1024 * 1024).unwrap();
