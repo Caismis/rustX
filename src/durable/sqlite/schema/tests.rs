@@ -278,7 +278,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 104);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -343,7 +343,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 104);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -397,37 +397,6 @@ fn schema_101_event_indexes_are_refused_without_rewriting_the_store() {
             })
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);
-    }
-}
-
-#[test]
-fn schema_102_terminal_fields_are_refused_without_rewriting_the_store() {
-    for previous in [102, 103] {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("terminal-layout.sqlite");
-        let id = ConversationId::generate();
-        {
-            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-            store
-                .conn
-                .lock()
-                .unwrap()
-                .execute(
-                    "UPDATE rustx_store SET schema_version=?1 WHERE id=1",
-                    [previous],
-                )
-                .unwrap();
-        }
-        let before = std::fs::read(&path).unwrap();
-        for opened in [
-            SqliteConversationStore::open(id.clone(), &path),
-            SqliteConversationStore::open_existing(id, &path),
-        ] {
-            assert!(
-                matches!(opened, Err(ConversationStoreError::SchemaVersionMismatch { stored, expected: SQLITE_SCHEMA_VERSION }) if stored == previous)
-            );
-            assert_eq!(std::fs::read(&path).unwrap(), before);
-        }
     }
 }
 
@@ -621,7 +590,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 104);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -678,7 +647,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 104);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");

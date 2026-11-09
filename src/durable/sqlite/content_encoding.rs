@@ -42,7 +42,7 @@ pub(super) fn inline_first(kind: &str, representation: ContentRepresentation) ->
         )
 }
 
-pub(super) struct SegmentWriter<'a> {
+struct SegmentWriter<'a> {
     connection: &'a Connection,
     key: (&'a str, &'a str, u32, ContentRepresentation),
     revision: u64,
@@ -53,7 +53,7 @@ pub(super) struct SegmentWriter<'a> {
     segment: u64,
 }
 impl<'a> SegmentWriter<'a> {
-    pub(super) fn new(
+    fn new(
         connection: &'a Connection,
         key: (&'a str, &'a str, u32, ContentRepresentation),
         revision: u64,
@@ -70,10 +70,7 @@ impl<'a> SegmentWriter<'a> {
             segment: 0,
         }
     }
-    pub(super) const fn position(&self) -> u64 {
-        self.written
-    }
-    pub(super) fn finish(mut self) -> Result<u64, ConversationStoreError> {
+    fn finish(mut self) -> Result<u64, ConversationStoreError> {
         self.flush().map_err(|error| storage(error.to_string()))?;
         if self.revision > CONTENT_SAFE_INTEGER_MAX {
             return Err(storage("content revision exhausted"));
