@@ -667,7 +667,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1cba0548592dffde8e4219276ab6614fb76bacab70995cca68b080ffb2cf5cbb"
+      "local_sha256": "26ca8832f1933cfc0ce36e5fa6e15d8b324f4e8b985c785e9b595602ba0f3198"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -1669,7 +1669,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "937ed352d8d22268d9fb8968d18b72fe4801b0d200a1be989ded576bf293d6fb",
+      "local_sha256": "eed5f1961645e45a02d349da7769ad29c23a8dd7b045fcac6bdf54fa1e6215e0",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -8415,7 +8415,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f775efc345096dce642dc56525abfdbcdc43a10f3d561778920617c462bef717"
+      "local_sha256": "c5931a16afab5c0f0991a07dd81ed4283f79f5d2bcee6a0f13fc4d51f5177330"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

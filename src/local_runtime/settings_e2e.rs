@@ -38,6 +38,101 @@ model = "a"
 }
 
 #[test]
+fn a_missing_primary_uses_a_credentialed_default_and_preserves_auxiliary_policy() {
+    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
+    let (_root, host, request) = fixture();
+    let (manager, mut input) = request.session_input(&host).unwrap();
+    let path = host.config_directory.join("rustx.toml");
+    let mut document: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut unconfigured = document["providers"]["local"].clone();
+    unconfigured["api_key"] = "$UNSET_FIXTURE_KEY".into();
+    document["providers"]
+        .as_table_mut()
+        .unwrap()
+        .insert("unconfigured".into(), unconfigured);
+    let models = document["models"].as_table_mut().unwrap();
+    let mut configured = models.remove("a").unwrap();
+    configured["id"] = "wire-c".into();
+    let mut missing_credential = configured.clone();
+    missing_credential["provider"] = "unconfigured".into();
+    missing_credential["id"] = "wire-b".into();
+    models.insert("b".into(), missing_credential);
+    models.insert("c".into(), configured);
+    document["agent"]["model"].as_table_mut().unwrap().insert(
+        "title_model".into(),
+        toml::Value::try_from(serde_json::json!({ "mode": "explicit", "model": "c" })).unwrap(),
+    );
+    std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+
+    let credentials = crate::credentials::CredentialSnapshot::default();
+    let mut applications = super::configuration::application::ApplicationState::default();
+    let (_, default) = applications
+        .session_creation_models(&manager, &input.cwd, &credentials)
+        .unwrap();
+    assert_eq!(default.model.as_str(), "c");
+    assert!(
+        matches!(&default.title_model, AuxiliaryModelPolicy::Explicit { model, .. } if model.as_str() == "c")
+    );
+    input.model = Some(SessionModelConfig::of(
+        crate::model::catalog::ModelRef::parse("b").unwrap(),
+    ));
+    let error = applications
+        .initial_binding(&manager, &input, &credentials, false)
+        .unwrap_err();
+    assert!(error.contains("UNSET_FIXTURE_KEY"), "{error}");
+}
+
+#[test]
+fn a_new_model_bootstraps_an_empty_catalog_without_adopting_new_agents() {
+    let (_root, host, request) = fixture();
+    let (manager, input) = request.session_input(&host).unwrap();
+    let credentials = crate::credentials::CredentialSnapshot::default();
+    let mut applications = super::configuration::application::ApplicationState::default();
+    applications
+        .initial_binding(&manager, &input, &credentials, false)
+        .unwrap();
+    let path = host.config_directory.join("rustx.toml");
+    let original = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let record = |applications: &mut super::configuration::application::ApplicationState| {
+        applications.record_source(
+            &input.cwd,
+            &manager.capture_application(&input, Some(&credentials)),
+        );
+    };
+    record(&mut applications);
+    applications.publish_creation_catalog(None, &credentials, true);
+    assert!(
+        applications
+            .session_creation_models(&manager, &input.cwd, &credentials)
+            .is_err()
+    );
+
+    let definitions = input.cwd.join(".agents/agents");
+    std::fs::create_dir_all(&definitions).unwrap();
+    std::fs::write(
+        definitions.join("reviewer.toml"),
+        "instructions = 'Review'\n[model]\nmodel = 'a'\nprofile = 'missing'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        input.cwd.join("rustx.toml"),
+        "[agent]\nagents = ['reviewer']\n",
+    )
+    .unwrap();
+    std::fs::write(&path, original).unwrap();
+    record(&mut applications);
+
+    let binding = applications
+        .initial_binding(&manager, &input, &credentials, false)
+        .unwrap();
+    assert_eq!(binding.session_model().model.as_str(), "a");
+    assert!(binding.config.agent.agents.is_empty());
+    assert!(binding.subagents.is_empty());
+}
+
+#[test]
 fn root_identity_and_description_are_independent_cas_units() {
     let (_root, host, request) = fixture();
     let (manager, input) = request.session_input(&host).unwrap();
@@ -139,7 +234,7 @@ fn t08_capture_rejects_external_change_between_layers_and_resource_manifest() {
     let before = std::fs::read_to_string(&path).unwrap();
     // This hook is exactly after layer capture, before resource resolution and
     // the final manifest check. No thread scheduling or elapsed time is involved.
-    let result = manager.capture_application_at_boundary(&input, || {
+    let result = manager.capture_application_at_boundary(&input, None, || {
         std::fs::write(
             &path,
             format!("{before}\n[environment]\nCAPTURE_REVISION='new'\n"),
@@ -147,7 +242,7 @@ fn t08_capture_rejects_external_change_between_layers_and_resource_manifest() {
         .unwrap();
     });
     assert!(matches!(result, Err(diagnostic) if diagnostic.contains("changed during capture")));
-    let captured = manager.capture_application(&input).unwrap();
+    let captured = manager.capture_application(&input, None).unwrap();
     assert!(captured.context.is_ok(), "a stable rescan succeeds");
 }
 
@@ -425,11 +520,11 @@ fn application_capture_preserves_non_unicode_source_identity() {
     std::fs::rename(source, &exact).unwrap();
     request.config = Some(exact);
     let (manager, input) = request.session_input(&host).unwrap();
-    let captured = manager.capture_application(&input).unwrap();
+    let captured = manager.capture_application(&input, None).unwrap();
     assert!(captured.context.is_ok());
     assert_eq!(
         captured.revision,
-        manager.capture_application(&input).unwrap().revision
+        manager.capture_application(&input, None).unwrap().revision
     );
 }
 

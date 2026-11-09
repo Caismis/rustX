@@ -375,9 +375,8 @@ impl ApplicationState {
         credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<std::borrow::Cow<'_, super::ProspectiveSessionConfig>, String> {
         if let Some(capture) = self.available.get(key) {
-            // An empty catalog has no launch binding to retain. A validated
-            // model added later can bootstrap a new Session without requiring
-            // an existing Session worker to publish it first.
+            // A first usable model can bootstrap creation after an empty
+            // catalog. Preserve the Workspace's last published resources.
             if capture.config.agent.model.is_none()
                 && let Some(desired) = self
                     .desired_sources
@@ -385,15 +384,18 @@ impl ApplicationState {
                     .and_then(|input| input.as_ref().ok())
                     .and_then(|input| input.context.as_ref().ok())
                 && desired.config.agent.model.is_some()
-                && Self::validate_default(desired, credentials).is_ok()
-                && desired.validate_resource_authority().is_ok()
+                && let Some(candidate) =
+                    Self::creation_catalog_candidate(capture, desired, credentials, false)
             {
-                return Ok(std::borrow::Cow::Owned(desired.clone()));
+                return Ok(std::borrow::Cow::Owned(candidate));
             }
             return Ok(std::borrow::Cow::Borrowed(capture));
         }
         let capture = configuration
-            .capture_application(&super::SessionConfigInput::new(key.to_path_buf()))?
+            .capture_application(
+                &super::SessionConfigInput::new(key.to_path_buf()),
+                Some(credentials),
+            )?
             .context?;
         Self::validate_default(&capture, credentials)?;
         capture.validate_resource_authority()?;
@@ -737,14 +739,14 @@ impl ApplicationState {
         }
     }
 
-    /// A removed model stops being a choice for new Sessions at the source
-    /// commit, even in a Workspace with no Session worker to apply that edit.
-    /// Only the catalog unit is published here. The captured generation still
-    /// travels through the ordinary worker for existing Sessions.
-    pub(crate) fn publish_model_removals(
+    /// A typed model-catalog edit reaches new Sessions at the source commit,
+    /// even when no Session worker exists. Other units keep their previous
+    /// creation authority. Existing Sessions still apply the ordinary capture.
+    pub(crate) fn publish_creation_catalog(
         &mut self,
         workspace: Option<&std::path::Path>,
         credentials: &crate::credentials::CredentialSnapshot,
+        removing: bool,
     ) {
         for (directory, available) in &mut self.available {
             if workspace.is_some_and(|workspace| workspace != directory) {
@@ -758,20 +760,32 @@ impl ApplicationState {
             else {
                 continue;
             };
-            if !available
-                .models
-                .model_refs()
-                .any(|model| desired.models.model(&model).is_err())
-            {
-                continue;
-            }
-            let candidate = available.clone().with_published_catalog(desired);
-            if candidate.preserves_adopted_models(available)
-                && Self::validate_default(&candidate, credentials).is_ok()
+            if let Some(candidate) =
+                Self::creation_catalog_candidate(available, desired, credentials, removing)
             {
                 *available = candidate;
             }
         }
+    }
+
+    fn creation_catalog_candidate(
+        available: &super::ProspectiveSessionConfig,
+        desired: &super::ProspectiveSessionConfig,
+        credentials: &crate::credentials::CredentialSnapshot,
+        removing: bool,
+    ) -> Option<super::ProspectiveSessionConfig> {
+        if desired.same_catalog(available)
+            || !desired.preserves_adopted_models(available, |model| {
+                available.models.model(model).is_err()
+                    || (removing && desired.models.model(model).is_err())
+            })
+        {
+            return None;
+        }
+        let candidate = available.clone().with_creation_catalog(desired);
+        Self::validate_default(&candidate, credentials).ok()?;
+        candidate.validate_resource_authority().ok()?;
+        Some(candidate)
     }
 
     /// Every directory with retained source authority, whether it published a

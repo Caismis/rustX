@@ -488,7 +488,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     } finally { await client.close(); }
   }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
-    return this.nativeLane(id, async () => (await this.resolveWorkspace(id, endpoint)).cwd, async (client, cwd, current) => {
+    return this.nativeLane(id, () => this.resolveExpectedDirectory(id, endpoint, operation.expected_directory), async (client, cwd, current) => {
       const target = { kind: 'workspace' as const, directory: cwd };
       const readSource = async () => {
         return readSourceSettings(async()=>(await client.call('configuration/sourcesRead', {target}, 'source_settings')).projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
@@ -529,6 +529,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       return { kind: operation.kind, projection };
     });
   }
+
+  private async resolveExpectedDirectory(id: string, endpoint: string, expected?: string) {
+    const { cwd } = await this.resolveWorkspace(id, endpoint);
+    // Both strings originate at this canonical Host/native boundary. The
+    // expected directory is a fence only; the registered location selects I/O.
+    if (expected !== undefined && expected !== cwd) throw new WorkspaceHostError('Workspace directory changed', 'workspace_unavailable');
+    return cwd;
+  }
   /** Native Workflow file authoring in exactly this registered Workspace of
    * exactly the Product Host authority that admitted the transaction. A
    * replaced authority is `authority_replaced` even when it reuses the
@@ -541,7 +549,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     // dispatch, validate the authority before mapping the registration.
     const resolve = async () => {
       this.mutationScope(scope);
-      try { return (await this.resolveWorkspace(id, scope.endpoint)).cwd; }
+      try { return await this.resolveExpectedDirectory(id, scope.endpoint, operation.kind === 'tool_catalog' ? operation.expected_directory : undefined); }
       catch (cause) { throw new WorkspaceHostError(cause instanceof Error ? cause.message : String(cause), 'workspace_unavailable'); }
     };
     const run = async (client: AppServerClient, cwd: string, current: () => Promise<boolean>): Promise<WorkflowHostResult> => {
@@ -572,7 +580,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'enable' };
         }
         case 'tool_catalog': {
-          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor }, 'workflow_tool_catalog');
+          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope }, 'workflow_tool_catalog');
           await unchanged();
           return { kind: 'tool_catalog', catalog };
         }
@@ -650,7 +658,11 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'enable' ? fields(['kind', 'id', 'expected_revision', 'enabled']) && id() && typeof value!.expected_revision === 'string' && typeof value!.enabled === 'boolean'
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
-        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor']) && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256) && catalogCursor(value!.cursor)
+        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory'])
+          && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
+          && (value!.expected_scope == null || value!.source != null && (value!.expected_scope === 'user' || value!.expected_scope === 'workspace'))
+          && (value!.expected_directory === undefined || typeof value!.expected_directory === 'string' && value!.expected_directory.length > 0)
+          && catalogCursor(value!.cursor)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)

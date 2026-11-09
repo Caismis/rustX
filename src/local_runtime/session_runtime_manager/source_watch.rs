@@ -551,6 +551,7 @@ fn invalidate(active: &mut BTreeMap<PathBuf, RecursiveMode>, path: &Path) {
 #[derive(Default, PartialEq, Eq)]
 struct WatchPlan {
     watches: BTreeMap<PathBuf, RecursiveMode>,
+    skill_directories: BTreeMap<PathBuf, Vec<(SourceTarget, bool)>>,
     linked_directories: Vec<(SourceTarget, PathBuf, PathBuf)>,
     linked_inputs: Vec<(SourceTarget, PathBuf)>,
 }
@@ -561,6 +562,31 @@ impl WatchPlan {
         path: &Path,
         same: &impl Fn(&Path, &Path) -> bool,
     ) -> impl Iterator<Item = SourceTarget> {
+        use crate::skills::discovery::{IGNORE_FILES, hidden};
+        use crate::skills::package::SKILL_MARKDOWN_FILE;
+
+        // The scanner has evaluated ignore rules for these parents. Match
+        // their direct events without stopping at an ignored ancestor marker.
+        let scanned =
+            path.parent()
+                .zip(path.file_name())
+                .into_iter()
+                .flat_map(move |(parent, name)| {
+                    let entries = self.skill_directories.get(parent);
+                    let fixed = entries.is_some()
+                        && loader_name(
+                            parent,
+                            name,
+                            IGNORE_FILES.into_iter().chain([SKILL_MARKDOWN_FILE]),
+                            same,
+                        )
+                        .is_some();
+                    entries
+                        .into_iter()
+                        .flatten()
+                        .filter(move |(_, package)| fixed || (!package && !hidden(name)))
+                        .map(|(target, _)| target.clone())
+                });
         let directories =
             self.linked_directories
                 .iter()
@@ -572,7 +598,7 @@ impl WatchPlan {
             .linked_inputs
             .iter()
             .filter_map(move |(target, file)| beneath(file, path, same).map(|_| target.clone()));
-        directories.chain(inputs)
+        scanned.chain(directories).chain(inputs)
     }
 }
 
@@ -621,8 +647,18 @@ fn watch_plan(sources: &KnownSources) -> WatchPlan {
             crate::skills::discovery::is_shared(root),
             &signal,
         );
+        let packages: std::collections::BTreeSet<_> = scanned
+            .files
+            .iter()
+            .filter(|path| path.ends_with(crate::skills::package::SKILL_MARKDOWN_FILE))
+            .filter_map(|path| path.parent())
+            .collect();
         for directory in scanned.directories {
             if let Ok(path) = std::fs::canonicalize(&directory) {
+                plan.skill_directories
+                    .entry(path.clone())
+                    .or_default()
+                    .push((target.clone(), packages.contains(directory.as_path())));
                 if path != directory {
                     plan.linked_directories
                         .push((target.clone(), path.clone(), directory));
@@ -947,6 +983,35 @@ mod tests {
             workspaces: workspaces.to_vec(),
             inputs: Vec::new(),
         }
+    }
+
+    #[test]
+    fn ignored_skill_markers_do_not_hide_nested_source_events() {
+        let temporary = tempfile::tempdir().unwrap();
+        let user = roots(temporary.path());
+        let collection = user.resources.join("skills/collection");
+        let package = collection.join("package");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(collection.join(".gitignore"), "/SKILL.md\n").unwrap();
+        std::fs::write(collection.join("SKILL.md"), "ignored marker").unwrap();
+        std::fs::write(package.join("SKILL.md"), "nested marker").unwrap();
+        let plan = watch_plan(&known(&user, &[]));
+        let same = |_: &Path, _: &Path| false;
+        for path in [
+            collection.join("new-package"),
+            package.join("SKILL.md"),
+            package.join(".ignore"),
+        ] {
+            assert_eq!(
+                plan.skill_owners(&path, &same).collect::<Vec<_>>(),
+                [SourceTarget::User]
+            );
+        }
+        assert!(
+            plan.skill_owners(&package.join("asset.md"), &same)
+                .next()
+                .is_none()
+        );
     }
 
     /// The targets that read `path` as reported, where no other spelling is

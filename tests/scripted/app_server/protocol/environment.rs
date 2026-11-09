@@ -1491,8 +1491,8 @@ pub(crate) async fn skill_large_resources_scenario() {
     let directory = fixture.workspaces[0].join(".agents/skills/large");
     std::fs::create_dir_all(&directory).unwrap();
     let license = "L".repeat(240_000);
-    let header =
-        format!("---\nname: large\ndescription: Large native resources\nlicense: {license}\n---\n");
+    let description = "界".repeat(50_000);
+    let header = format!("---\nname: large\ndescription: {description}\nlicense: {license}\n---\n");
     let file = directory.join("SKILL.md");
     std::fs::write(&file, &header).unwrap();
     std::fs::OpenOptions::new()
@@ -1501,6 +1501,18 @@ pub(crate) async fn skill_large_resources_scenario() {
         .unwrap()
         .set_len(32 * 1024 * 1024)
         .unwrap();
+    for (folder, name) in [
+        ("too-large", "m".repeat(70_000)),
+        ("normal", "normal".into()),
+    ] {
+        let directory = directory.with_file_name(folder);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Normal descriptor\n---\n"),
+        )
+        .unwrap();
+    }
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
     let target = SourceTarget::Workspace {
@@ -1512,7 +1524,7 @@ pub(crate) async fn skill_large_resources_scenario() {
         Method::SkillsList {
             target: target.clone(),
             offset: 0,
-            limit: 32,
+            limit: 1,
             expected_revision: None,
         },
     )
@@ -1522,6 +1534,27 @@ pub(crate) async fn skill_large_resources_scenario() {
     };
     assert_eq!(page.data.len(), 1);
     assert!(crate::bounded_file::json_fits(&page, 32_768));
+    assert_eq!(page.data[0].catalog.name, "large");
+    let preview = page.data[0].catalog.description.strip_suffix('…').unwrap();
+    assert!(!preview.is_empty() && description.starts_with(preview));
+    assert_eq!(page.next_offset, Some(1));
+    let MethodResult::Skills { page: last } = call(
+        &connection,
+        1,
+        Method::SkillsList {
+            target: target.clone(),
+            offset: 1,
+            limit: 32,
+            expected_revision: Some(page.revision.clone()),
+        },
+    )
+    .await
+    else {
+        panic!("last catalog page")
+    };
+    assert_eq!(last.data.len(), 1);
+    assert_eq!(last.data[0].catalog.name, "normal");
+    assert_eq!(last.next_offset, None);
     let mut metadata = Vec::new();
     let mut offset = 0;
     loop {
@@ -1554,6 +1587,7 @@ pub(crate) async fn skill_large_resources_scenario() {
     }
     let metadata: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
     assert_eq!(metadata["license"], license);
+    assert_eq!(metadata["description"], description);
     let MethodResult::SkillContent { content } = call(
         &connection,
         3,

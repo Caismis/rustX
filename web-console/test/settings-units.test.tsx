@@ -364,6 +364,7 @@ it('a named Agent preserves and edits the complete explicit Summary Model indepe
   const models = ['main', 'summary-a', 'summary-b'];
   const profiles = { main: ['fast'], 'summary-a': ['deep'], 'summary-b': ['deep', 'quick'] };
   const source = cfg3Source();
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={models} profiles={profiles} name="reviewer" />, { source, context: source });
   const commit = async (expected: ModelLayer) => {
@@ -399,6 +400,7 @@ it('a named Agent preserves and edits the complete explicit Title Model independ
   const models = ['main', 'title-a', 'title-b'];
   const profiles = { main: ['fast'], 'title-a': ['deep'], 'title-b': ['deep', 'quick'] };
   const source = cfg3Source();
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
   const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={models} profiles={profiles} name="reviewer" />, { source, context: source });
   const commit = async (expected: ModelLayer) => {

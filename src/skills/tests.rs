@@ -160,6 +160,22 @@ fn malformed_prefixes_are_diagnosed_and_large_definitions_are_loaded() {
 }
 
 #[test]
+fn unterminated_frontmatter_stops_at_the_prefix_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("SKILL.md");
+    let mut file = std::fs::File::create(&path).unwrap();
+    file.write_all(b"---\nname: guide\ndescription: ").unwrap();
+    file.set_len(64 * 1024 * 1024).unwrap();
+    super::frontmatter::READ_BYTES.with(|count| count.set(0));
+    let error = super::frontmatter::read(&path, &CancellationSignal::new()).unwrap_err();
+    assert!(error.contains("frontmatter exceeds"), "{error}");
+    super::frontmatter::READ_BYTES.with(|count| {
+        let limit = super::frontmatter::MAX_FRONTMATTER_BYTES as u64;
+        assert!((limit..=limit + 4096).contains(&count.get()));
+    });
+}
+
+#[test]
 fn prefix_cancellation_and_definition_replacement_use_deterministic_io_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();

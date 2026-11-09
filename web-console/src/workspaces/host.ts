@@ -1,4 +1,4 @@
-import type { McpProbeResult, ModelProbeOutcome, ModelProbeSource, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v77.ts';
+import type { McpProbeResult, ModelProbeOutcome, ModelProbeSource, SourceMutation, SourceScope, SourceSettings, SourceTarget } from '../../../protocol/app-server/v77.ts';
 import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v77.ts';
 import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v77.ts';
 import type { WorkflowEdit, WorkflowSource } from '../../../protocol/app-server/workflow-documents.ts';
@@ -6,7 +6,7 @@ import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts'
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }
 export interface DeliveryBytes extends FileBytes { file: SessionFileReference }
-export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'model_probe'; model: string; source: ModelProbeSource } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
+export type WorkspaceConfigurationOperation = ({ kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'model_probe'; model: string; source: ModelProbeSource } | { kind: 'write'; expected_revision: string; mutation: SourceMutation }) & { expected_directory?: string };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
 export type WorkspaceConfigurationReread =
@@ -33,7 +33,7 @@ export type WorkflowHostOperation =
   | { kind: 'list' }
   | { kind: 'read'; id: string }
   | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
-  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null }
+  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null; expected_scope?: SourceScope | null; expected_directory?: string }
   | { kind: 'enable'; id: string; expected_revision: string; enabled: boolean }
   | { kind: 'analyze'; id: string; document: WorkflowFileDocument; generation: string; query?: WorkflowAnalysisQuery }
   | { kind: 'check'; id: string; document: WorkflowFileDocument }

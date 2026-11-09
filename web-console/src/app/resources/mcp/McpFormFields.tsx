@@ -4,28 +4,30 @@ import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Choice } from '../../settings/primitives/aria';
 import { JsonCodeEditor } from '../../../presentation/primitives/JsonCodeEditor';
+import type { McpFieldBuffers } from '../types';
 import { formatArguments, parseArguments, formatReferences, parseReferences } from './form-values';
 import css from './McpPage.module.css';
 
 /** Intermediate text stays in the field; every valid value goes straight to
  * the native-source transaction draft. Invalid text blocks Save and JSON. */
-function DraftText<T>({ value, format, parse, change, validity, field, label, error, placeholder, json = false }: {
+function DraftText<T>({ value, format, parse, change, validity, field, invalidText, label, error, placeholder, json = false }: {
   value: T; format: (value: T) => string; parse: (text: string) => T; change: (value: T) => void;
-  validity: (field: string, valid: boolean) => void; field: string; label: string; error: string; placeholder: string; json?: boolean;
+  validity: (field: keyof McpFieldBuffers, invalidText?: string) => void; field: keyof McpFieldBuffers;
+  invalidText?: string; label: string; error: string; placeholder: string; json?: boolean;
 }) {
   const encoded = format(value), reflected = useRef(encoded);
-  const [text, setText] = useState(encoded), [invalid, setInvalid] = useState(false);
+  const [text, setText] = useState(invalidText ?? encoded), [invalid, setInvalid] = useState(invalidText !== undefined);
   useEffect(() => {
     if (encoded === reflected.current) return;
-    reflected.current = encoded; setText(encoded); setInvalid(false); validity(field, true);
+    reflected.current = encoded; setText(encoded); setInvalid(false); validity(field);
   }, [encoded, field, validity]);
-  useEffect(() => () => validity(field, true), [field, validity]);
+  useEffect(() => () => validity(field), [field, validity]);
   const update = (text: string) => {
     setText(text);
     try {
       const next = parse(text); reflected.current = format(next);
-      setInvalid(false); validity(field, true); change(next);
-    } catch { setInvalid(true); validity(field, false); }
+      setInvalid(false); validity(field); change(next);
+    } catch { setInvalid(true); validity(field, text); }
   };
   if (json) return <JsonCodeEditor label={label} value={text} placeholder={placeholder} error={invalid ? error : ''} onChange={update} minHeight={112} />;
   return <label>{label}
@@ -34,8 +36,9 @@ function DraftText<T>({ value, format, parse, change, validity, field, label, er
   </label>;
 }
 
-export function McpFormFields({ value, change, validity, identity, disabled }: {
-  value: McpWrite; change: (value: McpWrite) => void; validity: (field: string, valid: boolean) => void;
+export function McpFormFields({ value, change, invalidFields, validity, identity, disabled }: {
+  value: McpWrite; change: (value: McpWrite) => void; invalidFields: McpFieldBuffers;
+  validity: (field: keyof McpFieldBuffers, invalidText?: string) => void;
   identity: ReactNode; disabled: boolean;
 }) {
   const tx = useTranslation(), definition = value.definition, http = mcpTransport(definition) === 'http';
@@ -50,11 +53,11 @@ export function McpFormFields({ value, change, validity, identity, disabled }: {
       {http ? <label>{tx('settings:mcp.url')}<input value={definition.url ?? ''} placeholder={tx('settings:mcp.url-placeholder')} onChange={event => patch({url:event.target.value})}/></label>
         : <>
           <label>{tx('settings:mcp.command')}<input value={definition.command ?? ''} placeholder={tx('settings:mcp.command-placeholder')} onChange={event => patch({command:event.target.value})}/></label>
-          <DraftText field="args" label={tx('settings:mcp.arguments')} value={definition.args ?? []} format={formatArguments} parse={parseArguments}
+          <DraftText field="args" invalidText={invalidFields.args} label={tx('settings:mcp.arguments')} value={definition.args ?? []} format={formatArguments} parse={parseArguments}
             change={args => patch({args})} validity={validity} error={tx('settings:mcp.args-error')} placeholder={tx('settings:mcp.args-placeholder')}/>
         </>}
       <details className={css.optionalMap} key={http ? 'http' : 'stdio'}><summary>{tx(http ? 'settings:mcp.headers' : 'settings:mcp.env')}</summary>
-        <DraftText field={http ? 'headers' : 'env'} label={tx(http ? 'settings:mcp.headers-json' : 'settings:mcp.env-json')} json
+        <DraftText field={http ? 'headers' : 'env'} invalidText={http ? invalidFields.headers : invalidFields.env} label={tx(http ? 'settings:mcp.headers-json' : 'settings:mcp.env-json')} json
           value={(http ? definition.sensitive_headers : definition.sensitive_env) ?? {}} format={formatReferences} parse={parseReferences}
           change={references => patch(http ? {sensitive_headers:references} : {sensitive_env:references})} validity={validity}
           error={tx('settings:mcp.references-error')} placeholder={tx(http ? 'settings:mcp.headers-placeholder' : 'settings:mcp.env-placeholder')}/>

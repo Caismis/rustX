@@ -670,16 +670,18 @@ export class AppServerSession {
     }finally{this.#modelMutationInFlight=false;}
   }
 
-  async modelSet(config: SessionModelConfig): Promise<SessionModelView> {
+  async modelSet(config: SessionModelConfig, recoverCarriedAuxiliary = false): Promise<SessionModelView> {
     if (this.#released || this.#serverClosed) throw new Error("Session attachment is unavailable.");
     if (this.#modelMutationInFlight) throw new Error("A model selection request is still in flight; wait for its response or connection recovery.");
     this.#assertControlReady();
     const epoch = this.#epoch;
     this.#modelMutationInFlight = true;
     try {
+      const hasExplicitAuxiliary = [config.summaryModel, config.titleModel, config.classificationModel, config.btwModel]
+        .some(policy => policy?.mode === "explicit");
       await this.#call(
         "session/setModel",
-        { target: this.#target, config },
+        { target: this.#target, config, ...(recoverCarriedAuxiliary && hasExplicitAuxiliary ? { recover_unavailable_auxiliary: true } : {}) },
         "model_set",
       );
       if (this.#released || this.#serverClosed || epoch !== this.#epoch) {

@@ -7,6 +7,9 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+const SKILL_PAGE_DATA_BYTES: usize = 131_072;
+const SKILL_DESCRIPTION_PREVIEW_BYTES: usize = 4096;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SkillDescriptor {
@@ -36,8 +39,8 @@ pub struct SkillContent {
 fn descriptor(
     package: &crate::skills::SkillPackage,
     provenance: &SkillProvenance,
-) -> Result<SkillDescriptor, SettingsError> {
-    Ok(SkillDescriptor {
+) -> Result<Option<SkillDescriptor>, SettingsError> {
+    let mut skill = SkillDescriptor {
         catalog: SkillCatalogEntry {
             name: package.name().into(),
             description: package.description().into(),
@@ -46,7 +49,23 @@ fn descriptor(
         provenance: provenance.clone(),
         disable_model_invocation: package.disable_model_invocation(),
         metadata_revision: digest(&package.definition()).map_err(|_| SettingsError::Io)?,
-    })
+    };
+    // Leave room for the surrounding array so every projected descriptor can
+    // be paged on its own. Only the WebUI preview is shortened.
+    let limit = SKILL_PAGE_DATA_BYTES - 2;
+    if crate::bounded_file::json_fits(&skill, limit) {
+        return Ok(Some(skill));
+    }
+    let description = &mut skill.catalog.description;
+    if description.len() > SKILL_DESCRIPTION_PREVIEW_BYTES {
+        description.truncate(description.floor_char_boundary(SKILL_DESCRIPTION_PREVIEW_BYTES));
+        description.push('…');
+        if crate::bounded_file::json_fits(&skill, limit) {
+            return Ok(Some(skill));
+        }
+    }
+    skill.provenance.shadowed.clear();
+    Ok(crate::bounded_file::json_fits(&skill, limit).then_some(skill))
 }
 impl SessionRuntimeManager {
     pub(crate) async fn skill_page(
@@ -70,20 +89,25 @@ impl SessionRuntimeManager {
             let discovered = configuration
                 .discover_skills(target.workspace())
                 .ok_or(SettingsError::Invalid)?;
-            let descriptors: Vec<_> = discovered
-                .packages
-                .iter()
-                .map(|package| {
-                    let provenance = discovered
-                        .provenance
-                        .iter()
-                        .find(|entry| entry.name == package.name())
-                        .ok_or(SettingsError::Invalid)?;
-                    descriptor(package, provenance)
-                })
-                .collect::<Result<_, _>>()?;
+            let mut descriptors = Vec::new();
+            let mut all_diagnostics = discovered.diagnostics;
+            for package in &discovered.packages {
+                let provenance = discovered
+                    .provenance
+                    .iter()
+                    .find(|entry| entry.name == package.name())
+                    .ok_or(SettingsError::Invalid)?;
+                match descriptor(package, provenance)? {
+                    Some(descriptor) => descriptors.push(descriptor),
+                    None => all_diagnostics.push(SkillDiagnostic::PackageWarning {
+                        source: provenance.source,
+                        package: provenance.location.clone(),
+                        detail: "Skill identity is too large to display".into(),
+                    }),
+                }
+            }
             let revision =
-                digest(&(&descriptors, &discovered.diagnostics)).map_err(|_| SettingsError::Io)?;
+                digest(&(&descriptors, &all_diagnostics)).map_err(|_| SettingsError::Io)?;
             if let Some(expected) = expected
                 && expected != revision
             {
@@ -93,25 +117,22 @@ impl SessionRuntimeManager {
                     actual: revision,
                 });
             }
-            if offset > discovered.packages.len() {
+            let total = descriptors.len();
+            if offset > total {
                 return Err(SettingsError::Invalid);
             }
             let mut data = Vec::new();
             for descriptor in descriptors.into_iter().skip(offset).take(limit) {
                 data.push(descriptor);
-                if !crate::bounded_file::json_fits(&data, 131_072) {
+                if !crate::bounded_file::json_fits(&data, SKILL_PAGE_DATA_BYTES) {
                     data.pop();
                     break;
                 }
             }
-            if data.is_empty() && offset < discovered.packages.len() {
-                return Err(SettingsError::Invalid);
-            }
-            let next_offset =
-                (offset + data.len() < discovered.packages.len()).then_some(offset + data.len());
+            let next_offset = (offset + data.len() < total).then_some(offset + data.len());
             let mut diagnostics = Vec::new();
-            let diagnostic_count = discovered.diagnostics.len();
-            for diagnostic in discovered.diagnostics.into_iter().take(32) {
+            let diagnostic_count = all_diagnostics.len();
+            for diagnostic in all_diagnostics.into_iter().take(32) {
                 diagnostics.push(diagnostic);
                 if !crate::bounded_file::json_fits(&diagnostics, 65_536) {
                     diagnostics.pop();
@@ -163,7 +184,7 @@ impl SessionRuntimeManager {
                 .iter()
                 .find(|provenance| provenance.name == name)
                 .ok_or(SettingsError::Invalid)?;
-            let skill = descriptor(package, provenance)?;
+            let skill = descriptor(package, provenance)?.ok_or(SettingsError::Invalid)?;
             let (data_base64, next_offset, revision) = match kind {
                 SkillContentKind::Instructions => {
                     let path = package.instruction_source();

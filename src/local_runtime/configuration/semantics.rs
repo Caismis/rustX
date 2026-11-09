@@ -123,14 +123,15 @@ pub(in crate::local_runtime) fn authored_catalog(
 }
 
 /// A model can reference a Provider owned by another source. If that Provider
-/// is removed, keep the authored model editable and omit it from live choices.
+/// is removed, keep recoverable orphan entries editable outside the live catalog.
 pub(in crate::local_runtime) fn available_catalog(
     layer: &RuntimeLayer,
+    may_omit_orphan: impl Fn(&str) -> bool,
 ) -> crate::model::authoring::Catalog {
     let mut catalog = authored_catalog(layer);
-    catalog
-        .models
-        .retain(|_, model| catalog.providers.contains_key(&model.provider));
+    catalog.models.retain(|name, model| {
+        catalog.providers.contains_key(&model.provider) || !may_omit_orphan(name)
+    });
     catalog
 }
 

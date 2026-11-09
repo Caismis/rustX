@@ -145,18 +145,7 @@ impl AgentInspection {
                 .filter(|entry| profile.skills.contains(&entry.name))
                 .cloned()
                 .collect(),
-            agent_controls: if profile.agents.is_empty() {
-                Vec::new()
-            } else {
-                crate::tools::native::AGENT_CONTROL_TOOL_NAMES
-                    .iter()
-                    .map(|name| ToolInspection {
-                        id: crate::tools::native::agent_control_tool_id(name),
-                        name: (*name).to_owned(),
-                        origin: ToolOrigin::Builtin,
-                    })
-                    .collect()
-            },
+            agent_controls: Self::controls_for(&profile.agents),
             agents: profile.agents.iter().cloned().collect(),
             workflows: profile.workflows.iter().cloned().collect(),
             extensions: vec![
@@ -179,6 +168,26 @@ impl AgentInspection {
                 .map(AgentProfileDiagnostic::redacted)
                 .collect(),
         }
+    }
+
+    pub(crate) fn set_root_agents(&mut self, agents: impl IntoIterator<Item = SubagentName>) {
+        let agents = agents.into_iter().collect();
+        self.agent_controls = Self::controls_for(&agents);
+        self.agents = agents.into_iter().collect();
+    }
+
+    fn controls_for(agents: &std::collections::BTreeSet<SubagentName>) -> Vec<ToolInspection> {
+        if agents.is_empty() {
+            return Vec::new();
+        }
+        crate::tools::native::AGENT_CONTROL_TOOL_NAMES
+            .iter()
+            .map(|name| ToolInspection {
+                id: crate::tools::native::agent_control_tool_id(name),
+                name: (*name).to_owned(),
+                origin: ToolOrigin::Builtin,
+            })
+            .collect()
     }
 }
 

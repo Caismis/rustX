@@ -43,7 +43,7 @@ export class ModelSelection {
         if (!current()) throw new Error('Model selection retired with its connection.');
         const selection = this.port.state().views[id].modelIntent!.config;
         this.port.setSession(id, { modelIntent: { config: selection, phase: 'applying' } });
-        await this.setAgentModel(id, selection);
+        await this.setAgentModel(id, selection, true);
         if (!current()) throw new Error('Model selection retired with its connection.');
         await this.repairAgentModel(id);
         if (!current()) throw new Error('Model selection retired with its connection.');
@@ -63,14 +63,18 @@ export class ModelSelection {
   }
   /** Transport continuation guard, not Session model authority. A successful
    * mutation response alone cannot enable a dependent Send. */
-  async setAgentModel(id: string, config: SessionModelConfig) {
+  async setAgentModel(id: string, config: SessionModelConfig, recoverCarriedAuxiliary = false) {
     const target = this.port.target(id), generation = this.port.state().generation;
     if (this.port.state().views[id].modelMutation) throw new Error('Reread native model state before another mutation.');
     const current = () => this.port.current(generation) && sameTarget(this.port.state().views[id]?.target, target);
     const operation = { generation, status: 'in-flight' as const };
     this.port.setSession(id, { modelMutation: operation });
     try {
-      await this.port.request({ method: 'session/setModel', params: { target, config } }, 'model_set');
+      const hasExplicitAuxiliary = [config.summaryModel, config.titleModel, config.classificationModel, config.btwModel]
+        .some(policy => policy?.mode === 'explicit');
+      await this.port.request({ method: 'session/setModel', params: {
+        target, config, ...(recoverCarriedAuxiliary && hasExplicitAuxiliary ? { recover_unavailable_auxiliary: true } : {}),
+      } }, 'model_set');
       if (!current()) return;
       this.port.setSession(id, { modelMutation: { generation, status: 'acknowledged' }, ...(this.port.state().views[id]?.modelIntent?.phase === 'failed' ? { modelIntent: undefined } : {}) });
     } catch (error) {

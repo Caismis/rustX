@@ -739,7 +739,7 @@ export class CommandDispatcher {
       const configured = { ...current.configured };
       if (clear) delete configured.profile;
       else if (profile !== undefined) configured.profile = profile;
-      const updated = await session.modelSet(configured);
+      const updated = await session.modelSet(configured, true);
       return transient("info", withModelOutcomeNotice(session, `Session model profile -> ${updated.configured.profile ?? "model default"}; future independent attempts. Running attempts stay frozen.`));
     }
     if (argument === "show") {
@@ -800,12 +800,12 @@ export class CommandDispatcher {
         classificationModel: current.classificationModel,
         btwModel: current.btwModel,
       };
-      const updated = await session.modelSet({
-        ...replacement,
-      });
-      const selectionNote = sameModel
-        ? "profile, overrides and auxiliary policies preserved"
-        : "primary overrides reset; auxiliary policies preserved";
+      const updated = await session.modelSet(replacement, true);
+      const auxiliaryRecovered = (["summaryModel", "titleModel", "classificationModel", "btwModel"] as const)
+        .some(key => current[key]?.mode === "explicit" && updated.configured[key]?.mode !== "explicit");
+      const selectionNote = auxiliaryRecovered
+        ? `${sameModel ? "profile and overrides preserved" : "primary overrides reset"}; unavailable auxiliary models now follow the primary`
+        : sameModel ? "profile, overrides and auxiliary policies preserved" : "primary overrides reset; auxiliary policies preserved";
 
       const attempt = session.state?.attempt;
       const attemptNote =

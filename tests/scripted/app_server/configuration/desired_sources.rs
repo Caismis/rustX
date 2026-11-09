@@ -371,7 +371,7 @@ async fn issue385_failed_preparation_after_user_commit_keeps_last_good_available
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue385_future_default_source_generation_publishes_without_session_mutation() {
-    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::local_runtime::configuration::settings::{SessionModelsView, SourceTarget};
     use crate::local_runtime::session::deletion::SessionDeleteResult;
     Box::pin(bounded(async {
         let fixture = Fixture::with_session_count(None, 0).await;
@@ -436,9 +436,42 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
                 .entries
                 .is_empty()
         );
-        // A zero-Session User commit that changes only a future-Session default
-        // (local/a -> local/b) refreshes the retained desired source; it
-        // creates nothing and republishes nothing by itself.
+        // Typed model edits publish only the creation catalog, even with no
+        // Session to drive a preparation. An added model is immediately visible.
+        let mut added = issue459_authored_a(&fixture).await;
+        added.id = "c".into();
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Model {
+                id: "local/c".into(),
+                authored: Some(added),
+            },
+        )
+        .await;
+        let source = fixture
+            .manager
+            .source_settings(&SourceTarget::Workspace {
+                directory: workspace.clone(),
+            })
+            .await
+            .unwrap();
+        let Some(SessionModelsView::Available {
+            catalog,
+            default_model,
+        }) = source.session_models
+        else {
+            panic!("published creation catalog")
+        };
+        assert_eq!(default_model.model, model_a);
+        assert!(
+            catalog
+                .models
+                .iter()
+                .any(|entry| entry.model.as_str() == "local/c")
+        );
+
+        // Changing the default is also effective for creation at commit.
         write(
             &fixture,
             0,
@@ -474,11 +507,7 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
         let desired_revisions = {
             let applications = fixture.manager.applications.lock();
             let available = applications.test_available(&workspace).unwrap();
-            assert_eq!(
-                available.config.initial_model().model,
-                model_a,
-                "generation B waits for native publication"
-            );
+            assert_eq!(available.config.initial_model().model, model_b);
             let desired = applications
                 .test_desired_source(&workspace)
                 .expect("User commit refreshes a sessionless Workspace")
@@ -486,11 +515,11 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
                 .expect("desired capture");
             let context = desired.context.as_ref().expect("desired context");
             assert_eq!(context.config.initial_model().model, model_b);
+            assert_ne!(available.source_revisions, context.source_revisions);
             context.source_revisions.clone()
         };
-        // A new Session binds last-good A with its own selection local/a. The
-        // unpublished generation defers to natural residency; creation drives
-        // no runtime, no model request, and no adoption candidate.
+        // The catalog gives the new Session local/b. The remaining source
+        // generation waits for residency, without preparing during creation.
         let second = fixture
             .manager
             .create_session(SessionPersistentState {
@@ -509,7 +538,7 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
                 .unwrap()
                 .1
                 .model,
-            selected(&model_a)
+            selected(&model_b)
         );
         assert!(fixture.manager.configuration_runtime(&second.id).is_none());
         assert!(fixture.provider.request_bodies().is_empty());
@@ -567,7 +596,7 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
                 .unwrap()
                 .1
                 .model,
-            selected(&model_a),
+            selected(&model_b),
             "publication never mutates the resident Session's selection"
         );
         {
@@ -611,7 +640,7 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
                 .unwrap()
                 .1
                 .model,
-            selected(&model_a)
+            selected(&model_b)
         );
         fixture.close().await;
     }))
@@ -660,16 +689,10 @@ async fn issue385_failed_future_default_publication_keeps_last_good_available() 
                 .entries
                 .is_empty()
         );
-        write(
-            &fixture,
-            0,
-            ConfigMutation::RootModel {
-                authored: Some(crate::local_runtime::authoring::ModelLayer {
-                    model: Some(model_b.clone()),
-                    ..Default::default()
-                }),
-            },
-        )
+        // An external edit still goes through ordinary generation preparation.
+        issue459_edit(&fixture, |document| {
+            document["agent"]["model"]["model"] = "local/b".into();
+        })
         .await;
         source_settled(&fixture, &SourceTarget::User).await;
         // The joining Session binds last-good A while the unpublished

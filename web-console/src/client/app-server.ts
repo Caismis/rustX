@@ -739,7 +739,7 @@ export class AppServerClient {
     modelRead: (target, current) => this.reads.modelRead(target, current),
   });
   prepareAgentModel(id: string, config: SessionModelConfig) { return this.models.prepareAgentModel(id, config); }
-  setAgentModel(id: string, config: SessionModelConfig) { return this.models.setAgentModel(id, config); }
+  setAgentModel(id: string, config: SessionModelConfig, recoverCarriedAuxiliary = false) { return this.models.setAgentModel(id, config, recoverCarriedAuxiliary); }
   repairAgentModel(id: string) { return this.models.repairAgentModel(id); }
   confirmAgentModel(id: string, config: SessionModelConfig, current: () => boolean) { return this.models.confirmAgentModel(id, config, current); }
   private readonly interactions = new Interactions({

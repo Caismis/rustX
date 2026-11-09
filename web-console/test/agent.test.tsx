@@ -11,6 +11,7 @@ import { ModelSelect } from '../src/presentation/agent/ModelSelect';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
+import { ToolInspectionContext } from '../src/app/agent/tool-inspection';
 import { FileLinks } from '../src/presentation/markdown/FileLinks';
 import { RpcFailure } from '../src/client/errors';
 import { toolCard } from '../src/bindings/tools';
@@ -352,15 +353,31 @@ it('replayed image reads use the saved image and keep extra result text', () => 
  const openFile = vi.fn();
  const ui = render(<FileLinks value={openFile}><Tool tool={JSON.parse(JSON.stringify(tool))}/></FileLinks>);
  expect(ui.container.querySelector('[data-tool-renderer="image"]')).toBeTruthy();
- fireEvent.click(ui.getByRole('button', { name: /^sample\.png$/ }));
+ const path = ui.getByRole('button', { name: /^sample\.png$/ });
+ expect(path.closest('[role="button"]')).toBeNull();
+ fireEvent.click(path);
  expect(openFile).toHaveBeenCalledWith({ path: '/workspace/sample.png' });
  expect(ui.queryByText('/workspace/sample.png')).toBeNull();
- fireEvent.click(screen.getByText('Read image'));
+ fireEvent.click(screen.getByRole('button', { name: 'Read image', expanded: false }));
  expect(ui.getByText('/workspace/sample.png')).toBeTruthy();
  expect(ui.getByText('Extra result text')).toBeTruthy();
  expect(ui.container.textContent).not.toMatch(/artifact_1|Read static PNG image/);
 });
 
+
+it('keeps the trace inspector reachable for an image read with a deferred result', async () => {
+  const occurrence = { locator: { type: 'by_message_id' as const, message_id: 'assistant' }, block_index: 0 };
+  const tool: ForegroundToolExecution = {
+    occurrence, block_index: 0, call_id: 'image', tool_id: 'tool-read-image', name: 'read_image',
+    assembly_complete: true, committed_result_deferred: true,
+    state: { type: 'running', arguments: '{"path":"/workspace/sample.png"}' },
+  };
+  const inspect = vi.fn(async () => {});
+  render(<ToolInspectionContext value={inspect}><Tool tool={tool}/></ToolInspectionContext>);
+  fireEvent.click(screen.getByRole('button', { name: /Read image.*sample\.png/, expanded: false }));
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
+  await waitFor(() => expect(inspect).toHaveBeenCalledWith({ occurrence, call_id: 'image', tool_id: 'tool-read-image' }));
+});
 
 it('preloads the model catalog and reopens the menu without another read or loading state', async () => {
   modelFixture(); server.held.add('session/models'); await server.attached('A'); render(<Control/>);
@@ -590,7 +607,7 @@ it.each(['menu', 'slash'] as const)('%s reselects the current model with its com
   const before = server.client.getSnapshot().views.A.snapshot;
   await chooseCurrent();
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured, recover_unavailable_auxiliary: true });
   expect(server.client.getSnapshot().views.A.snapshot).toBe(before);
   if (surface === 'slash') expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLInputElement).value).toBe('/model');
   ui.rerender(surface === 'menu' ? <Control/> : <SlashControl/>);
@@ -639,7 +656,7 @@ it('a Draft equivalent choice stays local, while a deliberate current-model choi
   expect(server.client.getSnapshot().views.A.modelIntent?.config).toEqual(configured);
   await act(async () => { server.reply(opening); await attaching; });
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured, recover_unavailable_auxiliary: true });
   await act(async () => server.reply(mutation));
   expect(count('session/setModel')).toBe(1);
 });
@@ -957,7 +974,7 @@ it.each(['reply', 'expired'] as const)('revalidates a deferred selection when th
  expect(count('session/setModel')).toBe(1);
 });
 
-it('rereads the current Session model when switching between attachments with the same local sequence', async () => {
+it('rereads the Session model and closes the old picker when attachments have the same local sequence', async () => {
  modelFixture();
  const models = new Map(['A', 'B'].map(id => {
    const model = structuredClone(server.snapshots.get('A')!.model!);
@@ -977,8 +994,12 @@ it('rereads the current Session model when switching between attachments with th
  const ui = render(<Selected id="A"/>);
  const trigger = () => screen.getByRole('button', {name:'Model and thinking effort'});
  await waitFor(() => expect(trigger().textContent).toContain('exact/model'));
+ fireEvent.click(trigger());
+ expect(trigger().getAttribute('aria-expanded')).toBe('true');
  ui.rerender(<Selected id="B"/>);
  await waitFor(() => expect(trigger().textContent).toContain('other'));
+ expect(trigger().getAttribute('aria-expanded')).toBe('false');
+ expect(screen.queryByRole('menu')).toBeNull();
  ui.rerender(<Selected id="A"/>);
  await waitFor(() => expect(trigger().textContent).toContain('exact/model'));
  expect(catalog).toHaveBeenCalledTimes(3);

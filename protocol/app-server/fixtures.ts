@@ -666,6 +666,36 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
+    "method": "session/setModel",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "config": {
+        "model": "local/replacement",
+        "requestParams": {},
+        "summaryModel": {
+          "mode": "session"
+        },
+        "titleModel": {
+          "mode": "session"
+        },
+        "classificationModel": {
+          "mode": "session"
+        },
+        "btwModel": {
+          "mode": "session"
+        }
+      },
+      "recover_unavailable_auxiliary": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
     "method": "session/selectModel",
     "params": {
       "target": {
@@ -1417,7 +1447,8 @@ export const fixtures = [
         "directory": "/workspace/fixture"
       },
       "source": "github",
-      "cursor": null
+      "cursor": null,
+      "expected_scope": "user"
     }
   },
   {

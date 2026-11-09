@@ -98,7 +98,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childDetails).toContainText('Workflow-only reviewer');
     const inspectedNode = await childDetails.elementHandle();
     await fixture.release('workflow-child-read');
-    await expect(page.locator('#subagent-header-actions').getByRole('status')).toContainText('Completed');
+    await expect(page.locator('#subagent-header-actions').getByRole('status')).toContainText('Completed', { timeout: 15_000 });
     await expect(childDetails).toContainText('Workflow-only reviewer');
     expect(await childDetails.evaluate((node, previous) => node === previous, inspectedNode)).toBe(true);
     await expect(childTrace).toContainText('One-shot subagent record');

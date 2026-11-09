@@ -340,11 +340,12 @@ impl AppServerConnection {
                 target,
                 source,
                 cursor,
+                expected_scope,
             } => {
                 let catalog = self
                     .host
                     .manager()
-                    .workflow_tool_catalog(target, source, cursor)
+                    .workflow_tool_catalog(target, source, cursor, expected_scope)
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::WorkflowToolCatalog { catalog })

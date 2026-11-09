@@ -423,7 +423,7 @@ async fn a_child_may_select_a_capability_that_is_available_but_inactive_for_the_
 /// Statically invalid references — capability, model, or Skill — reject
 /// resource-generation preparation deterministically.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn statically_invalid_references_fail_launch_analysis_closed() {
+async fn statically_invalid_child_references_fail_admission_closed() {
     for (subagents, expected) in [
         (
             serde_json::json!({
@@ -486,14 +486,16 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
     ] {
         let lab = Lab::new();
         lab.write_config(&subagents);
-        let composed = lab.paths().compose(&dependencies()).await;
+        let product = lab.paths().compose(&dependencies()).await.unwrap();
+        let resources = product.runtime().runtime_resources();
         if expected == "local/model-missing" {
-            assert!(composed.is_err());
-            continue;
+            assert!(
+                resources.delegatable_agents().is_empty(),
+                "the missing model makes the role unavailable for delegation"
+            );
         }
-        let product = composed.unwrap();
         let result = resolve(
-            &product.runtime().runtime_resources(),
+            &resources,
             &agent("explore"),
             &inherited_model(),
             &model_registry(),

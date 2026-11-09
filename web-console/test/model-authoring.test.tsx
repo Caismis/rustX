@@ -1,10 +1,12 @@
 import { providerAction } from './settings-harness';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { cfg3Client } from './cfg3-fixture';
-import { chooseOption, openSettingsPage, settingsReady, SettingsSurface } from './settings-harness';
-import { userSettingsTarget } from '../src/app/settings/projection';
-import { RpcFailure } from '../src/client/errors';
+import { cfg3Client, cfg3Host } from './cfg3-fixture';
+import { cfg3Effective, cfg3Source } from './cfg3-data';
+import { chooseOption, openSettingsPage, renderEditor, settingsReady, SettingsSurface } from './settings-harness';
+import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
+import { ModelsPage } from '../src/app/settings/models/ModelsPage';
+import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 
 afterEach(cleanup);
 const writes = (subject: ReturnType<typeof cfg3Client>) => subject.request.mock.calls.filter(([operation]) => operation.method === 'configuration/sourceWrite');
@@ -99,6 +101,28 @@ it('autosaves a newer Provider edit after the previous write is observed', async
   expect(writes(subject)[1][0]).toMatchObject({params:{expected_revision:'user-2', mutation:{mutation:{
     id:'transport', authored:{base_url:'https://latest.example/v1', credential:{kind:'retain'}},
   }}}});
+});
+
+it('offers a manual Provider retry once an uncertain write is reread at the same revision', async () => {
+  let attempts = 0;
+  const subject = cfg3Client(async (operation, source) => {
+    if (operation.method !== 'configuration/sourceWrite') return;
+    if (++attempts === 1) throw new OutcomeUncertain();
+    source.user.authored!.providers!.transport.base_url = 'https://retry.example/v1';
+    source.user.revision = 'user-2';
+    return { type: 'sources_written', revision: 'user-2', configuration_revision: null };
+  });
+  await openModels(subject);
+  const url = screen.getByLabelText('Base URL');
+  fireEvent.change(url, { target: { value: 'https://retry.example/v1' } });
+  fireEvent.keyDown(url, { key: 'Enter' });
+  await waitFor(() => expect(subject.request.mock.calls.filter(([request]) => request.method === 'configuration/sourcesRead')).toHaveLength(2));
+  expect(writes(subject)).toHaveLength(1);
+  await providerAction('Retry');
+  await waitFor(() => expect(writes(subject)).toHaveLength(2));
+  expect(writes(subject)[1][0]).toMatchObject({
+    params: { expected_revision: 'user-1', mutation: { mutation: { id: 'transport', authored: { base_url: 'https://retry.example/v1' } } } },
+  });
 });
 
 it('invalid model limits and duplicate model identities never reach native writes', async () => {
@@ -207,6 +231,77 @@ it('automatically saves provider icons and retains saved credentials', async () 
   expect(within(form).queryByRole('button', { name: 'Save Provider transport' })).toBeNull();
 });
 
+it('requires a new workspace credential for an inherited provider override and returns to read-only after restoring', async () => {
+  let revision = 1;
+  const subject = cfg3Client(async (operation, source) => {
+    if (operation.method !== 'configuration/sourceWrite' || operation.params.mutation.kind !== 'config') return;
+    const mutation = operation.params.mutation.mutation;
+    if (mutation.unit !== 'provider' && mutation.unit !== 'restore_provider') return;
+    const workspace = source.workspace!;
+    const authored = mutation.unit === 'provider' ? mutation.authored : undefined;
+    workspace.authored!.providers = authored ? { [mutation.id]: {
+      base_url: authored.base_url, protocol: authored.protocol, credential: { type: 'literal' },
+    } } : {};
+    workspace.revision = `workspace-${++revision}`;
+    return { type: 'sources_written', revision: workspace.revision, configuration_revision: null };
+  });
+  subject.source.resolved = subject.source.user.authored;
+  render(<SettingsSurface client={subject.client} host={cfg3Host(subject)} target={workspaceSettingsTarget('A', 'A')} />);
+  await settingsReady();
+  await openSettingsPage('Models');
+  const form = within(screen.getByRole('form', { name: 'Provider transport' }));
+  expect((form.getByLabelText('Environment variable') as HTMLInputElement).value).toBe('USER_KEY');
+
+  await providerAction('Customize', form);
+  const url = form.getByLabelText('Base URL');
+  expect((url as HTMLInputElement).value).toBe('https://user.invalid');
+  fireEvent.change(url, { target: { value: 'https://workspace.invalid' } });
+  fireEvent.keyDown(url, { key: 'Enter' });
+  expect(writes(subject)).toHaveLength(0);
+  await screen.findByText('Enter a valid API Key or environment variable name.');
+
+  const key = form.getByLabelText('API Key');
+  expect((key as HTMLInputElement).value).toBe('');
+  fireEvent.change(key, { target: { value: 'workspace-only' } });
+  fireEvent.keyDown(key, { key: 'Enter' });
+  await waitFor(() => expect(writes(subject)).toHaveLength(1));
+  expect(writes(subject)[0][0]).toMatchObject({ params: {
+    target: { kind: 'workspace', directory: '/workspace/A' },
+    expected_revision: 'workspace-1',
+    mutation: { mutation: {
+      unit: 'provider', id: 'transport', authored: {
+        base_url: 'https://workspace.invalid', protocol: 'openai_responses',
+        credential: { kind: 'literal', value: 'workspace-only' },
+      },
+    } },
+  } });
+  await waitFor(() => expect(form.queryByText('Using global settings.')).toBeNull());
+  await waitFor(() => expect(form.getByRole('button', { name: 'Provider actions' }).getAttribute('aria-disabled')).toBe('false'));
+  await providerAction('Use global default', form);
+  fireEvent.click(screen.getByRole('button', { name: 'Use global default Provider transport' }));
+  await screen.findByText('Using global settings.');
+  expect((form.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://user.invalid');
+  expect((form.getByLabelText('Environment variable') as HTMLInputElement).value).toBe('USER_KEY');
+  expect(writes(subject)).toHaveLength(2);
+});
+
+it('keeps auxiliary model settings editable after the primary model is removed', async () => {
+  const source = cfg3Source();
+  const authored = source.user.authored!;
+  authored.models = { main: cfg3Effective().document.models!.main };
+  authored.agent = { model: { model: 'removed', summary_model: { mode: 'explicit', model: 'main' } } };
+  const { writes } = await renderEditor(<ModelsPage client={cfg3Client().client} target={userSettingsTarget}
+    source={source} scope="user" revision={source.user.revision} models={['main']} profiles={{}} onFocus={() => {}} />,
+  { source, context: source });
+  fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
+  const form = within(screen.getByRole('form', { name: 'Default model' }));
+  fireEvent.click(form.getByRole('button', { name: 'Auxiliary models' }));
+  await chooseOption('Title model', 'main', form);
+  fireEvent.click(form.getByRole('button', { name: 'Save Default model' }));
+  await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'root_model', authored: {
+      model: 'removed', summary_model: { mode: 'explicit', model: 'main' }, title_model: { mode: 'explicit', model: 'main' },
+  } } }, source.user.revision));
+});
 
 it('tests the saved model and revision without opening its editor or writing configuration', async () => {
   const subject = cfg3Client();

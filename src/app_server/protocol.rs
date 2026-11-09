@@ -417,6 +417,9 @@ pub enum Method {
     ModelSet {
         target: AttachmentTarget,
         config: Box<crate::model::session::SessionModelConfig>,
+        /// A primary-model picker can recover unchanged auxiliary model references that were removed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recover_unavailable_auxiliary: Option<bool>,
     },
     /// Choose catalog defaults by finite native ordinals, even when names are deferred.
     #[serde(rename = "session/selectModel")]
@@ -1069,6 +1072,8 @@ pub enum Method {
         source: Option<String>,
         #[serde(default)]
         cursor: Option<crate::local_runtime::workflow_tools::WorkflowToolCatalogCursor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_scope: Option<crate::runtime::resources::SourceScope>,
     },
     /// Offline structural check, optional explanation, and dependency
     /// admission in an explicit Workspace context of one candidate document.

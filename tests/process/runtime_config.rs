@@ -308,10 +308,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         "and it is not an ordinary available capability, so no selector can name it"
     );
     assert!(
-        snapshot
-            .skill_catalog()
-            .unwrap()
-            .contains("<name>new-skill</name>")
+        snapshot.skill_catalog().is_none(),
+        "discovered Skills are advertised only when the model can read their instructions"
     );
     assert!(!snapshot.available_tools().tools().is_empty());
 

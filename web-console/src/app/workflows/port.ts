@@ -1,5 +1,5 @@
 import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, withWorkflowOperation, type WorkflowRequest } from '../../../../protocol/app-server/workflow-documents.ts';
-import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor, WorkflowToolSource } from '../../../../protocol/app-server/v77';
+import type { ErrorData, SourceScope, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor, WorkflowToolSource } from '../../../../protocol/app-server/v77';
 import type { WorkflowEdit, WorkflowSource } from '../../../../protocol/app-server/workflow-documents.ts';
 import { analysisMatches } from '../../../../protocol/app-server/workflow-analysis';
 import type { AppServerClient } from '../../client/app-server';
@@ -93,8 +93,9 @@ export interface WorkflowScopePort {
   modelChoices(query: WorkflowModelChoicesQuery, expectedRevision?: string): Promise<WorkflowModelChoices>;
   /** The scope's MCP servers and Managed Python packages, unlisted; or one
    * `source` connected, listed and closed. Global sees User sources, a
-   * Workspace also its own. */
-  toolCatalog(source?: string, cursor?: WorkflowToolCatalogCursor | null): Promise<WorkflowToolCatalog>;
+   * Workspace also its own. Supply the expected owner when listing a source
+   * from a previously observed definition. */
+  toolCatalog(source?: string, cursor?: WorkflowToolCatalogCursor | null, expectedScope?: SourceScope): Promise<WorkflowToolCatalog>;
   /** Check the exact candidate. A Workspace file's dependencies are
    * checked in its own Workspace; a Global file's are not checked. */
   check(id: string, document: WorkflowFileDocument): Promise<WorkflowCheckReport>;
@@ -108,11 +109,13 @@ export interface WorkflowScopePort {
 
 /** Each page belongs to one unchanged catalog. A source becomes listed only
  * after every page has arrived through the same captured authority. */
-export async function readToolCatalog(port: Pick<WorkflowScopePort, 'toolCatalog'>, source?: string) {
+export async function readToolCatalog(port: Pick<WorkflowScopePort, 'toolCatalog'>, source?: string, expectedScope?: SourceScope, owns = () => true) {
   const sources: WorkflowToolSource[] = [];
   let cursor: WorkflowToolCatalogCursor | undefined;
   do {
-    const catalog = await port.toolCatalog(source, cursor);
+    if (!owns()) throw new Error('Tool catalog request superseded');
+    const catalog = await port.toolCatalog(source, cursor, expectedScope);
+    if (!owns()) throw new Error('Tool catalog request superseded');
     for (const item of catalog.sources) {
       const prior = source && sources.find(prior => prior.source_id === item.source_id);
       if (prior) prior.tools.push(...item.tools);
@@ -141,12 +144,13 @@ const replaced = (write: boolean) => new WorkflowOperationError(write ? { kind: 
  * received: a later authority change marks its reread unobserved but never
  * erases the commit. Results that would come from a replacement authority
  * are refused. */
-export function createWorkflowPort({ client, host, hostAuthority, scope }: {
+export function createWorkflowPort({ client, host, hostAuthority, scope, expectedWorkspaceDirectory }: {
   client: AppServerClient;
   host: () => ProductHostWorkspaces | undefined;
   /** The Product Host authority current at creation, if one is observed. */
   hostAuthority: WorkspaceAuthorityObservation | undefined;
   scope: WorkflowScope;
+  expectedWorkspaceDirectory?: string;
 }): WorkflowScopePort {
   // The native authority is the `initialize` identity already observed;
   // it is never filled in later from another connection.
@@ -192,7 +196,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
       list: () => read(async () => (await viaHost(workspaceId, { kind: 'list' })).library),
       read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
       modelChoices: (query, expected_revision) => read(async () => (await viaHost(workspaceId, { kind: 'model_choices', query, expected_revision })).choices),
-      toolCatalog: (source, cursor) => read(async () => (await viaHost(workspaceId, { kind: 'tool_catalog', source, cursor })).catalog),
+      toolCatalog: (source, cursor, expected_scope) => read(async () => (await viaHost(workspaceId, { kind: 'tool_catalog', source, cursor, expected_scope, expected_directory: expectedWorkspaceDirectory })).catalog),
       analyze: (id, document, generation, query, owns) => read(async () => {
         if (owns && !owns()) throw new Error('Workflow analysis request superseded');
         return (await viaHost(workspaceId, { kind: 'analyze', id, document, generation, query }, owns)).report;
@@ -216,7 +220,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope }: {
     list: () => read(async () => (await client.request({ method: 'workflow/list', params: { target } }, 'workflow_library')).library),
     read: id => read(() => readWorkflowSource(client, request, target, id)),
     modelChoices: (query, expected_revision) => read(async () => (await client.request({ method: 'workflow/modelChoices', params: { target, query, expected_revision } }, 'workflow_model_choices')).choices),
-    toolCatalog: (source, cursor) => read(async () => (await client.request({ method: 'workflow/toolCatalog', params: { target, source, cursor } }, 'workflow_tool_catalog')).catalog),
+    toolCatalog: (source, cursor, expected_scope) => read(async () => (await client.request({ method: 'workflow/toolCatalog', params: { target, source, cursor, expected_scope } }, 'workflow_tool_catalog')).catalog),
     analyze: (id, document, generation, query, owns) => read(async () => {
       const { report } = await withWorkflowDocument(client, request, target, document, reference => client.request({ method: 'workflow/analyze', params: { target, id, document: reference, generation, query } }, 'workflow_analysis'), owns);
       if (!analysisMatches(report, target, id, generation, query)) throw new Error('Mismatched Workflow analysis target or query');

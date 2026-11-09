@@ -1359,6 +1359,7 @@ fn translate_inputs(
         crate::model::adapter::profile::Phase::TranslateMessages,
     );
     let mut input_items: Vec<serde_json::Value> = Vec::new();
+    let mut replayed_messages = Vec::new();
     let instructions: Vec<String> = if request.effective_system_prompt.is_empty() {
         Vec::new()
     } else {
@@ -1401,28 +1402,22 @@ fn translate_inputs(
             request.messages.clone()
         }
     };
-    #[cfg(feature = "issue-387-profile")]
-    let profiled_blocks =
-        (request.messages.len() - blocks.len()..)
-            .zip(&blocks)
-            .map(|(index, block)| {
-                crate::model::adapter::profile::item(index);
-                block
-            });
-    #[cfg(feature = "issue-387-profile")]
-    let blocks = profiled_blocks;
-    #[cfg(not(feature = "issue-387-profile"))]
-    let blocks = &blocks;
-    for block in blocks {
+    let origin = request.invocation.replay_origin();
+    let start = request.messages.len() - blocks.len();
+    for (index, block) in (start..).zip(&blocks) {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::item(index);
         match block.view() {
             ModelMessageView::User(user) => {
                 input_items.push(translate_user_input(user, &request.images)?);
             }
             ModelMessageView::Assistant(assistant) => {
-                input_items.extend(translate_assistant_inputs(
-                    assistant,
-                    request.invocation.replay_origin().as_ref(),
-                )?);
+                let (message, items) = translate_assistant_inputs(assistant, origin.as_ref())?;
+                if let Some(message) = message {
+                    replayed_messages.push((input_items.len(), index));
+                    input_items.push(message);
+                }
+                input_items.extend(items);
             }
             ModelMessageView::Tool(tool_call_id, result) => {
                 input_items.push(translate_tool_result(
@@ -1431,24 +1426,61 @@ fn translate_inputs(
                     &request.images,
                 )?);
             }
-            ModelMessageView::RequestOnly(carryover) => {
-                let (role, kind) = if carryover.is_assistant() {
-                    ("assistant", "output_text")
-                } else {
-                    ("user", "input_text")
-                };
-                input_items.push(serde_json::json!({
-                    "type": "message",
-                    "role": role,
-                    "content": [{
-                        "type": kind,
-                        "text": carryover.render(),
-                    }]
-                }));
+            ModelMessageView::RequestOnly(context) if context.is_assistant() => {
+                replayed_messages.push((input_items.len(), index));
+                input_items.push(replayed_assistant_message(vec![replayed_output_text(
+                    &context.render(),
+                )]));
             }
+            ModelMessageView::RequestOnly(context) => input_items.push(serde_json::json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": context.render(),
+                }]
+            })),
         }
     }
+    assign_replayed_message_ids(&mut input_items, replayed_messages);
     Ok((input_items, instructions, previous_response_id))
+}
+
+fn replayed_output_text(text: &str) -> serde_json::Value {
+    serde_json::json!({"type": "output_text", "text": text, "annotations": []})
+}
+
+fn replayed_assistant_message(content: Vec<serde_json::Value>) -> serde_json::Value {
+    let mut message = serde_json::json!({
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+    });
+    message["content"] = serde_json::Value::Array(content);
+    message
+}
+
+fn assign_replayed_message_ids(input: &mut [serde_json::Value], replayed: Vec<(usize, usize)>) {
+    if replayed.is_empty() {
+        return;
+    }
+    // Only synthesized messages receive IDs. Reserve every retained item ID,
+    // including items that come after a synthesized message in the request.
+    let mut occupied: BTreeSet<_> = input
+        .iter()
+        .filter_map(|item| item["id"].as_str().map(str::to_owned))
+        .collect();
+    for (position, coordinate) in replayed {
+        let base = format!("msg_rustx_{coordinate}");
+        let mut id = base.clone();
+        for suffix in 1.. {
+            if occupied.insert(id.clone()) {
+                break;
+            }
+            id = format!("{base}_{suffix}");
+        }
+        input[position]["id"] = id.into();
+    }
 }
 
 /// Input after the actual accepted output explicitly bound to native continuation.
@@ -1496,16 +1528,17 @@ fn translate_user_input(
     }))
 }
 
+type TranslatedAssistant = (Option<serde_json::Value>, Vec<serde_json::Value>);
+
 fn translate_assistant_inputs(
     assistant: &[crate::message::types::AssistantContentBlock],
     origin: Option<&crate::model::replay::ReplayOrigin>,
-) -> Result<Vec<serde_json::Value>, ModelError> {
+) -> Result<TranslatedAssistant, ModelError> {
     if let Some(items) = retained_stateless_output(assistant, origin)? {
         // The native bundle already contains the accepted text/calls. Replaying
         // those typed views again would duplicate the prior generation.
-        return Ok(items);
+        return Ok((None, items));
     }
-    let mut items = Vec::new();
     let mut message_content = Vec::new();
     let mut tool_calls = Vec::new();
     for content in assistant {
@@ -1513,10 +1546,7 @@ fn translate_assistant_inputs(
         crate::model::adapter::profile::block();
         match content {
             AssistantContentBlock::Text(text) => {
-                message_content.push(serde_json::json!({
-                    "type": "output_text",
-                    "text": text.text,
-                }));
+                message_content.push(replayed_output_text(&text.text));
             }
             AssistantContentBlock::Refusal(refusal) => {
                 message_content.push(serde_json::json!({
@@ -1536,10 +1566,7 @@ fn translate_assistant_inputs(
                     .as_deref()
                     .filter(|text| !text.trim().is_empty())
                 {
-                    message_content.push(serde_json::json!({
-                        "type": "output_text",
-                        "text": text,
-                    }));
+                    message_content.push(replayed_output_text(text));
                 }
             }
             AssistantContentBlock::ToolCall(call) => {
@@ -1562,15 +1589,9 @@ fn translate_assistant_inputs(
             }
         }
     }
-    if !message_content.is_empty() {
-        items.push(serde_json::json!({
-            "type": "message",
-            "role": "assistant",
-            "content": message_content,
-        }));
-    }
-    items.extend(tool_calls);
-    Ok(items)
+    let message =
+        (!message_content.is_empty()).then(|| replayed_assistant_message(message_content));
+    Ok((message, tool_calls))
 }
 
 fn retained_stateless_output(

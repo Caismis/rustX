@@ -10,7 +10,7 @@ import { documentAuthoring } from '../../settings/projection';
 import { extensionEntries } from '../shared/inventory';
 import { ResourceAvailability } from '../shared/ResourceAvailability';
 import { ResourceCard, ResourceGroup } from '../shared/ResourceCards';
-import type { McpFocus } from '../types';
+import type { McpEditorDraft, McpFocus } from '../types';
 import type { ProbeState } from './useMcpProbes';
 import { McpStatusIcon } from './McpStatusIcon';
 import { McpEditor } from './McpEditor';
@@ -30,10 +30,11 @@ export function McpActions({ disabled, onFocus }: { disabled: boolean; onFocus: 
   </div>;
 }
 
-export function McpPage({ source, scope, revision, focus, onFocus, scopeControl, query, view, probeStates = {}, testConnection, probeAvailable = false }: {
+export function McpPage({ source, scope, revision, focus, onFocus, editorDraft, onEditorDraftChange, scopeControl, query, view, probeStates = {}, testConnection, probeAvailable = false }: {
   probeStates?: Record<string, ProbeState>;
   testConnection?: (id: string) => void; probeAvailable?: boolean;
   source: SourceSettings; scope: SourceScope; revision?: string; focus?: McpFocus;
+  editorDraft?: McpEditorDraft; onEditorDraftChange: (draft?: McpEditorDraft) => void;
   onFocus: (focus?: McpFocus) => void; scopeControl: ReactNode; query: string; view: CatalogView;
 }) {
   const tx = useTranslation();
@@ -41,7 +42,8 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
   const entries = extensionEntries(source, scope, 'mcp');
   if (focus) return <section className={css.page} data-mcp-page="" aria-label={focus.name ? tx('settings:extension-detail.mcp-value',{p0:focus.name}) : tx('settings:mcp.new')}>
     {focus.name && entries.find(entry => entry.name === focus.name)?.diagnostics.map((message, index) => <p role="alert" key={index}>{message}</p>)}
-    <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus} scopeControl={scopeControl} close={() => onFocus(undefined)} />
+    <McpEditor key={`${scope}:${focus.name ?? ''}:${focus.mode ?? ''}`} source={source} scope={scope} revision={revision} focus={focus}
+      editorDraft={editorDraft} onEditorDraftChange={onEditorDraftChange} scopeControl={scopeControl} close={() => onFocus(undefined)} />
   </section>;
 
   const needle = query.trim().toLocaleLowerCase();

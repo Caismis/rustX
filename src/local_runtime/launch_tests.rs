@@ -2545,7 +2545,7 @@ fn cfg275_offline_generation_projects_native_facts_once_without_effects_or_secre
     std::fs::create_dir_all(&broken).unwrap();
     std::fs::write(
         broken.join("SKILL.md"),
-        "---\nname: [SECRET_INVALID_VALUE]\ndescription: bad\n---\n",
+        "---\nname: broken\ndescription: [SECRET_INVALID_VALUE]\n---\n",
     )
     .unwrap();
     install_workflow(

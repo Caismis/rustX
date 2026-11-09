@@ -1,6 +1,43 @@
 import { test, expect } from '@playwright/test';
 import { openResourceModule } from './shell-actions';
 
+test('MCP Back retains invalid JSON and Discard resets the JSON and form together', async ({ page }) => {
+  await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/settings.html?scenario=mcp`);
+  const surface = await openResourceModule(page, 'mcp', 'Global');
+  await surface.getByRole('button', { name: '＋ New MCP server', exact: true }).click();
+  await surface.getByLabel('Name', { exact: true }).fill('draft-mcp');
+  await surface.getByLabel('Command', { exact: true }).fill('initial');
+  await surface.getByRole('button', { name: 'Save', exact: true }).click();
+  const server = surface.getByRole('button', { name: 'MCP draft-mcp', exact: true });
+  await server.click();
+  await surface.getByLabel('Command', { exact: true }).fill('form-draft');
+  await surface.getByRole('button', { name: 'JSON', exact: true }).click();
+  const json = surface.getByLabel('Complete configuration', { exact: true });
+  await json.fill('{unfinished');
+  await surface.getByRole('button', { name: '← MCP servers', exact: true }).click();
+  await server.click();
+  await expect(json).toHaveText('{unfinished', { useInnerText: true });
+  await expect(surface.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await surface.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect.poll(async () => JSON.parse(await json.innerText())['draft-mcp'].command).toBe('initial');
+  await expect(surface.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await surface.getByRole('button', { name: 'Form', exact: true }).click();
+  await expect(surface.getByLabel('Command', { exact: true })).toHaveValue('initial');
+  const references = surface.getByLabel('Environment variables (JSON)', { exact: true });
+  await surface.getByText('Environment references (optional)', { exact: true }).click();
+  await references.fill('{unfinished');
+  await surface.getByRole('button', { name: '← MCP servers', exact: true }).click();
+  await server.click();
+  await surface.getByText('Environment references (optional)', { exact: true }).click();
+  await expect(references).toHaveText('{unfinished', { useInnerText: true });
+  await expect(surface.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+  await surface.getByRole('button', { name: 'Discard', exact: true }).click();
+  await surface.getByText('Environment references (optional)', { exact: true }).click();
+  const referenceEditor = surface.locator('[data-json-editor]').filter({ has: page.getByRole('textbox', { name: 'Environment variables (JSON)', exact: true }) });
+  await expect(referenceEditor).toHaveAttribute('data-empty', 'true');
+  await expect(references).toHaveAttribute('aria-invalid', 'false');
+});
+
 for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON and save at ${width}px`, async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));

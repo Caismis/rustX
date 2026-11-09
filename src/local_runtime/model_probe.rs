@@ -49,7 +49,7 @@ impl SessionRuntimeManager {
                     .capture_authored_settings(&target, Some(&source))
                     .ok()?;
                 let catalog = ModelCatalog::from_authoring(
-                    super::configuration::semantics::available_catalog(&layer?),
+                    super::configuration::semantics::available_catalog(&layer?, |_| true),
                 )
                 .ok()?;
                 let registry =

@@ -1169,8 +1169,9 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
                     }),
                 },
             },
-            Method::ModelSet { target: target.clone(), config: Box::new(selection.clone()) },
+            Method::ModelSet { recover_unavailable_auxiliary: None, target: target.clone(), config: Box::new(selection.clone()) },
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: target.clone(),
                 config: Box::new(SessionModelConfig {
                     title_model: crate::model::session::AuxiliaryModelPolicy::Session,
@@ -1244,6 +1245,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         // A Session override from raw text reaches the provider wire exactly.
         let override_text = r#"{"o1":1.50,"o2":-9007199254740991,"o3":15e-1,"o4":[1e20,{"o5":0.1}]}"#;
         let call = Method::ModelSet {
+            recover_unavailable_auxiliary: None,
             target: target.clone(),
             config: Box::new(SessionModelConfig {
                 profile: Some(ModelProfileId::new("p")),
@@ -1400,7 +1402,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
                 .handle_request(Request {
                     jsonrpc: JsonRpcVersion::V2,
                     id: RequestId::Integer(1),
-                    call: Method::ModelSet { target: target.clone(), config: Box::new(config) },
+                    call: Method::ModelSet { recover_unavailable_auxiliary: None, target: target.clone(), config: Box::new(config) },
                 })
                 .await;
             let text = serde_json::to_string(&response).unwrap();
@@ -1423,7 +1425,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         // An unrelated override key is no collision.
         assert!(matches!(super::super::protocol::call(
             &connection, 2,
-            Method::ModelSet { target: target.clone(), config: Box::new(selection(json!({"top_k": 40}))) },
+            Method::ModelSet { recover_unavailable_auxiliary: None, target: target.clone(), config: Box::new(selection(json!({"top_k": 40}))) },
         ).await, MethodResult::ModelSet { .. }));
         let model = super::super::protocol::read_model_result(
             &connection, &target,

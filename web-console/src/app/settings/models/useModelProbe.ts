@@ -31,7 +31,8 @@ export function useModelProbe(client: AppServerClient, host: ProductHostWorkspac
     };
   }, [key, active, notify]);
   const [observation, setObservation] = useState<ProbeObservation>();
-  const available = transport.connection === 'connected' && (target.kind === 'user' || !!host?.configureWorkspace && !!revisions.workspace_revision);
+  const directory = source.target.kind === 'workspace' ? source.target.directory : undefined;
+  const available = transport.connection === 'connected' && (target.kind === 'user' || !!host?.configureWorkspace && !!revisions.workspace_revision && !!directory);
   const states = available && observation?.key === key ? observation.states : {};
   const test = async (model: string) => {
     if (!available || states[model] === 'checking') return;
@@ -50,7 +51,7 @@ export function useModelProbe(client: AppServerClient, host: ProductHostWorkspac
     publish('checking');
     try {
       if (target.kind === 'workspace') {
-        const response = await host?.configureWorkspace?.(target.id, transport.endpoint ?? '', { kind: 'model_probe', model, source: revisions });
+        const response = await host?.configureWorkspace?.(target.id, transport.endpoint ?? '', { kind: 'model_probe', model, source: revisions, expected_directory: directory });
         publish(response?.kind === 'model_probe' ? response.outcome : 'unavailable');
       } else {
         const response = await client.request({ method: 'model/probe', params: { target: { kind: 'user' }, model, source: revisions } }, 'model_probe', undefined, current);

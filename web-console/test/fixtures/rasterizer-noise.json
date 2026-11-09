@@ -4120,5 +4120,29 @@
         ]
       }
     ]
+  },
+  {
+    "reference": "model-advanced-light-390-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 Linux capture during the branch review. Stable captures of this unchanged checkpoint alternated between the baseline and this single one-level rounded border pixel.",
+    "referenceSha256": "c902292561ec93f17eaefe82930a8f9f11db650675da974af98b1043bd61f033",
+    "captureSha256": "bcbd796e2bab83f6dc8dc4bc7a8ee6c43a0a7d9d13ecad3baabc38f5d45941b3",
+    "regions": [{"label": "Context input corner coverage", "x": 34, "y": 237, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 1}],
+    "pixels": [[34, 237, [223, 223, 223, 255], [222, 222, 222, 255]]]
+  },
+  {
+    "reference": "model-advanced-dark-390-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 Linux capture during the branch review. Stable captures of this unchanged checkpoint alternated between the baseline and this single one-level rounded border pixel.",
+    "referenceSha256": "a38904cb27e664e8f5ca29609d77a3d8688956a5b2e6769d6c90254314348b4d",
+    "captureSha256": "368278e2f10912d7d147b4daa9ec645b76c277458c08b91360afa1c4ae96f8ca",
+    "regions": [{"label": "Context input corner coverage", "x": 34, "y": 237, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 1}],
+    "pixels": [[34, 237, [78, 78, 80, 255], [77, 77, 79, 255]]]
+  },
+  {
+    "reference": "model-profiles-dark-1440-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 Linux capture during the branch review. Stable captures of this unchanged checkpoint alternated between the baseline and this single one-level rounded border pixel.",
+    "referenceSha256": "0cff5fe0a0e3a9ef0d75b2fa20a985e16a65e022827228ecc5e8f3114ed02efa",
+    "captureSha256": "2fddb0a1853a242c9017eae9c52ca2a2bd80714a25a86c2532c64677e21ab5fa",
+    "regions": [{"label": "Profile panel corner coverage", "x": 26, "y": 360, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 1}],
+    "pixels": [[26, 360, [82, 83, 84, 255], [83, 84, 84, 255]]]
   }
 ]

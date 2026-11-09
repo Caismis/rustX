@@ -29,6 +29,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
       base_url: inherited?.base_url ?? '',
       credential: { kind: 'literal', value: '' },
     },
+    // A redacted ProviderView is safe to inspect but cannot author credentials.
+    inherited: () => undefined,
     revision,
     draftKey: JSON.stringify(providerMutation(id, null)),
     mutation: value => providerMutation(id, value, restores),
@@ -41,6 +43,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const [iconPicker, setIconPicker] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [customizing, setCustomizing] = useState(false);
+  if (authored && customizing) setCustomizing(false);
   const [attempted, setAttempted] = useState(0);
   const form = useRef<HTMLFormElement>(null);
   const keyEditor = useRef<HTMLDivElement>(null);
@@ -66,6 +69,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const creating = !authored && !inherited;
   const canDiscardCreation = creating && unit.intent && !hasModels;
   const { endpointError, credentialError } = connectionErrors(value);
+  const canRetry = unit.draft && unit.admitted && !unit.reviewNeeded && !endpointError && !credentialError
+    && (unit.outcome.kind === 'rejected' || unit.outcome.kind === 'uncertain');
   const edit = (next: ProviderWrite, trigger?: 'idle' | 'blur' | 'now') => {
     setAttempted(0);
     unit.edit(next);
@@ -153,8 +158,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
               { id: 'icon', label: tx('settings:models.choose-icon') },
               { id: 'credential', label: tx(credential.kind === 'environment' ? 'settings:models.use-key' : 'settings:models.use-environment') },
               ...canDiscardCreation ? [{ id: 'discard-creation', label: tx('settings:copy.delete'), icon: <IconTrashOutline16/>, danger: true }] : [],
-              ...unit.outcome.kind === 'rejected' && !unit.reviewNeeded && !endpointError && !credentialError
-                ? [{ id: 'retry', label: tx('settings:models.retry-provider-save') }] : [],
+              ...canRetry ? [{ id: 'retry', label: tx('settings:models.retry-provider-save') }] : [],
               ...authored ? [{ id: 'delete', label: tx(restores ? 'settings:models.restore' : 'settings:copy.delete'),
                 icon: <IconTrashOutline16/>, danger: !restores, disabled: !unit.admitted }] : [],
             ]}

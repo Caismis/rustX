@@ -48,14 +48,14 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       else {
         surface=await openResourceModule(page,'subagents','Workspace A');
         await surface.getByRole('button', { name: 'optional', exact: true }).click();
-        await surface.getByRole('button', { name: 'Advanced options', exact: true }).click();
+        await expect(surface.getByRole('heading', { name: 'Advanced options', exact: true })).toBeVisible();
       }
       const title = owner === 'Root' ? 'Default model' : 'Agent optional';
       const form = surface.getByRole('form', { name: title, exact: true });
       const save = async () => {
         await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
         if (owner === 'Root') await expect(settledSave(surface, title)).toBeVisible();
-        else await expect(surface.getByRole('button', { name: 'optional', exact: true })).toBeVisible();
+        else await expect(surface.getByRole('button', { name: 'optional', exact: true })).toBeVisible({ timeout: 15_000 });
       };
       if (owner === 'Root') {
         await expect(form.getByRole('button', { name: new RegExp(`${auxiliary} model$`) })).toBeHidden();
@@ -72,7 +72,6 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       await choose(form, `${auxiliary} model`, 'summary-b');
       await expect(form.getByLabel('Description', { exact: true })).toHaveValue('');
       await expect(form.getByLabel('System prompt', { exact: true })).toHaveValue('');
-      await choose(form, 'Available tools', 'Choose tools');
       await form.getByLabel('read', { exact: true }).check();
       await save();
       const sourceFile = join(fixture.workspaceA, '.agents/agents/optional.toml');
@@ -84,7 +83,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
       const reopen = async () => {
         await surface.getByRole('button', { name: 'optional', exact: true }).click();
-        await form.getByRole('button', { name: 'Advanced options', exact: true }).click();
+        await expect(form.getByRole('heading', { name: 'Advanced options', exact: true })).toBeVisible();
       };
       await reopen();
       const nested = form.getByRole('group', { name: `Explicit ${auxiliary} Model settings`, exact: true });

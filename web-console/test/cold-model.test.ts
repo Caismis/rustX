@@ -55,6 +55,22 @@ it('confirms a deferred model body after attachment before sending with the sele
  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
 });
 
+it('opts into carrying removed auxiliary references only for picker selections', async () => {
+  const attach = server.client.attach('A');
+  const opening = await server.waitFor('thread/resume', 1);
+  const config = { model: 'replacement', summaryModel: { mode: 'explicit' as const, model: 'old-summary' } };
+  const chosen = server.client.prepareAgentModel('A', config);
+  server.reply(opening);
+  await attach;
+  const picker = await server.waitFor('session/setModel', 1);
+  expect(picker.params).toMatchObject({ config, recover_unavailable_auxiliary: true });
+  await chosen;
+
+  await server.client.setAgentModel('A', config);
+  const strict = await server.waitFor('session/setModel', 2);
+  expect(strict.params).not.toHaveProperty('recover_unavailable_auxiliary');
+});
+
 it('a rejected selection preserves failure and never sends with the old model', async () => {
   const attach = server.client.attach('A'); const opening = await server.waitFor('thread/resume', 1);
   server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32000, message: 'Model removed' }); });

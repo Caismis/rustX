@@ -23,7 +23,7 @@ export function useMcpProbes(client: AppServerClient, host: ProductHostWorkspace
   const registration = registrationKey();
   const registered = target.kind !== 'workspace' || !associations || !!catalog?.workspaces.some(row => row.id === target.id);
   const transport = useClientSelector(client, transportSelection, sameValue);
-  const document = target.kind === 'user' ? source?.user_mcp : source?.workspace_mcp;
+  const document = source?.target.kind === target.kind ? (target.kind === 'user' ? source.user_mcp : source.workspace_mcp) : undefined;
   const revision = document?.revision;
   const key = JSON.stringify([transport.endpoint, transport.authorityRevision, transport.generation, transport.connection, settingsTargetKey(target), revision, active, registration]);
   const currentKey = useRef(key);
@@ -52,8 +52,10 @@ export function useMcpProbes(client: AppServerClient, host: ProductHostWorkspace
     try {
       let result;
       if (target.kind === 'workspace') {
-        if (!host?.configureWorkspace) throw new Error('Workspace Host unavailable');
-        const response = await host.configureWorkspace(target.id, transport.endpoint ?? '', {kind:'mcp_probe', id, expected_revision:revision});
+        if (!host?.configureWorkspace || source?.target.kind !== 'workspace') throw new Error('Workspace Host unavailable');
+        const response = await host.configureWorkspace(target.id, transport.endpoint ?? '', {
+          kind:'mcp_probe', id, expected_revision:revision, expected_directory:source.target.directory,
+        });
         if (response.kind !== 'mcp_probe') throw new Error('Unexpected probe result');
         result = response.result;
       } else {

@@ -439,7 +439,7 @@ test('an open section menu settles closed when the panel widens under it', async
   await expect(rail.getByRole('tab', { name: 'General' })).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await expect(rail.getByRole('tab', { name: 'Models' })).toHaveAttribute('aria-selected', 'true');
-  await expect(settings.getByRole('heading', { level: 3, name: 'Models', exact: true })).toBeVisible();
+  await expect(settings.getByRole('heading', { level: 3, name: 'Model Settings', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(settings).toBeVisible();
   await page.getByRole('button', { name: 'Home', exact: true }).click();

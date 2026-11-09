@@ -20,3 +20,13 @@ it('rejects a changed or non-advancing continuation without exposing partial cho
     expect(calls).toBe(2);
   }
 });
+
+it('does not request another MCP catalog page after the discovery owner is retired', async () => {
+  let active = true;
+  const toolCatalog = vi.fn(async () => {
+    active = false;
+    return { sources: [], next: { offset: 17, digest: 'a'.repeat(64) } };
+  });
+  await expect(readToolCatalog({ toolCatalog }, 'shared', 'workspace', () => active)).rejects.toThrow('Tool catalog request superseded');
+  expect(toolCatalog).toHaveBeenCalledTimes(1);
+});

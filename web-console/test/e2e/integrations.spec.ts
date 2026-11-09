@@ -1,5 +1,5 @@
 import { formatArguments } from '../../src/app/resources/mcp/form-values';
-import {openResourceModule,newSubagent,choose} from './shell-actions';
+import {openResourceModule,newSubagent} from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
@@ -81,10 +81,9 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     settings=await openResourceModule(page,'subagents','Workspace A');
     await newSubagent(settings,'reviewer');
     await settings.getByLabel('Description', { exact: true }).fill('Independent review profile');
-    await settings.getByRole('button', { name: 'Advanced options', exact: true }).click();
-    await expect(settings.getByLabel('todo', { exact: true })).not.toBeChecked();
+    await expect(settings.getByRole('heading', { name: 'Advanced options', exact: true })).toBeVisible();
+    await expect(settings.getByRole('switch', { name: 'Todo', exact: true })).not.toBeChecked();
     await settings.getByLabel('System prompt', { exact: true }).fill('Review the requested change and report concrete findings.');
-    await choose(settings, 'Available tools', 'Choose tools');
     await settings.getByLabel('read', { exact: true }).check();
     await settings.getByRole('button', { name: 'Save New subagent', exact: true }).click();
     await settings.getByRole('listitem',{name:'reviewer',exact:true}).getByRole('button',{name:'reviewer',exact:true}).click();

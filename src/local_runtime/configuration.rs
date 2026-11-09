@@ -190,6 +190,7 @@ pub struct ProspectiveSessionConfig {
     pub(crate) managed_python: crate::runtime::resources::ManagedPythonCatalog,
     pub(crate) workflows: std::sync::Arc<crate::runtime::workflow::WorkflowCatalog>,
     pub(crate) subagents: crate::runtime::subagent::AgentCatalog,
+    root_agent_grants: Vec<crate::runtime::subagent::SubagentName>,
     pub(crate) agent_root: PathBuf,
     pub(crate) role_sources:
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,

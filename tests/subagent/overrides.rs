@@ -535,7 +535,10 @@ async fn cfg3_child_skill_and_plugin_selection_is_independent_of_root_visibility
     lab.write_config(&reviewer_roles(), &[]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    assert!(resources.capability().model_skill_entries().is_empty());
+    assert!(
+        resources.skill_catalog().is_none(),
+        "the root has no file-reading tool"
+    );
     assert_eq!(
         skill_names(&delegate(&resources, "reviewer", None).unwrap()),
         ["review-guidance"]

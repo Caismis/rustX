@@ -882,7 +882,11 @@ compaction outcome in `context_compacted.compaction`. It never substitutes
 A later operation cannot replace an earlier receipt. Transport loss preserves
 existing explicit reconciliation and never triggers automatic compaction replay.
 
-`session/setModel` validates a complete authored selection. `session/selectModel`
+`session/setModel` validates a complete authored selection. A primary-model picker
+can set `recover_unavailable_auxiliary` to let an unchanged auxiliary policy
+follow the primary model when its referenced model has been removed.
+Changed auxiliary policies and invalid profiles still undergo strict validation.
+`session/selectModel`
 selects catalog defaults through `{ binding_revision, model_position,
 profile_position? }`. Positions are native catalog ordinals from the bounded
 catalog pages, including deferred entries; they are never indexes in a filtered
@@ -892,7 +896,7 @@ capability resource generation; the two revision domains are not interchangeable
 This permits exact model and profile identities larger than the request envelope
 without copying those identities into a mutation request. Choosing catalog defaults
 replaces primary-model overrides and output limits with catalog defaults while
-preserving the independently configured Summary policy.
+preserving independently configured auxiliary policies whose models still exist.
 Both methods use the same existing capture/resolve/commit owner and return only
 the committed settings revision. Neither successful response
 replaces the active Attempt's frozen `AttemptModelView`, including when only a

@@ -1284,6 +1284,7 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         result(
             &client,
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: a.clone(),
                 config: Box::new(selected),
             },
@@ -1474,7 +1475,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             assert_eq!(before["attempt"]["phase"]["type"], "running");
             let mut model: rustx::model::session::SessionModelConfig = serde_json::from_value(before["model"]["configured"].clone()).unwrap();
             model.request_params.insert("temperature".into(), serde_json::json!(0.42));
-            let MethodResult::ModelSet { .. } = result(client, Method::ModelSet { target: targets[index].clone(), config: Box::new(model.clone()) }).await else { panic!("bounded live model selection receipt") };
+            let MethodResult::ModelSet { .. } = result(client, Method::ModelSet { recover_unavailable_auxiliary: None, target: targets[index].clone(), config: Box::new(model.clone()) }).await else { panic!("bounded live model selection receipt") };
             let selected:rustx::model::session::SessionModelView=serde_json::from_value(checkpoint_state(client,&targets[index]).await["model"].clone()).unwrap();
             assert_eq!(selected.configured, model);
             assert_eq!(selected.effective.as_ref().unwrap().request_params["temperature"], serde_json::json!(0.42));
@@ -1878,6 +1879,7 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
             &client,
             5,
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: target.clone(),
                 config: Box::new(SessionModelConfig::of(
                     ModelRef::parse("local/test").unwrap(),

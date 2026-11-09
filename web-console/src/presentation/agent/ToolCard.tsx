@@ -29,14 +29,14 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
  const toggle = () => { if (disclosure) { disclosure.toggle(); return; } if (!open) onExpand?.(); setOpen(value => !value); };
  const Icon = icons[tool.variant];
  const state = tool.state === 'failure' ? 'error' : tool.state === 'cancelled' || tool.state === 'uncertain' ? 'stopped' : tool.state === 'success' ? 'ok' : tool.state;
- const expandable = tool.variant !== 'image' || !!(tool.imageResult || tool.output || body);
+ const expandable = tool.variant !== 'image' || !!(tool.imageResult || tool.output || body || inspect);
  const summary = open ? tool.details?.expandedSummary ?? tool.summary : tool.summary;
  return <div className={tree.callRow} data-tool-call-id={tool.identity !== 'job' ? tool.id : undefined} data-job-id={tool.identity === 'job' ? tool.id : undefined} data-tool-renderer={tool.variant} data-tool-name={tool.nativeName}>
  <div className={css.root} data-state={state} data-variant={tool.variant}>
  <DisclosureRow rowClassName={css.row} leadingClassName={css.leading} titleClassName={css.title} chevronClassName={css.chevron}
  running={tool.state === 'running'}
  icon={tool.icon ?? <Icon size={14}/>}
- title={tool.title} open={open && expandable} expandable={expandable} expandOnRowClick keepContentWhenOpen onToggle={toggle}
+ title={tool.title} open={open && expandable} expandable={expandable} expandOnRowClick={!onOpenPath} keepContentWhenOpen onToggle={toggle}
  collapsedContent={<>{tool.summary && <><span className={css.sep} data-shimmer-decoration aria-hidden/>
    {onOpenPath ? <button type="button" className={`${css.summary} ${css.pathLink}`} title={tool.path}
      onClick={event => { event.stopPropagation(); onOpenPath(); }} onKeyDown={event => event.stopPropagation()}>{summary}</button>

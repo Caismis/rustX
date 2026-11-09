@@ -159,11 +159,89 @@ async fn canonical_assistant_history_uses_output_text() {
         assert_eq!(
             body["input"],
             serde_json::json!([
-                {"type":"message", "role":"assistant", "content":[{"type":"output_text", "text":"Previous answer"}]},
+                {"type":"message", "role":"assistant", "id":"msg_rustx_0", "status":"completed", "content":[{"type":"output_text", "text":"Previous answer", "annotations":[]}]},
                 {"type":"message", "role":"user", "content":[{"type":"input_text", "text":"Next question"}]},
             ])
         );
         assert!(body.get("previous_response_id").is_none());
+    }
+}
+
+#[tokio::test]
+async fn synthesized_assistant_messages_follow_the_schema_and_do_not_relabel_native_items() {
+    use async_openai::types::responses::{InputItem, Item, MessageItem};
+    use rustx::message::types::{AssistantMessageBlock, ReasoningBlock, RefusalBlock};
+    use rustx::model::{ModelInputMessage, RequestOnlyModelContext};
+    use rustx::runtime::identity::MessageId;
+
+    let server = crate::common::FixtureServer::start(|_, _| {
+        sse_fixture("openai_responses", "plain_text.sse")
+    })
+    .await;
+    let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Continue");
+    let native = serde_json::json!({
+        "type": "message",
+        "role": "assistant",
+        "id": "msg_rustx_0",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "Native answer.", "annotations": []}],
+        "future_field": "preserved",
+    });
+    request.messages.insert(
+        0,
+        MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("previous"),
+            content: vec![
+                AssistantContentBlock::Text(TextBlock {
+                    text: "Previous answer.".into(),
+                }),
+                AssistantContentBlock::Refusal(RefusalBlock {
+                    text: "Cannot help with that part.".into(),
+                }),
+            ],
+        })
+        .into(),
+    );
+    request.messages.insert(
+        1,
+        MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("native"),
+            content: vec![
+                AssistantContentBlock::Text(TextBlock {
+                    text: "Native answer.".into(),
+                }),
+                AssistantContentBlock::Reasoning(ReasoningBlock {
+                    origin: request.invocation.replay_origin(),
+                    text: None,
+                    provider_state: Some(ProviderContinuationState::OpenAiResponses(
+                        OpenAiResponsesContinuation::Stateless {
+                            items: vec![native.clone()],
+                        },
+                    )),
+                }),
+            ],
+        })
+        .into(),
+    );
+    request.messages.insert(
+        2,
+        ModelInputMessage::RequestOnly(RequestOnlyModelContext::AuxiliaryAnswer {
+            text: "Example answer.".into(),
+        }),
+    );
+
+    let events = collect_events(&adapter(&server), request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let wire: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
+    let input = wire["input"].as_array().unwrap();
+    assert_eq!(input[1], native);
+    assert_eq!(input[0]["content"][1]["type"], "refusal");
+    for (index, expected_id) in [(0, "msg_rustx_0_1"), (2, "msg_rustx_2")] {
+        let item: InputItem = serde_json::from_value(input[index].clone()).unwrap();
+        let InputItem::Item(Item::Message(MessageItem::Output(message))) = item else {
+            panic!("expected a structured assistant output, got {item:?}");
+        };
+        assert_eq!(message.id, expected_id);
     }
 }
 
@@ -1257,9 +1335,9 @@ async fn reasoning_without_responses_replay_state_is_readable_history() {
         assert!(input.iter().all(|item| item["type"] == "message"));
         let mut expected = Vec::new();
         if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
-            expected.push(serde_json::json!({"type":"output_text", "text":text}));
+            expected.push(serde_json::json!({"type":"output_text", "text":text, "annotations":[]}));
         }
-        expected.push(serde_json::json!({"type":"output_text", "text":"Previous answer"}));
+        expected.push(serde_json::json!({"type":"output_text", "text":"Previous answer", "annotations":[]}));
         assert_eq!(input[0]["role"], "assistant");
         assert_eq!(input[0]["content"], serde_json::json!(expected));
         assert_eq!(input[1]["content"][0]["type"], "input_text");

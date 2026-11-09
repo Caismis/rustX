@@ -24,7 +24,7 @@ import { ResourceBrowser } from './shared/ResourceBrowser';
 import { AgentEditor, type AgentDraft } from './subagents/AgentEditor';
 import type { LoadMcpTools } from './subagents/AgentToolFields';
 import { SubagentList } from './subagents/SubagentList';
-import type { ResourceModule, McpFocus } from './types';
+import type { McpEditorDraft, McpFocus, ResourceModule } from './types';
 import css from './ResourceSurface.module.css';
 
 interface Props {
@@ -54,7 +54,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const showingWorkspace = tab === 'workspace';
   const target = showingWorkspace && workspaceId ? workspaceSettingsTarget(workspaceId, workspace?.displayName ?? workspaceId) : userSettingsTarget;
   const available = !showingWorkspace || !!workspace;
-  const { actor, transport } = useSettingsTarget(client, target, host, visible && available);
+  const hostOwner = catalog && JSON.stringify([catalog.authorityId, catalog.endpoint]);
+  const { actor, transport } = useSettingsTarget(client, target, host, visible && available, showingWorkspace ? hostOwner : undefined);
   const observation = useSelector(actor, state => state.context.observation);
   const source = useSelector(actor, state => state.context.observation ?? state.context.staleObservation);
   const readError = useSelector(actor, state => state.context.readError);
@@ -65,11 +66,14 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [query, setQuery] = useState('');
   const [view, setView] = useState<CatalogView>('cards');
   const [mcpFocus, setMcpFocus] = useState<McpFocus>();
+  const mcpDrafts = useRef(new Map<string, { draft: McpEditorDraft; hostOwner?: string }>());
   const [resourceFocus, setResourceFocus] = useState<string>();
   const [newAgent, setNewAgent] = useState<AgentDraft>();
   const owner = `${transport.endpoint}|${transport.authorityRevision}`;
-  const lifetime = `${owner}|${settingsTargetKey(target)}`;
+  const directory = observation?.target.kind === 'workspace' ? observation.target.directory : undefined;
+  const lifetime = JSON.stringify([owner, settingsTargetKey(target), showingWorkspace ? hostOwner : undefined, showingWorkspace ? workspace?.location : undefined]);
   const [presentedOwner, setPresentedOwner] = useState(owner);
+  const [presentedHost, setPresentedHost] = useState(hostOwner);
   const agentEditor = module === 'subagents' && (newAgent !== undefined || resourceFocus !== undefined);
   const detail = !!mcpFocus;
   const probes = useMcpProbes(client, host, target, observation, visible && available && module === 'mcp' && !mcpFocus, associations);
@@ -86,8 +90,16 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     setQuery('');
   };
   if (owner !== presentedOwner) {
+    mcpDrafts.current.clear();
     setPresentedOwner(owner);
     resetScope();
+  }
+  if (hostOwner !== presentedHost) {
+    setPresentedHost(hostOwner);
+    for (const [key, entry] of mcpDrafts.current) {
+      if (entry.hostOwner !== undefined) mcpDrafts.current.delete(key);
+    }
+    if (showingWorkspace && presentedHost !== undefined) resetScope();
   }
   const changeCreationScope = (next: SettingsTarget, draft: AgentDraft) => {
     const { tools, workflows: _workflows, skills: _skills, ...fields } = draft;
@@ -96,13 +108,15 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     setTab(next.kind === 'user' ? 'global' : 'workspace');
     if (next.kind === 'workspace') { chosen.current = true; setWorkspace(next.id); }
   };
-  const loadMcpTools = useCallback<LoadMcpTools>(async (scope, server) => {
-    if (scope === 'workspace' && !workspaceId) return;
-    const port = createWorkflowPort({ client, host: () => host, hostAuthority: authority.capture(),
+  const loadMcpTools = useCallback<LoadMcpTools>(async (scope, server, owner, owns) => {
+    const hostAuthority = authority.capture();
+    const currentHost = hostAuthority && JSON.stringify([hostAuthority.scope.authorityId, hostAuthority.scope.endpoint]);
+    if (scope === 'workspace' && (!workspaceId || !directory || !hostAuthority || currentHost !== hostOwner)) return;
+    const port = createWorkflowPort({ client, host: () => host, hostAuthority, expectedWorkspaceDirectory: directory,
       scope: scope === 'workspace' && workspaceId ? { kind: 'workspace', workspaceId } : USER_SCOPE });
-    const catalog = await readToolCatalog(port, server);
+    const catalog = await readToolCatalog(port, server, owner, () => owns() && (scope === 'user' || !!hostAuthority?.current()));
     return catalog.sources.find(entry => entry.source_id === server);
-  }, [client, host, authority, workspaceId]);
+  }, [client, host, authority, workspaceId, directory, hostOwner]);
   const listTitle = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef(false);
   useEffect(() => {
@@ -116,7 +130,14 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     if (!next) returnFocus.current = true;
     setMcpFocus(next);
   };
+  const mcpDraftKey = mcpFocus ? JSON.stringify([lifetime, source?.target, mcpFocus.name ?? null]) : undefined;
   const mcpPage = module === 'mcp' && source && <McpPage source={source} scope={scope} revision={revision} focus={mcpFocus} onFocus={focusMcp}
+    editorDraft={mcpDraftKey ? mcpDrafts.current.get(mcpDraftKey)?.draft : undefined}
+    onEditorDraftChange={draft => {
+      if (!mcpDraftKey) return;
+      if (draft) mcpDrafts.current.set(mcpDraftKey, { draft, hostOwner: showingWorkspace ? hostOwner : undefined });
+      else mcpDrafts.current.delete(mcpDraftKey);
+    }}
     scopeControl={<span>{scopeLabel}</span>} query={query} view={view} probeStates={probes.states} testConnection={probes.testConnection} probeAvailable={probes.available} />;
 
   return <section className={`primary-page ${catalogCss.surface}`} aria-label={title} data-resource-module={module}

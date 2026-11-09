@@ -33090,6 +33090,13 @@
                 },
                 "config": {
                   "$ref": "#/$defs/SessionModelConfig"
+                },
+                "recover_unavailable_auxiliary": {
+                  "description": "A primary-model picker can recover unchanged auxiliary model references that were removed.",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
                 }
               },
               "additionalProperties": false,
@@ -36740,6 +36747,16 @@
                     }
                   ],
                   "default": null
+                },
+                "expected_scope": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SourceScope"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "additionalProperties": false,

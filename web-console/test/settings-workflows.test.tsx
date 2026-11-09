@@ -553,6 +553,7 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   expect(disabled(field('Description'))).toBe(true);
   fireEvent.change(field('Description'), { target: { value: 'sneaked-edit' } });
   await waitFor(() => expect(field('Description').value).toBe('User reviewer'));
+  expect(methods(s)).not.toContain('workflow/toolCatalog');
   expect(retained(s)).not.toContain('User reviewer');
   expect(writes(s)).toHaveLength(0);
 

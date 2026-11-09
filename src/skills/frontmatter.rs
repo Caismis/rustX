@@ -4,6 +4,8 @@ use std::path::Path;
 
 use crate::runtime::CancellationSignal;
 
+/// Bound the metadata read independently of the size of the body.
+pub(crate) const MAX_FRONTMATTER_BYTES: usize = 2 * 1024 * 1024;
 const BUFFER_BYTES: usize = 4096;
 
 #[cfg(test)]
@@ -24,6 +26,7 @@ pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, 
         let mut header = Vec::new();
         let mut first = true;
         let mut previous_cr = false;
+        let mut remaining = MAX_FRONTMATTER_BYTES;
         loop {
             crate::package_io::check_cancelled(signal)?;
             let bytes = reader.fill_buf()?;
@@ -43,11 +46,16 @@ pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, 
             let used = bytes.len();
             let bytes = if first {
                 first = false;
-                bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)
+                let prefix = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+                remaining -= bytes.len() - prefix.len();
+                prefix
             } else {
                 bytes
             };
             for &byte in bytes {
+                remaining = remaining
+                    .checked_sub(1)
+                    .ok_or_else(|| std::io::Error::other("SKILL.md frontmatter exceeds 2 MiB"))?;
                 let skip = previous_cr && byte == b'\n';
                 previous_cr = byte == b'\r';
                 if skip {

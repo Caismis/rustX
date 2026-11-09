@@ -468,6 +468,7 @@ impl Driver {
         rpc(
             &self.connection,
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: self.target.clone(),
                 config: Box::new(config),
             },
@@ -2817,8 +2818,9 @@ async fn invalidated_stored_reasoning_replays_readable_history_without_stale_cov
     let input = body["input"].as_array().unwrap();
     assert!(!input.iter().any(|item| item["type"] == "reasoning"));
     assert!(input.iter().any(|item| item["role"] == "assistant"
+        && item["status"] == "completed"
         && item["content"][0]
-            == serde_json::json!({"type":"output_text", "text":"stored response reasoning"})));
+            == serde_json::json!({"type":"output_text", "text":"stored response reasoning", "annotations": []})));
     let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
     assert_eq!(snapshots.len(), 3);
     assert!(snapshots[1].continuation.is_some());

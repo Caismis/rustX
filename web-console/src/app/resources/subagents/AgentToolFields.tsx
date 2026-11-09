@@ -10,7 +10,7 @@ import css from './Subagents.module.css';
 
 type Tools = NonNullable<NamedAgentProfileDocument['tools']>;
 type Grants = Pick<NamedAgentProfileDocument, 'tools' | 'workflows'>;
-export type LoadMcpTools = (scope: SourceScope, server: string) => Promise<WorkflowToolSource | undefined>;
+export type LoadMcpTools = (scope: SourceScope, server: string, owner: SourceScope, owns: () => boolean) => Promise<WorkflowToolSource | undefined>;
 
 export function AgentToolFields({ source, scope, value, change, loadMcpTools }: {
   source: SourceSettings; scope: SourceScope; value: Grants; change: (grants: Partial<Grants>) => void;
@@ -89,7 +89,7 @@ function McpServerTools({ scope, owner, name, selected, change, loadMcpTools }: 
   useEffect(() => {
     if (!loadMcpTools || current) return;
     let active = true;
-    void loadMcpTools(scope, name).then(
+    void loadMcpTools(scope, name, owner, () => active).then(
       listed => {
         if (!active) return;
         const tools = listed?.kind === 'mcp' && listed.scope === owner && listed.state === 'listed' ? listed.tools : undefined;

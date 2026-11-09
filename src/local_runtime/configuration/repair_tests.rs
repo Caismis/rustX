@@ -4577,7 +4577,7 @@ fn resolved(fixture: &Fixture) -> Result<BTreeMap<PathBuf, String>, String> {
 fn captured(fixture: &Fixture) -> Result<(), String> {
     fixture
         .manager
-        .capture_application(&session_input(fixture))
+        .capture_application(&session_input(fixture), None)
         .map(drop)
 }
 
@@ -4825,7 +4825,7 @@ fn a_native_writer_during_a_session_capture_is_never_mixed_into_it() {
         let failure = if application {
             fixture
                 .manager
-                .capture_application_at_boundary(&session_input(&fixture), write)
+                .capture_application_at_boundary(&session_input(&fixture), None, write)
                 .map(drop)
                 .unwrap_err()
         } else {

@@ -430,6 +430,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
             limit: 32,
         },
+        Method::ModelSet {
+            target: target.clone(),
+            config: Box::new(crate::model::session::SessionModelConfig::of(
+                crate::model::catalog::ModelRef::parse("local/replacement").unwrap(),
+            )),
+            recover_unavailable_auxiliary: Some(true),
+        },
         Method::ModelSelect {
             target: target.clone(),
             choice: crate::model::session::CatalogModelSelection {
@@ -991,6 +998,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             target: target.clone(),
             source: Some("github".into()),
             cursor: None,
+            expected_scope: Some(crate::runtime::resources::SourceScope::User),
         },
     ));
     fixtures.push(success(

@@ -162,7 +162,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const picker: ModelPickerState = { nextPage: sourceChoices ? nextSourcePage : nextPage, choices: modelChoices, current: currentModel, profile: currentProfile, effectiveProfile,
    disabled: draft ? draft.disabled || !choices : disabled || (connecting ? !coldCatalog : blocked), loading: draft ? !draft.source : connecting ? !coldSource : busy && !catalog,
    error: draft ? draftError : queued?.error ?? coldError ?? (view?.modelMutation?.status === 'uncertain' ? tx('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : error), choose };
- const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target])} choices={picker.choices}
+ const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, view?.id, target, draft?.source?.target])} choices={picker.choices}
    current={picker.current} profile={picker.profile} effectiveProfile={picker.effectiveProfile} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : connecting ? !coldSource : blocked} error={picker.error} load={load}
    choose={choose} nextPage={picker.nextPage}/>
    {!draft && modelStatus?.available === false && <p role="status">{tx('common:activity.model-unavailable')}</p>}

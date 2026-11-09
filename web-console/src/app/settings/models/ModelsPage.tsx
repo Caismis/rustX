@@ -276,7 +276,7 @@ function DefaultModelSelection({ value, change, models, profiles }: ModelSelecti
       {model && <ModelProfileChoice label={tx('settings:models-page.profile')} profile={profile} profiles={profiles[model] ?? []}
         onChange={profile => change(profile ? { ...selection, profile } : selection)}/>}
     </div>
-    {model && <Advanced title={tx('settings:models-page.auxiliary-models')}>
+    {value.model && <Advanced title={tx('settings:models-page.auxiliary-models')}>
       <AuxiliaryModelSelections value={value} change={change} models={models} profiles={profiles}/>
     </Advanced>}
   </>;

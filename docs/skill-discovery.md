@@ -15,8 +15,8 @@ resolve beside the offered instruction file. Broken links and directory cycles
 are skipped. Package bodies and supporting files are opened on demand by the
 tools that use them.
 
-`skills/frontmatter.rs` reads a cancellable prefix with 4 KiB read-ahead and
-stops at the closing YAML delimiter. Two matching prefix reads verify the
+`skills/frontmatter.rs` reads up to 2 MiB of frontmatter with 4 KiB cancellable
+read-ahead and stops at the closing YAML delimiter. Two matching prefix reads verify the
 definition using content equality. Discovery requires parseable YAML and a
 nonempty string description. It uses the parent directory name when the
 frontmatter supplies no string name. Nonstandard names and descriptions over

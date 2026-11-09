@@ -145,8 +145,9 @@ impl UserConfigManager {
     pub(crate) fn capture_application(
         &self,
         request: &SessionConfigInput,
+        credentials: Option<&crate::credentials::CredentialSnapshot>,
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_at_boundary(request, || {})
+        self.capture_application_at_boundary(request, credentials, || {})
     }
 
     /// A Session scope's capture: its source generation, resolved and
@@ -157,8 +158,12 @@ impl UserConfigManager {
     pub(crate) fn capture_session_application(
         &self,
         input: &SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<application::CapturedApplication, String> {
-        let mut captured = self.capture_application(&SessionConfigInput::new(input.cwd.clone()))?;
+        let mut captured = self.capture_application(
+            &SessionConfigInput::new(input.cwd.clone()),
+            Some(credentials),
+        )?;
         if let Ok(context) = &mut captured.context {
             context.input.model.clone_from(&input.model);
         }
@@ -168,6 +173,7 @@ impl UserConfigManager {
     pub(in crate::local_runtime) fn capture_application_at_boundary(
         &self,
         request: &SessionConfigInput,
+        credentials: Option<&crate::credentials::CredentialSnapshot>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
         let (layers, documents) = self
@@ -190,7 +196,7 @@ impl UserConfigManager {
         let process = layers.merged.app_server.clone().unwrap_or_default();
         process.validate()?;
         let (context, read) = crate::bounded_file::recording_reads(|| {
-            self.resolve_captured_layers(layers, true)
+            self.resolve_captured_layers(layers, true, credentials)
                 .and_then(|capture| {
                     capture
                         .config
@@ -244,7 +250,7 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         layers: LayerCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let capture = self.resolve_captured_layers(layers, false)?;
+        let capture = self.resolve_captured_layers(layers, false, None)?;
         let config = &capture.config;
         config.context.validate().map_err(|e| e.to_string())?;
         let (primary, summary) = crate::model::session::analyze_session_model_config(
@@ -391,6 +397,7 @@ impl UserConfigManager {
         &self,
         capture: LayerCapture,
         allow_unselected: bool,
+        credentials: Option<&crate::credentials::CredentialSnapshot>,
     ) -> Result<SourceCapture, LaunchFailure> {
         let LayerCapture {
             mut revisions,
@@ -418,7 +425,15 @@ impl UserConfigManager {
         }
         let user_path = self.sources.config_path.clone();
         let catalog = if allow_unselected {
-            super::semantics::available_catalog(&merged)
+            // A Global provider deletion cannot edit Workspace files. A
+            // missing provider of a User model is still invalid, since the
+            // User mutation owns and removes both entries together.
+            super::semantics::available_catalog(&merged, |name| {
+                matches!(
+                    provenance.get(&format!("models.{name}")),
+                    Some(Origin::Workspace { .. })
+                )
+            })
         } else {
             super::semantics::authored_catalog(&merged)
         };
@@ -488,12 +503,20 @@ impl UserConfigManager {
             // An authored preference can outlive its model. Project a new
             // default from visible choices without rewriting that preference
             // or the selection carried by an existing Session.
-            config.agent.model = models
+            let resolved = credentials
+                .map(|credentials| models.resolve(credentials))
+                .transpose()
+                .map_err(model_failure)?;
+            let replacement = models
                 .selectable_model_refs()
                 .cloned()
                 .map(crate::model::session::SessionModelConfig::of)
                 .find(|selection| {
-                    crate::model::session::analyze_session_model_config(&models, selection)
+                    resolved.as_ref().is_none_or(|catalog| {
+                        catalog
+                            .binding(&selection.model)
+                            .is_ok_and(|(provider, _)| provider.credential().is_ok())
+                    }) && crate::model::session::analyze_session_model_config(&models, selection)
                         .is_ok_and(|(primary, _)| {
                             let budget = (primary.context_window, primary.max_output_tokens);
                             config
@@ -502,6 +525,20 @@ impl UserConfigManager {
                                 .is_ok()
                         })
                 });
+            config.agent.model = replacement
+                .map(|selection| {
+                    let mut authored = effective
+                        .agent
+                        .as_ref()
+                        .and_then(|agent| agent.model.clone())
+                        .unwrap_or_default();
+                    authored.model = Some(selection.model);
+                    authored.profile = None;
+                    authored.request_params = None;
+                    authored.max_output_tokens = None;
+                    authored.resolve()
+                })
+                .transpose()?;
         }
         if allow_unselected && let Some(selection) = &mut config.agent.model {
             selection.use_available_auxiliary_models(&models, None);
@@ -689,6 +726,12 @@ impl UserConfigManager {
                 return Err(LaunchFailure::resource(error.clone()));
             }
         }
+        let root_agent_grants = config.agent.agents.clone();
+        diagnostics.extend(super::prospective::omit_agents_without_models(
+            &mut config,
+            &subagents,
+            &models,
+        ));
         let managed_python = super::super::managed_python_resources::discover_controlled(
             Some(&locations.workspace),
             &host.home_directory.join("rustx/.agents"),
@@ -916,6 +959,7 @@ impl UserConfigManager {
             managed_python,
             workflows: std::sync::Arc::new(workflows),
             subagents,
+            root_agent_grants,
             agent_root,
             role_sources,
             locations,

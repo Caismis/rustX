@@ -16,6 +16,7 @@ async fn select(
         connection,
         468,
         Method::ModelSet {
+            recover_unavailable_auxiliary: None,
             target: target.clone(),
             config: Box::new(config.clone()),
         },
@@ -247,6 +248,7 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
                     &connection,
                     103,
                     Method::ModelSet {
+                        recover_unavailable_auxiliary: None,
                         target: target.clone(),
                         config: Box::new(config),
                     }

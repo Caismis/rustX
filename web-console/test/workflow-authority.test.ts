@@ -4,16 +4,18 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AppServerTransport } from '../../tui/src/app-server/transport.ts';
-import type { WorkflowFileDocument } from '../../protocol/app-server/v77';
+import type { SourceTarget, WorkflowFileDocument } from '../../protocol/app-server/v77';
 import type { WorkflowSource } from '../../protocol/app-server/workflow-documents.ts';
-import { capabilities as nativeCapabilities } from './fixture';
+import { boundedSettings, capabilities as nativeCapabilities } from './fixture';
+import { cfg3Source } from './cfg3-data';
 import { exampleSource } from './workflow-fixtures';
 import { createServer } from 'node:http';
 import { LocalWorkspaceHost } from '../host/workspaces';
 import { workspaceHandler } from '../host/http';
 import { HttpWorkspaceHost } from '../src/workspaces/http-host';
 import type { AppServerClient } from '../src/client/app-server';
-import { createWorkflowPort, WorkflowOperationError } from '../src/app/workflows/port';
+import { createWorkflowPort, readToolCatalog, WorkflowOperationError } from '../src/app/workflows/port';
+import { createConfigurationPort } from '../src/app/settings/machines/port';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkflowHostOperation } from '../src/workspaces/host';
 
@@ -32,9 +34,13 @@ const native = vi.hoisted(() => {
       const reply = (result: unknown) => queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result }));
       if (request.method === 'initialize') void (state.gate ?? Promise.resolve()).then(() => reply({ type: 'initialized', authority_id: state.native, protocol_version: 77, capabilities: nativeCapabilities }));
       else if (request.method === 'configuration/sourceWrite') reply({ type: 'sources_written', revision: 'sha256:created', configuration_revision: null });
+      else if (request.method === 'configuration/sourcesRead') reply({ type: 'source_settings', projection: boundedSettings({ ...cfg3Source(), target: request.params.target as SourceTarget }) });
       else if (request.method === 'workflow/read') reply({ type: 'workflow_source', source: { id: 'flow', revision: 'sha256:created' } });
       else if (request.method === 'workflow/modelChoices') { const query = request.params.query as { type: string; model?: string }; reply({ type: 'workflow_model_choices', choices: query.type === 'models' ? { type: 'models', revision: 'catalog-1', models: ['fixture/model'], next_offset: null } : { type: 'profiles', revision: 'catalog-1', model: query.model, profiles: ['low'], next_offset: null } }); }
-      else if (request.method === 'workflow/toolCatalog') void (request.params.source === 'slow' ? state.catalogGate ?? Promise.resolve() : Promise.resolve()).then(() => reply({ type: 'workflow_tool_catalog', catalog: { sources: [] } }));
+      else if (request.method === 'workflow/toolCatalog') void (request.params.source === 'slow' ? state.catalogGate ?? Promise.resolve() : Promise.resolve()).then(() => {
+        const next = request.params.source === 'paged-mcp' && !request.params.cursor ? { offset: 16, digest: 'a'.repeat(64) } : undefined;
+        reply({ type: 'workflow_tool_catalog', catalog: { sources: [], next } });
+      });
       else if (request.method === 'workflow/list') reply({ type: 'workflow_library', library: { target: request.params.target, directory: '/x', absent_revision: 'missing', files: [], diagnostic: null } });
       return Promise.resolve();
     }
@@ -128,6 +134,27 @@ describe('Workflow operations and Product Host authority (R1)', () => {
     await expect(port.list()).rejects.toMatchObject({ failure: { kind: 'unavailable', message: 'product_host_replaced' } });
     expect(native.state.requests).toHaveLength(0);
   });
+
+  it('keeps configuration intents and MCP discovery in the observed native directory after registration remaps', async () => {
+    const { h1, h2 } = replacement();
+    const [registration] = (await h1.listWorkspaces()).workspaces;
+    const client = fakeClient().client;
+    let host = h1;
+    const configuration = createConfigurationPort({ client, endpoint, workspaceId: registration.id, host: () => host, identified: () => {} });
+    const { target } = await configuration.read();
+    if (target.kind !== 'workspace') throw new Error('Expected Workspace target');
+    host = h2;
+    const authority = new WorkspaceAuthority(h2);
+    await authority.observe();
+    const workflows = createWorkflowPort({ client, host: () => h2, hostAuthority: authority.capture(),
+      scope: { kind: 'workspace', workspaceId: registration.id }, expectedWorkspaceDirectory: target.directory });
+    await expect(readToolCatalog(workflows, 'shared', 'workspace')).rejects.toMatchObject({ failure: { kind: 'unavailable', message: 'Workspace directory changed' } });
+    await expect(configuration.read()).rejects.toMatchObject({ kind: 'workspace_unavailable' });
+    await expect(configuration.reconcile()).rejects.toMatchObject({ kind: 'workspace_unavailable' });
+    await expect(configuration.write('workspace-1', { kind: 'mcp', id: 'shared', authored: null })).rejects.toMatchObject({ kind: 'workspace_unavailable' });
+    expect(dispatched().map(request => request.method)).toEqual(['configuration/sourcesRead']);
+    expect(native.state.connects).toBe(1);
+  });
 });
 
 describe('Workflow operations and native App Server authority', () => {
@@ -204,6 +231,17 @@ describe('Workflow operations and native App Server authority', () => {
     await expect(port.modelChoices({ type: 'profiles', model: 'fixture/model', offset: 32 }, 'catalog-1')).resolves.toEqual({ type: 'profiles', revision: 'catalog-1', model: 'fixture/model', profiles: ['low'], next_offset: null });
     expect(dispatched()).toHaveLength(1);
     expect(dispatched()[0]).toMatchObject({ method: 'workflow/modelChoices', params: { target: { kind: 'workspace', directory }, query: { type: 'profiles', model: 'fixture/model', offset: 32 }, expected_revision: 'catalog-1' } });
+  });
+
+  it('fences automatic MCP discovery and its continuation to the observed owner', async () => {
+    const { h, registration, authority, directory } = await host();
+    const port = createWorkflowPort({ client: browser().client, host: () => h, hostAuthority: authority.capture(), scope: { kind: 'workspace', workspaceId: registration } });
+    await readToolCatalog(port, 'paged-mcp', 'user');
+    const params = { target: { kind: 'workspace', directory }, source: 'paged-mcp', expected_scope: 'user' };
+    expect(dispatched().map(request => ({ method: request.method, params: request.params }))).toEqual([
+      { method: 'workflow/toolCatalog', params },
+      { method: 'workflow/toolCatalog', params: { ...params, cursor: { offset: 16, digest: 'a'.repeat(64) } } },
+    ]);
   });
 
   it('does not hold the mutation lane or another catalog request behind a slow source', async () => {

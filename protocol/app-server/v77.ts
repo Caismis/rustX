@@ -426,6 +426,10 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         config: SessionModelConfig;
+        /**
+         * A primary-model picker can recover unchanged auxiliary model references that were removed.
+         */
+        recover_unavailable_auxiliary?: boolean | null;
       };
     }
   | {
@@ -1284,6 +1288,7 @@ export type Request1 =
         target: SourceTarget;
         source?: string | null;
         cursor?: WorkflowToolCatalogCursor | null;
+        expected_scope?: SourceScope | null;
       };
     }
   | {
@@ -2070,6 +2075,11 @@ export type WorkflowModelChoicesQuery =
       offset: number;
       type: 'profiles';
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SourceScope".
+ */
+export type SourceScope = 'user' | 'workspace';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowConsumerField".
@@ -4963,11 +4973,6 @@ export type RuntimeClientStatusSection =
  * via the `definition` "ResourceFamily".
  */
 export type ResourceFamily = 'agent' | 'workflow' | 'managed_python' | 'mcp' | 'skill';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SourceScope".
- */
-export type SourceScope = 'user' | 'workspace';
 /**
  * What one resource diagnostic belongs to.
  *

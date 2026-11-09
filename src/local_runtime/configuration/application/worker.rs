@@ -254,7 +254,7 @@ impl ConfigurationApplications {
                 return;
             }
             if let Some(old) = &adopted
-                && capture.preserves_adopted_models(old)
+                && capture.preserves_adopted_models(old, |_| false)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
                 let others_unchanged = capture.same_capabilities(old)

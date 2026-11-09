@@ -135,6 +135,39 @@ it('invalid JSON remains editable when switching back to the form',async()=>{
  expect(readJson(screen.getByLabelText('Complete configuration'))).toBe('{broken');
  expect(screen.getByRole('alert').textContent).toContain('Invalid JSON');expect(writes(s)).toHaveLength(0);
 });
+it('retained raw JSON cannot overwrite a newly observed MCP source revision', async () => {
+ const s = await open();
+ fireEvent.click(screen.getByRole('button', { name: '＋ New MCP server' }));
+ fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'docs' } });
+ fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'initial' } });
+ fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+ await screen.findByRole('listitem', { name: 'docs' });
+ const openServer = () => fireEvent.click(screen.getByRole('button', { name: 'MCP docs' }));
+ openServer();
+ fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
+ const draft = '{"docs":{"command":"stale-draft"}}';
+ changeJson(await screen.findByLabelText('Complete configuration'), draft);
+ fireEvent.click(screen.getByRole('button', { name: '← MCP servers' }));
+ s.source.user_mcp.revision = 'external-mcp';
+ s.source.user_mcp.authored!.docs.definition.command = 'external-command';
+ s.source.user_mcp.authored!.docs.retained_env = ['NEW_TOKEN'];
+ fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+ await screen.findByText('stdio · external-command');
+ openServer();
+ const json = await screen.findByLabelText('Complete configuration');
+ expect(readJson(json)).toBe(draft);
+ expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+ fireEvent.submit(screen.getByRole('form', { name: 'Edit MCP server' }));
+ expect(writes(s)).toHaveLength(1);
+ fireEvent.click(screen.getByRole('button', { name: 'Use latest setting' }));
+ expect(readJson(json)).toBe(draft);
+ fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+ await screen.findByRole('listitem', { name: 'docs' });
+ expect(writes(s)).toHaveLength(2);
+ expect(writes(s)[1]).toMatchObject({ expected_revision: 'external-mcp', mutation: {
+   id: 'docs', authored: { definition: { command: 'stale-draft' }, retained_env: ['NEW_TOKEN'] },
+ } });
+});
 it('an unfinished form can visit JSON and return without being forced to complete it',async()=>{
  const s=await open();fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
  fireEvent.click(screen.getByRole('button',{name:'JSON'}));
@@ -186,7 +219,7 @@ it('workspace MCP management shows inherited global definitions without probing 
  const {McpPage}=await import('../src/app/resources/mcp/McpPage');
  const {vi}=await import('vitest');
  const onFocus=vi.fn();
- const props={source:s.source,scope:'workspace' as const,onFocus,scopeControl:<span>Workspace A</span>,query:'',view:'cards' as const};
+ const props={source:s.source,scope:'workspace' as const,onFocus,onEditorDraftChange:vi.fn(),scopeControl:<span>Workspace A</span>,query:'',view:'cards' as const};
  const ui=render(<McpPage {...props}/>);
  expect(screen.getByText('No MCP servers installed')).toBeTruthy();
  expect(within(screen.getByRole('group',{name:'Available from Global'})).getByRole('listitem',{name:'exa'})).toBeTruthy();

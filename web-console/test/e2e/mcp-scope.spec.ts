@@ -32,10 +32,11 @@ test('MCP module shares compact typography and fits a narrow page',async({page})
  await page.getByRole('button',{name:'Dark',exact:true}).click();
  const mcp=await openResourceModule(page,'mcp','Global');
  await mcp.getByRole('button',{name:'MCP exa',exact:true}).click();
- await expect(mcp.locator('h3')).toHaveCSS('font-size','20px');
+ await expect(mcp.locator('h3')).toHaveCSS('font-size','24px');
  await expect(mcp.getByRole('button',{name:'Form',exact:true})).toHaveAttribute('aria-pressed','true');
  await mcp.getByRole('button',{name:'JSON',exact:true}).click();
  await page.setViewportSize({width:390,height:850});
+ await expect(mcp.locator('h3')).toHaveCSS('font-size','20px');
  await captureEvidence(mcp,'mcp-editor-narrow');
  const bounds=await mcp.evaluate(el=>({client:el.clientWidth,scroll:el.scrollWidth}));
  expect(bounds.scroll).toBeLessThanOrEqual(bounds.client);

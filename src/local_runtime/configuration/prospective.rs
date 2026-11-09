@@ -5,6 +5,72 @@ use super::{
     AdmittedSessionConfig, BTreeMap, CurrentRuntimeConfig, IndependentPolicy, Origin,
     ProspectiveSessionConfig, SessionLocations, application,
 };
+use crate::runtime::capability_inspection::{
+    ResourceDiagnostic, ResourceDiagnosticSubject, ResourceFamily,
+};
+
+const AGENT_MODEL_UNAVAILABLE: &str = "selected Agent model is unavailable";
+
+/// The authored Agent remains available for editing. Its explicit model must
+/// exist before the Root can advertise the Agent for delegation.
+pub(super) fn omit_agents_without_models(
+    config: &mut CurrentRuntimeConfig,
+    subagents: &crate::runtime::subagent::AgentCatalog,
+    models: &crate::model::catalog::ModelCatalog,
+) -> Vec<ResourceDiagnostic> {
+    let mut diagnostics = Vec::new();
+    config.agent.agents.retain(|name| {
+        let Some(definition) = subagents.get(name) else {
+            // A missing or malformed Agent definition is still a source error.
+            return true;
+        };
+        let Some(selection) = definition.model() else {
+            return true;
+        };
+        let Some(field) = missing_agent_model_field(models, selection) else {
+            return true;
+        };
+        diagnostics.push(ResourceDiagnostic::resource(
+            ResourceFamily::Agent,
+            name,
+            &crate::runtime::resources::RuntimeResourceLoadError::new(AGENT_MODEL_UNAVAILABLE)
+                .at(definition.instructions_source(), field)
+                .because(AGENT_MODEL_UNAVAILABLE),
+        ));
+        false
+    });
+    diagnostics
+}
+
+fn missing_agent_model_field(
+    models: &crate::model::catalog::ModelCatalog,
+    selection: &crate::model::session::SessionModelConfig,
+) -> Option<&'static str> {
+    if models.model(&selection.model).is_err() {
+        Some("model.model")
+    } else {
+        selection
+            .summary_selection()
+            .filter(|summary| models.model(&summary.model).is_err())
+            .map(|_| "model.summary_model")
+    }
+}
+
+fn agent_model_can_bind(
+    models: &crate::model::catalog::ModelCatalog,
+    model: &crate::model::session::SessionModelConfig,
+) -> bool {
+    use crate::model::invocation::{RequestParamsLayer, analyze_selection};
+    let valid = |selection: crate::model::ModelSelection, layer| {
+        models
+            .model(&selection.model)
+            .is_ok_and(|definition| analyze_selection(definition, &selection, layer).is_ok())
+    };
+    valid(model.selection(), RequestParamsLayer::SessionOverrides)
+        && model
+            .summary_selection()
+            .is_none_or(|summary| valid(summary, RequestParamsLayer::SummaryOverrides))
+}
 
 impl ProspectiveSessionConfig {
     /// The physical/profile closure admitted by Root selection and Workflow
@@ -210,7 +276,7 @@ impl ProspectiveSessionConfig {
                 };
                 match (model(self), model(other)) {
                     (None, None) => true,
-                    (Some(left), Some(right)) => self.same_model(&left, other, &right),
+                    (Some(left), Some(right)) => self.same_named_model(&left, other, &right),
                     _ => false,
                 }
             })
@@ -226,24 +292,36 @@ impl ProspectiveSessionConfig {
     /// that selection must resolve to the same invocation here.
     ///
     /// The same holds for each explicit model a direct Model node of an
-    /// enabled Workflow names, at any depth.
-    pub(crate) fn preserves_adopted_models(&self, adopted: &Self) -> bool {
+    /// enabled Workflow names, at any depth. Creation may allow references
+    /// that no longer bind an invocation, or that lacked one before the edit.
+    pub(crate) fn preserves_adopted_models(
+        &self,
+        adopted: &Self,
+        allows_unbound: impl Fn(&crate::model::catalog::ModelRef) -> bool,
+    ) -> bool {
         adopted.admitted_agent_dependencies().iter().all(|name| {
             adopted
                 .subagents
                 .get(name)
-                .and_then(|definition| definition.profile().model.clone())
-                .is_none_or(|model| adopted.same_model(&model, self, &model))
+                .and_then(|definition| definition.model())
+                .is_none_or(|model| {
+                    allows_unbound(&model.model)
+                        || model
+                            .summary_selection()
+                            .is_some_and(|summary| allows_unbound(&summary.model))
+                        || adopted.same_named_model(model, self, model)
+                })
         }) && adopted
             .workflow_model_selections()
             .values()
             .all(|selection| {
-                adopted.models.same_invocation(
-                    selection,
-                    &self.models,
-                    selection,
-                    crate::model::invocation::RequestParamsLayer::SessionOverrides,
-                )
+                allows_unbound(&selection.model)
+                    || adopted.models.same_invocation(
+                        selection,
+                        &self.models,
+                        selection,
+                        crate::model::invocation::RequestParamsLayer::SessionOverrides,
+                    )
             })
     }
 
@@ -278,6 +356,31 @@ impl ProspectiveSessionConfig {
         right: &crate::model::session::SessionModelConfig,
     ) -> bool {
         crate::model::session::same_session_invocation(&self.models, left, &other.models, right)
+    }
+
+    /// The exact primary and Summary invocations that `FrozenModelSpec` binds.
+    fn same_named_model(
+        &self,
+        left: &crate::model::session::SessionModelConfig,
+        other: &Self,
+        right: &crate::model::session::SessionModelConfig,
+    ) -> bool {
+        use crate::model::invocation::RequestParamsLayer;
+        self.models.same_invocation(
+            &left.selection(),
+            &other.models,
+            &right.selection(),
+            RequestParamsLayer::SessionOverrides,
+        ) && match (left.summary_selection(), right.summary_selection()) {
+            (None, None) => true,
+            (Some(left), Some(right)) => self.models.same_invocation(
+                &left,
+                &other.models,
+                &right,
+                RequestParamsLayer::SummaryOverrides,
+            ),
+            _ => false,
+        }
     }
 
     /// Why this capture's catalog does not admit the Session's own selection,
@@ -354,6 +457,44 @@ impl ProspectiveSessionConfig {
             published.component_revisions[&application::ApplyUnit::Provider].clone(),
         );
         self
+    }
+
+    /// Recompute Root eligibility using only the last published grants and
+    /// definitions. A returned model can make a formerly omitted grant usable.
+    pub(super) fn with_creation_catalog(self, published: &Self) -> Self {
+        let mut candidate = self.with_published_catalog(published);
+        let config = std::sync::Arc::make_mut(&mut candidate.config);
+        config.agent.agents = candidate
+            .root_agent_grants
+            .iter()
+            .filter(|name| {
+                config.agent.agents.contains(name)
+                    || candidate
+                        .subagents
+                        .get(name)
+                        .and_then(|definition| definition.model())
+                        .is_some_and(|model| agent_model_can_bind(&candidate.models, model))
+            })
+            .cloned()
+            .collect();
+        let omitted = omit_agents_without_models(config, &candidate.subagents, &candidate.models);
+        if let Some(main) = &mut candidate.inspection.main {
+            main.set_root_agents(config.agent.agents.iter().cloned());
+        }
+        let diagnostics = &mut candidate.inspection.resource_diagnostics;
+        diagnostics.retain(|diagnostic| {
+            diagnostic.reason != AGENT_MODEL_UNAVAILABLE
+                || !matches!(
+                    &diagnostic.subject,
+                    ResourceDiagnosticSubject::Resource { family: ResourceFamily::Agent, name }
+                        if config.agent.agents.iter().any(|agent| agent.as_str() == name)
+                )
+        });
+        diagnostics.extend(omitted);
+        diagnostics.sort();
+        diagnostics.dedup();
+        diagnostics.truncate(256);
+        candidate
     }
 
     pub(crate) fn retaining_context_from(mut self, adopted: &Self) -> Self {

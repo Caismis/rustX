@@ -74,7 +74,8 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   const restoring = scope === 'workspace' && !!unit.shadowed;
   const title = tx(creating ? 'resources:subagents.new' : 'resources:subagents.edit');
   const formName = creating ? title : tx('settings:extension-detail.agent-value', { p0: name ?? '' });
-  const save = editable && !invalid && !duplicate && unit.admitted && unit.writable && !busy && (creating || unit.draft);
+  const canSubmit = editable && unit.admitted && !busy && !unit.reviewNeeded;
+  const save = canSubmit && !invalid && !duplicate && unit.writable && (creating || unit.draft);
   const model = value.model ?? undefined;
   const modelChoices = [...new Set([...models, ...(model?.model ? [model.model] : [])])];
   const update = (changes: Partial<AgentDraft>) => unit.edit({ ...value, ...changes });
@@ -150,7 +151,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
               </div>
             </section>
             <AgentToolFields source={source} scope={resourceScope}
-              value={value} change={update} loadMcpTools={discover ? loadMcpTools : undefined} />
+              value={value} change={update} loadMcpTools={discover && unit.writable ? loadMcpTools : undefined} />
             <section className={css.section} aria-labelledby={`${sections}-advanced`}>
               <h2 id={`${sections}-advanced`}>{tx('settings:agent-page.advanced-options')}</h2>
               <AgentSkillFields client={client} source={source} scope={resourceScope} active={discover}
@@ -162,7 +163,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
               </label>
               <fieldset className={css.featureGroup}>
                 <legend>{tx('settings:extension-detail.extensions-default-off')}</legend>
-                {(['todo', 'goal', 'agent_status'] as const).map(id => {
+                {(['todo', 'agent_status'] as const).map(id => {
                   const label = tx(`resources:subagents.feature-${id}`);
                   return <div className={css.settingRow} key={id}>
                     <span>{label}</span>
@@ -185,8 +186,8 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
             triggerText={tx(restoring ? 'settings:models.restore' : 'settings:copy.delete')}
             confirm={tx(restoring ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: formName })}
             description={tx(restoring ? 'settings:forms.restore-help' : 'resources:subagents.delete-help')}
-            settle={form} tone={restoring ? 'restore' : 'destructive'} disabled={!editable || busy || !unit.admitted}
-            onConfirm={() => { submitted.current = true; unit.submit(true); }} /></span>}
+            settle={form} tone={restoring ? 'restore' : 'destructive'} disabled={!canSubmit}
+            onConfirm={() => { if (canSubmit) { submitted.current = true; unit.submit(true); } }} /></span>}
           <div className={css.saveActions}>
             {unit.reviewNeeded && <Button size="sm" disabled={!editable || busy} onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
             <Button variant="outline" size="sm" disabled={busy} onClick={close}>{tx('resources:cancel')}</Button>

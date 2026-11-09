@@ -913,7 +913,10 @@ committed named Agent's explicit selection resolves to — the catalog arrives w
 that change's commit,
 together with any capability or context change of the same generation. A cold
 Session receives the catalog when it next becomes resident. New Sessions start
-from the Workspace's published creation catalog.
+from the Workspace's published creation catalog. A typed settings edit can
+publish a validated catalog and default for new Sessions at the source commit,
+including when no Session is resident. Other source units still go through their
+ordinary preparation and adoption.
 
 A configured selection the published catalog does not admit is **unavailable**.
 The Session keeps it configured — nothing switches it to the catalog default or
@@ -926,8 +929,10 @@ are refused with `model_unavailable`, and inbound accepted before the publicatio
 is held, never run on the removed selection and never dropped. Held work does not
 make the Session busy for the correction. The correction is an ordinary
 `session/setModel` with a complete selection the
-catalog admits, primary and explicit auxiliary selections alike; it commits through the usual
-fence and admits held work with exactly the new selection.
+catalog admits, primary and explicit auxiliary selections alike. The primary-model
+picker can explicitly request that a carried auxiliary policy whose model was removed
+follow the primary model. Both corrections commit through the usual fence and admit
+held work with the resulting selection.
 
 The committed generation's `source_revisions` stay the source manifest its context
 was resolved from. Independently published units — execution policy, shared
