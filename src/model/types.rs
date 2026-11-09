@@ -350,3 +350,88 @@ mod tests {
         assert_eq!(decoded, usage);
     }
 }
+
+#[cfg(test)]
+mod continuation_work_tests {
+    use super::*;
+    use crate::message::types::{
+        AssistantContentBlock, AssistantMessageBlock, MessageBlock, ReasoningBlock,
+    };
+    use crate::model::projected::CanonicalMessageRef;
+    use crate::model::selected_input::take_hash_work;
+    use crate::runtime::continuation::{
+        AcceptedOutputContinuationSource, AnthropicContinuation, ProviderContinuationState,
+    };
+    use crate::runtime::identity::{ConversationId, MessageId, RequestId};
+
+    #[test]
+    fn continuation_hashes_only_identity_candidates_and_checks_the_prefix() {
+        let mut request = crate::scripted_suites::common::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "fixture",
+            "prefix",
+        );
+        let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
+            opaque: serde_json::json!({"type":"redacted_thinking","data":"a".repeat(8192)}),
+        });
+        let output = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("accepted"),
+            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                text: None,
+                provider_state: Some(state.clone()),
+            })],
+        });
+        let scope = ConversationId::generate();
+        let source = AcceptedOutputContinuationSource::from_accepted_output(
+            RequestId::new("previous"),
+            &scope,
+            &request.messages,
+            &output,
+        )
+        .unwrap();
+        request.continuation = Some(state);
+        request.continuation_source = Some(source);
+        request
+            .messages
+            .push(ModelInputMessage::Canonical(output.clone()));
+        for index in 0..64 {
+            let MessageBlock::Assistant(mut unrelated) = output.clone() else {
+                unreachable!()
+            };
+            unrelated.id = MessageId::new(format!("unrelated-{index}"));
+            request
+                .messages
+                .push(ModelInputMessage::Canonical(MessageBlock::Assistant(
+                    unrelated,
+                )));
+        }
+        take_hash_work();
+        assert_eq!(request.continuation_boundary().unwrap(), Some(1));
+        let (original, semantic) = take_hash_work();
+        assert_eq!(original, serde_json::to_vec(&output).unwrap().len());
+        assert!(semantic > 8192);
+        let mut changed = request.clone();
+        changed.messages[0] = crate::scripted_suites::common::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "fixture",
+            "changed prefix",
+        )
+        .messages[0]
+            .clone();
+        assert!(changed.continuation_boundary().is_err());
+        request
+            .messages
+            .push(ModelInputMessage::Canonical(output.clone()));
+        assert!(
+            request
+                .continuation_boundary()
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+        let MessageBlock::Assistant(mut wrong) = output.clone() else {
+            unreachable!()
+        };
+        wrong.content.clear();
+        assert!(!CanonicalMessageRef::of(&scope, &output).matches(&MessageBlock::Assistant(wrong)));
+    }
+}
