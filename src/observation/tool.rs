@@ -117,7 +117,7 @@ pub(crate) fn foreground(
                         ..
                     }
                 )
-                .then(|| binding.content_ref.clone())
+                .then(|| binding.content_ref.as_ref().clone())
             })
         });
     let arguments = header.arguments_json.clone().unwrap_or_default();
@@ -141,7 +141,7 @@ pub(crate) fn foreground(
                     ..
                 }
             )
-            .then(|| binding.content_ref.clone())
+            .then(|| binding.content_ref.as_ref().clone())
         }),
         assembly_complete: true,
         committed_result_deferred: header
@@ -171,7 +171,7 @@ pub(crate) fn foreground(
                         ..
                     }
                 )
-                .then(|| binding.content_ref.clone())
+                .then(|| binding.content_ref.as_ref().clone())
             })
         });
     }
@@ -265,15 +265,15 @@ pub(crate) fn content(
         })
     {
         let mut binding = binding.clone();
-        binding.path = vec!["state".into(), "arguments".into()];
+        binding.path = vec!["state".into(), "arguments".into()].into();
         binding.deferred = header.arguments_json.is_none();
         result.push(binding);
     }
     if let Some(reference) = &view.result_metadata_ref {
         result.push(super::cut::ContentBinding {
-            path: vec!["committed_result".into()],
-            source_path: Some(vec!["result".into()]),
-            content_ref: reference.clone(),
+            path: vec!["committed_result".into()].into(),
+            source_path: Some(vec!["result".into()].into()),
+            content_ref: reference.clone().into(),
             deferred: view.committed_result_deferred,
         });
     }
@@ -366,9 +366,10 @@ pub(crate) fn enrich_message(
         let mut candidate = header.clone();
         let index = candidate.tool_calls.len();
         for mut binding in content(tool, &view) {
-            binding
-                .path
-                .splice(0..0, ["tool_calls".into(), index.to_string()]);
+            binding.path = ["tool_calls".into(), index.to_string()]
+                .into_iter()
+                .chain(binding.path.iter().cloned())
+                .collect();
             candidate.content.push(binding);
         }
         candidate.tool_calls.push(view);
@@ -444,7 +445,10 @@ pub(crate) fn enrich_loaded_transcript_header(
             if candidate.display.is_some() {
                 prefix.insert(0, "display".into());
             }
-            binding.path.splice(0..0, prefix);
+            binding.path = prefix
+                .into_iter()
+                .chain(binding.path.iter().cloned())
+                .collect();
             candidate.content.push(binding);
         }
         candidate.collections.extend(collections(tool));

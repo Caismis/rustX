@@ -115,7 +115,7 @@ fn read_frozen_sources(
     let mut offset = 0;
     loop {
         let chunk = inner.content_read(&reference, offset, 65_536).unwrap();
-        assert_eq!(chunk.content_ref, reference);
+        assert_eq!(chunk.content_ref, reference.as_ref().clone());
         bytes.extend(
             base64::engine::general_purpose::STANDARD
                 .decode(chunk.data_base64)

@@ -1196,8 +1196,8 @@ pub(in crate::durable::sqlite) fn prefer_original_raw(
             crate::observation::content::ContentRepresentation::RawJsonUtf8,
         )?;
         if let Some(raw) = raw {
-            if binding.content_ref != raw {
-                binding.content_ref = raw;
+            if *binding.content_ref != raw {
+                binding.content_ref = raw.into();
                 return Ok(true);
             }
         } else if binding.content_ref.representation

@@ -263,7 +263,7 @@ async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_fo
             let read = |offset| Method::ConversationContentRead {
                 target: target.clone(),
                 agent_id: None,
-                content_ref: reference.clone(),
+                content_ref: (reference.clone()).as_ref().clone(),
                 offset,
                 max_bytes: 1,
             };
@@ -282,7 +282,7 @@ async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_fo
             let MethodResult::ContentChunk { chunk } = call(&client, 46_783, read(0)).await else {
                 panic!("same connection remains readable");
             };
-            assert_eq!(chunk.content_ref, reference);
+            assert_eq!(chunk.content_ref, reference.as_ref().clone());
             assert_eq!(chunk.next_offset, Some(1));
             assert_eq!(
                 base64::engine::general_purpose::STANDARD

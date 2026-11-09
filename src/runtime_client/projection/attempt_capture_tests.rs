@@ -214,9 +214,9 @@ fn foreground_admission_matches_old_fields_without_allocating_discarded_payloads
 fn attempt_bindings_reuse_only_identical_position_source_frontier_and_deferred_state() {
     let owners = super::super::prepared_capture::PreparedAttemptBindings::default();
     let binding = ContentBinding {
-        source_path: Some(vec!["result".into()]),
-        path: vec!["attempt".into(), "foreground".into(), "0".into()],
-        content_ref: content_reference(),
+        source_path: Some(vec!["result".into()].into()),
+        path: vec!["attempt".into(), "foreground".into(), "0".into()].into(),
+        content_ref: content_reference().into(),
         deferred: false,
     };
     let mut original = Vec::new();
@@ -230,9 +230,9 @@ fn attempt_bindings_reuse_only_identical_position_source_frontier_and_deferred_s
     let _ = unchanged[0].size();
     assert_eq!(crate::observation::metadata::take_work(), 0);
     let mut changes = vec![binding.clone(); 5];
-    changes[0].path[2] = "1".into();
-    changes[1].content_ref.content_revision += 1;
-    changes[2].content_ref.readable_end += 1;
+    std::sync::Arc::make_mut(&mut changes[0].path)[2] = "1".into();
+    std::sync::Arc::make_mut(&mut changes[1].content_ref).content_revision += 1;
+    std::sync::Arc::make_mut(&mut changes[2].content_ref).readable_end += 1;
     changes[3].deferred = true;
     changes[4].source_path = None;
     for change in changes {
@@ -451,8 +451,8 @@ fn prepared_tool_admission_reads_current_result_sources_with_unchanged_attempt_o
         metadata: content_reference(),
         content: vec![ContentBinding {
             source_path: None,
-            path: vec!["tool".into(), "result".into(), "content".into(), "0".into()],
-            content_ref: content_reference(),
+            path: vec!["tool".into(), "result".into(), "content".into(), "0".into()].into(),
+            content_ref: content_reference().into(),
             deferred: true,
         }],
         frontier: crate::observation::cut::CollectionFrontier {
@@ -470,9 +470,7 @@ fn prepared_tool_admission_reads_current_result_sources_with_unchanged_attempt_o
     changed.foreground_content[0].metadata.content_revision += 1;
     changed.foreground_content[0].metadata.readable_end += 10;
     changed.foreground_content[0].frontier.revision += 1;
-    changed.foreground_content[0].content[0]
-        .content_ref
-        .content_revision += 1;
+    Arc::make_mut(&mut changed.foreground_content[0].content[0].content_ref).content_revision += 1;
     assert!(Arc::ptr_eq(
         original.snapshot.attempt.owner(),
         changed.snapshot.attempt.owner()

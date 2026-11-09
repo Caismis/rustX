@@ -97,7 +97,7 @@ impl RuntimeClientProjection {
             let arguments_ref = header.content.iter().find_map(|binding| {
                 (binding.content_ref.representation == ContentRepresentation::RawJsonUtf8
                     && matches!(&binding.content_ref.source, ContentSource::CanonicalMessageBlock { block_index, .. } if *block_index == source.block_index))
-                    .then(|| binding.content_ref.clone())
+                    .then(|| binding.content_ref.as_ref().clone())
             });
             events.push(RuntimeClientEvent::ToolCallAssembled {
                 position,

@@ -514,9 +514,10 @@ impl ClientInner {
                             "metadata".into()
                         } else {
                             "payload".into()
-                        }],
+                        }]
+                        .into(),
                         source_path: None,
-                        content_ref: reference.clone(),
+                        content_ref: reference.clone().into(),
                         deferred: true,
                     })
                     .collect();

@@ -224,7 +224,7 @@ fn selected_content_bytes(
             .unwrap();
         let (rows, read) = SqliteConversationStore::content_read_work();
         assert!(rows <= 2 && read <= 65_536);
-        assert_eq!(chunk.content_ref, binding.content_ref);
+        assert_eq!(chunk.content_ref, (binding.content_ref).as_ref().clone());
         assert_eq!(chunk.offset, offset);
         assert_eq!(chunk.readable_end, binding.content_ref.readable_end);
         let part = base64::engine::general_purpose::STANDARD
@@ -332,12 +332,12 @@ fn original_text_block(
     let metadata = item
         .content
         .iter()
-        .find(|binding| binding.path == ["value"])
+        .find(|binding| binding.path.as_ref() == ["value"])
         .unwrap();
     let payload = item
         .content
         .iter()
-        .find(|binding| binding.path == ["value", "text"])
+        .find(|binding| binding.path.as_ref() == ["value", "text"])
         .unwrap();
     assert_eq!(
         payload.content_ref.representation,

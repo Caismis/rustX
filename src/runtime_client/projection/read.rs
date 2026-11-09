@@ -139,7 +139,7 @@ impl RuntimeClientProjection {
 
     pub(crate) fn install_content_metadata(
         &mut self,
-        references: Vec<crate::observation::content::ContentRef>,
+        references: Vec<Arc<crate::observation::content::ContentRef>>,
     ) {
         for reference in references {
             if let crate::observation::content::ContentSource::CanonicalMessageBlock {
@@ -154,7 +154,7 @@ impl RuntimeClientProjection {
                     block_index.get(),
                     reference.representation.key(),
                 );
-                self.content_metadata.insert(key, Arc::new(reference));
+                self.content_metadata.insert(key, reference);
             }
         }
         // This cache contains finite read evidence only. The immutable Store is
@@ -249,7 +249,7 @@ impl RuntimeClientProjection {
                 header
                     .content
                     .iter()
-                    .map(|binding| binding.content_ref.clone())
+                    .map(|binding| Arc::clone(&binding.content_ref))
             })
             .collect();
         self.install_content_metadata(references);

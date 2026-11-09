@@ -501,7 +501,7 @@ impl ClientInner {
     ) -> Result<(), RuntimeClientError> {
         for binding in bindings {
             if let Some(reference) = self.materialize_content_binding(binding)? {
-                binding.content_ref = reference;
+                binding.content_ref = reference.into();
             }
         }
         Ok(())
@@ -696,9 +696,10 @@ impl ClientInner {
         for index in 0..checkpoint.content.len() {
             let binding = &checkpoint.content[index];
             if let Some(reference) = self.materialize_content_binding(binding)?
-                && reference != binding.content_ref
+                && &reference != binding.content_ref.as_ref()
             {
-                Arc::make_mut(&mut checkpoint.content)[index] = binding.resolve(&reference);
+                Arc::make_mut(&mut checkpoint.content)[index] =
+                    binding.resolve(&Arc::new(reference));
             }
         }
         self.materialize_trace(&mut checkpoint.snapshot, &checkpoint.read_cut, records)?;

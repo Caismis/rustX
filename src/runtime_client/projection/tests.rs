@@ -6045,7 +6045,7 @@ fn t14_t19_complete_canonical_head_omits_only_exact_unchanged_rows() {
     assert_canonical_header_fact(&mut projection, &changed_body, false);
     assert_canonical_header_fact(&mut projection, &earlier, false);
     let mut refined = earlier.clone();
-    refined.content[0].content_ref.readable_end += 1;
+    std::sync::Arc::make_mut(&mut refined.content[0].content_ref).readable_end += 1;
     assert_canonical_header_fact(&mut projection, &refined, false);
     assert_canonical_header_fact(&mut projection, &earlier, false);
     assert!(

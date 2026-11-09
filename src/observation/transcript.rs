@@ -283,11 +283,11 @@ pub(crate) fn transcript_header_view(
                     .first()
                     .is_some_and(|segment| segment == "display")
                 {
-                    binding.path.remove(0);
+                    binding.path = binding.path[1..].into();
                 }
                 let mut path = vec!["entries".to_owned(), index.to_string()];
-                path.append(&mut binding.path);
-                binding.path = path;
+                path.extend(binding.path.iter().cloned());
+                binding.path = path.into();
                 result.content.push(binding);
             }
             result.collections.extend(header.collections);

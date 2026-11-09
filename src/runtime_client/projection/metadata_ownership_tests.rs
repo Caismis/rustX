@@ -111,8 +111,8 @@ fn empty_draft() -> PublicationDraft {
 
 fn binding(draft: &PublicationDraft, message: &MessageBlock, path: Vec<String>) -> ContentBinding {
     ContentBinding {
-        source_path: Some(vec!["text".into()]),
-        path,
+        source_path: Some(vec!["text".into()].into()),
+        path: path.into(),
         content_ref: ContentRef {
             conversation_id: draft.seed.snapshot.conversation_id.clone(),
             source: ContentSource::CanonicalMessageBlock {
@@ -126,7 +126,7 @@ fn binding(draft: &PublicationDraft, message: &MessageBlock, path: Vec<String>) 
             version: 1,
             content_revision: 1,
             readable_end: 7,
-        },
+        }.into(),
         deferred: true,
     }
 }
@@ -653,10 +653,10 @@ fn native_metadata_heads_reuse_fragments_across_publication_and_keep_old_paths()
     let original_bytes = serde_json::to_vec(original.as_ref()).unwrap();
     let moved = head.message(7);
     let mut expected = raw;
-    expected.path.remove(0);
+    expected.path = expected.path[1..].into();
     let mut path = vec!["messages".into(), "7".into()];
-    path.append(&mut expected.path);
-    expected.path = path;
+    path.extend(expected.path.iter().cloned());
+    expected.path = path.into();
     assert_eq!(
         serde_json::to_vec(moved.as_ref()).unwrap(),
         serde_json::to_vec(&vec![expected]).unwrap()
@@ -684,10 +684,10 @@ fn indexed_metadata_merge_preserves_existing_duplicates_and_first_source_path() 
         vec!["content".into(), "0".into(), "text".into()],
     );
     let mut second = raw.clone();
-    second.path[1] = "1".into();
-    second.content_ref.content_revision = 2;
+    std::sync::Arc::make_mut(&mut second.path)[1] = "1".into();
+    std::sync::Arc::make_mut(&mut second.content_ref).content_revision = 2;
     let mut duplicate = second.clone();
-    duplicate.content_ref.content_revision = 3;
+    std::sync::Arc::make_mut(&mut duplicate.content_ref).content_revision = 3;
     let head =
         super::super::prepared_capture::PreparedBindingHead::from(vec![raw, second, duplicate]);
     let mapped = head.message(0);
@@ -695,7 +695,7 @@ fn indexed_metadata_merge_preserves_existing_duplicates_and_first_source_path() 
     let mut current = Capture::new(7);
     for revision in [90, 91] {
         let mut existing = mapped[0].clone().into_owned();
-        existing.content_ref.content_revision = revision;
+        std::sync::Arc::make_mut(&mut existing.content_ref).content_revision = revision;
         current.content.push(existing.into());
     }
     let initial = current.content.clone();
@@ -808,7 +808,7 @@ fn cached_raw_evidence_merge_rechecks_current_resolution_and_preserves_old_cut()
         vec!["content".into(), "0".into(), "text".into()],
     );
     let mut reference = raw.content_ref.clone();
-    reference.content_revision = 10;
+    Arc::make_mut(&mut reference).content_revision = 10;
     let ContentSource::CanonicalMessageBlock {
         component,
         locator,
@@ -830,7 +830,7 @@ fn cached_raw_evidence_merge_rechecks_current_resolution_and_preserves_old_cut()
     draft
         .seed
         .content_metadata
-        .insert(key.clone(), Arc::new(reference.clone()));
+        .insert(key.clone(), Arc::new((reference.clone()).as_ref().clone()));
     let old = draft.seed.clone();
     let mut first = Capture::new(7);
     take_evidence_work();
@@ -838,9 +838,9 @@ fn cached_raw_evidence_merge_rechecks_current_resolution_and_preserves_old_cut()
     assert_eq!(take_evidence_work(), 1);
     assert_eq!(first.content[0].content_ref.content_revision, 10);
     let first_wire = serde_json::to_vec(&first.content).unwrap();
-    reference.content_revision = 11;
-    reference.readable_end += 1;
-    draft.seed.content_metadata.insert(key, Arc::new(reference));
+    Arc::make_mut(&mut reference).content_revision = 11;
+    Arc::make_mut(&mut reference).readable_end += 1;
+    draft.seed.content_metadata.insert(key, Arc::new(reference.as_ref().clone()));
     let mut second = Capture::new(8);
     draft
         .seed
@@ -870,7 +870,7 @@ fn content_resolution_keeps_argument_precedence_and_missing_representation_seman
             for available in [0_u8, 1, 2, 3] {
                 draft.seed.content_metadata.clear();
                 let mut original = binding(&draft, &message, path.clone());
-                original.content_ref.representation = representation;
+                Arc::make_mut(&mut original.content_ref).representation = representation;
                 let ContentSource::CanonicalMessageBlock {
                     component,
                     locator,
@@ -887,8 +887,8 @@ fn content_resolution_keeps_argument_precedence_and_missing_representation_seman
                         continue;
                     }
                     let mut reference = original.content_ref.clone();
-                    reference.representation = kind;
-                    reference.content_revision = revision;
+                    Arc::make_mut(&mut reference).representation = kind;
+                    Arc::make_mut(&mut reference).content_revision = revision;
                     draft.seed.content_metadata.insert(
                         (
                             component.key(),
@@ -896,7 +896,7 @@ fn content_resolution_keeps_argument_precedence_and_missing_representation_seman
                             block_index.get(),
                             kind.key(),
                         ),
-                        Arc::new(reference),
+                        Arc::new(reference.as_ref().clone()),
                     );
                 }
                 let expected = if available & 2 != 0

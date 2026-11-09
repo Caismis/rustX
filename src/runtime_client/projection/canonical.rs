@@ -287,7 +287,7 @@ impl RuntimeClientProjection {
                                 block_index,
                                 ..
                             } if *block_index == slot.block_index => {
-                                Some(binding.content_ref.clone())
+                                Some(binding.content_ref.as_ref().clone())
                             }
                             _ => None,
                         })

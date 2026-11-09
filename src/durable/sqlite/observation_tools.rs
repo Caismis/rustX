@@ -111,15 +111,15 @@ fn page_at(
                 .call
                 .content
                 .iter()
-                .any(|binding| binding.content_ref == *reference)
+                .any(|binding| binding.content_ref.as_ref() == reference)
         {
             association
                 .call
                 .content
                 .push(crate::observation::cut::ContentBinding {
                     source_path: None,
-                    path: vec!["value".into(), "arguments".into()],
-                    content_ref: reference.clone(),
+                    path: vec!["value".into(), "arguments".into()].into(),
+                    content_ref: reference.clone().into(),
                     deferred: reference.readable_end > 1024,
                 });
         }

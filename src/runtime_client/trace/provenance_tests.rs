@@ -77,7 +77,7 @@ fn giant_original_provenance_retains_scope_digest_and_exact_canonical_metadata_s
     let binding = message_id_source
         .as_deref()
         .expect("original identity remains explicitly readable");
-    assert_eq!(binding.source_path, Some(vec!["id".into()]));
+    assert_eq!(binding.source_path, Some(vec!["id".into()].into()));
     assert!(binding.deferred);
     assert!(matches!(
         binding.content_ref.source,

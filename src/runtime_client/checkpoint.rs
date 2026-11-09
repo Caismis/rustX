@@ -324,7 +324,7 @@ pub(crate) fn page<T: Serialize + schemars::JsonSchema>(
 pub(crate) fn message_metadata(
     store: &dyn crate::durable::ObservationStore,
     message: &crate::message::types::MessageBlock,
-) -> Vec<ContentRef> {
+) -> Vec<Arc<ContentRef>> {
     use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
     use crate::observation::content::{ContentRepresentation as Rep, ContentSource};
     let reps: Vec<_> = match message {
@@ -386,21 +386,21 @@ pub(crate) fn message_metadata(
                 .ok()
                 .flatten()
             {
-                references.push(reference);
+                references.push(Arc::new(reference));
             }
             if let Some(reference) = store
                 .content_descriptor(&source, representation)
                 .ok()
                 .flatten()
             {
-                references.push(reference);
+                references.push(Arc::new(reference));
             }
             if let Some(reference) = store
                 .content_descriptor(&source, Rep::RawJsonUtf8)
                 .ok()
                 .flatten()
             {
-                references.push(reference);
+                references.push(Arc::new(reference));
             }
             references
         })
@@ -409,7 +409,7 @@ pub(crate) fn message_metadata(
 pub(crate) fn observation_metadata(
     store: &dyn crate::durable::ObservationStore,
     observation: &crate::runtime::observation::ConversationObservation,
-) -> Vec<ContentRef> {
+) -> Vec<Arc<ContentRef>> {
     use crate::runtime::observation::ConversationObservation as Observation;
     #[cfg(not(test))]
     let _ = store;
@@ -421,13 +421,13 @@ pub(crate) fn observation_metadata(
                 .head
                 .iter()
                 .flat_map(|header| &header.content)
-                .map(|binding| binding.content_ref.clone())
+                .map(|binding| Arc::clone(&binding.content_ref))
                 .collect::<Vec<_>>(),
             Observation::AuditSettled { receipt, .. } => receipt
                 .header
                 .content
                 .iter()
-                .map(|binding| binding.content_ref.clone())
+                .map(|binding| Arc::clone(&binding.content_ref))
                 .collect::<Vec<_>>(),
             #[cfg(test)]
             Observation::Committed { block, .. } => message_metadata(store, block),

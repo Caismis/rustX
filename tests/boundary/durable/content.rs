@@ -446,10 +446,10 @@ fn t15_t19_canonical_block_pages_advance_and_binary_does_not_alias_artifacts() {
     // Metadata for this absent artifact is readable; a client cannot turn its
     // unresolved reference into retained BinaryBytes by changing representation.
     let mut forged = image.content[0].content_ref.clone();
-    forged.representation = ContentRepresentation::BinaryBytes;
+    std::sync::Arc::make_mut(&mut forged).representation = ContentRepresentation::BinaryBytes;
     assert!(store.content_read(&forged, 0, 65_536).is_err());
     let mut text_forged = blocks[0].content[0].content_ref.clone();
-    text_forged.representation = ContentRepresentation::BinaryBytes;
+    std::sync::Arc::make_mut(&mut text_forged).representation = ContentRepresentation::BinaryBytes;
     assert!(store.content_read(&text_forged, 0, 65_536).is_err());
     assert!(
         store

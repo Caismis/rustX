@@ -152,22 +152,22 @@ impl<T: Clone> MetadataFragment<T> {
     }
 }
 impl MetadataFragment<ContentBinding> {
-    pub(crate) fn resolve(&self, reference: &crate::observation::content::ContentRef) -> Self {
-        if &self.content_ref == reference {
+    pub(crate) fn resolve(&self, reference: &Arc<crate::observation::content::ContentRef>) -> Self {
+        if self.content_ref == *reference {
             return self.clone();
         }
         // One alternate belongs to the original captured binding. A changed
         // authority gets a fresh owner; it can never overwrite an old cut.
         let resolved = self.0.resolved.get_or_init(|| {
             let mut value = self.0.value.clone();
-            value.content_ref.clone_from(reference);
+            value.content_ref = Arc::clone(reference);
             value.into()
         });
-        if &resolved.content_ref == reference {
+        if resolved.content_ref == *reference {
             resolved.clone()
         } else {
             let mut value = self.0.value.clone();
-            value.content_ref.clone_from(reference);
+            value.content_ref = Arc::clone(reference);
             value.into()
         }
     }

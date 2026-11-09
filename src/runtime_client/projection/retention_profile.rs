@@ -80,8 +80,17 @@ impl Census {
         self.owner(key, pointer, bytes)
     }
     fn paths(&mut self, binding: &ContentBinding) {
+        self.owner(
+            "content_ref_owners",
+            Arc::as_ptr(&binding.content_ref) as usize,
+            size_of::<crate::observation::content::ContentRef>() + ARC_HEADER,
+        );
         for path in std::iter::once(&binding.path).chain(binding.source_path.iter()) {
-            if self.vector("binding_path_vectors", path) {
+            if self.owner(
+                "binding_path_arrays",
+                path.as_ptr() as usize,
+                path.len() * size_of::<String>() + ARC_HEADER,
+            ) {
                 self.bytes(
                     "binding_path_strings",
                     path.iter().map(String::capacity).sum(),
@@ -297,12 +306,13 @@ mod tests {
     fn binding() -> ContentBinding {
         ContentBinding {
             source_path: None,
-            path: vec!["messages".into(), "0".into(), "display".into()],
+            path: vec!["messages".into(), "0".into(), "display".into()].into(),
             content_ref: crate::observation::content::ContentRef::configuration_instructions(
                 crate::runtime::identity::ConversationId::generate(),
                 1,
                 3,
-            ),
+            )
+            .into(),
             deferred: false,
         }
     }
@@ -319,14 +329,15 @@ mod tests {
         assert_eq!(census.allocations["binding_fragments"].owners, 1);
         census.binding(&right);
         assert_eq!(census.allocations["binding_fragments"].owners, 2);
-        assert_eq!(census.allocations["binding_path_vectors"].owners, 2);
+        assert_eq!(census.allocations["binding_path_arrays"].owners, 1);
+        assert_eq!(census.allocations["content_ref_owners"].owners, 1);
     }
 
     #[test]
     fn a_prepared_alternate_is_counted_once_without_changing_its_owner() {
         let original: MetadataFragment<_> = binding().into();
         let mut reference = original.content_ref.clone();
-        reference.content_revision += 1;
+        std::sync::Arc::make_mut(&mut reference).content_revision += 1;
         let alternate = original.resolve(&reference);
         let mut census = Census::default();
         census.binding(&original);
