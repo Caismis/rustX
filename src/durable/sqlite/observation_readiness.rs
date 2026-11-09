@@ -15,7 +15,8 @@ pub(super) const EVENT_DELETION: &str =
                  DELETE FROM event_observation_readiness WHERE sequence=OLD.sequence;
                  INSERT INTO event_observation_direct(lo,hi)
                      SELECT OLD.sequence+1,hi FROM event_observation_direct
-                     WHERE lo<=OLD.sequence AND hi>OLD.sequence ORDER BY lo DESC LIMIT 1;
+                     WHERE lo=(SELECT MAX(lo) FROM event_observation_direct WHERE lo<=OLD.sequence)
+                     AND hi>OLD.sequence;
                  DELETE FROM event_observation_direct WHERE lo=OLD.sequence;
                  UPDATE event_observation_direct SET hi=OLD.sequence-1
                      WHERE lo=(SELECT MAX(lo) FROM event_observation_direct WHERE lo<OLD.sequence)
@@ -186,6 +187,7 @@ pub(super) fn mark_direct(
     Ok(())
 }
 
+#[allow(clippy::needless_pass_by_value)] // Adapter for rusqlite Result::map_err.
 fn sql_error(error: rusqlite::Error) -> ConversationStoreError {
     super::sqlite_error(&error, error.to_string())
 }
