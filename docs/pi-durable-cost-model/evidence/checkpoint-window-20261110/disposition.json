@@ -1,0 +1,12 @@
+{
+  "decision": "Reject measured candidate; do not infer checkpoint policy intrinsically causes the CPU observation. Restore exact production source and retain fixture diagnostics only.",
+  "candidate_head": "414e71a65be1999b53b47db3a520dfb61de37758",
+  "rejection_head": "991e1f4fe61ff9f5f833d96c7e262072120e4ee1",
+  "restored_rust_tree": "ed64a1b1f99937f6bc45f1c923d98247cc366fbf",
+  "production_diff_against_baseline": "",
+  "products": {
+    "ordinary": 48,
+    "long-uncertainty": 8,
+    "policy-causal": 9
+  }
+}
