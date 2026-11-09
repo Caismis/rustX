@@ -261,6 +261,11 @@ in frozen request fingerprints, including ordinary text requests.
 
 `ModelRequestStarted.owner` is the authoritative request-to-owner fact. Agent starts retain native Snapshot/Context authority; auxiliary starts require an active Call with bounded source metadata. Mandatory derived owner and Call indexes are committed with their original facts. Terminals must match that ownership. Auxiliary facts never acquire Agent P/U/C authority. See [Auxiliary request facts and inspection](auxiliary-execution.md) for the semantic transitions, bounded readers, uncertainty and source-audit lifetime.
 
+Auxiliary preparation belongs to the admitted native Call worker. The adapter
+owns the provider encoding, which the worker shares across ordinary retries
+under the same capacity permit. Each retry uses a fresh durable RequestStart.
+Workflow's translated-size check before capacity admission retains only a count.
+
 Auxiliary storage admits bounded consumer-defined purpose, activation cause and
 opaque business references without importing consumers or dispatching by purpose.
 Native Compaction/Human references keep their integrity checks independently of

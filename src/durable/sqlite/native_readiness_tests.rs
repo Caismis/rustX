@@ -389,7 +389,7 @@ fn rolled_back_direct_release_cannot_classify_a_reused_sequence() {
             store.conversation_id(),
             started("rolled-back-direct"),
         ).unwrap();
-        assert_eq!(temporary.sequence, 1);
+        assert_eq!(temporary.event.sequence, 1);
         super::super::observation_readiness::mark_direct(&transaction, 1, 1).unwrap();
         assert!(super::super::observation_event::witness(&transaction, 1, 1).unwrap().unwrap().native_direct);
         transaction.rollback().unwrap();

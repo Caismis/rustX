@@ -219,7 +219,7 @@ pub(crate) fn prepare_request_with_limit(
     #[cfg(test)]
     PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated, encoded + 1)));
     let body = match body_limit {
-        Some(limit) => crate::observation::bounded::encode_capped_bytes(&wire, limit),
+        Some(limit) => crate::bounded_json::encode_capped_bytes(&wire, limit),
         None => serde_json::to_vec(&wire),
     }
     .map_err(|error| {
