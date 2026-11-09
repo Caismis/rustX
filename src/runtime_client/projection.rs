@@ -151,6 +151,8 @@ mod observe;
 mod publication;
 mod read;
 mod read_domains;
+#[cfg(feature = "issue-387-profile")]
+mod retention_profile;
 mod subscription;
 pub(crate) mod views;
 

@@ -120,6 +120,19 @@ where
     }
 }
 impl<T> MetadataFragment<T> {
+    #[cfg(feature = "issue-387-profile")]
+    pub(crate) fn allocation_identity(&self) -> (usize, usize) {
+        (
+            Arc::as_ptr(&self.0) as usize,
+            std::mem::size_of::<Inner<T>>() + 2 * std::mem::size_of::<usize>(),
+        )
+    }
+
+    #[cfg(feature = "issue-387-profile")]
+    pub(crate) fn prepared_alternate(&self) -> Option<&Self> {
+        self.0.resolved.get()
+    }
+
     pub(crate) fn same_owner(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
