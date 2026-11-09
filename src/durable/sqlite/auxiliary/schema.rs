@@ -126,7 +126,8 @@ CREATE INDEX IF NOT EXISTS request_owners_source_idx
     WHERE owner_kind='auxiliary';
 CREATE INDEX IF NOT EXISTS events_auxiliary_call_id_kind_idx
     ON events(json_extract(event_json,'$.event.call_id'),
-              json_extract(event_json,'$.event.type'));
+              json_extract(event_json,'$.event.type'))
+    WHERE json_extract(event_json,'$.event.call_id') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS events_auxiliary_fact_type_idx
     ON events(json_extract(event_json,'$.event.type'))
     WHERE (
@@ -270,9 +271,9 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         table: "events",
         name: "events_auxiliary_call_id_kind_idx",
         unique: false,
-        partial: false,
+        partial: true,
         columns: &[None, None],
-        definition: "CREATE INDEX events_auxiliary_call_id_kind_idx ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type'))",
+        definition: "CREATE INDEX events_auxiliary_call_id_kind_idx ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.call_id') IS NOT NULL",
     },
     AuxiliaryIndexShape {
         table: "events",

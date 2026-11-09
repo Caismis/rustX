@@ -509,7 +509,6 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
     for sql in [
         "CREATE INDEX publication_streams_message_settlement_idx ON publication_streams(message_id,settlement)",
         "CREATE INDEX events_execution_owner_idx ON events(observation_execution_owner) WHERE observation_execution IS NOT NULL",
-        "CREATE INDEX events_trace_kind_idx ON events(observation_kind) WHERE observation_kind IS NOT NULL",
         "CREATE INDEX events_trace_owner_idx ON events(observation_trace_owner,observation_kind) WHERE observation_trace_owner IS NOT NULL",
         "CREATE UNIQUE INDEX request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL",
         "CREATE UNIQUE INDEX state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal)",
