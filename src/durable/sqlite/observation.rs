@@ -497,7 +497,7 @@ fn transcript_message_header(
         for binding in &mut content {
             let mut path = vec!["display".into(), "item".into(), "message".into()];
             path.extend(binding.path.iter().skip(1).cloned());
-            binding.path = path;
+            binding.path = path.into();
         }
         TranscriptHeader {
             tool_calls: Vec::new(),
@@ -660,8 +660,8 @@ fn block_bytes(
             }
             content.push(crate::observation::cut::ContentBinding {
                 source_path: None,
-                path,
-                content_ref: reference,
+                path: path.into(),
+                content_ref: reference.into(),
                 deferred: value.is_none() || representation == Rep::BinaryBytes,
             });
         }
@@ -681,8 +681,8 @@ fn block_bytes(
         )? {
             content.push(crate::observation::cut::ContentBinding {
                 source_path: None,
-                path: vec!["value".into()],
-                content_ref: reference,
+                path: vec!["value".into()].into(),
+                content_ref: reference.into(),
                 deferred: true,
             });
         }

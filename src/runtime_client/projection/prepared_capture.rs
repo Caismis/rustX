@@ -215,17 +215,21 @@ impl PreparedBindingHead {
                 .iter()
                 .map(|value| {
                     let mut value = value.clone();
-                    match prefix {
+                    let path = match prefix {
                         BindingPrefix::Message(index) => {
-                            if value.path.first().is_some_and(|field| field == "display") {
-                                value.path.remove(0);
-                            }
-                            let mut path = vec!["messages".to_owned(), index.to_string()];
-                            path.append(&mut value.path);
-                            value.path = path;
+                            let skip = usize::from(
+                                value.path.first().is_some_and(|field| field == "display"),
+                            );
+                            ["messages".to_owned(), index.to_string()]
+                                .into_iter()
+                                .chain(value.path[skip..].iter().cloned())
+                                .collect()
                         }
-                        BindingPrefix::Transcript => value.path.insert(0, "transcript".into()),
-                    }
+                        BindingPrefix::Transcript => std::iter::once("transcript".into())
+                            .chain(value.path.iter().cloned())
+                            .collect(),
+                    };
+                    value.path = path;
                     value.into()
                 })
                 .collect(),

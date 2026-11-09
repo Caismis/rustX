@@ -654,7 +654,7 @@ impl RuntimeClientProjection {
                     header
                         .content
                         .iter()
-                        .map(|binding| binding.content_ref.clone())
+                        .map(|binding| Arc::clone(&binding.content_ref))
                 })
                 .collect(),
         );

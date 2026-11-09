@@ -1199,8 +1199,8 @@ fn message_bindings(
         ) {
             if header.identity.is_none() {
                 content.push(crate::observation::cut::ContentBinding {
-                    path: vec!["message_id".into()],
-                    source_path: Some(vec!["id".into()]),
+                    path: vec!["message_id".into()].into(),
+                    source_path: Some(vec!["id".into()].into()),
                     content_ref: binding.content_ref.clone(),
                     deferred: true,
                 });
@@ -1259,8 +1259,8 @@ fn message_bindings(
             let mut target = path.clone();
             target.extend(suffix);
             content.push(crate::observation::cut::ContentBinding {
-                source_path,
-                path: target,
+                source_path: source_path.map(Into::into),
+                path: target.into(),
                 content_ref: binding.content_ref.clone(),
                 deferred: true,
             });

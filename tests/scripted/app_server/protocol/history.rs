@@ -221,7 +221,7 @@ async fn t08_t11_t15_cold_trace_pages_read_exact_deferred_request_and_fence_fore
                 .items
                 .iter()
                 .flat_map(|item| &item.content)
-                .any(|binding| binding.content_ref == reference)
+                .any(|binding| binding.content_ref.as_ref() == &reference)
         );
         let mut foreign_source = source_cut;
         foreign_source.read.conversation_id = fixture.sessions[1].active_conversation_id.clone();

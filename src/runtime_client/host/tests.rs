@@ -1921,10 +1921,9 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
         .submit_inbound(submit_content("all native block descriptors"))
         .unwrap();
     receive_until_metadata(&subscription, |metadata| {
-        metadata
-            .content
-            .iter()
-            .any(|binding| binding.path == ["attempt", "in_flight", "blocks", "31", "text"])
+        metadata.content.iter().any(|binding| {
+            binding.path.as_ref() == ["attempt", "in_flight", "blocks", "31", "text"]
+        })
     })
     .await;
     let before = inner.checkpoint().unwrap();
@@ -1957,7 +1956,7 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
     suffix_tx.send(true).unwrap();
     let update = receive_until_metadata(&subscription, |metadata| {
         metadata.content.iter().any(|binding| {
-            binding.path == ["attempt", "in_flight", "blocks", "31", "text"]
+            binding.path.as_ref() == ["attempt", "in_flight", "blocks", "31", "text"]
                 && binding.content_ref.readable_end > last.readable_end
         })
     })
@@ -1968,7 +1967,7 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
     let event_ref = &metadata
         .content
         .iter()
-        .find(|binding| binding.path == ["attempt", "in_flight", "blocks", "31", "text"])
+        .find(|binding| binding.path.as_ref() == ["attempt", "in_flight", "blocks", "31", "text"])
         .unwrap()
         .content_ref;
     let after = inner.checkpoint().unwrap();

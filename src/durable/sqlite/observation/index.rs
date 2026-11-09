@@ -49,8 +49,8 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
             capture.content.push(
                 crate::observation::cut::ContentBinding {
                     source_path: None,
-                    path: vec!["display".into()],
-                    content_ref: reference,
+                    path: vec!["display".into()].into(),
+                    content_ref: reference.into(),
                     deferred: metadata_deferred,
                 }
                 .into(),
@@ -80,8 +80,8 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
                 capture.content.push(
                     crate::observation::cut::ContentBinding {
                         source_path: None,
-                        path,
-                        content_ref: reference,
+                        path: path.into(),
+                        content_ref: reference.into(),
                         deferred: true,
                     }
                     .into(),
@@ -110,8 +110,8 @@ pub(in crate::durable::sqlite) fn append_message_metadata(
                 capture.content.push(
                     crate::observation::cut::ContentBinding {
                         source_path: None,
-                        path,
-                        content_ref: reference,
+                        path: path.into(),
+                        content_ref: reference.into(),
                         deferred: true,
                     }
                     .into(),
@@ -470,8 +470,9 @@ fn entry_header(
                                 "audit".into(),
                                 "content".into(),
                                 index.to_string(),
-                            ],
-                            content_ref: reference,
+                            ]
+                            .into(),
+                            content_ref: reference.into(),
                             deferred: true,
                         }
                         .into(),
@@ -930,8 +931,9 @@ pub(in crate::durable::sqlite) fn audit_metadata_bindings(
                             "audit".into(),
                             "content".into(),
                             index.to_string(),
-                        ],
-                        content_ref: reference,
+                        ]
+                        .into(),
+                        content_ref: reference.into(),
                         deferred: true,
                     }
                     .into(),
@@ -988,8 +990,8 @@ pub(in crate::durable::sqlite) fn index_audit_blocks(
             )? {
                 content.push(ContentBinding {
                     source_path: None,
-                    path: vec![field.into()],
-                    content_ref: reference,
+                    path: vec![field.into()].into(),
+                    content_ref: reference.into(),
                     deferred: true,
                 });
             }
@@ -1001,8 +1003,8 @@ pub(in crate::durable::sqlite) fn index_audit_blocks(
             )? {
                 content.push(ContentBinding {
                     source_path: None,
-                    path: Vec::new(),
-                    content_ref: reference,
+                    path: Vec::new().into(),
+                    content_ref: reference.into(),
                     deferred: true,
                 });
             }
@@ -1070,7 +1072,7 @@ pub(in crate::durable::sqlite) fn canonical_bindings(
             &binding.content_ref.source,
             binding.content_ref.representation,
         )?) {
-            *binding = binding.resolve(&reference);
+            *binding = binding.resolve(&std::sync::Arc::new(reference));
         } else {
             return Err(storage("canonical descriptor missing native byte index"));
         }

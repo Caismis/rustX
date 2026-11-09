@@ -367,7 +367,7 @@ pub(super) fn trace_arguments_reference(
     fields: &[crate::observation::trace::TraceFieldSource],
 ) -> crate::observation::content::ContentRef {
     use crate::observation::trace::{TraceFieldKind, TraceFieldSource};
-    fields
+    (fields
         .iter()
         .find_map(|field| match field {
             TraceFieldSource::Content {
@@ -376,7 +376,9 @@ pub(super) fn trace_arguments_reference(
             } => Some(binding.content_ref.clone()),
             _ => None,
         })
-        .expect("original arguments field")
+        .expect("original arguments field"))
+    .as_ref()
+    .clone()
 }
 pub(super) fn trace_original_journal_field_bytes(
     store: &SqliteConversationStore,

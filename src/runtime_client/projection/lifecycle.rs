@@ -338,7 +338,7 @@ impl RuntimeClientProjection {
             self.install_content_metadata(
                 bindings
                     .iter()
-                    .map(|binding| binding.content_ref.clone())
+                    .map(|binding| Arc::clone(&binding.content_ref))
                     .collect(),
             );
             let slot = self.snapshot.attempt.as_ref().and_then(|attempt| {

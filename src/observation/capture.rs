@@ -632,7 +632,7 @@ impl Capture {
         self.content.push(
             ContentBinding {
                 source_path: None,
-                path,
+                path: path.into(),
                 deferred: true,
                 content_ref: ContentRef {
                     conversation_id: conversation.clone(),
@@ -650,7 +650,8 @@ impl Capture {
                     version: 1,
                     content_revision: 1,
                     readable_end,
-                },
+                }
+                .into(),
             }
             .into(),
         );
@@ -748,7 +749,7 @@ impl Capture {
             );
             self.content.push(ContentBinding {
                 source_path: None,
-                path: field,
+                path: field.into(),
                 deferred: true,
                 content_ref: ContentRef {
                     conversation_id: conversation.clone(),
@@ -766,7 +767,7 @@ impl Capture {
                     version: 1,
                     content_revision: 1,
                     readable_end: text.len() as u64,
-                },
+                }.into(),
             }.into());
             String::new()
         };

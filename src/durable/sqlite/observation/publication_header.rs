@@ -57,7 +57,8 @@ impl PublicationHeader {
                 )?;
                 binding.content_ref = raw
                     .or(structural)
-                    .ok_or_else(|| storage("canonical descriptor missing native byte index"))?;
+                    .ok_or_else(|| storage("canonical descriptor missing native byte index"))?
+                    .into();
             }
         }
         self.header.transcript_cursor = connection.query_row_cached(

@@ -48,7 +48,7 @@ fn original_content_reference(
     checkpoint: &RuntimeClientCheckpoint,
     original: &str,
 ) -> crate::observation::content::ContentRef {
-    checkpoint
+    (checkpoint
         .content
         .iter()
         .map(std::ops::Deref::deref)
@@ -67,7 +67,7 @@ fn original_content_reference(
         })
         .expect("advertised original canonical content reader")
         .content_ref
-        .clone()
+        .clone()).as_ref().clone()
 }
 
 fn assert_original_content(

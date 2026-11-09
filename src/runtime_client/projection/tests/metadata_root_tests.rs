@@ -26,6 +26,25 @@ fn leaf_pins(root: &super::super::ContentMetadata) -> usize {
 }
 
 #[test]
+fn installing_native_content_evidence_shares_the_exact_reference_owner() {
+    let (mut projection, _store) = initialized_source_projection();
+    let original = Arc::new(reference(1));
+    projection.install_content_metadata(vec![Arc::clone(&original)]);
+    let stored = projection.content_metadata.values().next().unwrap();
+    assert!(Arc::ptr_eq(stored, &original));
+    let old = projection.content_metadata.clone();
+    let mut changed = original.as_ref().clone();
+    changed.content_revision += 1;
+    let changed = Arc::new(changed);
+    projection.install_content_metadata(vec![Arc::clone(&changed)]);
+    assert!(Arc::ptr_eq(old.values().next().unwrap(), &original));
+    assert!(Arc::ptr_eq(
+        projection.content_metadata.values().next().unwrap(),
+        &changed
+    ));
+}
+
+#[test]
 fn retained_checkpoints_share_capability_capture_until_its_owner_changes() {
     let (projection, _store) = initialized_source_projection();
     let seed = projection.checkpoint_seed();
@@ -60,7 +79,11 @@ fn retained_checkpoints_share_capability_capture_until_its_owner_changes() {
 #[test]
 fn issued_metadata_roots_do_not_clone_historical_leaves_and_survive_working_eviction() {
     let (mut projection, _store) = initialized_source_projection();
-    projection.install_content_metadata((1..=4096).map(reference).collect());
+    projection.install_content_metadata(
+        (1..=4096)
+            .map(|position| Arc::new(reference(position)))
+            .collect(),
+    );
     projection.initialize_publication_view();
     let original = projection.checkpoint_seed();
     let original_checkpoint = original.checkpoint_candidate().unwrap();
@@ -84,7 +107,7 @@ fn issued_metadata_roots_do_not_clone_historical_leaves_and_survive_working_evic
     );
     assert_eq!(leaf_pins(&projection.content_metadata), baseline);
     drop(captured);
-    projection.install_content_metadata(vec![reference(4097)]);
+    projection.install_content_metadata(vec![Arc::new(reference(4097))]);
     assert_eq!(projection.content_metadata.len(), 4096);
     assert!(!projection.content_metadata.contains_key(&first));
     assert!(original.content_metadata.contains_key(&first));

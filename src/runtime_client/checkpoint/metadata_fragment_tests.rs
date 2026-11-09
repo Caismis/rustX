@@ -6,8 +6,8 @@ use crate::runtime_client::event::RuntimeClientEvent;
 
 fn binding() -> ContentBinding {
     ContentBinding {
-        source_path: Some(vec!["text\"\\\n水".into()]),
-        path: vec!["messages".into(), "0".into(), "content".into(), "0".into()],
+        source_path: Some(vec!["text\"\\\n水".into()].into()),
+        path: vec!["messages".into(), "0".into(), "content".into(), "0".into()].into(),
         content_ref: ContentRef {
             conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             source: ContentSource::CanonicalMessageBlock {
@@ -21,7 +21,8 @@ fn binding() -> ContentBinding {
             version: 1,
             content_revision: 1,
             readable_end: 99,
-        },
+        }
+        .into(),
         deferred: true,
     }
 }
@@ -30,7 +31,7 @@ fn metadata() -> ProjectionMetadata {
         read_cut: CheckpointReadCut {
             canonical_foreground: None,
             live_publication: None,
-            conversation_id: binding().content_ref.conversation_id,
+            conversation_id: binding().content_ref.conversation_id.clone(),
             activation_id: None,
             revision: 9,
             through: 99,
@@ -109,8 +110,8 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
     let mut value = metadata();
     for (path, revision) in [("z", 1), ("a", 2), ("a", 3)] {
         let mut content = binding();
-        content.path = vec![path.into()];
-        content.content_ref.content_revision = revision;
+        content.path = vec![path.into()].into();
+        std::sync::Arc::make_mut(&mut content.content_ref).content_revision = revision;
         Arc::make_mut(&mut value.content).push(content.into());
     }
     for domain in ["z", "a", "a"] {
@@ -198,7 +199,7 @@ fn metadata_array_cache_invalidates_changed_authority_without_changing_old_cut()
     let old_bytes = encoded(&old).unwrap();
     let prepared = cache.prepare(&old);
     let mut reference = value.content[0].content_ref.clone();
-    reference.content_revision = u64::MAX;
+    std::sync::Arc::make_mut(&mut reference).content_revision = u64::MAX;
     Arc::make_mut(&mut value.content)[0] = value.content[0].resolve(&reference);
     metadata_fragment::take_array_work();
     let changed = cache.prepare(&value);
@@ -213,8 +214,9 @@ fn array_metadata(keys: &[usize]) -> ProjectionMetadata {
     let mut value = metadata();
     for (index, key) in keys.iter().enumerate() {
         let mut content = binding();
-        content.path = vec![format!("key-{key:03}")];
-        content.content_ref.content_revision = u64::try_from(index).unwrap() + 1;
+        content.path = vec![format!("key-{key:03}")].into();
+        std::sync::Arc::make_mut(&mut content.content_ref).content_revision =
+            u64::try_from(index).unwrap() + 1;
         Arc::make_mut(&mut value.content).push(content.into());
         Arc::make_mut(&mut value.collections).push(
             CollectionFrontier {
@@ -334,19 +336,20 @@ fn metadata_sort_live_binding_misses_release_the_previous_prepared_owner() {
         for (index, fragment) in Arc::make_mut(&mut value.content).iter_mut().enumerate() {
             let mut content = binding();
             content.path = fragment.path.clone();
-            content.content_ref.source = ContentSource::LivePublicationPrefix {
-                component: PublicationContentComponent::Payload,
-                stream_id: PublicationStreamId::new("metadata-live-stream"),
-                message_id: MessageId::new("metadata-live-message"),
-                attempt_id: AttemptId::new("metadata-live-attempt"),
-                turn_id: TurnId::new("metadata-live-turn"),
-                publication_request_id: RequestId::new("metadata-live-request"),
-                block_index: crate::message::types::ContentBlockIndex::new(
-                    u32::try_from(index).unwrap(),
-                ),
-            };
-            content.content_ref.content_revision = frame;
-            content.content_ref.readable_end = frame * 1024;
+            std::sync::Arc::make_mut(&mut content.content_ref).source =
+                ContentSource::LivePublicationPrefix {
+                    component: PublicationContentComponent::Payload,
+                    stream_id: PublicationStreamId::new("metadata-live-stream"),
+                    message_id: MessageId::new("metadata-live-message"),
+                    attempt_id: AttemptId::new("metadata-live-attempt"),
+                    turn_id: TurnId::new("metadata-live-turn"),
+                    publication_request_id: RequestId::new("metadata-live-request"),
+                    block_index: crate::message::types::ContentBlockIndex::new(
+                        u32::try_from(index).unwrap(),
+                    ),
+                };
+            std::sync::Arc::make_mut(&mut content.content_ref).content_revision = frame;
+            std::sync::Arc::make_mut(&mut content.content_ref).readable_end = frame * 1024;
             *fragment = content.into();
         }
         metadata_fragment::take_array_work();
@@ -390,8 +393,13 @@ fn immutable_metadata_fragments_preserve_schema_wire_and_exact_budget_boundaries
         let mut value = metadata();
         for index in 0..count {
             let mut content = binding();
-            content.source_path = (index % 2 == 0).then(|| vec!["text\"\\\n水".into()]);
-            content.path.push(index.to_string());
+            content.source_path = (index % 2 == 0).then(|| vec!["text\"\\\n水".into()].into());
+            content.path = content
+                .path
+                .iter()
+                .cloned()
+                .chain(std::iter::once(index.to_string()))
+                .collect();
             let fragment: MetadataFragment<_> = content.clone().into();
             assert_eq!(encoded(&fragment).unwrap(), encoded(&content).unwrap());
             let decoded: MetadataFragment<ContentBinding> =
@@ -421,7 +429,7 @@ fn immutable_metadata_fragments_preserve_invalid_and_oversized_admission() {
     for revision in [9_007_199_254_740_991, 9_007_199_254_740_992, u64::MAX] {
         let mut value = metadata();
         let mut content = binding();
-        content.content_ref.content_revision = revision;
+        std::sync::Arc::make_mut(&mut content.content_ref).content_revision = revision;
         Arc::make_mut(&mut value.content).push(content.into());
         compare(value, 2);
     }
@@ -432,7 +440,12 @@ fn immutable_metadata_fragments_preserve_invalid_and_oversized_admission() {
     ] {
         let mut value = metadata();
         let mut content = binding();
-        content.path.push("x".repeat(length));
+        content.path = content
+            .path
+            .iter()
+            .cloned()
+            .chain(std::iter::once("x".repeat(length)))
+            .collect();
         Arc::make_mut(&mut value.content).push(content.into());
         compare(value, 1);
     }
@@ -446,8 +459,8 @@ fn immutable_metadata_resolution_keeps_old_owner_and_measures_each_value_once() 
     let initial_bytes = encoded(&base).unwrap();
     assert_eq!(crate::observation::metadata::take_work(), 1);
     let mut reference = base.content_ref.clone();
-    reference.content_revision = 10;
-    reference.readable_end = 1024;
+    std::sync::Arc::make_mut(&mut reference).content_revision = 10;
+    std::sync::Arc::make_mut(&mut reference).readable_end = 1024;
     let resolved = base.resolve(&reference);
     let resolved_bytes = encoded(&resolved).unwrap();
     assert!(!base.same_owner(&resolved));
@@ -462,7 +475,7 @@ fn immutable_metadata_resolution_keeps_old_owner_and_measures_each_value_once() 
         1,
         "only the first resolved owner is measured"
     );
-    reference.content_revision = u64::MAX;
+    std::sync::Arc::make_mut(&mut reference).content_revision = u64::MAX;
     assert!(base.resolve(&reference).size().exact.is_none());
     assert_eq!(encoded(&base).unwrap(), initial_bytes);
     assert_eq!(encoded(&resolved).unwrap(), resolved_bytes);
@@ -502,16 +515,16 @@ fn metadata_binding_merge_reuses_only_ordered_owners_and_keeps_duplicate_priorit
     use metadata_fragment::{BindingFragments, MetadataArrays, take_evidence_work};
     let cache = MetadataArrays::default();
     let mut first = binding();
-    first.path = vec!["existing".into()];
-    first.content_ref.content_revision = 90;
+    first.path = vec!["existing".into()].into();
+    std::sync::Arc::make_mut(&mut first.content_ref).content_revision = 90;
     let mut duplicate = first.clone();
-    duplicate.content_ref.content_revision = 91;
+    std::sync::Arc::make_mut(&mut duplicate.content_ref).content_revision = 91;
     let prefix: Vec<MetadataFragment<_>> = vec![first.into(), duplicate.into()];
     let mut a = binding();
-    a.path = vec!["new".into()];
-    a.content_ref.content_revision = 1;
+    a.path = vec!["new".into()].into();
+    std::sync::Arc::make_mut(&mut a.content_ref).content_revision = 1;
     let mut b = a.clone();
-    b.content_ref.content_revision = 2;
+    std::sync::Arc::make_mut(&mut b.content_ref).content_revision = 2;
     let heads: BindingFragments = std::sync::Arc::new(vec![prefix[0].clone(), a.into(), b.into()]);
     let oracle = |prefix: &[MetadataFragment<ContentBinding>], heads: &[BindingFragments]| {
         let mut result = prefix.to_vec();
@@ -561,11 +574,16 @@ fn metadata_fragment_mutation_invalidates_size_and_resolution_without_changing_o
     let before = encoded(&original).unwrap();
     let old_size = value.size();
     let mut reference = value.content_ref.clone();
-    reference.content_revision = 2;
+    std::sync::Arc::make_mut(&mut reference).content_revision = 2;
     let old_resolution = value.resolve(&reference);
     let old_resolved_bytes = encoded(&old_resolution).unwrap();
     value.deferred = false;
-    value.path.push("changed".into());
+    value.path = value
+        .path
+        .iter()
+        .cloned()
+        .chain(std::iter::once("changed".into()))
+        .collect();
     let current = encoded(&value).unwrap();
     assert_eq!(value.size().exact, Some(current.len()));
     assert_eq!(original.size(), old_size);
@@ -580,6 +598,74 @@ fn metadata_fragment_mutation_invalidates_size_and_resolution_without_changing_o
     );
     // The unique-owner case also clears a previously initialized certificate.
     drop(original);
-    value.path.push("unique".into());
+    value.path = value
+        .path
+        .iter()
+        .cloned()
+        .chain(std::iter::once("unique".into()))
+        .collect();
     assert_eq!(value.size().exact, Some(encoded(&value).unwrap().len()));
+}
+
+#[test]
+fn shared_binding_parts_preserve_plain_and_structural_wire_bytes() {
+    #[derive(Serialize, schemars::JsonSchema)]
+    struct OwnedBinding {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_path: Option<Vec<String>>,
+        path: Vec<String>,
+        content_ref: ContentRef,
+        deferred: bool,
+    }
+    for source_path in [None, Some(Vec::new()), Some(vec!["水\\\"\n".into()])] {
+        let mut shared = binding();
+        shared.source_path = source_path.clone().map(Into::into);
+        let owned = OwnedBinding {
+            source_path,
+            path: shared.path.to_vec(),
+            content_ref: shared.content_ref.as_ref().clone(),
+            deferred: shared.deferred,
+        };
+        assert_eq!(
+            serde_json::to_vec(&shared).unwrap(),
+            serde_json::to_vec(&owned).unwrap()
+        );
+        assert_eq!(encoded(&shared).unwrap(), encoded(&owned).unwrap());
+        assert_eq!(
+            preflight::required_safe_integer_budget(&shared, CHECKPOINT_TARGET_BYTES),
+            preflight::required_safe_integer_budget(&owned, CHECKPOINT_TARGET_BYTES)
+        );
+        let decoded: ContentBinding =
+            serde_json::from_slice(&serde_json::to_vec(&owned).unwrap()).unwrap();
+        assert_eq!(decoded, shared);
+    }
+}
+
+#[test]
+fn resolving_and_editing_a_binding_keep_previous_parts_and_certificates_immutable() {
+    let original: MetadataFragment<_> = binding().into();
+    let old_wire = encoded(&original).unwrap();
+    let old_size = original.size();
+    let mut reference = original.content_ref.as_ref().clone();
+    reference.content_revision += 1;
+    let reference = Arc::new(reference);
+    let mut resolved = original.resolve(&reference);
+    assert!(Arc::ptr_eq(&original.path, &resolved.path));
+    assert!(Arc::ptr_eq(
+        original.source_path.as_ref().unwrap(),
+        resolved.source_path.as_ref().unwrap()
+    ));
+    assert!(!Arc::ptr_eq(&original.content_ref, &resolved.content_ref));
+    assert!(Arc::ptr_eq(&reference, &resolved.content_ref));
+    assert_eq!(encoded(&original).unwrap(), old_wire);
+    let resolved_wire = encoded(&resolved).unwrap();
+    let old_resolved = resolved.clone();
+    Arc::make_mut(&mut resolved.path)[0] = "changed".into();
+    assert_eq!(encoded(&original).unwrap(), old_wire);
+    assert_eq!(original.size(), old_size);
+    assert_eq!(encoded(&old_resolved).unwrap(), resolved_wire);
+    assert_eq!(
+        resolved.size().exact,
+        Some(encoded(&resolved).unwrap().len())
+    );
 }
