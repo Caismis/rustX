@@ -1,3 +1,4 @@
+import { LoadingIndicator } from '../../../presentation/primitives/LoadingIndicator';
 import { lazy, Suspense } from 'react';
 import type { FilePreviewLease } from '../../../client/session-files';
 import { DERIVED_PDF_MAX_BYTES, type DocumentKind } from '../../../../shared/documents.ts';
@@ -15,7 +16,7 @@ export function DocumentPreview({ kind, bytes, derived = false, resources, retry
     catch { return <p role="alert">{tx('artifacts:document.malformed')}</p>; }
     return <HtmlPreview bytes={bytes} viewState={viewState} onViewStateChange={onViewStateChange} />;
   }
-  const loading = <p role="status">{tx('artifacts:document.loading')}</p>;
+  const loading = <LoadingIndicator label={tx('artifacts:document.loading')}/>;
   if (kind === 'pdf') return <Suspense fallback={loading}><PdfPreview bytes={bytes} maxBytes={derived ? DERIVED_PDF_MAX_BYTES : undefined} signal={resources.signal} retry={retry} viewState={viewState} onViewStateChange={onViewStateChange} /></Suspense>;
   if (kind === 'xlsx' || kind === 'csv' || kind === 'tsv') return <SpreadsheetPreview format={kind} bytes={bytes} signal={resources.signal} viewState={viewState} onViewStateChange={onViewStateChange}/>;
   return loading;

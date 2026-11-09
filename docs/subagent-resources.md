@@ -13,6 +13,14 @@ resolution never rereads current files, and preparation materializes only finite
 admitted demand. Exact model/Tool/source/Skill bindings freeze before child
 ownership commits. Global invocation policies remain global, not profile prose.
 
+Skill versions identify normalized frontmatter definitions. The child receives
+only selected catalog metadata, dependency declarations, versions and effective
+source locations. It prepares those declared dependencies using the existing
+environment owner, installs the frozen catalog directly, and reads live bodies
+and assets through ordinary Tools. No file list, whole-package hash or package
+copy crosses initialization. IPC v38 and profile digest v8 describe this single
+contract; see [Skill discovery](skill-discovery.md).
+
 ## Invocation overrides and frozen child contracts
 
 `ResolvedSubagentSpec` is the complete immutable child contract. An invocation

@@ -1,7 +1,9 @@
 //! Confined, fixed-buffer I/O for local package owners. This is not a cache.
 use sha2::{Digest, Sha256};
 use std::fs::{File, Metadata};
-use std::io::{Read, Seek, Write};
+#[cfg(test)]
+use std::io::Write;
+use std::io::{Read, Seek};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -14,6 +16,8 @@ use crate::runtime::CancellationSignal;
 pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
 #[cfg(test)]
 thread_local! {
+    pub(crate) static OPENED_FILES: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+    pub(crate) static DIRECTORY_LISTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     pub(crate) static STREAMED_FILE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 const DIRECTORY: OFlags = OFlags::RDONLY
@@ -22,31 +26,87 @@ const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::CLOEXEC);
 
 /// Every component is resolved relative to an already opened directory.
-pub(crate) struct PackageDirectory(OwnedFd);
+pub(crate) struct PackageDirectory {
+    fd: std::sync::Arc<OwnedFd>,
+    ancestors: Vec<(std::sync::Arc<OwnedFd>, std::ffi::OsString)>,
+}
 
 impl PackageDirectory {
+    pub(crate) fn descriptor(&self) -> &OwnedFd {
+        &self.fd
+    }
     pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
-        let mut fd = open("/", DIRECTORY, Mode::empty())?;
+        let mut directory = Self {
+            fd: std::sync::Arc::new(open("/", DIRECTORY, Mode::empty())?),
+            ancestors: Vec::new(),
+        };
         if !path.is_absolute() {
             return Err(std::io::Error::other("package root must be absolute"));
         }
         for part in path.components() {
             match part {
                 Component::RootDir => {}
-                Component::Normal(name) => fd = openat(&fd, name, DIRECTORY, Mode::empty())?,
+                Component::Normal(name) => directory = directory.child(name)?,
                 _ => return Err(std::io::Error::other("unsafe package root")),
             }
         }
-        Ok(Self(fd))
+        Ok(directory)
+    }
+
+    pub(crate) fn verify(&self) -> std::io::Result<()> {
+        for (index, (parent, name)) in self.ancestors.iter().enumerate() {
+            let child = self
+                .ancestors
+                .get(index + 1)
+                .map_or(&self.fd, |(descriptor, _)| descriptor);
+            let current =
+                rustix::fs::statat(parent.as_ref(), name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+            let retained = rustix::fs::fstat(child.as_ref())?;
+            if (current.st_dev, current.st_ino) != (retained.st_dev, retained.st_ino) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "authorized directory replaced",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Detect a physical descendant, including case aliases on native filesystems.
+    pub(crate) fn contains(&self, file: &File) -> std::io::Result<bool> {
+        let source = rustix::fs::fstat(file)?;
+        for descriptor in
+            std::iter::once(&self.fd).chain(self.ancestors.iter().map(|(descriptor, _)| descriptor))
+        {
+            let current = rustix::fs::fstat(descriptor.as_ref())?;
+            if (source.st_dev, source.st_ino) == (current.st_dev, current.st_ino) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(crate) fn child(&self, name: &std::ffi::OsStr) -> std::io::Result<Self> {
-        Ok(Self(openat(&self.0, name, DIRECTORY, Mode::empty())?))
+        self.verify()?;
+        let fd = openat(self.fd.as_ref(), name, DIRECTORY, Mode::empty())?;
+        let mut ancestors = self.ancestors.clone();
+        if name != "." {
+            ancestors.push((self.fd.clone(), name.to_os_string()));
+        }
+        let directory = Self {
+            fd: std::sync::Arc::new(fd),
+            ancestors,
+        };
+        directory.verify()?;
+        Ok(directory)
     }
 
     pub(crate) fn names(&self, limit: usize) -> std::io::Result<Vec<PathBuf>> {
+        #[cfg(test)]
+        DIRECTORY_LISTS.with(|count| count.set(count.get() + 1));
+        self.verify()?;
         let mut names = Vec::new();
-        for entry in rustix::fs::Dir::read_from(&self.0)? {
+        for entry in rustix::fs::Dir::read_from(self.fd.as_ref())? {
             let entry = entry?;
             let name = entry.file_name().to_bytes();
             if name == b"." || name == b".." {
@@ -59,18 +119,22 @@ impl PackageDirectory {
             }
             names.push(PathBuf::from(std::ffi::OsStr::from_bytes(name)));
         }
+        self.verify()?;
         names.sort();
         Ok(names)
     }
 
     pub(crate) fn file(&self, relative: &Path) -> std::io::Result<File> {
+        #[cfg(test)]
+        OPENED_FILES.with(|files| files.borrow_mut().push(relative.to_path_buf()));
+        self.verify()?;
         let mut parts = relative.components().peekable();
         let mut directory = None;
         while let Some(part) = parts.next() {
             let Component::Normal(name) = part else {
                 return Err(std::io::Error::other("unsafe package-relative path"));
             };
-            let parent = directory.as_ref().unwrap_or(&self.0);
+            let parent = directory.as_ref().unwrap_or(self.fd.as_ref());
             if parts.peek().is_none() {
                 let file = File::from(openat(
                     parent,
@@ -197,21 +261,6 @@ fn read_pass(
         ));
     }
     Ok(hash.finalize().into())
-}
-
-pub(crate) fn copy(
-    directory: &PackageDirectory,
-    relative: &Path,
-    destination: &Path,
-    signal: &CancellationSignal,
-) -> std::io::Result<()> {
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut output = File::create_new(destination)?;
-    let evidence = stream(directory, relative, signal, |bytes| output.write_all(bytes))?;
-    output.set_permissions(evidence.metadata.permissions())?;
-    Ok(())
 }
 
 #[cfg(test)]

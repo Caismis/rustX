@@ -4,158 +4,81 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
+async fn headless_interactions_broadcast_survive_disconnect_and_select_one_response() {
     bounded(async {
-        use crate::runtime::interaction::{
-            ApprovalDecision, InteractionResponse, InteractionSettleGate, QuestionnaireResponse,
-        };
+        use crate::runtime::interaction::{ApprovalDecision, InteractionResponse, InteractionSettleGate, QuestionnaireResponse};
         use std::sync::Arc;
+        struct ReleaseSettlement(Arc<InteractionSettleGate>);
+        impl Drop for ReleaseSettlement {fn drop(&mut self){self.0.release();}}
         for tool in ["read", "ask_user"] {
-            for cancel_first in [false, true] {
+            for first in ["response", "error", "invalid"] {
                 let f = Fixture::with_session_count(Some(tool), 1).await;
                 let connection = Arc::new(AppServerConnection::new(f.host.clone()));
                 initialize(&connection).await;
                 let initial = attach(&connection, &f, 0).await;
                 let identity = f.manager.load(&initial.session_id, None).await.unwrap();
                 let runtime = identity.inspect_runtime().unwrap();
-                if tool == "read" {
-                    runtime.install_test_pre_tool_policy(Arc::new(AskPolicy));
-                }
+                if tool == "read" { runtime.install_test_pre_tool_policy(Arc::new(AskPolicy)); }
                 let coordinator = runtime.interaction_test_owner();
-                call(
-                    &connection,
-                    60,
-                    Method::TurnStart {
-                        target: initial.clone(),
-                        content: (input("request-A"))
-                            .into_iter()
-                            .map(|block| match block {
-                                crate::message::types::UserContentBlock::Text(text) => {
-                                    crate::app_server::protocol::UserInputBlock::Text(text)
-                                }
-                                _ => panic!("client fixtures must use text or issued receipts"),
-                            })
-                            .collect(),
-                    },
-                )
-                .await;
+                call(&connection, 60, Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(),
+                    target: initial.clone(), content: vec![UserInputBlock::Text(crate::message::content::TextBlock { text:"request-A".into() })],
+                }).await;
                 f.gates[0].wait_entered().await;
-                call(&connection, 61, Method::SessionDetach { target: initial }).await;
-                // No external attachment exists when the real provider releases the tool call.
+                call(&connection, 61, Method::SessionDetach { target:initial.clone() }).await;
                 f.gates[0].release();
                 coordinator.pending_published.notified().await;
                 assert_eq!(coordinator.pending_count(), 1);
-                let reattached = attach(&connection, &f, 0).await;
-                let MethodResult::Checkpoint {
-                    checkpoint: checkpoint_4,
-                } = call(
-                    &connection,
-                    62,
-                    Method::SessionCheckpoint {
-                        trace_records: vec![],
-                        target: reattached.clone(),
-                    },
-                )
-                .await
-                else {
-                    panic!("snapshot")
-                };
-                let snapshot = Box::new(checkpoint_4.snapshot);
-                assert_eq!(snapshot.pending_interactions.len(), 1);
-                let pending = snapshot.pending_interactions[0].clone();
-                call(
-                    &connection,
-                    63,
-                    Method::SessionDetach { target: reattached },
-                )
-                .await;
-                assert_eq!(
-                    coordinator.pending_count(),
-                    1,
-                    "detach cannot settle a pending interaction"
-                );
+                let waiting = crate::app_server::thread_status::ThreadStatus::Active { active_flags: vec![if tool == "read" {crate::app_server::thread_status::ThreadActiveFlag::WaitingOnApproval} else {crate::app_server::thread_status::ThreadActiveFlag::WaitingOnUserInput}] };
+                assert_eq!(super::status::read(&connection, &initial.conversation_id).await.status, waiting);
                 let target = attach(&connection, &f, 0).await;
-                let response = if tool == "read" {
-                    InteractionResponse::Approval {
-                        decision: ApprovalDecision::Allow,
-                    }
-                } else {
-                    InteractionResponse::Questionnaire {
-                        response: QuestionnaireResponse::Declined,
-                    }
+                let MethodResult::Checkpoint { checkpoint } = call(&connection, 62, Method::SessionCheckpoint { trace_records:vec![],target:target.clone() }).await else { panic!("checkpoint") };
+                let interaction = checkpoint.snapshot.pending_interactions[0].interaction.clone();
+                call(&connection, 63, Method::SessionSubscribe {target:target.clone(),after_cursor:checkpoint.cursor}).await;
+                let ServerMessage::Request(request) = connection.next_server_message().await.unwrap() else { panic!("request") };
+                let rival = AppServerConnection::new(f.host.clone()); initialize(&rival).await;
+                let target = attach(&rival, &f, 0).await;
+                let MethodResult::Checkpoint { checkpoint } = call(&rival, 62, Method::SessionCheckpoint {trace_records:vec![],target:target.clone()}).await else { panic!("checkpoint") };
+                call(&rival, 63, Method::SessionSubscribe {target,after_cursor:checkpoint.cursor}).await;
+                let ServerMessage::Request(replayed) = rival.next_server_message().await.unwrap() else { panic!("request replay") };
+                assert_eq!(request, replayed);
+                let third = AppServerConnection::new(f.host.clone()); initialize(&third).await;
+                let third_target = attach(&third, &f, 0).await;
+                let MethodResult::Checkpoint {checkpoint:third_checkpoint}=call(&third,64,Method::SessionCheckpoint{target:third_target.clone(),trace_records:vec![]}).await else {panic!("third checkpoint")};
+                call(&third,65,Method::SessionSubscribe{target:third_target,after_cursor:third_checkpoint.cursor}).await;
+                let ServerMessage::Request(third_request)=third.next_server_message().await.unwrap() else {panic!("third subscriber")};
+                assert_eq!(third_request,request);
+                assert_eq!(coordinator.pending_count(),1);
+                assert_eq!(super::status::read(&third,&initial.conversation_id).await.status,waiting);
+                // A disconnected subscriber never settles shared native work.
+                connection.close(); assert_eq!(coordinator.pending_count(),1);
+                let response = if tool == "read" { InteractionResponse::Approval {decision:ApprovalDecision::Allow} }
+                    else { InteractionResponse::Questionnaire {response:QuestionnaireResponse::Declined} };
+                let result = serde_json::to_value(response).unwrap();
+                let winner = match first {
+                    "response" => serde_json::json!({"jsonrpc":"2.0","id":request.id,"result":result}),
+                    "invalid" => serde_json::json!({"jsonrpc":"2.0","id":request.id,"result":"invalid domain payload"}),
+                    _ => serde_json::json!({"jsonrpc":"2.0","id":request.id,"error":{"code":-32000,"message":"declined"}}),
                 };
-                let interaction = pending.interaction.clone();
-                let respond = Method::InteractionRespond {
-                    target: target.clone(),
-                    interaction: interaction.clone(),
-                    response,
-                };
-                let cancel = Method::InteractionCancel {
-                    target,
-                    interaction,
-                };
-                let (first, second) = if cancel_first {
-                    (cancel, respond)
-                } else {
-                    (respond, cancel)
-                };
-                let gate = Arc::new(InteractionSettleGate::default());
-                gate.arm();
-                coordinator.install_settle_gate(gate.clone());
-                let first_connection = connection.clone();
-                let winner = tokio::spawn(async move {
-                    first_connection
-                        .handle_request(Request {
-                            jsonrpc: JsonRpcVersion::V2,
-                            id: RequestId::Integer(64),
-                            call: first,
-                        })
-                        .await
-                });
-                let entered = gate.clone();
-                tokio::task::spawn_blocking(move || entered.wait_entered())
-                    .await
-                    .unwrap();
-                // The actual coordinator terminal transition is now parked with its winner selected.
-                let second_connection = connection.clone();
-                let (started, receiver) = tokio::sync::oneshot::channel();
-                let loser = tokio::spawn(async move {
-                    started.send(()).unwrap();
-                    second_connection
-                        .handle_request(Request {
-                            jsonrpc: JsonRpcVersion::V2,
-                            id: RequestId::Integer(65),
-                            call: second,
-                        })
-                        .await
-                });
-                receiver.await.unwrap();
-                // The loser reaches the coordinator while the winning terminal
-                // transition is still parked, not merely after task completion.
-                let losing_response = loser.await.unwrap();
+                let gate = Arc::new(InteractionSettleGate::default()); gate.arm();let _release=ReleaseSettlement(gate.clone()); coordinator.install_before_settle_gate(gate.clone());
+                assert!(rival.handle_json(&winner.to_string()).await.is_none());
+                let entered = gate.clone(); tokio::task::spawn_blocking(move || entered.wait_entered()).await.unwrap();
+                let loser = serde_json::json!({"jsonrpc":"2.0","id":request.id,"result":result});
+                assert!(rival.handle_json(&loser.to_string()).await.is_none());
+                let ServerMessage::Resolved {params,..} = rival.next_server_message().await.unwrap() else { panic!("resolved") };
+                assert_eq!(params.request_id, request.id);
+                assert_eq!(super::status::read(&rival,&initial.conversation_id).await.status,waiting,"claiming the transport reply does not settle the native wait");
                 gate.release();
-                assert!(matches!(winner.await.unwrap(), Response::Success(_)));
-                assert!(matches!(losing_response, Response::Failure(_)));
-                assert_eq!(coordinator.pending_count(), 0);
                 loop {
-                    if let NotificationMethod::Event { event, .. } =
-                        connection.next_notification().await.notification
-                        && event
-                            .facts()
-                            .iter()
-                            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
-                    {
-                        break;
-                    }
+                    if let NotificationMethod::Event {event,..} = rival.next_notification().await.notification
+                        && event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled {..})) {break;}
                 }
-                drop(coordinator);
-                drop(runtime);
-                drop(connection);
-                f.close().await;
+                assert_eq!(coordinator.pending_count(),0);
+                assert!(runtime.with_pending_interaction_header(&interaction, |_| ()).is_none());
+                super::status::next_status(&third,&initial.conversation_id,&crate::app_server::thread_status::ThreadStatus::Idle).await;
+                drop(coordinator); drop(runtime); drop(connection); drop(rival); drop(third); f.close().await;
             }
         }
-    })
-    .await;
+    }).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -175,7 +98,7 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
         call(
             &connection,
             700,
-            Method::TurnStart {
+            Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(),
                 target: a.clone(),
                 content: content("request-A"),
             },
@@ -188,7 +111,7 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
         } = call(
             &connection,
             701,
-            Method::TurnSteer {
+            Method::InboundQueue { input_id: uuid::Uuid::new_v4().to_string(),
                 target: a.clone(),
                 content: content("pending original"),
             },

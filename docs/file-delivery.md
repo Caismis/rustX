@@ -115,7 +115,7 @@ Initialize client names are metadata and have no authorization role.
 
 Two transport-authenticated callers enter one native owner,
 `app_server::delivery_access`: the private Product Host lane below, and an App
-Server connection holding *delivery access*. Each passes a cancellation authority
+Server connection initialized with ordinary API eligibility. Each passes a cancellation authority
 minted by its transport authentication; no JSON field, client name, coordinate,
 path or root list can manufacture one.
 
@@ -132,7 +132,7 @@ workspace ownership; each read fence rechecks the frozen selection.
 Children use the Session's frozen shared workspace. The registry's frozen logical
 root must equal the original parent Session's current canonical mapping, and
 **that exact physical root** must be in the Product Host's current registrations.
-Trusted delivery-access clients use their explicit transport grant and native
+Authenticated ordinary clients use their live connection and native
 registry ownership; they do not borrow a Product Host registration. The frozen
 child workspace still must match the parent Session mapping.
 Both lanes retain the original Session allocation lease, exact attachment,
@@ -144,32 +144,16 @@ model request or writes canonical history to read a delivery.
 
 ### Delivery access for App Server clients
 
-`delivery/read` and `delivery/locate` serve trusted clients such as the TUI. Delivery
-access is granted only when the connection is established:
-
-- **stdio:** `--stdio-delivery-access` delegates it to the stdio owner — the process
-  that spawned the server and owns its pipes. That owner already runs with the same
-  user authority. The TUI passes it for the child it spawns. It is the owner's explicit
-  composition choice, never implied by stdio.
-- **WebSocket:** `--delivery-access-token-file` names a separate 43–128 character
-  owner-only credential. The file must be regular, unreadable by other users, and
-  is never followed through a symlink. Startup rejects reuse of the transport token
-  or the Product Host secret. A client offers `rustx-delivery-access.<secret>`
-  beside `rustx-token.<token>`. A wrong value fails the handshake with 401, and the
-  response selects only the public subprotocol. The secret never enters ordinary TUI
-  or Web configuration, URLs, logs or protocol fields.
-
-Without access both Methods fail `session_file_read` / `unauthorized` before any
-lookup. With it, the target must be one of the connection's own attachments. Native
-lookup then resolves the exact committed Tool-result message and delivery index to
-the original Conversation, its current catalog mapping and recorded root
-device/inode, exactly as for the Product Host. The difference is the root policy:
-the Product Host additionally requires a currently registered Workspace root; a
-delivery-access connection is native-process authority and uses the original
-mapping alone. Connection close cancels the connection's authority and native
-credential removal cancels every grant, so admitted reads fail at their next fence
-and publish nothing. Reads share the two native permits, which are released only
-when the descriptor read physically settles.
+`delivery/read` and `delivery/locate` are ordinary App Server APIs. Every
+initialized authenticated WebSocket client, and every initialized OS-trusted stdio
+client, has the same eligibility. No second delivery credential or delegation flag
+is required. The target must belong to this connection. Native committed-result,
+original mapping, root identity, descriptor and size checks remain authoritative.
+The private Product Host lane additionally requires its registered Workspace root.
+Connection close, detach or native retirement fence pending publications. Shared
+read permits remain owned until physical settlement. A returned path is in the
+server filesystem and may be opened locally only with proven shared identity.
+See [authentication and common API eligibility](app-server/shared-control.md).
 
 Each request is one operation owned by its connection, registered under its exact
 JSON-RPC id before native admission:
@@ -233,9 +217,8 @@ take the connection's route table before the revocation order, and a credential
 slot after it, and never take the stream or a request's state. Authentication
 takes only a credential slot. No path takes them in another order.
 
-**Credential rotation.** The WebSocket delivery credential and the Product Host
-credential each live in one slot owned by `AppServerHost`, and only
-`bind_delivery_access` / `bind_product_host` change it, through one transition
+**Private credential rotation.** The Product Host credential lives in one slot
+owned by `AppServerHost`; only `bind_product_host` changes it, through one transition
 (`AppServerHost::rotate`). The transition takes the exclusive side of the
 revocation order, then the slot's mutex. Holding both, it drops the previous
 grant, which cancels its token and so every connection or socket token it
@@ -398,7 +381,7 @@ the ordinary native failure vocabulary.
 | Host Office source read | 50 MiB, independent of ordinary preview/Download |
 | Private file carrier | Bounded JSON metadata followed by one complete binary WebSocket message; HTTP multipart metadata and original bytes to the browser |
 | Public `delivery/read` | Existing 512 KiB Base64 response within the ordinary 1 MiB record budget |
-| Native Session-file reads | 2 owned reads per AppServerHost, shared by the Product Host lane and delivery-access connections; excess fails, no unbounded queue |
+| Native Session-file reads | 2 owned reads per AppServerHost, shared by the Product Host lane and ordinary connections; excess fails, no unbounded queue |
 | Product Host file operations | 2 physical read obligations per Host instance; clean close/terminal response releases admission, unknown settlement keeps its slot unavailable |
 | Browser private Host reads / retained preview URLs | 2 private permits / 3 aggregate URLs: 2 visible panes plus 1 transient Download |
 | Managed Artifact transfers / URLs / bytes | Existing independent 2 / 16 / 262,144 bytes; preview leases separately obey the aggregate 3-URL limit |
@@ -705,61 +688,8 @@ definitions never touch the filesystem.
   parent) already fail the exclusive create or a write, before any link, and so
   remain definite. The uncertain class is what is left once a link has been sent.
 
-  The outcomes are distinct: saved; saved with a residue warning; not saved; not
-  saved with residue; outcome unknown, with or without residue. Each residue is
-  either a staged file that was not removed or one whose removal could not be
-  established. A cleanup result never replaces the publication outcome, and an
-  ambiguous one is reported, never turned into success. "Saved" states
-  that this save's link created the destination entry and that, right after,
-  the entry named the complete file this save created and wrote. It makes no
-  claim about later: anyone who may write the parent can rename or replace that
-  entry afterwards. F's bytes are synced before the link. The parent directory
-  is not synced, so whether the new name itself survives a system crash is up
-  to the filesystem; the atomicity of publication does not depend on it.
-- **Staging path.** The staged file is created beside the destination, in
-  `dirname(destination)`, the destination's own spelling of its parent
-  (`dirname` only strips the last component). The OS therefore resolves it
-  exactly as `link` resolves the destination, on the same filesystem. No Save
-  path is built with `path.join`/`resolve`: in `link/../report.md` with `link` a
-  symlink, the OS resolves `link` before `..`, so lexical folding would stage in
-  a different directory than the one the destination is created in. Both names
-  are resolved again at each step. If the parent is renamed or replaced between
-  staging and the commit, the link fails (`ENOENT`) and nothing is published,
-  but that `ENOENT` cannot prove it, so the outcome is uncertain. The staged
-  file, still in the renamed directory, is reported as residue under the
-  spelling it was created with. The random part of the staged name
-  only avoids collisions; `O_EXCL` is what establishes ownership.
-- **Destination spelling.** The typed path is used exactly as typed. Leading,
-  trailing and inner spaces are part of the name, and whitespace only decides
-  whether the input is blank. `~`/`~/` expand to the user's home, and a relative
-  path is prefixed with the TUI's cwd without folding `.` or `..`, which the OS
-  resolves (lexical folding names a different file when a component is a
-  symlink).
-- **Destination.** The delivered name is the server's identity for the file and is
-  never altered. It prefills the editable destination only when it renders as
-  itself; a name carrying a terminal control, C1 or bidi character leaves the field
-  empty and asks for an explicit path. The destination Input holds only renderable
-  text: a paste that would add such a character is refused whole.
-- **Open** is best effort, by contract, in one trusted local environment: this
-  TUI spawned the App Server (ownership `owned_child`, established at
-  construction), so the server's paths are this user's paths on this machine, and
-  the connection holds delivery access. Anywhere else Open is refused and Save is
-  offered. `delivery/locate` returns the verified leaf, and the TUI requires its
-  own `lstat` of that path to report the same regular-file device/inode (not a
-  symlink, directory or other file) before it launches the platform opener
-  (`xdg-open`/`open`, argv only, no shell). That check is an availability check at
-  one instant, not a security guarantee. The opener and the application it starts
-  resolve the pathname again, later, by themselves, and no portable opener accepts
-  a descriptor, so a rename or replacement in that window can make them open
-  another file, as in any file manager. The commit is the spawn: cancellation
-  before it launches nothing, and after it the launch is not reported as undone.
-  Exit 0 is reported as the opener accepting the request, never as an application
-  opening, and never as proof of which file it showed. A non-zero exit or a
-  failed spawn is reported as the opener's rejection. Save is the
-  identity-preserving action.
-- **Remote** (`--connect`) never interprets a server path locally. With
-  `--delivery-access-token-file`, Save writes bytes on the client machine. Without
-  it, `/files` shows metadata and reports both actions as unavailable.
+Remote trusted clients use their ordinary connection credential. Save writes bytes
+on the client machine; native paths may be opened only with proven shared identity.
 
 Each `/files` overlay owns one abort scope. Every way the interaction ends goes
 through the app's overlay close: Escape on the list, another overlay replacing it,

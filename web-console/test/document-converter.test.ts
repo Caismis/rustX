@@ -1,94 +1,96 @@
 // @vitest-environment node
-import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { existsSync } from 'node:fs';
-import { afterEach, expect, it, vi } from 'vitest';
-const boundary = vi.hoisted(() => ({ spawn: vi.fn(), admit: vi.fn(), kill: vi.fn(), retire: vi.fn() }));
-vi.mock('../host/documents/office-cgroup.ts', async original => ({ ...await original<typeof import('../host/documents/office-cgroup.ts')>(), observeOfficeCgroup: async () => { await boundary.admit(); return { kill: boundary.kill, retire: boundary.retire }; } }));
-vi.mock('node:child_process', () => ({ spawn: boundary.spawn }));
-import { convertOffice } from '../host/documents/converter';
-function gate() {
-  const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stdin: new PassThrough(), kill: vi.fn() });
-  let spawned!: () => void; const ready = new Promise<void>(resolve => { spawned = resolve; });
-  boundary.spawn.mockImplementation(() => { spawned(); return child; });
-  boundary.admit.mockResolvedValue(undefined); boundary.kill.mockResolvedValue(undefined); boundary.retire.mockResolvedValue(undefined);
-  return { child, ready };
+import { existsSync, readdirSync } from 'node:fs';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+const boundary = vi.hoisted(() => ({ start: vi.fn(), failCleanup: false }));
+vi.mock('../host/documents/office-sandbox.ts', () => ({ startOfficeSandbox: boundary.start }));
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>();
+  return { ...actual, rm: (...args: Parameters<typeof actual.rm>) => {
+    if (boundary.failCleanup && String(args[0]).endsWith('.docx')) return Promise.reject(new Error('input cleanup denied'));
+    return actual.rm(...args);
+  } };
+});
+import { OfficeConverter } from '../host/documents/converter';
+const owned: OfficeConverter[] = [];
+const closing: (() => void)[] = [];
+let reply: (input: PassThrough, output: PassThrough) => void;
+function converter() { const value = new OfficeConverter(); owned.push(value); return value; }
+function send(output: PassThrough, id: string, pdf = '%PDF-success', engine = 42) {
+  output.write(JSON.stringify({ id, length: Buffer.byteLength(pdf) }) + '\n'); output.write(pdf);
+  output.write(JSON.stringify({ id, settled: true, engine_pid: engine }) + '\n');
 }
-afterEach(() => { vi.useRealTimers(); boundary.spawn.mockReset(); });
-it('owns isolation arguments and retains temporary files until process-tree settlement after cancellation', async () => {
-  const { child, ready } = gate(), abort = new AbortController();
-  const work = convertOffice(Buffer.from('input'), 'docx', abort.signal);
+beforeEach(() => {
+  boundary.start.mockReset(); boundary.failCleanup = false; reply = (input, output) => input.on('data', chunk => send(output, JSON.parse(String(chunk)).id));
+  boundary.start.mockImplementation(async (_directory, _command, signal: AbortSignal) => {
+    const input = new PassThrough(), output = new PassThrough();
+    let settle!: () => void;
+    const closed = new Promise<void>(resolve => { settle = resolve; });
+    let stopped = false;
+    const dispose = vi.fn(async () => { if (!stopped) { stopped = true; output.end(); settle(); } await closed; });
+    signal.addEventListener('abort', () => void dispose(), { once: true });
+    queueMicrotask(() => output.write('{"ready":true,"engine_pid":42}\n'));
+    reply(input, output);
+    return { input, output, pid: 123, closed, dispose, deadline: vi.fn(async () => {}) };
+  });
+});
+afterEach(async () => { closing.splice(0).forEach(close => close()); await Promise.all(owned.splice(0).map(value => value.dispose())); vi.useRealTimers(); });
+it('retains one converter process and private directory across different documents, then retires it on Host disposal', async () => {
+  const engine = converter();
+  expect(await engine.render(Buffer.from('first'), 'docx', new AbortController().signal)).toEqual(Buffer.from('%PDF-success'));
+  const identity = await engine.identity, directory = boundary.start.mock.calls[0][0];
+  expect(existsSync(directory)).toBe(true); expect(readdirSync(directory).some(name => name.endsWith('.docx'))).toBe(false);
+  await engine.render(Buffer.from('different'), 'pptx', new AbortController().signal);
+  expect(await engine.identity).toEqual(identity); expect(boundary.start).toHaveBeenCalledOnce();
+  await engine.dispose(); expect(existsSync(directory)).toBe(false);
+  await expect(engine.render(Buffer.from('late'), 'docx', new AbortController().signal)).rejects.toThrow('converter_unavailable');
+});
+it('a malformed result retires the old engine before a later document gets a fresh slot', async () => {
+  reply = (input, output) => input.on('data', chunk => send(output, JSON.parse(String(chunk)).id, 'invalid PDF'));
+  const engine = converter(); await expect(engine.render(Buffer.from('first'), 'docx', new AbortController().signal)).rejects.toThrow('converter_failure');
+  const directory = boundary.start.mock.calls[0][0]; expect(existsSync(directory)).toBe(false);
+  reply = (input, output) => input.on('data', chunk => send(output, JSON.parse(String(chunk)).id));
+  await engine.render(Buffer.from('next'), 'pptx', new AbortController().signal); expect(boundary.start).toHaveBeenCalledTimes(2);
+});
+it('retires an idle engine crash before accepting a replacement document', async () => {
+  const engine = converter(); await engine.warm();
+  const old = await boundary.start.mock.results[0].value, directory = boundary.start.mock.calls[0][0];
+  await old.dispose();
+  await vi.waitFor(() => expect(existsSync(directory)).toBe(false));
+  await engine.render(Buffer.from('new document'), 'pptx', new AbortController().signal);
+  expect(boundary.start).toHaveBeenCalledTimes(2);
+});
+it('does not publish or reuse the slot when staged-input cleanup fails', async () => {
+  const engine = converter(); boundary.failCleanup = true;
+  await expect(engine.render(Buffer.from('input'), 'docx', new AbortController().signal)).rejects.toThrow('converter_unavailable');
+  expect(existsSync(boundary.start.mock.calls[0][0])).toBe(false);
+  await expect(engine.render(Buffer.from('next'), 'pptx', new AbortController().signal)).rejects.toThrow('converter_unavailable');
+  expect(boundary.start).toHaveBeenCalledOnce();
+});
+it('publication waits for the settlement trailer, and cancellation cannot release the next seat early', async () => {
+  let request!: () => void, finish!: () => void;
+  const entered = new Promise<void>(resolve => { request = resolve; });
+  const retired = new Promise<void>(resolve => { finish = resolve; }); closing.push(finish);
+  reply = (input, output) => input.on('data', chunk => { const { id } = JSON.parse(String(chunk)); output.write(JSON.stringify({id,length:5})+'\n%PDF-'); request(); });
+  const original = boundary.start.getMockImplementation()!;
+  boundary.start.mockImplementation(async (...args) => {
+    const sandbox = await original(...args);
+    const immediate = sandbox.dispose;
+    sandbox.dispose = async () => { await retired; await immediate(); };
+    return sandbox;
+  });
+  const engine = converter(), abort = new AbortController(); let completed = false;
+  const work = engine.render(Buffer.from('input'), 'docx', abort.signal).finally(() => { completed = true; });
   const rejected = expect(work).rejects.toThrow('obsolete');
-  await ready;
-  const [exe, args, options] = boundary.spawn.mock.calls[0];
-  expect(exe).toBe('/usr/bin/systemd-run');
-  expect(args.slice(args.indexOf('/usr/bin/env'), args.indexOf('/usr/bin/bwrap') + 1)).toEqual(['/usr/bin/env', '-i', '/usr/bin/bwrap']);
-  child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve));
-  for (const required of ['--unshare-all', '--unshare-user', '--disable-userns', '--die-with-parent', '--new-session', '--clearenv', '--size', '268435456', '--property=MemoryMax=536870912', '--property=TasksMax=64', '--property=ExitType=cgroup', '--remount-ro', '--fsize=104857600']) expect(args).toContain(required);
-  expect(args).not.toContain('--share-net'); expect(Object.keys(options.env).every(key => ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].includes(key))).toBe(true);
-  const registry = args.indexOf('/etc/libreoffice/registry');
-  expect(args.slice(registry - 1, registry + 2)).toEqual(['--ro-bind-try', '/etc/libreoffice/registry', '/etc/libreoffice/registry']);
-  // Only package-owned registry data may cross /etc; never the Host's entire
-  // configuration directory. Distros with their registry in /usr need no mount.
-  expect(args.filter((arg: string) => arg === '/etc')).toEqual(['/etc']);
-  expect(args[args.indexOf('/etc') - 1]).toBe('--dir');
-  const directory = args[args.indexOf('/input') - 1];
-  expect(existsSync(directory)).toBe(true);
-  abort.abort(); expect(boundary.kill).toHaveBeenCalled(); expect(existsSync(directory)).toBe(true);
-  child.emit('close', null); await rejected; expect(existsSync(directory)).toBe(false);
+  await entered; abort.abort(); await Promise.resolve(); expect(completed).toBe(false);
+  await expect(engine.render(Buffer.from('other'), 'pptx', new AbortController().signal)).rejects.toThrow('capacity');
+  finish(); await rejected; expect(existsSync(boundary.start.mock.calls[0][0])).toBe(false);
 });
-it('timeout kills and waits for close, while failed output never publishes', async () => {
-  vi.useFakeTimers(); const { child, ready } = gate();
-  const work = convertOffice(Buffer.from('input'), 'pptx', new AbortController().signal);
-  const rejected = expect(work).rejects.toThrow('converter_timeout'); await ready; child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve));
-  vi.advanceTimersByTime(60000); expect(boundary.kill).toHaveBeenCalled();
-  child.stdout.write('%PDF-late'); child.emit('close', 0); await rejected;
-  expect(vi.getTimerCount()).toBe(0);
-});
-it('cleans up success and malformed output', async () => {
-  for (const valid of [true, false]) {
-    const { child, ready } = gate(); const work = convertOffice(Buffer.from('input'), 'docx', new AbortController().signal);
-    const result = valid ? expect(work).resolves.toEqual(Buffer.from('%PDF-real')) : expect(work).rejects.toThrow('converter_failure');
-    await ready; const args = boundary.spawn.mock.calls.filter(call => call[0].endsWith('systemd-run')).at(-1)![1]; const directory = args[args.indexOf('/input') - 1];
-    child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve));
-    child.stdout.write(valid ? '%PDF-real' : 'invalid'); child.emit('close', 0); await result;
-    expect(existsSync(directory)).toBe(false);
-  }
-});
-
-it('missing cgroup admission fails closed before any permit; cancellation during startup cannot launch payload', async () => {
-  for (const cancelled of [false, true]) {
-    const { child, ready } = gate(), controller = new AbortController();
-    const work = convertOffice(Buffer.from('input'), 'docx', controller.signal);
-    const result = expect(work).rejects.toThrow(cancelled ? 'obsolete' : 'converter_unavailable');
-    await ready;
-    if (cancelled) controller.abort();
-    expect(child.stdin.read()).toBeNull();
-    child.emit('close', 1); await result;
-  }
-});
-it('oversized output cannot publish a PDF and waits for service closure', async () => {
-  const { child, ready } = gate();
-  const work = convertOffice(Buffer.from('input'), 'docx', new AbortController().signal);
-  const result = expect(work).rejects.toThrow('too_large'); await ready;
-  child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n'); await new Promise<void>(resolve => child.stdin.once('finish', resolve)); child.stdout.write(Buffer.alloc(100 * 1024 * 1024 + 1));
-  child.emit('close', 0); await result;
-});
-
-it('holds the stdin permit until kernel admission; cancellation while admission is held never grants it', async () => {
-  for (const cancel of [false, true]) {
-    const { child, ready } = gate(), controller = new AbortController();
-    let release!: () => void;
-    boundary.admit.mockReturnValueOnce(new Promise<void>(resolve => { release = resolve; }));
-    const work = convertOffice(Buffer.from('input'), 'docx', controller.signal);
-    const result = expect(work).rejects.toThrow(cancel ? 'obsolete' : 'converter_failure');
-    await ready;
-    const finished = new Promise<void>(resolve => child.stdin.once('finish', resolve));
-    child.stdout.write('RUSTX-CGROUP /sys/fs/cgroup/test\n');
-    expect(child.stdin.read()).toBeNull();
-    if (cancel) controller.abort();
-    release(); await finished;
-    expect(child.stdin.read()?.toString() ?? null).toBe(cancel ? null : 'run\n');
-    child.emit('close', 1); await result;
-  }
+it('independently bounds each active document, while no document deadline runs on a healthy idle slot', async () => {
+  vi.useFakeTimers();
+  reply = () => {};
+  const engine = converter(), work = engine.render(Buffer.from('input'), 'docx', new AbortController().signal);
+  const rejected = expect(work).rejects.toThrow('converter_timeout');
+  await vi.waitFor(() => expect(boundary.start).toHaveBeenCalledOnce());
+  await vi.advanceTimersByTimeAsync(60000); await rejected; expect(vi.getTimerCount()).toBe(0);
 });

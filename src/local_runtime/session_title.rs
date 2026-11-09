@@ -78,7 +78,7 @@ pub(crate) fn owner(
     >,
     mut capacity: tokio::sync::watch::Receiver<u64>,
 ) -> impl Future<Output = ()> + Send + 'static {
-    let lifecycle = runtime.title_lifecycle();
+    let lifecycle = runtime.lifecycle();
     let weak_runtime = Arc::downgrade(&runtime.inner);
     async move {
         let mut previous_state = ConversationLifecycleState::Inactive;

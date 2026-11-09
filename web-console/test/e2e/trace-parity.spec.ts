@@ -19,12 +19,19 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh'] as const) for
       const close = async () => panel.getByRole('button', { name: locale === 'zh' ? '关闭详情' : 'Close details' }).click();
       const tab = (en: string, zh: string) => panel.getByRole('tab', { name: locale === 'zh' ? zh : en, exact: true });
       const capture = async (name: string, target: Locator = panel) => {
+        // Both presentations own the same idle hover state, regardless of the
+        // underlying ledger row's position when it opened the detail panel.
+        await page.mouse.move(0, 0);
         await page.evaluate(() => document.fonts.ready);
         const settled = await captureStable(async delay => { if (delay) await page.waitForTimeout(delay); return target.screenshot({ animations: 'disabled', caret: 'hide', scale: 'css' }); }, name);
         expect(settled.stable, settled.stable ? undefined : settled.report).toBe(true); if (!settled.stable) return;
         if (!native) expected.set(name, settled.png);
         else {
           const result = compareScreenshot({ referenceName: name, expected: decodePng(expected.get(name)!), actual: decodePng(settled.png), noisePolicy: [] });
+          if (!result.ok) {
+            await test.info().attach(`${name}-reference`, { body: expected.get(name)!, contentType: 'image/png' });
+            await test.info().attach(`${name}-native`, { body: settled.png, contentType: 'image/png' });
+          }
           expect(result.ok, result.report).toBe(true);
           if (width === 1440 && locale === 'zh' && theme === 'dark') writeFileSync(`/tmp/rustx-dsh-${name}.png`, settled.png);
         }

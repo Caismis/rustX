@@ -149,7 +149,7 @@ process.on('SIGTERM',()=>queueMicrotask(()=>process.send({signal:'SIGTERM'})));
   const connection = once(server, 'connection');
   const child = spawn(process.execPath, ['--import', observer, join(root, 'dev/src/main.ts'), mode, '--binary', binary,
     ...(mode === 'web' ? ['--no-open', '--workspace', directory] : transport ? ['--listen', transport, '--token-file', userState] : [])],
-  { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
+  { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { ...process.env, XDG_STATE_HOME: join(directory, 'state') } });
   let errors = ''; child.stderr!.on('data', chunk => { errors += chunk; });
   const output = lines(child.stdout!);
   const closed = once(child, 'close');

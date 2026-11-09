@@ -343,6 +343,7 @@ pub(crate) struct SupervisedInteractiveProcess {
     /// The bounded stderr preview; the drain task reads until EOF regardless
     /// of the preview bound.
     pub(crate) stderr_preview: Arc<Mutex<Vec<u8>>>,
+    stderr_complete: tokio::sync::watch::Receiver<Option<bool>>,
     settlement: Arc<SettlementCell>,
     shutdown: Option<tokio::sync::mpsc::Sender<()>>,
     /// Test-only: the pid of the direct supervisor child (observability for
@@ -410,6 +411,7 @@ impl SupervisedInteractiveProcess {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let stderr_capture = Arc::new(Mutex::new(Vec::new()));
+        let (stderr_done, stderr_complete) = tokio::sync::watch::channel(None);
         if let Some(mut stderr_pipe) = stderr {
             let capture = stderr_capture.clone();
             // The stderr drain reads until EOF — the preview bound only
@@ -420,11 +422,18 @@ impl SupervisedInteractiveProcess {
             tokio::spawn(async move {
                 let mut bytes = Vec::new();
                 let mut buffer = [0u8; 8192];
+                let mut complete = false;
+                let mut truncated = false;
                 loop {
                     match stderr_pipe.read(&mut buffer).await {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) => {
+                            complete = true;
+                            break;
+                        }
+                        Err(_) => break,
                         Ok(count) => {
                             let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(bytes.len());
+                            truncated |= count > remaining;
                             bytes.extend_from_slice(&buffer[..count.min(remaining)]);
                             capture
                                 .lock()
@@ -434,7 +443,10 @@ impl SupervisedInteractiveProcess {
                     }
                 }
                 *capture.lock().expect("interactive stderr lock") = bytes;
+                let _ = stderr_done.send(Some(complete && !truncated));
             });
+        } else {
+            let _ = stderr_done.send(Some(true));
         }
         let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
         let settlement = Arc::new(SettlementCell::new());
@@ -457,6 +469,7 @@ impl SupervisedInteractiveProcess {
             stdin,
             stdout,
             stderr_preview: stderr_capture,
+            stderr_complete,
             settlement,
             shutdown: Some(shutdown_tx),
             #[cfg(test)]
@@ -471,6 +484,14 @@ impl SupervisedInteractiveProcess {
     pub(crate) fn stderr_preview(&self) -> String {
         let bytes = self.stderr_preview.lock().expect("interactive stderr lock");
         String::from_utf8_lossy(&bytes).trim().to_owned()
+    }
+
+    /// Only an already-observed EOF without clipping is safe for credential
+    /// diagnostics. Optional evidence never waits for a remaining pipe holder
+    /// after the supervised unit's physical outcome is known.
+    pub(crate) fn complete_stderr_preview(&self) -> Option<String> {
+        (*self.stderr_complete.borrow()).filter(|complete| *complete)?;
+        Some(self.stderr_preview())
     }
 
     /// Requests orderly server retirement without using the business stdin.
@@ -1327,6 +1348,15 @@ mod interactive_tests {
         let mut process = fixture.spawn(&script).expect("spawn");
         wait_for_file(&marker, "server start marker");
         settle(&mut process).await;
+        let mut stderr = process.stderr_complete.clone();
+        assert_eq!(
+            *tokio::time::timeout(DEADLINE, stderr.wait_for(Option::is_some))
+                .await
+                .unwrap()
+                .unwrap(),
+            Some(true)
+        );
+        assert_eq!(process.complete_stderr_preview(), Some(String::new()));
     }
 
     /// A server child that outlives its server parent stays owned: the unit
@@ -1560,6 +1590,15 @@ mod interactive_tests {
             "the retained stderr preview must stay bounded"
         );
         settle(&mut process).await;
+        let mut stderr = process.stderr_complete.clone();
+        assert_eq!(
+            *tokio::time::timeout(DEADLINE, stderr.wait_for(Option::is_some))
+                .await
+                .unwrap()
+                .unwrap(),
+            Some(false)
+        );
+        assert!(process.complete_stderr_preview().is_none());
     }
 
     /// An injected signaling failure escalates to containment: the unit

@@ -132,8 +132,10 @@
 #[doc(hidden)]
 pub mod fixture;
 
+pub mod catalog;
 mod connect;
 mod connection;
+mod diagnostics;
 mod dispatch;
 mod executor;
 mod framing;
@@ -351,6 +353,53 @@ pub struct McpServerBinding {
     pub policy: ToolInvocationPolicy,
 }
 
+impl McpServerBinding {
+    /// Freeze every accepted credential input at the native connection owner,
+    /// including bindings constructed without the configuration parser.
+    fn with_connection_redactions(&self) -> Self {
+        let mut binding = self.clone();
+        let mut values = Vec::new();
+        match &self.transport {
+            McpTransportConfig::Stdio { environment, .. } => {
+                values.extend(
+                    environment
+                        .values()
+                        .map(|value| crate::model::catalog::ResolvedCredential::new(value.clone())),
+                );
+            }
+            McpTransportConfig::StreamableHttp { headers, .. } => {
+                let mut header = |name: &str, value: &str| {
+                    values.push(crate::model::catalog::ResolvedCredential::new(value));
+                    // The scheme is framing; a peer authenticates with the
+                    // token and may echo it without the complete field value.
+                    if name.eq_ignore_ascii_case(http::header::AUTHORIZATION.as_str())
+                        || name.eq_ignore_ascii_case(http::header::PROXY_AUTHORIZATION.as_str())
+                    {
+                        let mut parts = value.split_ascii_whitespace();
+                        if parts
+                            .next()
+                            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("Bearer"))
+                            && let Some(token) = parts.next()
+                        {
+                            values.push(crate::model::catalog::ResolvedCredential::new(token));
+                        }
+                    }
+                };
+                for (name, value) in headers {
+                    header(name, value);
+                }
+                if let Ok(resolved) = self.credentials.resolve() {
+                    for (name, value) in &resolved.headers {
+                        header(name, value.expose());
+                    }
+                }
+            }
+        }
+        binding.credentials.literal_redactions = values;
+        binding
+    }
+}
+
 impl std::fmt::Debug for McpServerBinding {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -415,22 +464,6 @@ impl std::fmt::Display for McpError {
 }
 
 impl std::error::Error for McpError {}
-
-impl McpError {
-    fn redacted(mut self, credentials: &crate::credentials::SourceCredentials) -> Self {
-        let message = match &mut self {
-            Self::Configuration(message)
-            | Self::Discovery(message)
-            | Self::ProtocolCompatibility(message)
-            | Self::ProtocolViolation(message)
-            | Self::Unsupported(message)
-            | Self::Execution(message)
-            | Self::PhysicalSettlement(message) => message,
-        };
-        *message = credentials.redact(message);
-        self
-    }
-}
 
 fn duration_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)

@@ -42,6 +42,7 @@ pub(super) struct ManualCompactionCompletion {
 }
 
 pub(super) struct ManualTail {
+    pub(super) _activity: super::activity::TaskActivityLease,
     pub(super) worker: tokio::task::JoinHandle<()>,
     pub(super) completion: Arc<ManualCompactionCompletion>,
 }
@@ -601,6 +602,7 @@ impl ConversationRuntime {
                 inner.finish_manual_compaction(task, &completion_for_task, request_id.as_ref());
             });
             *self.inner.manual_tail.lock().expect("manual tail owner") = Some(ManualTail {
+                _activity: self.inner.activity.lease(),
                 worker,
                 completion: completion.clone(),
             });

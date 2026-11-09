@@ -2,7 +2,7 @@ import { formatArguments } from '../../src/app/settings/mcp/form-values';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
-  closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  returnHome, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
@@ -13,15 +13,23 @@ import { routeWorkspaceHost } from './workspace-host';
 
 test('CFG3 structured source authoring, inert definitions, CAS and automatic no-op application', async ({ page }) => {
   const fixture = await startDogfood(); const errors: string[] = [];
+  let invalidateNextWrite = false;
   page.on('pageerror', error => errors.push(error.message));
   try {
-    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await routeWorkspaceHost(page, fixture, {
+      before: async () => {
+        if (!invalidateNextWrite) return;
+        invalidateNextWrite = false;
+        appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
+      },
+      observed: async () => {},
+    }); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Transport token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
     // The source path is a diagnostic: it is on Advanced.
     await openSettingsPage(page, 'Advanced');
@@ -38,7 +46,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await openSettingsPage(page, 'Advanced');
     await expect(settings.getByText(/Revision:/)).toBeVisible();
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');
     await openSettingsPage(page, 'MCP servers');
@@ -62,9 +70,13 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     await settings.getByRole('button', { name: 'MCP local-fixture', exact: true }).click();
     await settings.getByLabel('Command', { exact: true }).fill('preserved-draft');
-    appendFileSync(join(fixture.workspaceA, '.agents/mcp.toml'), '\n# external edit invalidates the draft revision\n');
+    // The reviewed draft must be submitted before the external edit. An edit
+    // before clicking can instead invalidate a publication-owned read and
+    // correctly prevent submission, which never exercises the native write CAS.
+    invalidateNextWrite = true;
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('alert')).toContainText('was not saved: the source changed');
+    expect(invalidateNextWrite).toBe(false);
     await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('preserved-draft');
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
     await settings.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
@@ -96,10 +108,11 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     // A Workspace surface has no General page: appearance is set globally, from
     // the desktop layout where the Workspace object action is reachable.
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await closeSettings(page);
+    await returnHome(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
     await settings.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     await openSettingsPage(page, 'Extensions');
     await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();

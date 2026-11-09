@@ -238,12 +238,12 @@ Existing modal/menu focus owners arbitrate before the editor; there is no global
 cancellation shortcut or DOM exception list.
 
 The Stop button and double Escape converge on `ConversationSeat` →
-`AppServerClient.cancelTurn(expected)` → native `turn/cancel`. The internal expected
+`AppServerClient.cancelTurn(expected)` → native `turn/interrupt`. The internal expected
 target captures generation, native target and Attempt ID. The client refuses an
 obsolete expected target and revalidates eligibility again beside actual socket
-dispatch. `turn/cancel` is an exact lifecycle control operation in the existing
+dispatch. `turn/interrupt` is an exact lifecycle control operation in the existing
 bounded two-request control lane. Ordinary RPC capacity cannot queue it; a full
-control lane refuses it locally, definitely unsent. No protocol change is involved.
+control lane refuses it locally, definitely unsent.
 The exact local cancellation operation owns its in-flight/stopping marker. A
 failure known to precede transmission removes only that operation's marker,
 even if its transport/generation has been retired. An older continuation cannot
@@ -372,8 +372,8 @@ keeping the capability panel open; consumption and panel dismissal are separate.
 | `/model` | `session/model` + `session/models`, then `session/setModel` with an exact catalog model reference and native defaults |
 | Approval mode control | Native Workspace Approval source-unit CAS; desired/published/running distinction and automatic native application |
 | `/compact` | Native `context/compact`, available with no active Attempt; pending inbound alone is permitted by native maintenance |
-| `/new` | `session/create` using native Session cwd; attach/open only after success |
-| `/fork` | Native exact user-boundary selection and independent `session/fork` |
+| `/new` | `thread/start` using native Session cwd; attach/open only after success |
+| `/fork` | Native exact user-boundary selection and independent `thread/fork` |
 | `/branch` | Native exact user-boundary selection and in-Session `session/branch`, stable execution-idle only |
 | `/goal` | Focus existing GoalDomain-backed dock controls when a current Goal is visible |
 | `/tools` | Read-only `resources/read` capability inspection |
@@ -445,7 +445,7 @@ gesture to clear it, labelled "Use model defaults" when the Model declares no
 Profiles (no default Profile is named). Only that explicit row clears it —
 choosing the selected Model still keeps the pin.
 `session/setModel` is the dedicated operation for later intentional Session model changes.
-Initial explicit intent belongs to `session/create.settings.model`; a projected
+Initial explicit intent belongs to `thread/start.settings.model`; a projected
 native default is omitted. See [startup ownership](../docs/issue-419/ownership.md).
 The later model-change operation prepares a
 complete binding and commits through the idle/admission gate and model baseline
@@ -466,11 +466,13 @@ choice/multichoice/boolean/text/numeric/custom values and page navigation in
 Harness's question flow: a recommended first choice is the implicit draft, a
 single choice advances to the next question, the custom answer row is always
 visible, Skip omits a question from the submission and the card's dismiss action
-sends the native decline. Only `interaction/respond` or permitted
-`interaction/cancel` sends a response. Escape, collapsing the card, navigation and
-unmount never settle anything. Successful acknowledgements
-keep the pending surface until snapshot absence proves settlement. Lost replies
-stay uncertain, cannot be resent and repair through native reconnect/reread.
+sends the native decline. Only an explicit decision on a live
+`item/interaction/request` sends its correlated JSON-RPC reply. Escape, collapsing
+the card, navigation and unmount never settle anything. Sending a reply has no RPC
+acknowledgement. `serverRequest/resolved` retires local prompt/answer eligibility;
+the native Interaction coordinator remains the terminal owner. Lost replies stay
+uncertain and are never resent. A fresh live callback replay can permit a new
+explicit decision because it proves that the request remains unclaimed.
 
 ### Direct compaction and context seat (#435)
 

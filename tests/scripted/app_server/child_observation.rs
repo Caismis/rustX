@@ -44,8 +44,7 @@ async fn attach_other_session(
         client,
         20,
         Method::SessionAttach {
-            session_id: fixture.sessions[1].id.clone(),
-            node_id: None,
+            thread_id: fixture.sessions[1].active_conversation_id.clone(),
         },
     )
     .await
@@ -89,8 +88,7 @@ async fn t02_t03_large_child_observation_keeps_parent_websocket_and_other_sessio
             &client,
             1,
             Method::SessionAttach {
-                session_id: child.target.session_id.clone(),
-                node_id: None,
+                thread_id: child.target.conversation_id.clone(),
             },
         )
         .await
@@ -275,6 +273,7 @@ async fn t02_t03_large_child_observation_keeps_parent_websocket_and_other_sessio
             &client,
             300,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: other.clone(),
                 content: wire_text("request-A independent Session"),
             },

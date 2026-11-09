@@ -16,8 +16,16 @@ import '../../src/presentation/theme/shiki.css';
 import '../../src/presentation/theme/reset.css';
 import '../../src/app/console.css';
 const server = new Server(), http = new HttpWorkspaceHost('/product-host/workbench-fixture');
+server.handlers.set('workflow/list', request => {
+  if (request.method !== 'workflow/list') throw Error('Expected Workflow library read');
+  return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'missing', diagnostic: null, files: [] } };
+});
 const catalog = await http.listWorkspaces();
 server.workspaceHost.listWorkspaces = async () => ({ ...catalog, endpoint });
+// The fixture socket uses its own endpoint; filesystem authorization still
+// goes through the real Host's canonical registration and authority.
+server.workspaceHost.classifyLocations = (cwds, _endpoint, _authority, signal) => http.classifyLocations(cwds, catalog.endpoint, catalog.authorityId, signal);
+server.summaries.set('A', { cwd: catalog.workspaces[0]!.displayPath });
 server.workspaceHost.workbench = (_scope, call, signal) => http.workbench(catalog, call, signal);
 server.workspaceHost.observeWorkspaceFile = (_scope, call, changed, signal) => http.observeWorkspaceFile(catalog, call, changed, signal);
 if (new URL(location.href).searchParams.has('file-links')) {

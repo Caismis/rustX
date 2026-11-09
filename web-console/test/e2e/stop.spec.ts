@@ -17,8 +17,8 @@ for (const [width, locale, theme] of [[1440, 'en', 'light'], [390, 'zh', 'dark']
     const localize = async () => {
       if (!zh) return;
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
-      await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-      await page.getByRole('button', { name: '关闭设置' }).click();
+      await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+      await page.getByRole('button', { name: '主页' }).click();
     };
     const message = page.getByRole('textbox', { name: zh ? '消息' : 'Message', exact: true });
     const controls = page.locator('[data-turn-process]').filter({ hasText: zh ? /^已停止$/ : /^Stopped$/ });

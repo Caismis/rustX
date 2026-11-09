@@ -274,8 +274,7 @@ fn nested_packages_are_not_recursively_discovered() {
     assert_eq!(names, ["outer"], "nested packages are never discovered");
 }
 
-/// Package symlink roots and package-internal symlinks are rejected for
-/// M6, while ordinary Workspace symlink semantics for tools are unchanged.
+/// Discovery rejects symlinked package roots; internal resources belong to Tools.
 #[test]
 fn package_symlinks_are_rejected() {
     let (dir, workspace) = fixture();
@@ -311,14 +310,11 @@ fn package_symlinks_are_rejected() {
     )
     .expect("internal symlink");
     let internal = project_discovery(&workspace2).discover();
-    assert!(internal.packages.is_empty());
-    assert!(matches!(
-        internal.diagnostics.as_slice(),
-        [SkillDiagnostic::PackageInvalid {
-            cause: SkillPackageError::UnsupportedSymlink { .. },
-            ..
-        }]
-    ));
+    assert_eq!(internal.packages.len(), 1);
+    assert!(
+        internal.diagnostics.is_empty(),
+        "runtime resource links are not discovery inputs"
+    );
 }
 
 /// Discovery accepts a non-canonical package root but publishes a canonical
@@ -705,19 +701,19 @@ fn file_mtime_does_not_affect_the_digest() {
     assert_eq!(before, after);
 }
 
-/// A body change changes the version identity.
+/// Runtime body edits preserve the definition version.
 #[test]
-fn body_change_changes_the_version_identity() {
+fn body_change_preserves_the_version_identity() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body one\n");
     let before = version_id(&workspace, "pdf");
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body two\n");
-    assert_ne!(before, version_id(&workspace, "pdf"));
+    assert_eq!(before, version_id(&workspace, "pdf"));
 }
 
-/// A script change changes the version identity.
+/// Runtime script edits preserve the definition version.
 #[test]
-fn script_change_changes_the_version_identity() {
+fn script_change_preserves_the_version_identity() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body\n");
     let scripts = dir.path().join(".agents/skills/pdf/scripts");
@@ -725,12 +721,12 @@ fn script_change_changes_the_version_identity() {
     std::fs::write(scripts.join("extract.py"), "print('one')\n").expect("script");
     let before = version_id(&workspace, "pdf");
     std::fs::write(scripts.join("extract.py"), "print('two')\n").expect("script");
-    assert_ne!(before, version_id(&workspace, "pdf"));
+    assert_eq!(before, version_id(&workspace, "pdf"));
 }
 
-/// A binary asset change changes the version identity (raw bytes).
+/// Binary assets do not participate in discovery identity.
 #[test]
-fn binary_asset_change_changes_the_version_identity() {
+fn binary_asset_change_preserves_the_version_identity() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body\n");
     let assets = dir.path().join(".agents/skills/pdf/assets");
@@ -738,7 +734,7 @@ fn binary_asset_change_changes_the_version_identity() {
     std::fs::write(assets.join("sample.bin"), [0u8, 1, 2, 3]).expect("asset");
     let before = version_id(&workspace, "pdf");
     std::fs::write(assets.join("sample.bin"), [0u8, 9, 8, 7]).expect("asset");
-    assert_ne!(before, version_id(&workspace, "pdf"));
+    assert_eq!(before, version_id(&workspace, "pdf"));
 }
 
 /// A description-only change changes the version identity.

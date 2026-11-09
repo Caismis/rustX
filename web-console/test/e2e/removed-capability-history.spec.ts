@@ -147,7 +147,7 @@ for (const width of [1440, 390]) {
       // Remote credentials are deliberately memory-only. Reconnect and open
       // the existing Session rather than creating or re-executing anything.
       await connectRemote(page, fixture.endpoint, fixture.token);
-      const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+      const expand = page.getByRole('button', { name: 'Home', exact: true });
       if (await expand.isVisible()) await expand.click();
       await page.locator(`button[data-session-id="${session}"]`).click();
       await expect(page.getByText('Removed capabilities are absent from this request.', { exact: true })).toBeVisible();

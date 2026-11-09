@@ -66,12 +66,6 @@ pub const DISCOVER_ERROR_METHOD_NOT_FOUND: &str = "method_not_found";
 /// correlated `-32600` rejection naming the unsupported revision — the
 /// failing external peer shape of Issue #81.
 pub const DISCOVER_ERROR_INVALID_REQUEST: &str = "invalid_request";
-/// The environment variable overriding the revision this fixture echoes in
-/// its legacy `InitializeResult` (default: [`LEGACY_FIXTURE_REVISION`]).
-/// An unknown revision drives the no-shared-revision path over the legacy
-/// handshake.
-pub const LEGACY_REVISION_ENV: &str = "RUSTX_M7_LEGACY_FIXTURE_REVISION";
-
 /// The revision this fixture negotiates over the legacy `initialize`
 /// handshake — a representative 2025-era revision.
 pub const LEGACY_FIXTURE_REVISION: ProtocolVersion = ProtocolVersion::V_2025_06_18;
@@ -96,20 +90,14 @@ pub const JOURNAL_SUBSCRIBE: &str = "subscriptions/listen";
 /// [`LEGACY_FIXTURE_MODE_ENV`] selects it.
 ///
 /// Returns `true` when it served (so the re-executed test must return
-/// immediately), and `false` in the parent process.
-pub async fn serve_if_legacy_fixture_mode() -> bool {
+/// immediately), and `false` in the parent process. The caller supplies the
+/// peer revision independently of the transport's credential inputs.
+pub async fn serve_if_legacy_fixture_mode(revision: ProtocolVersion) -> bool {
     if std::env::var_os(LEGACY_FIXTURE_MODE_ENV).is_none() {
         return false;
     }
     let discover_error = std::env::var(LEGACY_DISCOVER_ERROR_ENV)
         .unwrap_or_else(|_| DISCOVER_ERROR_METHOD_NOT_FOUND.to_owned());
-    let revision =
-        std::env::var(LEGACY_REVISION_ENV)
-            .ok()
-            .map_or(LEGACY_FIXTURE_REVISION, |value| {
-                serde_json::from_value::<ProtocolVersion>(serde_json::Value::String(value))
-                    .expect("a protocol revision string always deserializes")
-            });
     serve(
         std::env::var_os(LEGACY_JOURNAL_ENV).map(PathBuf::from),
         &discover_error,

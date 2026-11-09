@@ -398,6 +398,28 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
         let Some(inner) = self.inner.upgrade() else {
             return Some(crate::runtime::observation::NativeReceiptInstallation::Unavailable);
         };
+        if let Some(sink) = inner.interaction_lifecycle.get() {
+            for fact in observation.facts() {
+                match fact {
+                    ConversationObservation::InteractionPending { interaction, .. } => {
+                        sink.pending(&inner.conversation_id, interaction, Arc::downgrade(&inner));
+                    }
+                    ConversationObservation::InteractionSettled { interaction, .. } => {
+                        sink.retired(interaction);
+                    }
+                    #[cfg(test)]
+                    ConversationObservation::InteractionRemoved { interaction } => {
+                        sink.retired(interaction);
+                    }
+                    ConversationObservation::SubagentLifecycle { snapshot, .. }
+                        if snapshot.state.is_terminal() =>
+                    {
+                        sink.origin_retired(&snapshot.child_conversation_id);
+                    }
+                    _ => {}
+                }
+            }
+        }
         let (mut model_capabilities, mut capability_source) = {
             let state = inner.state.lock().expect("native actor source descriptors");
             (

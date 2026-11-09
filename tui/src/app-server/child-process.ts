@@ -18,7 +18,7 @@
  * The launch flags bind **process-level user configuration** — the canonical
  * user TOML, the model catalog, the runtime root. They are not Session
  * settings: a Session's cwd and project configuration come from
- * `session/create`, and launch cwd is never substituted for Session cwd. This
+ * `thread/start`, and launch cwd is never substituted for Session cwd. This
  * client never reads or interprets any of those files; they are Rust-owned
  * authorities, and reading them here would create a second one.
  *
@@ -87,7 +87,7 @@ export function appServerArguments(launch: AppServerLaunchOptions): string[] {
   // This TUI spawned the child and owns its pipes, so it is the stdio owner
   // the native process may delegate committed-delivery access to. The grant
   // is this composition choice; no request field or client name confers it.
-  argv.push("--listen", "stdio", "--stdio-delivery-access");
+  argv.push("--listen", "stdio");
   return argv;
 }
 

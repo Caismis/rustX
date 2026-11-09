@@ -223,7 +223,7 @@ async fn title_lifecycle_busy_waits_for_commit_release_without_capacity_feedback
         // runnable self-wake, without relying on scheduler timing or sleep.
         runtime.stop_title_for_test().await;
         runtime.append_title_source_for_test(&first_human());
-        let lifecycle = runtime.title_lifecycle();
+        let lifecycle = runtime.lifecycle();
         let store = runtime.tool_runtime().durable_store();
         let (entered, held) = tokio::sync::oneshot::channel();
         let (release, resume) = std::sync::mpsc::channel::<()>();

@@ -212,8 +212,9 @@ export function renderFooter(
   session?: SessionView,
   conversation?: ConversationContext,
   application?: ConfigurationApplication,
+  threadStatus?:string,
 ): string {
-  const segments = footerSegments(state, connectionState, session, conversation, application);
+  const segments = footerSegments(state, connectionState, session, conversation, application,threadStatus);
   return layout(segments, width).join("\n");
 }
 
@@ -223,6 +224,7 @@ interface FooterFacts {
   session?: SessionView;
   conversation?: ConversationContext;
   application?: ConfigurationApplication;
+  threadStatus?:string;
 }
 
 /** The shell asks for layout on every render, including terminal-only resizes. */
@@ -234,7 +236,7 @@ export class FooterView {
     const facts = this.#facts();
     if (!facts.state) return [];
     const pad = width > 2 ? " " : "";
-    return renderFooter(facts.state, facts.connection, Math.max(1, width - pad.length * 2), facts.session, facts.conversation, facts.application)
+    return renderFooter(facts.state, facts.connection, Math.max(1, width - pad.length * 2), facts.session, facts.conversation, facts.application,facts.threadStatus)
       .split("\n").map((line) => `${pad}${line}${pad}`);
   }
 }
@@ -246,9 +248,11 @@ export function footerSegments(
   session?: SessionView,
   conversation?: ConversationContext,
   application?: ConfigurationApplication,
+  threadStatus?:string,
 ): Segment[] {
   const models = modelSegments(state);
   const segments = models.slice(0, 1);
+  if(threadStatus)segments.push({text:role.meta(threadStatus),priority:0});
   // No cached selection: snapshots/events are the only approval authority.
   if (state.effectiveApprovalMode != null) {
     const mode = approvalLabel(state.effectiveApprovalMode).toUpperCase();

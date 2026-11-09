@@ -31,7 +31,7 @@ impl SessionRuntimeManager {
             let composition = composition.as_ref()?;
             (
                 composition.runtime().clone(),
-                composition.runtime().title_lifecycle(),
+                composition.runtime().lifecycle(),
             )
         };
         let mut publications = runtime.runtime_catalog_publications();
@@ -207,6 +207,7 @@ impl SessionRuntimeManager {
         &self,
         policy: super::super::app_server_policy::AppServerPolicy,
     ) {
+        self.environment.configure(&policy.environment_roots);
         *self.process_policy.write().expect("process policy") = policy;
     }
 
@@ -214,8 +215,12 @@ impl SessionRuntimeManager {
         &self,
         desired: &super::super::app_server_policy::AppServerPolicy,
     ) -> bool {
+        self.environment.configure(&desired.environment_roots);
         let mut actual = self.process_policy.write().expect("process policy");
         let restart = actual.shutdown_deadline_ms != desired.shutdown_deadline_ms;
+        actual
+            .environment_roots
+            .clone_from(&desired.environment_roots);
         actual.max_connections = desired.max_connections;
         actual.max_external_attachments = desired.max_external_attachments;
         actual.max_resident_runtimes = desired.max_resident_runtimes;

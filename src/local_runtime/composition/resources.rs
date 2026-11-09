@@ -118,6 +118,7 @@ impl LocalRuntimeResourceLoader {
                     admitted_agents: subagents.names().into_iter().cloned().collect(),
                     admitted_workflows: workflows.entries().keys().cloned().collect(),
                     project_files: capture.root_agent_project_files.clone(),
+                    delegated_skills: delegated_skill_selections(config, &subagents, &workflows),
                 },
                 skill_discovery,
                 mcp_servers,
@@ -215,6 +216,31 @@ pub(in crate::local_runtime) fn admitted_source_demand(
     }
     sources.extend(workflow_source_demand(config, agents, workflows));
     crate::capabilities::source::ToolSourceDemand::new(sources, python)
+}
+
+/// Only admitted profiles contribute to the selected Skill comparison closure.
+pub(in crate::local_runtime) fn delegated_skill_selections(
+    config: &CurrentRuntimeConfig,
+    agents: &crate::runtime::subagent::AgentCatalog,
+    workflows: &WorkflowCatalog,
+) -> Vec<crate::runtime::agent_profile::AgentSkillSelection> {
+    let mut selected: Vec<_> = config
+        .agent
+        .agents
+        .iter()
+        .filter_map(|name| agents.get(name))
+        .map(|definition| definition.profile().skills.clone())
+        .collect();
+    for (id, entry) in workflows.entries() {
+        if config.agent.workflows.contains(id) {
+            for node in entry.source.agent_nodes() {
+                if let Some(definition) = agents.get(&node.profile) {
+                    selected.push(definition.profile().skills.clone());
+                }
+            }
+        }
+    }
+    selected
 }
 
 /// Requested Workflow sources receive live preparation; source failures are

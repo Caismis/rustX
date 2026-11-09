@@ -80,7 +80,7 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
     await expect(primary).toHaveAttribute('aria-busy', 'true');
     await expect(primary).toBeDisabled(); await expect(primary).toHaveCSS('opacity', '1');
     await input.press('Enter');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue']);
     await page.screenshot({ path: `/tmp/rustx-composer-workflow-${width}-${theme}-sending.png` });
     await page.evaluate(() => window.composerFixture.acknowledgeSubmission());
     await expect(input).toHaveValue('');

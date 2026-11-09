@@ -1072,6 +1072,7 @@ impl AgentExecution<'_> {
         }));
         context.workspace_changes = self.workspace_changes.clone();
         context.model_invocation = Some(self.request.model.primary());
+        context.attempt_id = Some(&self.request.attempt_id);
         if let Some(goal) = self.tool_runtime.goal() {
             context.goal = Some(Box::new(crate::goal::GoalToolContext {
                 domain: goal.clone(),

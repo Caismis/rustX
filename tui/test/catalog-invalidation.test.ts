@@ -1,3 +1,4 @@
+import {summaryFor} from '../../protocol/app-server/testing.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { harness, nextRequest } from './support/app-server-harness.ts';
@@ -17,7 +18,7 @@ for (const catalog_changed of [false, true]) {
     for (let i = 0; i < 2; i++) {
       const listing = h.host.listSessions();
       const request = await nextRequest(h, 'session/list', i);
-      h.transport.respond(request.id, { type: 'sessions', sessions: [], next_offset: null });
+      h.transport.respond(request.id, { type: 'sessions', sessions: ([]).map(row=>summaryFor(row)), next_offset: null });
       assert.deepEqual(await listing, { sessions: [], nextOffset: undefined });
     }
     assert.equal(h.transport.log.count('session/list'), 2, 'every catalog opening reads current native membership');

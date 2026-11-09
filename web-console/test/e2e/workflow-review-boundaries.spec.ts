@@ -10,7 +10,7 @@ import { routeWorkspaceHost } from './workspace-host';
 async function editor(page: Page, fixture: Awaited<ReturnType<typeof startDogfood>>, id: string) {
   await routeWorkspaceHost(page, fixture); await page.goto('/');
   await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-  await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
   await page.getByRole('button', { name: id, exact: true }).click();
   await expect(page).toHaveTitle(/rustX$/);
 }

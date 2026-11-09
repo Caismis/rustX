@@ -107,9 +107,6 @@ fn protocol_errors_round_trip_with_stable_categories() {
             supported: 13,
             requested: 4,
         },
-        RuntimeClientError::AttachmentInUse {
-            existing_attachment_id: rustx::runtime_client::AttachmentId::new("attachment-1"),
-        },
         RuntimeClientError::NotAttached,
         RuntimeClientError::InvalidRequest {
             message: "empty content".to_owned(),
@@ -659,12 +656,9 @@ async fn second_attachment_never_evicts_the_first() {
         panic!("initialized");
     };
     let second = host.attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION);
-    assert!(matches!(
-        second,
-        Err(RuntimeClientError::AttachmentInUse {
-            existing_attachment_id,
-        }) if existing_attachment_id == first_id
-    ));
+    let (second, _) = second.expect("shared attachment");
+    assert_ne!(second.attachment_id(), &first_id);
+
     let still_works =
         first.handle_request(RuntimeClientRequest::CheckpointGet { id: request_id(2) });
     assert!(still_works.error.is_none());

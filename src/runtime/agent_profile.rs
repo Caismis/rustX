@@ -362,6 +362,17 @@ pub fn resolve_agent_profile(
 ) -> ResolvedAgentProfile {
     let mut diagnostics = Vec::new();
     let mut tools = BTreeMap::new();
+    if authority.scope == AgentScope::Root {
+        for tool in authority
+            .tools
+            .tools()
+            .iter()
+            .map(|entry| &entry.definition)
+            .filter(|definition| matches!(definition.origin, ToolOrigin::Host { .. }))
+        {
+            tools.insert(tool.id.clone(), tool.clone());
+        }
+    }
     for selector in &profile.tools {
         match crate::capabilities::selection::project(
             selector,

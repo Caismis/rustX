@@ -74,6 +74,7 @@ export function originLabel(origin: ToolOrigin): string {
   if (origin === "builtin") {
     return "native";
   }
+  if ("host" in origin) return [origin.host.namespace, origin.host.name].filter(Boolean).join("/");
   return "mcp" in origin ? `mcp:${origin.mcp.server_id}` : `python:${origin.managed_python.package}`;
 }
 

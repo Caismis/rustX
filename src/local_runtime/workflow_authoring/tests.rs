@@ -2549,6 +2549,20 @@ fn issue527_incomplete_unused_tree_keeps_startup_and_settings_usable_with_comple
     let baseline = roots.manager.capture_source_settings(&target).unwrap();
     asset.seek(SeekFrom::End(-1)).unwrap();
     asset.write_all(b"x").unwrap();
+    let resource_edit = roots.manager.capture_source_settings(&target).unwrap();
+    assert!(same_capture(
+        &baseline.0.resource_revisions[&root],
+        &resource_edit.0.resource_revisions[&root]
+    ));
+    assert_eq!(
+        baseline.1, resource_edit.1,
+        "Skill resources do not enter the source revision"
+    );
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: accepted\ndescription: Successor definition\n---\n",
+    )
+    .unwrap();
     let changed = roots.manager.capture_source_settings(&target).unwrap();
     assert!(!same_capture(
         &baseline.0.resource_revisions[&root],

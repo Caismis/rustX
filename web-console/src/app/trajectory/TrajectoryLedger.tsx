@@ -9,6 +9,9 @@ import css from './Trajectory.module.css';
 
 export interface LedgerHandle {
   loadEarlier: () => void;
+  followTail: () => void;
+  /** Restore a replaced reading node without changing the viewport. */
+  restoreFocus: (key: string) => void;
   /** Scroll a record's row into view without moving focus or selection. */
   reveal: (key: string) => void;
 }
@@ -16,7 +19,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   ref: Ref<LedgerHandle>; rows: TrajectoryLedgerRow[]; first?: string; activeKey?: string; focusKey?: string; onFocused: () => void;
   folded: ReadonlySet<string>; focusedIds: ReadonlySet<string> | null;
   actions: TrajectoryRowActions; close: () => void;
-  loadEarlier: () => void; canLoadEarlier: boolean; loading: boolean; searching: boolean;
+  loadEarlier: (gapBefore?: string) => void; canLoadEarlier: boolean; loading: boolean; searching: boolean;
 }) {
   const tx = useTranslation();
   const targets = useMemo(() => ledgerFocusTargets(rows), [rows]);
@@ -27,9 +30,10 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
   }, [rows, activeKey]);
   const viewport = useRef<HTMLDivElement>(null);
   const followsTail = useRef(true);
-  const prepend = useRef<{ first?: string; key: string; offset: number } | null>(null);
+  const restoringFocus = useRef<string | undefined>(undefined);
+  const prepend = useRef<{ first?: string; boundary?: string; key: string; offset: number } | null>(null);
   const virtualized = rows.length > 100;
-  const virtualizer = useVirtualizer({ count: virtualized ? rows.length : 0, enabled: virtualized,
+  const virtualizer = useVirtualizer({ count: virtualized ? rows.length : 0, enabled: virtualized, useFlushSync: virtualized,
     getScrollElement: () => viewport.current, estimateSize: index => rows[index]!.height,
     getItemKey: index => rows[index]!.display_key, overscan: 12, initialRect: { width: 800, height: 500 },
     initialOffset: () => viewport.current?.scrollTop ?? 0,
@@ -43,8 +47,18 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
     Array.from(viewport.current?.querySelectorAll<HTMLElement>('[role="row"][data-display-key]') ?? [])
       .find(node => rowOwnsKey(rows[index]!, node.dataset.displayKey!))?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   };
-  const requestOlder = () => {
-    if (!canLoadEarlier) return;
+  const restoreFocus = () => {
+    if (!restoringFocus.current) return;
+    if (document.activeElement !== document.body) { restoringFocus.current = undefined; return; }
+    const node = Array.from(viewport.current?.querySelectorAll<HTMLElement>('[data-display-key]') ?? [])
+      .find(node => node.dataset.displayKey === restoringFocus.current);
+    if (node) { node.focus({ preventScroll: true }); restoringFocus.current = undefined; }
+  };
+  // A virtual range can settle in a child-only render after the parent's
+  // selection repair. Restore the mounted node without revealing offscreen rows.
+  useLayoutEffect(restoreFocus);
+  const requestOlder = (gapBefore?: string) => {
+    if (!gapBefore && !canLoadEarlier) return;
     const pane = viewport.current;
     if (pane) {
       const bounds = pane.getBoundingClientRect();
@@ -52,16 +66,21 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
       // may shrink when its Turn chrome moves to a prepended row.
       const visible = Array.from(pane.querySelectorAll<HTMLElement>('[role="row"][data-display-key]'));
       const node = visible.find(node => node.getBoundingClientRect().top >= bounds.top) ?? visible.find(node => node.getBoundingClientRect().bottom > bounds.top);
-      if (node) prepend.current = { first, key: node.dataset.displayKey!, offset: node.getBoundingClientRect().top - bounds.top };
+      if (node) prepend.current = { first, boundary: gapBefore ? rows.find(row => row.historyBefore === gapBefore)?.display_key : undefined, key: node.dataset.displayKey!, offset: node.getBoundingClientRect().top - bounds.top };
     }
-    followsTail.current = false; loadEarlier();
+    followsTail.current = false; loadEarlier(gapBefore);
   };
-  useImperativeHandle(ref, () => ({ loadEarlier: requestOlder, reveal }));
+  useImperativeHandle(ref, () => ({ loadEarlier: requestOlder, reveal, restoreFocus: key => {
+    restoringFocus.current = key; restoreFocus();
+  }, followTail: () => {
+    followsTail.current = true;
+    if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
+  } }));
   useLayoutEffect(() => {
     const pane = viewport.current;
     if (!pane) return;
     const anchor = prepend.current;
-    if (anchor && anchor.first !== first) {
+    if (anchor && (anchor.boundary ? !rows.some(row => row.display_key === anchor.boundary) : anchor.first !== first)) {
       const index = rows.findIndex(row => rowOwnsKey(row, anchor.key));
       if (index >= 0) {
         const node = Array.from(pane.querySelectorAll<HTMLElement>('[data-display-key]')).find(node => node.dataset.displayKey === anchor.key);
@@ -106,7 +125,7 @@ export function TrajectoryLedger({ ref, rows, first, activeKey, focusKey, onFocu
       {rendered.map(({ row, index, start }) => {
         const style = { height: row.height, ...(virtualized ? { position: 'absolute' as const, top: 0, left: 0, width: '100%', transform: `translateY(${start}px)` } : {}) };
         if (row.kind === 'history') return <div key={row.display_key} data-display-key={row.display_key} data-history-load="" className={css.loadRow} style={style}>
-          <button type="button" className={css.historyLoadButton} disabled={loading || !canLoadEarlier} aria-label={loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')} onClick={requestOlder}>
+          <button type="button" className={css.historyLoadButton} disabled={loading || !row.historyBefore && !canLoadEarlier} aria-label={loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')} onClick={() => requestOlder(row.historyBefore)}>
             {loading && <StateDot state="ongoing" />}
             <span aria-hidden="true">{loading ? tx('trajectory:history.loading-earlier') : tx('trajectory:history.load-earlier')}</span>
           </button>

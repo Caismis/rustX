@@ -64,7 +64,7 @@ pub enum ProjectedUserKind {
 impl From<&InboundKind> for ProjectedUserKind {
     fn from(kind: &InboundKind) -> Self {
         match kind {
-            InboundKind::Message => Self::Message,
+            InboundKind::Message | InboundKind::QueuedMessage => Self::Message,
             InboundKind::Context(context) => Self::Context(context.clone()),
             InboundKind::GoalContinuation(goal) => Self::GoalContinuation(goal.clone()),
         }

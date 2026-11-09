@@ -9,19 +9,22 @@ function RuntimeFacts(props: { snapshot: ReturnType<typeof snapshot>; client?: i
 import { snapshot, projectionHead, Server } from './fixture';
 import { CompactionCheckpoint } from '../src/app/agent/CompactionCheckpoint';
 afterEach(cleanup);
-it('does not show an empty-task invitation when a native message header already proves content exists', () => {
+it('keeps empty and descriptor-only transcript reads silent', () => {
   const s = snapshot();
   s.message_descriptors = [{ identity: 'deferred-message', locator: { type: 'by_message_id', message_id: 'deferred-message' }, role: 'assistant', kind: 'message', block_count: '1', tool_call_count: '0', tool_calls: [], content: [], collections: [] }];
   const ui = render(<AgentTranscript snapshot={s}/>);
   expect(ui.queryByText('Ready for a task.')).toBeNull();
   expect(ui.queryByText('What would you like to work on?')).toBeNull();
   ui.rerender(<AgentTranscript snapshot={snapshot()}/>);
-  expect(ui.getByText('Ready for a task.')).toBeTruthy();
+  expect(ui.queryByText('Ready for a task.')).toBeNull();
+  expect(ui.getByLabelText('Canonical conversation').textContent).toBe('');
 });
 const rich = '## Answer\n\n| Key | Value |\n| --- | --- |\n| one | two |\n\n- **Strong**\n\n```rust\nfn main() {}\n```\n\n$x^2$';
 it('Chat uses the same rich Markdown through streaming and canonical settlement exactly once', () => {
   const live = { ...snapshot(), attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, in_flight: { message_id: 'answer', blocks: [{ type: 'text' as const, block_index: 0, text: rich }] } } };
   const ui = render(<AgentTranscript snapshot={live} />);
+  expect(ui.queryByText('Ready for a task.')).toBeNull();
+  expect(ui.queryByText('What would you like to work on?')).toBeNull();
   expect(ui.getByRole('heading', { name: 'Answer' })).toBeTruthy();
   expect(ui.getByRole('table')).toBeTruthy();
   const committed = { ...live, messages: [{ role: 'assistant' as const, id: 'answer', content: [{ type: 'text' as const, text: rich }] }] };

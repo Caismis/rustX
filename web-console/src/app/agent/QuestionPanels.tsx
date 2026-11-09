@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v73';
+import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v76';
 import { Questionnaire } from './Questionnaire';
 import type { AppServerClient } from '../../client/app-server';
 import { sameValue, useClientSelector } from '../../client/selectors';

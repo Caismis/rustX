@@ -19,8 +19,8 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await openEmptySession(page, fixture, 'Workspace A');
     if (locale === 'zh') {
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
-      await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-      await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+      await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+      await page.getByRole('button', { name: '主页', exact: true }).click();
     }
     await expect(page).toHaveTitle(/rustX/);
     const message = page.getByRole('textbox', { name: copy('Message', '消息'), exact: true });
@@ -63,13 +63,13 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await expect.poll(() => run.locator('[data-workflow-node]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-workflow-node')))).toEqual(['workflow_start', 'review', 'gate']);
     await page.screenshot({ path: `/tmp/rustx-workflow-review-${locale}.png` });
     // The native review remains pending through reconnect; no choice is sent by rendering it.
-    const sidebar = page.getByRole('button', { name: copy('Expand Sidebar', '打开侧边栏'), exact: true });
+    const sidebar = page.getByRole('button', { name: copy('Home', '主页'), exact: true });
     if (await sidebar.isVisible()) await sidebar.click();
     const sessionId = await selectedSessionId(page), runId = await run.getAttribute('data-workflow-run-id');
     await page.reload();
     // Remote credentials stay in page memory, so both locales reconnect explicitly.
     await page.getByRole('button', { name: copy('Settings', '设置'), exact: true }).click();
-    const settings = page.getByRole('dialog', { name: copy('Settings', '设置'), exact: true });
+    const settings = page.getByRole('region', { name: copy('Settings', '设置'), exact: true });
     const section = settings.getByRole('button', { name: locale === 'en' ? /^Settings page: / : /^设置页面：/ });
     if (await section.isVisible()) {
       await section.click(); await page.getByRole('menuitem', { name: copy('Advanced', '高级'), exact: true }).click();
@@ -80,8 +80,8 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await page.getByLabel(copy('Transport token', '传输令牌')).fill(fixture.token);
     await settings.getByRole('button', { name: copy('Connect', '连接'), exact: true }).click();
     await expect(page.locator('.connection-status')).toHaveText(copy('Connected', '已连接'));
-    await page.getByRole('button', { name: copy('Close Settings', '关闭设置'), exact: true }).click();
-    const expand = page.getByRole('button', { name: copy('Expand Sidebar', '打开侧边栏'), exact: true });
+    await page.getByRole('button', { name: copy('Home', '主页'), exact: true }).click();
+    const expand = page.getByRole('button', { name: copy('Home', '主页'), exact: true });
     if (await expand.isVisible()) await expand.click();
     await page.locator(`button[data-session-id="${sessionId}"]`).click();
     await expect(run).toHaveAttribute('data-workflow-run-id', runId!);
@@ -92,7 +92,7 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     await review.getByRole('button', { name: copy('Submit', '提交'), exact: true }).click();
     await expect(review).toHaveCount(0);
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
-    await expect(run).toContainText(copy('completed', '已完成'));
+    await expect(run.getByRole('button').first()).toContainText(copy('completed', '已完成'));
     await expect(run.getByRole('button').first()).toHaveAttribute('aria-expanded', 'false');
     await run.getByRole('button').first().click();
     await expect(run).not.toContainText(copy('Steps used', '已执行'));

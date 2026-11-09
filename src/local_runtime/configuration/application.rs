@@ -440,6 +440,7 @@ impl ApplicationState {
             if let Ok(captured) = &input
                 && let Ok(context) = &captured.context
                 && context.same_capabilities(adopted)
+                && context.same_skill_catalog(adopted)
                 && context.same_context(adopted)
                 && context.same_provider(adopted)
                 && captured.policy.approval_mode == adopted.config.approval_mode

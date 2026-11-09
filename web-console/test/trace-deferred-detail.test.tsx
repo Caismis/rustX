@@ -1,7 +1,7 @@
 import {traceRefreshed} from './fixture';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v73';
+import type {CheckpointPage,CheckpointReadCut,MethodResult,Request} from '../../protocol/app-server/v76';
 import {Server,checkpoint,snapshot} from './fixture';
 import {nativeTraceFixture} from './native-trace-fixture';
 import {traceRecord,requestDetail} from './trace-fixture';
@@ -63,11 +63,11 @@ it.each(['root','child','historical'] as const)('%s keeps its own page cut and s
   const child=new AgentTraceReader(server.client,'A',server.client.getSnapshot().views.A.attachmentObservation!,{agent_id:'agent-child',activation_id:'activation-child',child_conversation_id:cut.conversation_id,state:'active'});
   await child.refresh();await child.detail('trace:4');entry=child.snapshot().details['trace:4'];retire=async()=>child.retire();
  }else{
-  server=new Server();servers.push(server);await server.connect();server.held.add('session/attach');
+  server=new Server();servers.push(server);await server.connect();server.held.add('thread/resume');
   cut={...checkpoint(snapshot()).read_cut,revision:'0',through:'7'};
   server.handlers.set('session/traceHistory',()=>({type:'session_trace_history',conversation_id:cut.conversation_id,page:{read_cut:cut,records:[record()],next_cursor:null}}));
   server.handlers.set('session/traceHistoryDetail',()=>({type:'session_trace_history_detail',conversation_id:cut.conversation_id,page:descriptor(cut)}));
-  const opening=server.client.attach('A'),request=await server.waitFor('session/attach',1);
+  const opening=server.client.attach('A'),request=await server.waitFor('thread/resume',1);
   await waitFor(()=>expect(server.client.getSnapshot().views.A.tracePreview?.cache.page.records).toHaveLength(1));
   await server.client.loadTraceDetail('A','trace:4');entry=server.client.getSnapshot().views.A.tracePreview!.cache.details['trace:4'];retire=async()=>{server.reply(request);await opening;};
  }
@@ -204,7 +204,7 @@ it.each(['terminal refresh','owner terminal refresh','explicit reselect'] as con
  const {useSyncExternalStore}=await import('react');
  const server=new Server();servers.push(server);await server.attached('A');
  const cut={...checkpoint(snapshot('child')).read_cut,activation_id:'activation-child'};
- let row:import('../../protocol/app-server/v73').TraceRecord={...record(),state:recovery==='owner terminal refresh'?'completed':'running'};
+ let row:import('../../protocol/app-server/v76').TraceRecord={...record(),state:recovery==='owner terminal refresh'?'completed':'running'};
  server.handlers.set('agent/trace',request =>({refreshed:traceRefreshed(request),type:'trace',page:{read_cut:cut,records:[row],next_cursor:null}}));
  server.held.add('agent/traceDetail');
  const original=nativeTraceFixture(row,requestDetail(4),cut);

@@ -6,10 +6,10 @@ for (const width of [1440, 390]) test(`subagent receipts, list, inspection and c
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
   await page.goto(`${origin}/test/fixtures/startup.html?existing&models&subagents&subagent-details`);
   await page.waitForFunction(() => (window as any).startupFixture);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
-  if (width < 600) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('thread/resume'); f.resumeCatalog(); });
+  if (width < 600) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('button[data-session-id="A"]').click();
-  if (width < 600) await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeFocused();
+  if (width < 600) await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeFocused();
   const calls = page.locator('[data-activity-domain="agent"]');
   await expect(calls).toHaveCount(3);
   for (const call of await calls.all()) await call.getByRole('button').first().click();

@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppServerPolicy {
+    /// Instance-wide native roots for standalone commands and filesystem RPCs.
+    /// Empty denies these operations. Only User/Host configuration owns grants.
+    #[schemars(length(max = 32))]
+    pub environment_roots: Vec<std::path::PathBuf>,
     #[schemars(range(min = 1, max = 256))]
     pub max_resident_runtimes: usize,
     #[schemars(range(min = 1, max = 1024))]
@@ -18,6 +22,7 @@ pub struct AppServerPolicy {
 impl Default for AppServerPolicy {
     fn default() -> Self {
         Self {
+            environment_roots: Vec::new(),
             max_resident_runtimes: 8,
             max_connections: 32,
             max_external_attachments: 64,
@@ -30,7 +35,17 @@ impl AppServerPolicy {
     /// # Errors
     /// Rejects zero and operationally unreasonable process budgets.
     pub fn validate(&self) -> Result<(), String> {
-        if !(1..=256).contains(&self.max_resident_runtimes)
+        if self.environment_roots.len() > 32
+            || self.environment_roots.iter().any(|path| {
+                !path.is_absolute()
+                    || path
+                        .to_str()
+                        .is_none_or(|path| path.len() > 4096 || path.contains('\0'))
+                    || path
+                        .components()
+                        .any(|part| matches!(part, std::path::Component::ParentDir))
+            })
+            || !(1..=256).contains(&self.max_resident_runtimes)
             || !(1..=1024).contains(&self.max_connections)
             || !(1..=4096).contains(&self.max_external_attachments)
             || !(1..=86_400_000).contains(&self.idle_grace_ms)

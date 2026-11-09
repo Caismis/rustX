@@ -594,7 +594,8 @@ impl Child {
                 access,
                 crate::local_runtime::composition::McpInitialSubmission::default(),
                 &crate::runtime::cancellation::CancellationSignal::new(),
-            )
+            &[],
+)
             .await
         } else {
             let controller = Arc::new(

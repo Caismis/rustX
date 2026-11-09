@@ -33,7 +33,9 @@ use crate::skills::package::{SkillDiscoveryOutcome, SkillPackage};
 
 /// One model-visible Skill catalog entry: standard metadata plus the host
 /// location of the primary instructions file.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct SkillCatalogEntry {
     /// The validated standard Skill name.
     pub name: String,
@@ -73,8 +75,8 @@ pub struct SkillSnapshot {
 
 impl SkillSnapshot {
     /// Install the selected metadata and proven bindings of a one-shot child.
-    /// Packages were validated by the parent and physically verified by the
-    /// materializer. No discovery, parsing, or body loading occurs here.
+    /// Definitions and source bindings were validated and frozen by the parent.
+    /// No discovery, parsing, file validation, or resource copying occurs here.
     pub(crate) fn from_frozen(
         mut entries: Vec<(SkillCatalogEntry, SkillBinding, SkillProvenance)>,
         roots: Vec<crate::skills::AutomaticSkillRoot>,

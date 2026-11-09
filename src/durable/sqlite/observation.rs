@@ -103,7 +103,7 @@ fn kind(message: &MessageBlock) -> (&'static str, &'static str, usize) {
         MessageBlock::Tool(value) => ("tool", "tool", value.result.content.len()),
         MessageBlock::User(value) => {
             let kind = match &value.kind {
-                InboundKind::Message => "message",
+                InboundKind::Message | InboundKind::QueuedMessage => "message",
                 InboundKind::GoalContinuation(_) => "goal_continuation",
                 InboundKind::Context(ContextKind::NativeEnvironment) => {
                     "context/native_environment"

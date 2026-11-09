@@ -57,6 +57,9 @@ fn seed_published_sessions(catalog: &mut SessionCatalog, count: usize) {
     for lineage in prepared {
         let now = chrono::Utc::now();
         let node = SessionNode {
+            name: None,
+            archived: false,
+            dynamic_tools: Vec::new(),
             ordinal: next.next_node_ordinal,
             id: lineage.node_id.clone(),
             parent: None,

@@ -1,5 +1,5 @@
 import { useEffect, useState, useImperativeHandle, type Ref, useSyncExternalStore } from 'react';
-import type { RuntimeClientAgent, TraceToolLocator } from '../../../../protocol/app-server/v73';
+import type { RuntimeClientAgent, TraceToolLocator } from '../../../../protocol/app-server/v76';
 import type { AppServerClient } from '../../client/app-server';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { AgentTraceReader } from '../../client/agent-trace';
@@ -25,5 +25,5 @@ export function SubagentTrajectory({ agent, client, sessionId, visible, ref, obs
   useEffect(() => { if (visible) void reader?.refresh(agent.state).then(() => reader.initial()); }, [reader, visible, agent.activation_id, agent.state, agent.observation.revision, observationRevision]);
   if (!reader || !cache) return null;
   return <>{cache.loading && cache.page.records.length === 0 && <p role="status">{tx('common:activity.reading')}</p>}{cache.error && <Button size="sm" onClick={() => void reader.refresh()}>{tx('trajectory:toolbar.refresh')}</Button>}
-    <Trajectory cache={cache} onLatest={() => void reader.latest().then(() => reader.initial())} onSelect={reader.select} loadEarlier={() => void reader.earlier()} onLoadDetail={id => void reader.detail(id)}/></>;
+    <Trajectory cache={cache} onLatest={() => void reader.latest().then(() => reader.initial())} onSelect={reader.select} loadEarlier={before => void reader.earlier(false, before)} onLoadDetail={id => void reader.detail(id)}/></>;
 }

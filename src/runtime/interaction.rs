@@ -1255,6 +1255,8 @@ pub(crate) struct InteractionCoordinator {
     #[cfg(test)]
     settle_gate: Mutex<Option<Arc<InteractionSettleGate>>>,
     #[cfg(test)]
+    before_settle_gate: Mutex<Option<Arc<InteractionSettleGate>>>,
+    #[cfg(test)]
     wait_cancellation_gate: Mutex<Option<Arc<InteractionWaitCancellationGate>>>,
 }
 
@@ -1363,6 +1365,27 @@ impl core::fmt::Debug for InteractionCoordinator {
 }
 
 impl InteractionCoordinator {
+    pub(crate) fn wait_activity_ready(&self) {
+        drop(self.state.lock().expect("interaction state"));
+    }
+    pub(crate) fn with_activity_waits<T>(&self, read: impl FnOnce((bool, bool)) -> T) -> Option<T> {
+        let state = self.state.try_lock().ok()?;
+        let waits = state
+            .pending
+            .values()
+            .fold((false, false), |(approval, user), pending| {
+                match pending.request.kind {
+                    InteractionKind::Approval { .. } => (true, user),
+                    InteractionKind::Questionnaire { .. } | InteractionKind::Review { .. } => {
+                        (approval, true)
+                    }
+                }
+            });
+        let result = read(waits);
+        drop(state);
+        Some(result)
+    }
+
     pub(crate) fn scheduled_scope_is_pending(
         &self,
         id: &crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowStartId,
@@ -1395,8 +1418,18 @@ impl InteractionCoordinator {
             #[cfg(test)]
             settle_gate: Mutex::new(None),
             #[cfg(test)]
+            before_settle_gate: Mutex::new(None),
+            #[cfg(test)]
             wait_cancellation_gate: Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_before_settle_gate(&self, gate: Arc<InteractionSettleGate>) {
+        *self
+            .before_settle_gate
+            .lock()
+            .expect("before settlement gate") = Some(gate);
     }
 
     #[cfg(test)]
@@ -2110,6 +2143,36 @@ impl InteractionCoordinator {
             .get(&interaction.interaction_id)
             .map(|pending| pending.source.clone())
     }
+    pub(crate) fn with_pending_header<T>(
+        &self,
+        interaction: &InteractionRef,
+        publish: impl FnOnce(&crate::observation::interaction::RuntimeClientInteractionHeader) -> T,
+    ) -> Option<T> {
+        if interaction.conversation_id != self.conversation_id {
+            return None;
+        }
+        let state = self.state.lock().expect("interaction state");
+        let pending = state.pending.get(&interaction.interaction_id)?;
+        let mut header = pending.source.header().clone();
+        header.source_offset = pending.sequence? * 2;
+        pending.cancellation.with_active(|| publish(&header))
+    }
+    pub(crate) fn callback_headers(
+        &self,
+        limit: usize,
+    ) -> Vec<crate::observation::interaction::RuntimeClientInteractionHeader> {
+        let state = self.state.lock().expect("interaction state");
+        state
+            .pending_order
+            .iter()
+            .take(limit)
+            .map(|(sequence, id)| {
+                let mut header = state.pending[id].source.header().clone();
+                header.source_offset = sequence * 2;
+                header
+            })
+            .collect()
+    }
     pub(crate) fn observation_head(&self) -> PendingHeadProof {
         self.state
             .lock()
@@ -2238,6 +2301,17 @@ impl InteractionCoordinator {
         mut outcome: InteractionOutcome,
         validate_response: bool,
     ) -> Result<SettlementDelivery, InteractionError> {
+        #[cfg(test)]
+        {
+            let gate = self
+                .before_settle_gate
+                .lock()
+                .expect("before settlement gate")
+                .take();
+            if let Some(gate) = gate {
+                gate.enter();
+            }
+        }
         // Keep the observer callback inside the lifecycle's narrow
         // settlement path. This admission is acquired before the pending
         // state lock, preserving the lifecycle -> coordinator lock order
@@ -4420,6 +4494,64 @@ mod tests {
             })
         );
         assert_eq!(restarted.pending_count(), 1);
+    }
+
+    #[test]
+    fn thread_status_counts_logical_waits_beyond_the_observation_head_and_fences_old_cleanup() {
+        let owner = coordinator();
+        owner.set_provider_available(true);
+        let tickets: Vec<_> = (0..40)
+            .map(|i| {
+                owner
+                    .publish_approval(AttemptId::new("old-attempt"), facts(&format!("call-{i}")))
+                    .unwrap()
+            })
+            .collect();
+        let question = publish_questionnaire(&owner, "old-attempt").unwrap();
+        assert_eq!(
+            owner.with_activity_waits(|waits| waits).unwrap(),
+            (true, true)
+        );
+        for (i, ticket) in tickets.iter().enumerate() {
+            owner
+                .respond(
+                    &ticket.id,
+                    InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                owner.with_activity_waits(|waits| waits).unwrap(),
+                (i != 39, true)
+            );
+        }
+        owner
+            .cancel(&question.id, CancellationReason::UserRequested)
+            .unwrap();
+        assert_eq!(
+            owner.with_activity_waits(|waits| waits).unwrap(),
+            (false, false)
+        );
+        let newer = owner
+            .publish_approval(AttemptId::new("new-attempt"), facts("new-call"))
+            .unwrap();
+        drop(tickets);
+        drop(question);
+        assert!(
+            owner
+                .respond(
+                    &newer.id,
+                    InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow
+                    }
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            owner.with_activity_waits(|waits| waits).unwrap(),
+            (false, false)
+        );
     }
 
     #[test]

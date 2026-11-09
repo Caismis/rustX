@@ -278,6 +278,7 @@ impl ElicitationPlan {
     /// schema-valid MCP value.
     pub(super) fn responses(
         &self,
+        credentials: &crate::credentials::SourceCredentials,
         response: &QuestionnaireResponse,
     ) -> Result<InputResponses, String> {
         let submission = match response {
@@ -297,7 +298,7 @@ impl ElicitationPlan {
                         entry.question_index
                     )
                 })?;
-                let value = slot.value_of(&entry.answer)?;
+                let value = slot.value_of(credentials, &entry.answer)?;
                 content[slot.request_index].insert(slot.property.clone(), value);
                 answered[slot.request_index].insert(entry.question_index);
             }
@@ -333,17 +334,17 @@ impl ElicitationPlan {
 
 impl PropertySlot {
     /// The schema-valid MCP value for one typed answer to this question.
-    fn value_of(&self, answer: &QuestionnaireAnswer) -> Result<serde_json::Value, String> {
-        let mismatch = || {
-            format!(
-                "the answer kind does not match MCP elicitation property {:?}",
-                self.property
-            )
-        };
+    fn value_of(
+        &self,
+        credentials: &crate::credentials::SourceCredentials,
+        answer: &QuestionnaireAnswer,
+    ) -> Result<serde_json::Value, String> {
+        let property = credentials.redact(&self.property);
+        let mismatch =
+            || format!("the answer kind does not match MCP elicitation property {property:?}");
         let out_of_range = || {
             format!(
-                "the answer to MCP elicitation property {:?} is not one of its schema values",
-                self.property
+                "the answer to MCP elicitation property {property:?} is not one of its schema values"
             )
         };
         match (&self.values, answer) {
@@ -359,8 +360,7 @@ impl PropertySlot {
                 .map(serde_json::Value::Number)
                 .ok_or_else(|| {
                     format!(
-                        "the answer to MCP elicitation property {:?} is not a finite number",
-                        self.property
+                        "the answer to MCP elicitation property {property:?} is not a finite number"
                     )
                 }),
             (PropertyValues::Integer, QuestionnaireAnswer::Integer(integer)) => {
@@ -384,8 +384,7 @@ impl PropertySlot {
             // question this module publishes declares `allow_custom: false`,
             // so the runtime refuses one before it ever reaches this mapping.
             (_, QuestionnaireAnswer::Custom(_)) => Err(format!(
-                "MCP elicitation property {:?} accepts only its declared schema values",
-                self.property
+                "MCP elicitation property {property:?} accepts only its declared schema values"
             )),
             (_, _) => Err(mismatch()),
         }
@@ -440,6 +439,7 @@ struct TranslatedProperty {
     reason = "whole-payload validation and question construction are one contract"
 )]
 pub(super) fn plan_round(
+    credentials: &crate::credentials::SourceCredentials,
     requests: Option<&InputRequests>,
 ) -> Result<Option<ElicitationPlan>, McpMrtrUnsupported> {
     let Some(requests) = requests.filter(|requests| !requests.is_empty()) else {
@@ -466,6 +466,7 @@ pub(super) fn plan_round(
     // built, so an unsupported kind can never produce a partial prompt.
     let mut forms = Vec::with_capacity(requests.len());
     for (key, request) in requests {
+        let diagnostic_key = credentials.redact(key);
         match request {
             InputRequest::Elicitation(elicit) => match &elicit.params {
                 ElicitRequestParams::FormElicitationParams {
@@ -475,31 +476,31 @@ pub(super) fn plan_round(
                 } => forms.push((key.clone(), message.clone(), requested_schema.clone())),
                 ElicitRequestParams::UrlElicitationParams { .. } => {
                     return Err(McpMrtrUnsupported::new(format!(
-                        "MCP url-mode elicitation ({key:?}) is unsupported: rustX serves only \
+                        "MCP url-mode elicitation ({diagnostic_key:?}) is unsupported: rustX serves only \
                          bounded in-band form elicitation"
                     )));
                 }
                 _ => {
                     return Err(McpMrtrUnsupported::new(format!(
-                        "MCP elicitation request {key:?} uses an unsupported mode"
+                        "MCP elicitation request {diagnostic_key:?} uses an unsupported mode"
                     )));
                 }
             },
             InputRequest::CreateMessage(_) => {
                 return Err(McpMrtrUnsupported::new(format!(
-                    "MCP sampling (input request {key:?}) is unsupported: an MCP server may not \
+                    "MCP sampling (input request {diagnostic_key:?}) is unsupported: an MCP server may not \
                      initiate rustX model execution"
                 )));
             }
             InputRequest::ListRoots(_) => {
                 return Err(McpMrtrUnsupported::new(format!(
-                    "MCP roots (input request {key:?}) is unsupported: rustX exposes workspace \
+                    "MCP roots (input request {diagnostic_key:?}) is unsupported: rustX exposes workspace \
                      authority only through its own Workspace contract"
                 )));
             }
             _ => {
                 return Err(McpMrtrUnsupported::new(format!(
-                    "MCP input request {key:?} uses an unknown request kind"
+                    "MCP input request {diagnostic_key:?} uses an unknown request kind"
                 )));
             }
         }
@@ -511,6 +512,7 @@ pub(super) fn plan_round(
     let mut slots = Vec::new();
     let mut plans = Vec::with_capacity(forms.len());
     for (request_index, (key, message, schema)) in forms.iter().enumerate() {
+        let diagnostic_key = credentials.redact(key);
         plans.push(RequestPlan { key: key.clone() });
         let required: BTreeSet<&str> = schema
             .required
@@ -522,12 +524,13 @@ pub(super) fn plan_round(
         let properties = ordered_properties(schema);
         if properties.is_empty() {
             return Err(McpMrtrUnsupported::new(format!(
-                "MCP elicitation request {key:?} declares no properties to ask about"
+                "MCP elicitation request {diagnostic_key:?} declares no properties to ask about"
             )));
         }
         let single_property = !qualify && properties.len() == 1;
         for (property, definition) in properties {
-            let translated = translate_property(key, property, definition)?;
+            let diagnostic_property = credentials.redact(property);
+            let translated = translate_property(credentials, key, property, definition)?;
             let question = question_text(
                 message,
                 key,
@@ -538,7 +541,7 @@ pub(super) fn plan_round(
             );
             if question.chars().count() > MAX_QUESTION_TEXT_CHARS {
                 return Err(McpMrtrUnsupported::new(format!(
-                    "MCP elicitation request {key:?} property {property:?} produces a prompt \
+                    "MCP elicitation request {diagnostic_key:?} property {diagnostic_property:?} produces a prompt \
                      above the {MAX_QUESTION_TEXT_CHARS}-character bound"
                 )));
             }
@@ -676,13 +679,16 @@ fn bounded_header(source: &str) -> String {
     reason = "the whole schema-to-vocabulary mapping is one auditable contract"
 )]
 fn translate_property(
+    credentials: &crate::credentials::SourceCredentials,
     key: &str,
     property: &str,
     definition: &PrimitiveSchemaDefinition,
 ) -> Result<TranslatedProperty, McpMrtrUnsupported> {
+    let diagnostic_key = credentials.redact(key);
+    let diagnostic_property = credentials.redact(property);
     let unsupported = |detail: &str| {
         McpMrtrUnsupported::new(format!(
-            "MCP elicitation request {key:?} property {property:?} is unsupported: {detail}"
+            "MCP elicitation request {diagnostic_key:?} property {diagnostic_property:?} is unsupported: {detail}"
         ))
     };
     match definition {
@@ -798,7 +804,9 @@ fn translate_property(
                 description: schema.description.as_deref().map(str::to_owned),
             })
         }
-        PrimitiveSchemaDefinition::Enum(schema) => translate_enum(schema, &unsupported),
+        PrimitiveSchemaDefinition::Enum(schema) => {
+            translate_enum(credentials, schema, &unsupported)
+        }
         _ => Err(unsupported("it declares an unknown primitive schema kind")),
     }
 }
@@ -810,6 +818,7 @@ fn translate_property(
     reason = "every enum shape and its cardinality contract belong in one place"
 )]
 fn translate_enum(
+    credentials: &crate::credentials::SourceCredentials,
     schema: &EnumSchema,
     unsupported: &impl Fn(&str) -> McpMrtrUnsupported,
 ) -> Result<TranslatedProperty, McpMrtrUnsupported> {
@@ -883,9 +892,10 @@ fn translate_enum(
     }
     let mut labels = BTreeSet::new();
     for (label, _) in &choices {
+        let diagnostic_label = credentials.redact(label);
         if label.trim().is_empty() || label.chars().count() > MAX_OPTION_LABEL_CHARS {
             return Err(unsupported(&format!(
-                "the choice label {label:?} is empty or above the \
+                "the choice label {diagnostic_label:?} is empty or above the \
                  {MAX_OPTION_LABEL_CHARS}-character bound"
             )));
         }
@@ -894,7 +904,7 @@ fn translate_enum(
         // addresses an option by index and is never ambiguous to the runtime.
         if !labels.insert(label.clone()) {
             return Err(unsupported(&format!(
-                "two of its choices are both presented as {label:?}, which a human could not \
+                "two of its choices are both presented as {diagnostic_label:?}, which a human could not \
                  distinguish"
             )));
         }
@@ -1040,17 +1050,23 @@ mod tests {
     }
 
     fn plan_of(schema: &serde_json::Value) -> ElicitationPlan {
-        plan_round(Some(&requests(serde_json::json!({
-            "ask": elicitation("Tell me", schema),
-        }))))
+        plan_round(
+            &crate::credentials::SourceCredentials::default(),
+            Some(&requests(serde_json::json!({
+                "ask": elicitation("Tell me", schema),
+            }))),
+        )
         .expect("supported")
         .expect("a questionnaire")
     }
 
     fn refusal(schema: &serde_json::Value) -> String {
-        plan_round(Some(&requests(serde_json::json!({
-            "ask": elicitation("Tell me", schema),
-        }))))
+        plan_round(
+            &crate::credentials::SourceCredentials::default(),
+            Some(&requests(serde_json::json!({
+                "ask": elicitation("Tell me", schema),
+            }))),
+        )
         .expect_err("unsupported")
         .diagnostic
     }
@@ -1081,11 +1097,64 @@ mod tests {
         response: &QuestionnaireResponse,
     ) -> Result<InputResponses, String> {
         let normalized = normalize_questionnaire_response(plan.questionnaire(), response)?;
-        plan.responses(&normalized)
+        plan.responses(
+            &crate::credentials::SourceCredentials::default(),
+            &normalized,
+        )
     }
 
     /// A single-property elicitation keeps the server's own message verbatim
     /// and maps the answer onto the exact enum value by index.
+    #[test]
+    fn peer_diagnostics_redact_before_debug_and_preserve_native_bounds() {
+        let secret = "PR533_\"ESCAPED\\KEY";
+        let credentials = crate::credentials::SourceCredentials {
+            literal_redactions: [secret, "e", "1"]
+                .into_iter()
+                .map(crate::model::catalog::ResolvedCredential::new)
+                .collect(),
+            ..Default::default()
+        };
+        let input = requests(serde_json::json!({
+            (secret): elicitation("Tell me", &serde_json::json!({
+                "type":"object", "properties":{(secret):{"type":"string","format":"email"}}
+            }))
+        }));
+        let error = plan_round(&credentials, Some(&input))
+            .unwrap_err()
+            .diagnostic;
+        assert!(
+            !error.contains("PR533_"),
+            "peer values escaped before redaction: {error}"
+        );
+        assert!(error.contains("<redacted>"));
+        assert!(error.contains("cannot faithfully validate the \"email\" string format"));
+        let input = requests(serde_json::json!({
+            "ask": elicitation("Tell me", &serde_json::json!({
+                "type":"object", "properties":{"pick":{"type":"string","enum":[secret,secret]}}
+            }))
+        }));
+        let error = plan_round(&credentials, Some(&input))
+            .unwrap_err()
+            .diagnostic;
+        assert!(
+            !error.contains("PR533_"),
+            "choice label escaped before redaction: {error}"
+        );
+        assert!(error.contains("two of its choices"));
+        let many = (0..111)
+            .map(|index| (index.to_string(), elicitation("Tell me", &enum_schema())))
+            .collect();
+        let input = requests(serde_json::Value::Object(many));
+        let error = plan_round(&credentials, Some(&input))
+            .unwrap_err()
+            .diagnostic;
+        assert!(
+            error.contains("111 input requests"),
+            "native count was redacted: {error}"
+        );
+    }
+
     #[test]
     fn one_supported_elicitation_becomes_one_question_and_one_accept() {
         let plan = plan_of(&enum_schema());
@@ -1119,10 +1188,13 @@ mod tests {
     /// mapping is by server key, never positional.
     #[test]
     fn several_input_requests_map_by_key_not_by_position() {
-        let plan = plan_round(Some(&requests(serde_json::json!({
-            "zeta": elicitation("Second?", &enum_schema()),
-            "alpha": elicitation("First?", &enum_schema()),
-        }))))
+        let plan = plan_round(
+            &crate::credentials::SourceCredentials::default(),
+            Some(&requests(serde_json::json!({
+                "zeta": elicitation("Second?", &enum_schema()),
+                "alpha": elicitation("First?", &enum_schema()),
+            }))),
+        )
         .expect("supported")
         .expect("a questionnaire");
         // BTreeMap order is the deterministic wire order.
@@ -1158,7 +1230,12 @@ mod tests {
     #[test]
     fn an_unanswered_required_property_declines_instead_of_sending_partial_content() {
         let plan = plan_of(&enum_schema());
-        let responses = plan.responses(&submitted(Vec::new())).expect("responses");
+        let responses = plan
+            .responses(
+                &crate::credentials::SourceCredentials::default(),
+                &submitted(Vec::new()),
+            )
+            .expect("responses");
         assert_eq!(responses["ask"], serde_json::json!({"action": "decline"}));
     }
 
@@ -1177,7 +1254,7 @@ mod tests {
         assert!(error.contains("free-text"), "{error}");
         // Even bypassing the runtime validator, the mapping refuses it.
         let error = plan
-            .responses(&custom)
+            .responses(&crate::credentials::SourceCredentials::default(), &custom)
             .expect_err("the mapping refuses it too");
         assert!(error.contains("declared schema values"), "{error}");
     }
@@ -1409,7 +1486,12 @@ mod tests {
             };
             assert_eq!(settled.answers[0].answer, answer);
             // ...is bit-for-bit what the server is sent.
-            let emitted = number_plan.responses(&normalized).expect("responses");
+            let emitted = number_plan
+                .responses(
+                    &crate::credentials::SourceCredentials::default(),
+                    &normalized,
+                )
+                .expect("responses");
             let content = &emitted["ask"]["content"]["amount"];
             // An *exact* comparison is the assertion: a tolerance here would
             // hide precisely the divergence this test exists to forbid.
@@ -1454,7 +1536,12 @@ mod tests {
                 &submitted(vec![entry(0, decoded)]),
             )
             .unwrap_or_else(|error| panic!("{value} must validate: {error}"));
-            let emitted = integer_plan.responses(&normalized).expect("responses");
+            let emitted = integer_plan
+                .responses(
+                    &crate::credentials::SourceCredentials::default(),
+                    &normalized,
+                )
+                .expect("responses");
             assert_eq!(
                 emitted["ask"]["content"]["ledger"],
                 serde_json::json!(value),
@@ -1742,18 +1829,25 @@ mod tests {
             },
         });
         let roots = serde_json::json!({"method": "roots/list"});
-        let error = plan_round(Some(&requests(
-            serde_json::json!({"ask": sampling.clone()}),
-        )))
+        let error = plan_round(
+            &crate::credentials::SourceCredentials::default(),
+            Some(&requests(serde_json::json!({"ask": sampling.clone()}))),
+        )
         .expect_err("sampling is unsupported");
         assert!(error.diagnostic.contains("sampling"), "{error:?}");
-        let error = plan_round(Some(&requests(serde_json::json!({"ask": roots.clone()}))))
-            .expect_err("roots is unsupported");
+        let error = plan_round(
+            &crate::credentials::SourceCredentials::default(),
+            Some(&requests(serde_json::json!({"ask": roots.clone()}))),
+        )
+        .expect_err("roots is unsupported");
         assert!(error.diagnostic.contains("roots"), "{error:?}");
-        let error = plan_round(Some(&requests(serde_json::json!({
-            "supported": elicitation("Which channel?", &enum_schema()),
-            "unsupported": sampling,
-        }))))
+        let error = plan_round(
+            &crate::credentials::SourceCredentials::default(),
+            Some(&requests(serde_json::json!({
+                "supported": elicitation("Which channel?", &enum_schema()),
+                "unsupported": sampling,
+            }))),
+        )
         .expect_err("a mixed set is unsupported");
         assert!(error.diagnostic.contains("sampling"), "{error:?}");
     }
@@ -1810,11 +1904,18 @@ mod tests {
     /// A pure `requestState` round asks nothing and simply continues.
     #[test]
     fn a_state_only_round_publishes_no_questionnaire() {
-        assert!(plan_round(None).expect("supported").is_none());
         assert!(
-            plan_round(Some(&InputRequests::new()))
+            plan_round(&crate::credentials::SourceCredentials::default(), None)
                 .expect("supported")
                 .is_none()
+        );
+        assert!(
+            plan_round(
+                &crate::credentials::SourceCredentials::default(),
+                Some(&InputRequests::new())
+            )
+            .expect("supported")
+            .is_none()
         );
     }
 
@@ -1839,8 +1940,11 @@ mod tests {
                 elicitation(&format!("Question {index}?"), &enum_schema()),
             );
         }
-        let error = plan_round(Some(&requests(serde_json::Value::Object(map))))
-            .expect_err("above the request bound");
+        let error = plan_round(
+            &crate::credentials::SourceCredentials::default(),
+            Some(&requests(serde_json::Value::Object(map))),
+        )
+        .expect_err("above the request bound");
         assert!(error.diagnostic.contains("input requests"), "{error:?}");
 
         let mut properties = serde_json::Map::new();

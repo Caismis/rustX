@@ -111,6 +111,7 @@ impl RuntimeClientHost {
 
         let pending = Arc::new(PendingObservations::new());
         let inner = Arc::new(ClientInner {
+            interaction_lifecycle: std::sync::OnceLock::new(),
             conversation_id,
             agent_id: crate::runtime::identity::AgentId::new(format!(
                 "inspection:{}",
@@ -123,8 +124,7 @@ impl RuntimeClientHost {
             read_only: true,
             state: Arc::new(Mutex::new(ClientState {
                 projection,
-                control_attachment: None,
-                read_only_attachments: BTreeMap::new(),
+                attachments: BTreeMap::new(),
                 next_attachment_seq: 0,
             })),
             observation_preparation: Arc::new(Mutex::new(())),
@@ -218,6 +218,7 @@ impl RuntimeClientHost {
         projection.bind_activation(activation);
         projection.initialize_publication_view();
         let inner = Arc::new(ClientInner {
+            interaction_lifecycle: std::sync::OnceLock::new(),
             conversation_id: seed.conversation_id,
             agent_id: config.runtime.agent_id().clone(),
             runtime: Some(config.runtime),
@@ -227,8 +228,7 @@ impl RuntimeClientHost {
             read_only: false,
             state: Arc::new(Mutex::new(ClientState {
                 projection,
-                control_attachment: None,
-                read_only_attachments: BTreeMap::new(),
+                attachments: BTreeMap::new(),
                 next_attachment_seq: 0,
             })),
             observation_preparation: Arc::new(Mutex::new(())),

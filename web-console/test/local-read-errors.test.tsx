@@ -37,7 +37,7 @@ it('connection and durable authority failures retain blocking recovery presentat
 it('active surface attachment failure still reaches the global notice', async () => {
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
-  server.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'active surface unavailable' }); });
+  server.handlers.set('thread/resume', () => { throw new RpcFailure({ code: -32000, message: 'active surface unavailable' }); });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   expect(screen.getByRole('button', { name: 'Dismiss notice' }).closest('[role="alert"]')?.textContent).toContain('active surface unavailable');
 });

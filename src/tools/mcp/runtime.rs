@@ -25,7 +25,9 @@ use super::test_sync;
 use super::{McpError, bound_error, framing, streamable_http};
 
 /// Capability facts captured by one successful server handshake.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct McpNegotiatedCapabilities {
     /// The server accepts ordinary MCP tool operations.
     pub tools: bool,
@@ -177,7 +179,7 @@ impl McpServerRuntime {
         } else {
             return None;
         };
-        Some(self.redacted_diagnostic(&reason))
+        Some(bound_error(&reason))
     }
 
     /// Reject catalog work through the same protocol-poison owner as calls.
@@ -187,10 +189,9 @@ impl McpServerRuntime {
         Some(self.poisoned_protocol_violation().await.unwrap_or(reason))
     }
 
-    /// Diagnostics leave this generation only after credential redaction.
-    /// In particular, catalog rejection happens before the call-result owner
-    /// exists and cannot rely on `call()` sanitizing its eventual status.
-    fn redacted_diagnostic(&self, message: &str) -> String {
+    /// Sanitize one peer/transport fragment before bounding it or adding native
+    /// identities, counts, status text and transport-generation attribution.
+    pub(super) fn peer_diagnostic(&self, message: &str) -> String {
         bound_error(&self.credentials.redact(message))
     }
 
@@ -200,13 +201,14 @@ impl McpServerRuntime {
     /// signal for the same generation is absorbed. Repeated transport-loss
     /// observations therefore cannot produce a second retirement, a second
     /// replacement, or a second canonical settlement.
+    /// Callers sanitize external fragments before composing this native fact.
     pub(super) fn note_transport_loss(&self, reason: &str) {
         let mut failure = self
             .transport_failure
             .lock()
             .expect("MCP transport failure lock poisoned");
         if failure.is_none() {
-            *failure = Some(self.redacted_diagnostic(reason));
+            *failure = Some(bound_error(reason));
         }
     }
 
@@ -239,9 +241,7 @@ impl McpServerRuntime {
     /// Returns an error when the remote catalog cannot be fetched or a tool
     /// cannot be translated into rustX's canonical schema contract.
     pub async fn list_tools(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
-        self.list_tools_admitted()
-            .await
-            .map_err(|error| error.redacted(&self.credentials))
+        self.list_tools_admitted().await
     }
 
     /// First-use revalidation is owned by the `ToolInvocation`. Each page uses
@@ -253,7 +253,6 @@ impl McpServerRuntime {
     ) -> Result<Vec<CanonicalMcpTool>, McpError> {
         self.list_tools_for_invocation_admitted(context, generation)
             .await
-            .map_err(|error| error.redacted(&self.credentials))
     }
 
     async fn list_tools_for_invocation_admitted(
@@ -299,9 +298,10 @@ impl McpServerRuntime {
                         return Err(McpError::Discovery("unexpected tools/list response".into()));
                     }
                     Err(error) => {
-                        return Err(McpError::Discovery(
-                            self.redacted_diagnostic(&error.to_string()),
-                        ));
+                        return Err(McpError::Discovery(super::diagnostics::service_error(
+                            &error,
+                            &self.credentials,
+                        )));
                     }
                 },
                 McpPhysicalOutcome::Refused { detail, .. } => {
@@ -365,11 +365,15 @@ impl McpServerRuntime {
                 if let rmcp::service::ServiceError::TransportClosed
                 | rmcp::service::ServiceError::TransportSend(_) = &error
                 {
-                    self.note_transport_loss(&error.to_string());
+                    self.note_transport_loss(&super::diagnostics::service_error(
+                        &error,
+                        &self.credentials,
+                    ));
                 }
-                return Err(McpError::Discovery(
-                    self.redacted_diagnostic(&error.to_string()),
-                ));
+                return Err(McpError::Discovery(super::diagnostics::service_error(
+                    &error,
+                    &self.credentials,
+                )));
             }
         };
         let mut canonical = tools
@@ -536,12 +540,10 @@ impl McpServerRuntime {
     pub(super) async fn poisoned_protocol_violation(&self) -> Option<String> {
         let violation = self.protocol_violation.violation()?;
         self.poison_after_protocol_violation().await;
-        Some(
-            self.redacted_diagnostic(&protocol_violation_call_diagnostic(
-                &self.server_id,
-                &violation,
-            )),
-        )
+        Some(bound_error(&protocol_violation_call_diagnostic(
+            &self.server_id,
+            &violation,
+        )))
     }
 
     /// The bounded transport-generation tag carried by MCP diagnostics.

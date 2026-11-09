@@ -191,6 +191,22 @@ impl SubagentInteractionSink {
 }
 
 impl SubagentRegistry {
+    pub(crate) fn with_pending_interaction_header<T>(
+        &self,
+        interaction: &InteractionRef,
+        publish: impl FnOnce(&crate::observation::interaction::RuntimeClientInteractionHeader) -> T,
+    ) -> Option<T> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let record = &state.records[*state.index.get(state.routed_direct.get(interaction)?)?];
+        if !record.lifecycle.is_active()
+            || record.cancel_reason.is_some()
+            || record.publication_abandoned
+        {
+            return None;
+        }
+        Some(publish(state.routed_interactions.get(interaction)?))
+    }
+
     /// Updates the root human-provider state for all live and future child
     /// conversations. This changes only whether a new interaction may be
     /// published; it never settles an interaction already pending.
@@ -296,6 +312,13 @@ impl SubagentRegistry {
     /// Returns the live child interaction projection for the Runtime Client
     /// bootstrap cut. These values are never used as recovery authority.
     #[must_use]
+    pub(crate) fn callback_headers(
+        &self,
+        limit: usize,
+    ) -> Vec<crate::observation::interaction::RuntimeClientInteractionHeader> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        Self::pending_interaction_page_locked(&state, None, limit).head
+    }
     pub(crate) fn pending_interaction_head(&self) -> ChildPendingHeadProof {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         Self::pending_interaction_head_locked(&state)
@@ -613,5 +636,48 @@ impl SubagentRegistry {
         if let Some(observer) = state.observer.clone() {
             observer.on_interaction_head(&Self::pending_interaction_head_locked(&state));
         }
+    }
+}
+
+impl SubagentRegistry {
+    pub(crate) fn wait_activity_ready(&self) {
+        drop(self.state.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+    pub(crate) fn with_activity<T>(
+        &self,
+        read: impl FnOnce(bool, bool, bool, bool) -> T,
+    ) -> Option<T> {
+        use crate::observation::interaction::RuntimeClientInteractionKind as Kind;
+        let state = self.state.try_lock().ok()?;
+        let recovered = *self.recovery_reconciliation.borrow();
+        let active = !recovered
+            || !state.activity_records.is_empty()
+            || !state.ownership_committing.is_empty()
+            || self
+                .resume_activity
+                .load(std::sync::atomic::Ordering::Acquire)
+                != 0;
+        let fault = recovered && !state.recovery_pending.is_empty()
+            || !state.activity_fault_records.is_empty()
+            || !state.failed_admissions.is_empty();
+        let (approval, user) =
+            state
+                .routed_interactions
+                .values()
+                .fold((false, false), |(approval, user), pending| {
+                    match pending.kind {
+                        Kind::Approval => (true, user),
+                        Kind::Questionnaire | Kind::Review => (approval, true),
+                    }
+                });
+        let result = read(active, fault, approval, user);
+        drop(state);
+        Some(result)
+    }
+    pub(crate) fn recovery_activity_changes(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.recovery_reconciliation.subscribe()
+    }
+    pub(crate) fn activity_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.state_version.subscribe()
     }
 }

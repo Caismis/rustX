@@ -263,6 +263,8 @@ impl SessionRuntimeManager {
             let id = target.conversation_id.clone();
             #[cfg(test)]
             let id_for_probe = id.clone();
+            #[cfg(test)]
+            self.probe(&id).before_load_registration.park().await;
             let flight = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
                 registry.check_session(session, &id)?;
@@ -430,11 +432,11 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let startup = flight.startup.clone();
         let initialization = flight.initialization.clone();
-        let terminal = TerminalGuard::new(self, id, flight, WriterCertainty::Absent);
+        let terminal = TerminalGuard::new(self, id.clone(), flight, WriterCertainty::Absent);
         // The flight is registered before this task can acquire allocation access.
         tokio::spawn(async move {
             let result = owner
-                .acquire_and_compose(&session, &node, startup, &initialization)
+                .acquire_and_compose(&id, &session, &node, startup, &initialization)
                 .await
                 .map(Some);
             terminal.finish(result);
@@ -443,6 +445,7 @@ impl SessionRuntimeManager {
 
     async fn acquire_and_compose(
         &self,
+        id: &ConversationId,
         session: &SessionId,
         node: &SessionNodeId,
         startup: super::super::composition::McpInitialSubmission,
@@ -453,12 +456,7 @@ impl SessionRuntimeManager {
         }
         #[cfg(test)]
         {
-            let target = self
-                .sessions
-                .resolve_session_target(session, Some(node))
-                .await
-                .map_err(error)?;
-            let probe = self.probe(&target.conversation_id);
+            let probe = self.probe(id);
             probe.before_allocation.park().await;
             probe
                 .acquisitions
@@ -472,6 +470,9 @@ impl SessionRuntimeManager {
             .acquire_session(session, Some(node))
             .await
             .map_err(error)?;
+        if access.node.conversation_id != *id {
+            return Err(error("Thread execution destination changed"));
+        }
         self.compose(access, startup, initialization).await
     }
 
@@ -482,6 +483,12 @@ impl SessionRuntimeManager {
         startup: super::super::composition::McpInitialSubmission,
         initialization: &Arc<super::Initialization>,
     ) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
+        // Every caller owns a registered Loading flight before acquiring this
+        // fresh node. Archive cannot commit across that reservation; an earlier
+        // identity-only read does not grant execution after archive commits.
+        if access.node.archived {
+            return Err(RuntimeManagerError::ThreadArchived);
+        }
         #[cfg(test)]
         {
             let probe = self.probe(&access.node.conversation_id);
@@ -566,6 +573,7 @@ impl SessionRuntimeManager {
             access.allocation,
             startup,
             &initialization.cancellation,
+            &access.node.dynamic_tools,
         )
         .await
         .map_err(|failure| match failure {
@@ -611,6 +619,11 @@ impl SessionRuntimeManager {
             core.runtime().install_admission_gate(gate);
         }
         let composition = core.into_bound().map_err(error)?;
+        if let Some(sink) = self.interaction_lifecycle.get() {
+            composition
+                .host()
+                .install_interaction_lifecycle(sink.clone());
+        }
         // The App Server display-projection seam (Issue #386). Two different
         // conditions live here and must not be confused:
         //
@@ -677,6 +690,8 @@ impl SessionRuntimeManager {
                 .expect("process incarnation identity exhausted"),
         );
         Ok(Arc::new_cyclic(|resident| ResidentRuntime {
+            status_read: Mutex::new(()),
+            status_wake: Arc::new(tokio::sync::Notify::new()),
             node: access.node.id.clone(),
             initialization: initialization.clone(),
             operations: watch::channel(0).0,
@@ -970,6 +985,7 @@ impl SessionRuntimeManager {
                 owner.probe(&id).after_writer_transfer.park().await;
                 let result = owner
                     .acquire_and_compose(
+                        &id,
                         &session,
                         &node,
                         flight.startup.clone(),
@@ -1016,8 +1032,10 @@ impl TerminalGuard {
             writer,
         }
     }
+    #[allow(clippy::too_many_lines)] // One initialization publication, fenced against retirement.
     fn finish(mut self, result: CompositionOutcome) {
         let mut catalog_observer = None;
+        let mut status_observer = None;
         if let Ok(Some(runtime)) = &result {
             // Install the incarnation in the flight owner while Loading still
             // excludes all other claimants. Activation can synchronously admit
@@ -1029,6 +1047,7 @@ impl TerminalGuard {
             // inert, outside registry/control locks. It starts observing only
             // after Loaded is visible; a losing initialization drops it here.
             catalog_observer = self.owner.prepare_runtime_catalog_observer(runtime);
+            status_observer = self.owner.prepare_status_observer(runtime);
             let can_activate = self
                 .flight
                 .initialization
@@ -1110,6 +1129,9 @@ impl TerminalGuard {
             #[cfg(test)]
             let attach = registry.resident_attach.clone();
             drop(registry);
+            if let Some(observer) = status_observer {
+                tokio::spawn(observer);
+            }
             if let Some(observer) = catalog_observer {
                 tokio::spawn(observer);
             }
@@ -1192,9 +1214,13 @@ impl TerminalGuard {
                     && !registry.fenced(&self.id)
                     && !matches!(
                         result,
-                        Err(RuntimeManagerError::LoadingCancelled | RuntimeManagerError::Draining)
+                        Err(RuntimeManagerError::LoadingCancelled
+                            | RuntimeManagerError::Draining
+                            | RuntimeManagerError::ThreadArchived)
                     )
                 {
+                    // Retain accepted preparation failures for explicit retry.
+                    // Metadata-dependent archive refusals began no initialization.
                     registry.remove(&self.id);
                     registry
                         .failed_submissions
@@ -1212,6 +1238,7 @@ impl TerminalGuard {
             }
         };
         self.flight.result.send_replace(Some(outcome));
+        self.owner.status.wake.notify_one();
         drop(registry);
         if let Some((session, node, flight)) = restart {
             self.owner

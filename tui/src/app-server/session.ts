@@ -9,7 +9,7 @@ import { uploadOperationId } from '../../../protocol/app-server/upload.ts';
  * One attached Session: its authoritative projection and its typed operations.
  *
  * ```text
- * session/attach -> bounded Target receipt -> checkpoint -> subscribe receipt
+ * thread/resume -> bounded Target receipt -> checkpoint -> subscribe receipt
  *                -> fold consecutive registration-scoped events
  * ```
  *
@@ -68,6 +68,7 @@ import {
   type SessionModelConfig,
   type SessionModelView,
   type SessionNodeId,
+  type SessionView,
   type AgentId,
   type ToolExecutionId,
   type UserInputBlock,
@@ -83,7 +84,7 @@ import type { PresentationState } from "../presentation/state.ts";
 import { AppServerClient, isResyncRequired, isUncertainOutcome } from "./client.ts";
 import { requestEffect } from "../../../protocol/app-server/method-policy.ts";
 import { sameTarget } from "../../../protocol/app-server/attachment-identity.ts";
-import type { Request1 } from "../../../protocol/app-server/v73.ts";
+import type { Request1 } from "../../../protocol/app-server/v76.ts";
 import { SessionReaders, TRANSCRIPT_PROJECTION_PAGE_LIMIT } from "./session-readers.ts";
 
 type StateListener = (state: PresentationState) => void;
@@ -93,6 +94,7 @@ type ClosedListener = () => void;
 export class AppServerSession {
   readonly nodeId: SessionNodeId | undefined;
   readonly #client: AppServerClient;
+  #stopCallbacks: () => void = () => {};
   #target: AttachmentTarget;
   #state: PresentationState;
   #configuration?: ConfigurationApplication;
@@ -113,7 +115,7 @@ export class AppServerSession {
   /** Serializes repairs so two resyncs cannot interleave their installs. */
   #repair: Promise<void> | undefined;
   readonly #observation = new ObservationChain<Parameters<typeof reduce>[1]['event']>();
-  #checkpoint?: import('../../../protocol/app-server/v73.ts').RuntimeClientCheckpoint;
+  #checkpoint?: import('../../../protocol/app-server/v76.ts').RuntimeClientCheckpoint;
   get observationPhase() { return this.#observation.phase; }
   /** Cancellation needs the live attachment, not an observed execution baseline. */
   get cancellationReady() { return !this.#released && !this.#serverClosed; }
@@ -194,10 +196,12 @@ export class AppServerSession {
     this.#client = client;
     this.#target = target;
     this.#state = state;
+    this.#stopCallbacks = client.callbacks.onChange(() => this.#publish());
     this.#unknownModelSelections = unknownModelSelections;
     this.#observation.installCheckpoint(state.cursor);
     client.onClose(() => {
       this.#released = true;
+      this.#stopCallbacks();
       this.#epoch += 1;
     });
   }
@@ -216,19 +220,33 @@ export class AppServerSession {
     prepared?: (session: AppServerSession) => void,
     previous?: AppServerSession,
     unknownModelSelections = new Set<string>(),
+    knownThreadId?: string,
   ): Promise<AppServerSession> {
-    let attached: Extract<import('../../../protocol/app-server/v73.ts').MethodResult,{type:'attached'}>;
+    let threadId = knownThreadId;
+    if(threadId===undefined&&previous?.sessionId===sessionId&&(nodeId===undefined||previous.nodeId===nodeId)) {
+      threadId=previous.target.conversation_id;
+      nodeId??=previous.nodeId;
+    }
+    if (threadId === undefined) {
+      if (nodeId !== undefined) threadId = (await client.call('session/node',{session_id:sessionId,node_id:nodeId},'node')).node.conversation_id;
+      else {
+        const selected = (await client.call('session/read',{session_id:sessionId},'session')).session;
+        threadId = selected.active_conversation_id; nodeId = selected.active_node;
+      }
+    }
+    let attached: Extract<import('../../../protocol/app-server/v76.ts').MethodResult,{type:'attached'}>;
     try {
-      attached = await client.call('session/attach', {session_id:sessionId,node_id:nodeId??null}, 'attached');
+      attached = await client.call('thread/resume', {threadId}, 'attached');
     } catch (error) {
       if (client.closed || !(error instanceof UncertainOutcomeError || error instanceof AppServerRequestError && error.kind === 'outcome_unknown')) throw error;
       const status = await client.call('session/attachmentStatus',{session_id:sessionId},'attachment_status');
       if (!status.target || status.target.session_id !== sessionId) throw error;
-      const node = nodeId == null
-        ? (await client.call('session/read',{session_id:sessionId},'session')).session.active_node : nodeId;
-      const found = await client.call('session/node',{session_id:sessionId,node_id:node},'node');
-      if (found.node.conversation_id !== status.target.conversation_id) throw error;
-      attached = {type:'attached',target:status.target,configuration_revision:status.configuration_revision,attachment_kind:'controller',observation_source:'live'};
+      if (threadId !== status.target.conversation_id) throw error;
+      attached = {type:'attached',target:status.target,configuration_revision:status.configuration_revision,attachment_kind:'writable',observation_source:'live'};
+    }
+    if (attached.target.session_id !== sessionId || attached.target.conversation_id !== threadId) {
+      await client.close();
+      throw Error('Mismatched Thread resume identity.');
     }
     const applied=previous ? previous.#observation.applied : undefined;
     const resume=previous && client.authorityId!==undefined && client.authorityId===previous.#client.authorityId && applied!==undefined && previous.#state.cursor===applied && previous.#checkpoint?.cursor===applied
@@ -273,8 +291,13 @@ export class AppServerSession {
   }
 
   /** The current presentation state. Always a projection, never authority. */
+  interactionVisible(interaction: InteractionRef): boolean {
+    return this.#client.closed !== undefined || this.#client.callbacks.canAnswer(interaction);
+  }
+
   get state(): PresentationState {
-    return this.#state;
+    const pendingInteractions = this.#state.pendingInteractions.filter(item => this.interactionVisible(item.interaction));
+    return pendingInteractions.length === this.#state.pendingInteractions.length ? this.#state : { ...this.#state, pendingInteractions };
   }
 
   /** How many authoritative repairs this attachment has performed. */
@@ -342,11 +365,12 @@ export class AppServerSession {
       // and never treated as invalid protocol input.
       return false;
     }
-    if (notification.method === "configuration/sourceRepairChanged" || notification.method === "schedule/changed") {
+    if (notification.method === "configuration/sourceRepairChanged" || notification.method === "schedule/changed" || notification.method === "thread/status/changed" || notification.method === "thread/status/resyncRequired") {
       // Source-scoped (Issue #464): it addresses a configuration source, never
       // a Session, and is never folded into conversation presentation.
       return false;
     }
+    if (notification.method === "command/exec/outputDelta" || notification.method === "fs/changed") return false;
     if (this.#released || this.#serverClosed || !sameTarget(notification.params.target, this.#target)) {
       return false;
     }
@@ -408,8 +432,8 @@ export class AppServerSession {
     content: UserInputBlock[],
   ): Promise<{ messageId: string; sequence: string }> {
     const accepted = await this.#call(
-      "turn/start",
-      { target: this.#target, content },
+      "inbound/queue",
+      { target: this.#target, content, inputId: crypto.randomUUID() },
       "inbound_accepted",
     );
     return {
@@ -420,7 +444,10 @@ export class AppServerSession {
 
   /** Steering and queue admission stay native; neither retains a client queue. */
   async steer(content: UserInputBlock[]): Promise<void> {
-    await this.#call("turn/steer", { target: this.#target, content }, "inbound_accepted");
+    this.#assertControlReady();
+    const expectedTurnId = this.#state.attempt?.attemptId;
+    if (!expectedTurnId) throw Error('No exact active Turn is available.');
+    await this.#call("turn/steer", { target: this.#target, content, expectedTurnId, inputId: crypto.randomUUID() }, "turn_input_accepted");
   }
 
   async editPending(expected: import("../protocol/app-server.ts").MethodParams<"inbound/edit">["expected"], text: string): Promise<void> {
@@ -460,9 +487,11 @@ export class AppServerSession {
     if (!this.cancellationReady) throw new Error('Session attachment is unavailable.');
     // The native coordinator selects its current Attempt under its admission
     // lock. A retained observation cannot establish that owner's absence.
+    const turnId = this.#state.attempt?.attemptId;
+    if (!turnId) throw Error('No exact active Turn is available.');
     const accepted = await this.#client.call(
-      "turn/cancel",
-      { target: this.#target },
+      "turn/interrupt",
+      { target: this.#target, turnId },
       "cancellation_accepted",
     );
     return accepted.attempt_id;
@@ -473,20 +502,14 @@ export class AppServerSession {
     interaction: InteractionRef,
     response: InteractionResponse,
   ): Promise<void> {
-    await this.#call(
-      "interaction/respond",
-      { target: this.#target, interaction, response },
-      "interaction_settled",
-    );
+    this.#assertControlReady();
+    await this.#client.callbacks.answer(interaction, response);
   }
 
-  /** Cancels one pending interaction through its originating coordinator. */
+  /** Decline the exact live server request. */
   async cancelInteraction(interaction: InteractionRef): Promise<void> {
-    await this.#call(
-      "interaction/cancel",
-      { target: this.#target, interaction },
-      "interaction_settled",
-    );
+    this.#assertControlReady();
+    await this.#client.callbacks.answer(interaction);
   }
 
   // -------------------------------------------------------------------------
@@ -522,7 +545,7 @@ export class AppServerSession {
     if (!deferred.length) return undefined;
     return `Binding ${this.#state.modelStatus?.binding_revision ?? 'unavailable'}: deferred model/profile choices at native positions ${deferred.map(item => item.offset).join(', ')}. Read /observation model_catalog.models; /model-position selects native defaults at the displayed binding revision.`;
   }
-  #modelCatalogPage?: import('../../../protocol/app-server/v73.ts').CheckpointPage;
+  #modelCatalogPage?: import('../../../protocol/app-server/v76.ts').CheckpointPage;
   get nextModelOffset() { return this.#modelCatalogPage?.next_offset == null ? undefined : Number(this.#modelCatalogPage.next_offset); }
   /** Runs one manual idle compaction to its durable terminal result. */
   async compactContext(): Promise<NonNullable<ResultOf<'context_compacted'>['compaction']>> {
@@ -543,12 +566,12 @@ export class AppServerSession {
     return domainValue<RuntimeClientGoalView>(page,this.#reads.domainReader());
   }
 
-  #configurationCut?:import('../../../protocol/app-server/v73.ts').BoundedSessionApplication;
+  #configurationCut?:import('../../../protocol/app-server/v76.ts').BoundedSessionApplication;
   #configurationRead?:Promise<void>;
   #configurationObservationError?:string;
   get configurationObservationError(){return this.#configurationObservationError;}
   get deferredConfiguration(){return this.#configurationRead?this.#configurationCut:undefined;}
-  #observeConfiguration(cut:import('../../../protocol/app-server/v73.ts').BoundedSessionApplication) {
+  #observeConfiguration(cut:import('../../../protocol/app-server/v76.ts').BoundedSessionApplication) {
     if(this.#configurationCut && BigInt(cut.version)<=BigInt(this.#configurationCut.version))return;
     this.#configurationCut=cut;
     if(cut.inline){this.#configurationObservationError=undefined;this.#installConfiguration(cut.inline);return;}
@@ -628,7 +651,7 @@ export class AppServerSession {
    * a NoOp acknowledgement cannot settle an earlier unanswered request.
    */
   /** Selects native catalog defaults by finite ordinals at the displayed source revision. */
-  async modelSelect(choice:import('../../../protocol/app-server/v73.ts').CatalogModelSelection) {
+  async modelSelect(choice:import('../../../protocol/app-server/v76.ts').CatalogModelSelection) {
     if(!Number.isSafeInteger(choice.model_position)||choice.model_position<0 ||choice.profile_position!=null&&(!Number.isSafeInteger(choice.profile_position)||choice.profile_position<0))throw new Error('Invalid native model selection ordinal.');
     if(this.#released||this.#serverClosed)throw new Error('Session attachment is unavailable.');
     if(this.#modelMutationInFlight)throw new Error('A model selection request is still in flight; wait for its response or connection recovery.');
@@ -711,7 +734,7 @@ export class AppServerSession {
   }
 
   /** One native bounded Agent viewport; continuations retain its exact cut. */
-  async agentPage(offset = 0, previous?: import('../../../protocol/app-server/v73.ts').CheckpointPage) {
+  async agentPage(offset = 0, previous?: import('../../../protocol/app-server/v76.ts').CheckpointPage) {
     const epoch=this.#epoch;
     const page=previous
       ? await this.#reads.domainReader().page(previous,offset)
@@ -727,7 +750,7 @@ export class AppServerSession {
     return domainValue<RuntimeClientAgent>(page,this.#reads.domainReader());
   }
 
-  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v73.js").UploadReceipt[] = []) {
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v76.js").UploadReceipt[] = []) {
     return this.#call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 
@@ -811,6 +834,7 @@ export class AppServerSession {
       return;
     }
     this.#released = true;
+    this.#stopCallbacks();
     this.#epoch += 1;
     this.#observation.retire();
     await this.#call(
@@ -821,11 +845,12 @@ export class AppServerSession {
   }
 
   /** Switch the durable branch; native retirement remains manager-owned. */
-  async switchNode(nodeId: string): Promise<void> {
+  async switchNode(nodeId: string): Promise<SessionView> {
     this.#released = true;
+    this.#stopCallbacks();
     this.#epoch += 1;
     this.#observation.retire();
-    await this.#call("session/switchNode", { target: this.#target, node_id: nodeId }, "session");
+    return (await this.#call("session/switchNode", { target: this.#target, node_id: nodeId }, "session")).session;
   }
 
   // -------------------------------------------------------------------------
@@ -872,7 +897,7 @@ export class AppServerSession {
 
   #publish(): void {
     for (const listener of [...this.#listeners]) {
-      listener(this.#state);
+      listener(this.state);
     }
   }
 }

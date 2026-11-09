@@ -4,6 +4,7 @@ export interface DraftConversation {
 }
 export interface SessionNode {
   id: string; title: string; pendingInteraction?: 'approval' | 'plan-review' | 'question';
+  runtimeStatus?:{state:import('../primitives/StateDot').StateDotState;labels:string[]}; statusUnavailable?:boolean;
   running: boolean; runningSubagentCount: number; forking?: boolean;
   updatedAt: number; observation?: string; viewOpen?: boolean; pinned?: boolean;
   taskMark?: ReactNode; taskHover?: ReactNode;

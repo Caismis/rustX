@@ -1,7 +1,7 @@
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
-  choose, closeSettings, confirmSettingsAction, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  choose, returnHome, confirmSettingsAction, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -14,12 +14,12 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Transport token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    // Global Settings opens at General, one of seven product pages.
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    // The connection setup explicitly selected General before returning Home.
     await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab')).toHaveText(['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced']);
     expect(await selectedSettingsPage(page)).toBe('General');
     const saved = async (unit: string) => { await page.getByText(`${unit} saved.`, {exact:true}).waitFor({ state: 'visible' }); };
@@ -48,7 +48,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, automatic applica
     expect(readFileSync(fixture.settings, 'utf8')).toContain('json_schema_output = true');
     await model.screenshot({ path: test.info().outputPath('cfg3-user-model.png') });
     await model.getByRole('button', {name:'Close',exact:true}).click();
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     // A Workspace surface is constrained and lands on Models.
     expect(await selectedSettingsPage(page)).toBe('Models');

@@ -606,6 +606,34 @@ fn final_model_adopts_finite_pending_order_without_terminal_and_preserves_cursor
 }
 
 #[test]
+fn final_model_leaves_explicit_queue_to_the_next_attempt() {
+    for steer in [false, true] {
+        let fixture = FinalFixture::new();
+        let mut queued = draft("next attempt");
+        queued.kind = crate::message::types::InboundKind::QueuedMessage;
+        let queued = fixture.store.accept_inbound(queued).unwrap();
+        let steering = steer.then(|| fixture.store.accept_inbound(draft("steer")).unwrap());
+        let committed = fixture.settle(steering.as_ref().map(|item| item.sequence)).unwrap();
+        let boundary = committed.boundary.unwrap();
+        assert_eq!(boundary.attempt_completed.is_none(), steer);
+        if let Some(steering) = steering {
+            let items = boundary.adopted.unwrap().items;
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].message_id, steering.message_id);
+            assert_eq!(items[0].transcript_cursor, steering.transcript_cursor);
+        }
+        let remaining = fixture.store.load_pending().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].message_id, queued.message_id);
+        assert_eq!(remaining[0].transcript_cursor, queued.transcript_cursor);
+        fixture.store.adopt_pending_batch(queued.sequence, None).unwrap();
+        let canonical = fixture.store.load_canonical().unwrap();
+        assert!(matches!(canonical.last(), Some(MessageBlock::User(user))
+            if user.id == queued.message_id && user.kind == crate::message::types::InboundKind::Message));
+    }
+}
+
+#[test]
 fn final_model_rejects_foreign_envelopes_and_wrong_terminal_without_partial_facts() {
     for fault in 0..4 {
         let fixture = FinalFixture::new();

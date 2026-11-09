@@ -60,26 +60,24 @@ export class PdfDocumentOwner {
     if (!this.ready) throw new Error('obsolete');
     return this.ready;
   }
+  private initialSize?: Promise<PdfPageSize>;
+  /** Document zoom needs one finite reference page, independently of bitmap visibility. */
+  get firstPageSize(): Promise<PdfPageSize> {
+    if (this.retired) throw new Error('obsolete');
+    return this.initialSize ??= this.document.then(async document => {
+      // PDF.js already shares getPage promises. Geometry requests no operator
+      // list, text or canvas and must not clean up a concurrently rendering page.
+      const page = await document.getPage(1);
+      if (this.retired) throw new Error('obsolete');
+      return this.pageSize(page);
+    });
+  }
   private retired = false;
   private tail: Promise<unknown> = Promise.resolve();
   private cancelPage?: () => void;
   private renderTimer?: ReturnType<typeof setTimeout>;
   private readonly presentations = new Map<HTMLCanvasElement, { container: HTMLDivElement; pixels: number }>();
   private rendering?: HTMLCanvasElement;
-  private sizes?: Promise<readonly PdfPageSize[]>;
-  /** Finite geometry lets every page hold its place while bitmaps remain viewport-local. */
-  get pageSizes(): Promise<readonly PdfPageSize[]> {
-    return this.sizes ??= this.document.then(async document => {
-      const sizes: PdfPageSize[] = [];
-      for (let number = 1; number <= document.numPages; number++) {
-        if (this.retired) throw new Error('obsolete');
-        const page = await document.getPage(number);
-        try { if (this.retired) throw new Error('obsolete'); sizes.push(this.pageSize(page)); }
-        finally { page.cleanup(); }
-      }
-      return sizes;
-    });
-  }
   private pageSize(page: Awaited<ReturnType<PDFDocumentProxy['getPage']>>): PdfPageSize {
     const { width, height } = page.getViewport({ scale: 96 / 72 });
     // Admission stays in PDF points; CSS uses the same 96/72 conversion as DSH.
@@ -129,16 +127,17 @@ export class PdfDocumentOwner {
     // The owner observes terminal rejection even when closed before a consumer subscribes.
     void this.document.catch(() => {});
   }
-  render(number: number, zoom: number, canvas: HTMLCanvasElement, container: HTMLDivElement, signal: AbortSignal): Promise<void> {
+  render(number: number, zoom: number, canvas: HTMLCanvasElement, container: HTMLDivElement, signal: AbortSignal): Promise<PdfPageSize> {
     if (this.retired || signal.aborted) return Promise.reject(new Error('obsolete'));
     if (!this.presentations.has(canvas)) this.presentations.set(canvas, { container, pixels: canvas.width * canvas.height });
     const current = () => { signal.throwIfAborted(); if (this.retired) throw new Error('obsolete'); };
     const work = this.tail.catch(() => {}).then(async () => {
       current();
-      // A page owns its deadline only after the serialized render slot starts.
+      // The started physical operation owns this deadline through settlement.
+      // Visibility cancellation retires its caller, but an unresolved getPage,
+      // bitmap or text task can still hold the serialized slot until retirement.
       this.renderTimer = setTimeout(() => { this.dispose(); this.failed('parser_timeout'); }, limits.renderWatchdogMs);
       const clearDeadline = () => { clearTimeout(this.renderTimer); this.renderTimer = undefined; };
-      signal.addEventListener('abort', clearDeadline, { once: true });
       try {
         current();
         const document = await this.document; current();
@@ -192,6 +191,7 @@ export class PdfDocumentOwner {
           context.drawImage(buffer, 0, 0);
           container.replaceChildren(layer);
           this.presentations.set(canvas, { container, pixels: width * height });
+          return size;
         } finally {
           buffer.width = buffer.height = 0;
           if (this.rendering === buffer) this.rendering = undefined;
@@ -199,12 +199,12 @@ export class PdfDocumentOwner {
           if (this.cancelPage === abort) this.cancelPage = undefined;
           abort(); page.cleanup(); this.canvases.clear(); (document.filterFactory as BaseFilterFactory).destroy(); TextLayer.cleanup();
         }
-      } finally { signal.removeEventListener('abort', clearDeadline); clearDeadline(); }
+      } finally { clearDeadline(); }
     });
     this.tail = work;
     // Cancellation of a queued page settles immediately; its retired queue seat
     // remains serialized until prior rendering has actually finished.
-    return new Promise<void>((resolve, reject) => {
+    return new Promise<PdfPageSize>((resolve, reject) => {
       const abort = () => reject(signal.reason);
       signal.addEventListener('abort', abort, { once: true });
       void work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
@@ -217,6 +217,7 @@ export class PdfDocumentOwner {
     this.tail = Promise.resolve();
     const loading = this.loading, worker = this.worker;
     this.loading = undefined; this.ready = undefined; this.worker = undefined;
+    this.initialSize = undefined;
     // The supplied native worker is terminated immediately. PDF.js may never
     // receive its Terminate ACK, so release public DOM filter resources here.
     // disableFontFace avoids installing document fonts into application state.

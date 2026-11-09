@@ -1,4 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from FilesBody and TextPreview; see PROVENANCE.md. */
+import { PreviewFrame } from '../../presentation/right-panel/PreviewFrame';
+import { TextLines } from '../../presentation/right-panel/TextLines';
+import { LoadingIndicator } from '../../presentation/primitives/LoadingIndicator';
+import type { ReactNode } from 'react';
 import { DocumentBody } from './workbench-documents/DocumentBody';
 import { documentFailure } from './documents/errors';
 import { viewersForPath, loadsBytes, type Viewer } from './workbench-documents/definitions';
@@ -21,24 +25,32 @@ import css from '../../presentation/right-panel/WorkbenchFiles.module.css';
 import type { DesktopApplication } from '../../workspaces/desktop';
 export type WorkbenchCall = ((request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult>) & { observe?: (path: string, changed: () => void, signal: AbortSignal) => Promise<PreviewObservation> };
 /** Logical tab state; only inert layout/view metadata is persisted. */
-export interface FileTabView { line?: number; focusRevision?: number; expanded: Set<string>; levels: Map<string, WorkbenchResult>; cwd: string; revision: number; mode?: Viewer; document?: PreviewViewState; top: number; left: number; wrap: boolean; cache: PreviewContentCache; current(): boolean; preview?: { call: WorkbenchCall; path: string; owner: PreviewContentOwner; dispose(): void } }
+export interface FileTabView { line?: number; focusRevision?: number; treeFocus?: string; expanded: Set<string>; levels: Map<string, WorkbenchResult>; cwd: string; revision: number; mode?: Viewer; document?: PreviewViewState; top: number; left: number; wrap: boolean; cache: PreviewContentCache; current(): boolean; preview?: { call: WorkbenchCall; path: string; owner: PreviewContentOwner; dispose(): void } }
 export const fileTabView = (cache = new PreviewContentCache(), current = () => true): FileTabView => ({ expanded: new Set(), levels: new Map(), cwd: '', revision: 0, top: 0, left: 0, wrap: true, cache, current });
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 function Reload({ reload }: { reload: () => void }) {
   const tx = useTranslation(); const label = tx('artifacts:workbench.refresh');
   return <button type="button" className={css.tool} aria-label={label} title={label} onClick={reload}><IconRefreshOutline16/></button>;
 }
-export function WorkspaceFiles({ call, view, onOpen }: { call: WorkbenchCall; view: FileTabView; onOpen: (path: string) => void }) {
+export function WorkspaceFiles({ call, view, onOpen, embedded = false, current }: { call: WorkbenchCall; view: FileTabView; onOpen: (path: string) => void; embedded?: boolean; current?: string }) {
   const tx = useTranslation(), [, redraw] = useReducer(n => n + 1, 0);
   const [revision, setRevision] = useState(view.revision), body = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => { const el = body.current!; el.scrollTop = view.top; return () => { view.top = el.scrollTop; }; }, [view]);
+  useLayoutEffect(() => {
+    const el = body.current!; el.scrollTop = view.top;
+    if (view.treeFocus) [...el.querySelectorAll<HTMLElement>('[data-files-path]')].find(row => row.dataset.filesPath === view.treeFocus)?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+    return () => {
+      view.top = el.scrollTop;
+      const active = document.activeElement;
+      view.treeFocus = active instanceof HTMLElement && el.contains(active) ? active.closest<HTMLElement>('[data-files-path]')?.dataset.filesPath : undefined;
+    };
+  }, [view]);
   const loaded = useCallback((result: WorkbenchResult) => { view.cwd = result.cwd ?? ''; redraw(); }, [view]);
   return <section className={css.root} aria-label={tx('artifacts:workbench.files')} data-workbench-files>
-    <div className={css.header}><PathLabel path={view.cwd} className={css.path}/><Reload reload={() => { view.revision++; view.levels.clear(); setRevision(view.revision); }}/><OpenFileApp call={call} path="" directory/></div>
-    <div className={css.body} ref={body}><Directory path="" {...{ call, view, revision, onOpen, loaded }}/></div>
+    {!embedded && <div className={css.header}><PathLabel path={view.cwd} className={css.path}/><Reload reload={() => { view.revision++; view.levels.clear(); setRevision(view.revision); }}/><OpenFileApp call={call} path="" directory/></div>}
+    <div className={css.body} ref={body} data-files-body><Directory path="" {...{ call, view, revision, onOpen, loaded, current }}/></div>
   </section>;
 }
-function Directory({ path, call, view, revision, onOpen, loaded }: { path: string; call: WorkbenchCall; view: FileTabView; revision: number; onOpen: (path: string) => void; loaded: (result: WorkbenchResult) => void }) {
+function Directory({ path, call, view, revision, onOpen, loaded, current }: { path: string; call: WorkbenchCall; view: FileTabView; revision: number; onOpen: (path: string) => void; loaded: (result: WorkbenchResult) => void; current?: string }) {
   const tx = useTranslation(), [, redraw] = useReducer(n => n + 1, 0);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -55,15 +67,15 @@ function Directory({ path, call, view, revision, onOpen, loaded }: { path: strin
     {error ? <li className={css.note} role="alert">{error}</li> : !value ? <li className={css.note}>{tx('artifacts:workbench.loading')}</li> : !value.entries?.length ? <li className={css.note}>{tx('artifacts:workbench.empty')}</li> : [...value.entries].sort((a,b) => Number(b.directory) - Number(a.directory) || byName.compare(a.name,b.name)).map(entry => {
       const child = [path, entry.name].filter(Boolean).join('/'), expanded = view.expanded.has(child);
       return <li className={css.item} key={entry.name} data-files-path={child}>
-        <button type="button" className={css.row} disabled={entry.link} title={entry.link ? tx('artifacts:workbench.symlink') : entry.name} aria-expanded={entry.directory ? expanded : undefined} onClick={() => {
+        <button type="button" className={css.row} aria-current={child === current ? 'page' : undefined} disabled={entry.link} title={entry.link ? tx('artifacts:workbench.symlink') : entry.name} aria-expanded={entry.directory ? expanded : undefined} onClick={() => {
           if (entry.directory) { if (expanded) view.expanded.delete(child); else view.expanded.add(child); redraw(); } else onOpen(child);
         }}>{entry.directory ? expanded ? <IconFolderOpenOutline16 className={css.icon}/> : <IconFolderClose16 className={css.icon}/> : <FileTypeIcon path={entry.name} size={16} className={css.fileIcon}/>}<span className={css.name}>{entry.name}</span></button>
-        {entry.directory && expanded && <Directory path={child} {...{ call, view, revision, onOpen, loaded }}/ >}
+        {entry.directory && expanded && <Directory path={child} {...{ call, view, revision, onOpen, loaded, current }}/ >}
       </li>;
     })}
   </ul>;
 }
-export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call: WorkbenchCall; view: FileTabView; onOpen:(path:string)=>void }) {
+export function WorkspaceFile({ path, call, view, onOpen, navigator, tools }: { path: string; call: WorkbenchCall; view: FileTabView; onOpen:(path:string)=>void; navigator?: ReactNode; tools?: ReactNode }) {
   const tx = useTranslation();
   const [wrap, setWrap] = useState(view.wrap);
   const [mode, setMode] = useState<Viewer>(view.mode ?? viewersForPath(path)[0]), [menu, setMenu] = useState(false);
@@ -101,7 +113,14 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
     return () => { owner.deactivate(); view.cache.retain(owner); };
   }, [owner, view]);
   useEffect(() => { if (mode) owner.ensure(mode === 'office' ? path.toLowerCase().endsWith('.docx') ? 'docx' : 'pptx' : loadsBytes(mode) ? 'bytes' : 'pages', Math.max(view.document?.textLoadedLines ?? 0, view.line ?? 0)); }, [owner, mode, path]);
-  useLayoutEffect(() => { const el = scroll.current; if (!el || view.line === undefined || mode !== 'code' || !value.page?.eof && value.loadedLines < view.line) return; el.scrollTop = Math.max(0, view.line - 1) * parseFloat(getComputedStyle(el.querySelector('.line') ?? el).lineHeight); view.top = el.scrollTop; view.line = undefined; }, [view, loaded, mode, value.loadedLines]);
+  useLayoutEffect(() => {
+    const el = scroll.current;
+    if (!el || view.line === undefined || !['code', 'text'].includes(mode) || !value.page?.eof && value.loadedLines < view.line) return;
+    const row = mode === 'text' ? el.querySelector<HTMLElement>(`[data-textpreview-line="${view.line}"]`) : el.querySelectorAll<HTMLElement>('pre .line').item(view.line - 1);
+    if (!row) return;
+    el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    view.top = el.scrollTop; view.line = undefined;
+  }, [view, loaded, mode, value.loadedLines, value.text]);
   useLayoutEffect(() => {
     const node = scroll.current; if (!node || mode !== 'code') return;
     const changed = () => {
@@ -116,16 +135,15 @@ export function WorkspaceFile({ path, call, view, onOpen }: { path: string; call
   const bytes = value.data ?? new Uint8Array();
   const fullPath = view.cwd ? `${view.cwd.replace(/\/$/, '')}/${path}` : path;
   const more = value.page && !value.page.eof && <Button disabled={value.loading} onClick={() => owner.more()}>{tx(value.loading ? 'artifacts:document.loading' : 'artifacts:artifact-preview.load-more')}</Button>;
-  return <section className={css.root} data-workbench-file={path}>
-    <div className={css.header}><PathLabel path={fullPath} className={css.path}/>{viewersForPath(path).length > 1 && <Menu open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus selectedId={mode} items={viewersForPath(path).map(id => ({ id, label: tx(`artifacts:workbench.${id}`) }))} onSelect={id => { view.mode = id as Viewer; setMode(view.mode); setMenu(false); }} anchor={<button type="button" className={`${css.tool} ${css.viewer}`} aria-label={tx('artifacts:workbench.viewer')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{tx(`artifacts:workbench.${mode}`)}</button>}/>}<button hidden={mode !== 'text' && mode !== 'code'} type="button" className={css.tool} aria-label={tx('artifacts:artifact-preview.wrap-lines')} aria-pressed={wrap} title={tx('artifacts:artifact-preview.wrap-lines')} onClick={() => { view.wrap = !wrap; setWrap(!wrap); }}><IconWrapLinesOutline16/></button><Reload reload={() => owner.refresh()}/><OpenFileApp call={call} path={path} directory={false}/></div>
+  return <PreviewFrame path={fullPath} data-workbench-file={path} navigator={navigator} tools={<>{viewersForPath(path).length > 1 && <Menu open={menu} onClose={() => setMenu(false)} align="end" dense autoFocus selectedId={mode} items={viewersForPath(path).map(id => ({ id, label: tx(`artifacts:workbench.${id}`) }))} onSelect={id => { view.mode = id as Viewer; setMode(view.mode); setMenu(false); }} anchor={<button type="button" className={`${css.tool} ${css.viewer}`} aria-label={tx('artifacts:workbench.viewer')} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>{tx(`artifacts:workbench.${mode}`)}</button>}/>}<button hidden={mode !== 'text' && mode !== 'code'} type="button" className={css.tool} aria-label={tx('artifacts:artifact-preview.wrap-lines')} aria-pressed={wrap} title={tx('artifacts:artifact-preview.wrap-lines')} onClick={() => { view.wrap = !wrap; setWrap(!wrap); }}><IconWrapLinesOutline16/></button><Reload reload={() => owner.refresh()}/><OpenFileApp call={call} path={path} directory={false}/>{tools}</>}>
     {failure !== undefined && <div className={css.note} role="alert"><p>{tx(`artifacts:document.${failure}`)}</p>{!['source_missing','source_unavailable','authorization_revoked','obsolete'].includes(failure) && !(failure === 'too_large' && value.text === undefined) && <Button onClick={() => owner.retry()}>{tx('artifacts:artifact-preview.retry-preview')}</Button>}</div>}
     {!owner.automaticRefresh && <p className={css.note} role="note">{tx('artifacts:document.manual-refresh')}</p>}
     {value.text === '' && value.page?.eof && <p className={css.note}>{tx('artifacts:document.empty')}</p>}
-    {!mode ? <p className={css.note}>{tx('artifacts:artifact-preview.this-artifact-has-no-supported-inline-viewer')}</p> : !loaded ? error === undefined && <p className={css.note} role="status">{tx('artifacts:workbench.loading')}</p> : mode !== 'text' && mode !== 'code' ? <div ref={scroll} className={css.document} onScroll={reading.onScroll}><DocumentBody key={mode} call={call} onOpen={onOpen} mode={mode} text={value.text ?? ''} bytes={bytes} path={path} view={view} signal={lifetime.signal} retry={() => owner.retry()}/>{more}</div> : mode === 'code' ? <div className={css.renderer} data-wrap={wrap}><CodeBlock className={css.code} contentRef={scroll} code={value.text ?? ''} lang={languageForPath(path)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')} toolbarLabel={tx('artifacts:workbench.code')}/>{more}</div> : <div ref={scroll} className={css.plainText} data-wrap={wrap} onScroll={event => {
+    {!mode ? <p className={css.note}>{tx('artifacts:artifact-preview.this-artifact-has-no-supported-inline-viewer')}</p> : !loaded ? error === undefined && <LoadingIndicator label={tx('artifacts:workbench.loading')}/> : mode !== 'text' && mode !== 'code' ? <div ref={scroll} className={css.document} onScroll={reading.onScroll}><DocumentBody key={mode} call={call} onOpen={onOpen} mode={mode} text={value.text ?? ''} bytes={bytes} path={path} view={view} signal={lifetime.signal} retry={() => owner.retry()}/>{more}</div> : mode === 'code' ? <div className={css.renderer} data-wrap={wrap}><CodeBlock className={css.code} contentRef={scroll} code={value.text ?? ''} lang={languageForPath(path)} lineNumbers copyLabel={tx('common:search-block.copy')} copiedLabel={tx('common:search-block.copied')} toolbarLabel={tx('artifacts:workbench.code')}/>{more}</div> : <div ref={scroll} className={css.plainText} data-wrap={wrap} onScroll={event => {
       const node = event.currentTarget; reading.onScroll(event);
       if (value.page && !value.page.eof && !value.loading && error === undefined && node.scrollHeight - node.scrollTop - node.clientHeight < 160) owner.more();
-    }}><pre>{value.text}</pre>{more}</div>}
-  </section>;
+    }}><TextLines text={value.text ?? ''}/>{more}</div>}
+  </PreviewFrame>;
 }
 function OpenFileApp({ call, path, directory }: { call: WorkbenchCall; path: string; directory: boolean }) {
   const tx = useTranslation();

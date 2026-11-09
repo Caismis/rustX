@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {it} from 'node:test';
 import {fixtures} from '../../protocol/app-server/fixtures.ts';
-import {decodeProtocolMessage} from '../src/protocol/decoder.ts';
+import {decodeProtocolMessage,decodeServerOutput} from '../src/protocol/decoder.ts';
 
 const trace=fixtures.find(value=>'method' in value&&value.method==='session/trace');
 if(!trace||!('method' in trace)||trace.method!=='session/trace')throw new Error('Missing native Trace request fixture');
@@ -16,10 +16,10 @@ it('the generated Root Trace boundary admits 128 interests and rejects the 129th
 it('the generated Trace result requires an integer bounded progress count',()=>{
  const response=fixtures.find(value=>'result' in value&&value.result?.type==='trace');
  if(!response||!('result' in response)||response.result?.type!=='trace')throw new Error('Missing native Trace result fixture');
- for(const refreshed of [0,1,128])assert.ok(decodeProtocolMessage({...response,result:{...response.result,refreshed}}));
- for(const refreshed of [-1,129,1.5,null,'1'])assert.equal(decodeProtocolMessage({...response,result:{...response.result,refreshed}}),undefined);
+ for(const refreshed of [0,1,128])assert.ok(decodeServerOutput({...response,result:{...response.result,refreshed}}));
+ for(const refreshed of [-1,129,1.5,null,'1'])assert.equal(decodeServerOutput({...response,result:{...response.result,refreshed}}),undefined);
  const {refreshed,...missing}=response.result;void refreshed;
- assert.equal(decodeProtocolMessage({...response,result:missing}),undefined);
+ assert.equal(decodeServerOutput({...response,result:missing}),undefined);
 });
 
 it('checkpoint and Agent enrichment retain their generated eight-interest admission',()=>{

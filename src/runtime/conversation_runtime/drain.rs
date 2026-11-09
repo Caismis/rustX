@@ -195,6 +195,7 @@ impl RuntimeInner {
                 && state.mcp_settlement_failure.is_none()
             {
                 state.mcp_settlement_failure = Some(detail);
+                self.activity.pulse();
             }
             match lifecycle_state {
                 ConversationLifecycleState::Inactive => {
@@ -239,6 +240,12 @@ impl RuntimeInner {
                             .request_cancel(CancellationReason::RuntimeShutdown);
                     }
                     let transitioned = self.lifecycle.begin_drain();
+                    self.mailbox
+                        .steering
+                        .lock()
+                        .expect("steering admission")
+                        .waiting
+                        .clear();
                     debug_assert!(
                         transitioned,
                         "the coordinator lock owns the runtime drain transition"

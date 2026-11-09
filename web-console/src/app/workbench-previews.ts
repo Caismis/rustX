@@ -5,10 +5,11 @@ import type { WorkspaceAuthority } from '../workspaces/authority';
 import type { WorkspaceAuthorityScope } from '../workspaces/host';
 import type { WorkbenchTarget } from '../workspaces/workbench';
 import type { FileTabView } from './components/WorkbenchFiles';
-import type { TabId } from '../presentation/dockkit/contract/types';
+import type { PaneId, TabId } from '../presentation/dockkit/contract/types';
+import type { WorkbenchNavigatorState } from './components/WorkbenchNavigator';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { sameEndpoint } from '../workspaces/endpoint';
-interface RetainedWorkbench { views: Map<TabId, FileTabView>; current(): boolean }
+interface RetainedWorkbench { views: Map<TabId, FileTabView>; navigators: Map<PaneId, WorkbenchNavigatorState>; current(): boolean }
 /** App-private retention, never a path/permission registry. Every result is
  * still reauthorized by its source adapter before a body can restore it. */
 export class WorkbenchPreviewRetention {
@@ -18,7 +19,7 @@ export class WorkbenchPreviewRetention {
     const client = this.client.subscribe(this.invalidate), host = this.authority.subscribe(this.invalidate);
     return () => { client(); host(); for (const record of this.records.values()) this.dispose(record); this.records.clear(); };
   }
-  private dispose(record: RetainedWorkbench) { for (const view of record.views.values()) view.preview?.dispose(); record.views.clear(); }
+  private dispose(record: RetainedWorkbench) { for (const view of record.views.values()) view.preview?.dispose(); record.views.clear(); record.navigators.clear(); }
   private invalidate = () => { for (const [key, record] of this.records) if (!record.current()) { this.dispose(record); this.records.delete(key); } };
   acquire(scope: WorkspaceAuthorityScope | undefined, target: WorkbenchTarget | undefined): RetainedWorkbench {
     this.invalidate();
@@ -37,7 +38,7 @@ export class WorkbenchPreviewRetention {
     const key = JSON.stringify([generation, revision, hostRevision, scope?.authorityId, scope?.endpoint, captured]);
     const retained = this.records.get(key);
     if (retained) { this.records.delete(key); this.records.set(key, retained); return retained; }
-    const record = { current, views: new Map<TabId, FileTabView>() };
+    const record = { current, views: new Map<TabId, FileTabView>(), navigators: new Map<PaneId, WorkbenchNavigatorState>() };
     if (!current()) return record;
     if (this.records.size >= PREVIEW_POLICY.retainedSessions) { const oldest = this.records.entries().next().value!; this.dispose(oldest[1]); this.records.delete(oldest[0]); }
     this.records.set(key, record); return record;

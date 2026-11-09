@@ -42,6 +42,7 @@ use std::path::PathBuf;
 /// unreferenced private directory.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedLineage {
+    pub(crate) dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
     pub(crate) uploads: uploads::UploadRegistry,
     pub(crate) session_id: SessionId,
     pub(crate) node_id: SessionNodeId,
@@ -248,6 +249,7 @@ impl SessionCatalog {
         let seed = lineage_cut(&conversation_id, source, Some(message_id), side)?;
         let source_artifacts = self.lineage_artifacts(source, &seed)?;
         let prepared = PreparedLineage {
+            dynamic_tools: Vec::new(),
             uploads: uploads::UploadRegistry::default(),
             session_id: session_id.clone(),
             node_id,
@@ -292,6 +294,7 @@ impl SessionCatalog {
         })?;
         let database_path = conversation_database_path(&self.root, &session_id, &conversation_id);
         let prepared = PreparedLineage {
+            dynamic_tools: Vec::new(),
             uploads: uploads::UploadRegistry::default(),
             session_id,
             node_id,

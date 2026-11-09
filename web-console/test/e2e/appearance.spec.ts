@@ -5,7 +5,7 @@ for (const locale of ['en', 'zh'] as const) test(`Harness appearance cards follo
   await page.emulateMedia({ colorScheme: 'dark' }); await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-ds-dark-theme', '');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  if (locale === 'zh') await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
+  if (locale === 'zh') await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
   const label = (en: string, zh: string) => locale === 'en' ? en : zh;
   const row = page.getByRole('group', { name: label('Appearance', '外观'), exact: true });
   const system = row.getByRole('button', { name: label('System', '跟随系统'), exact: true });

@@ -1,0 +1,28 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted Home sidebar; see PROVENANCE.md. */
+.root {
+  --dsh-sidebar-inline-padding: 12px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 6px var(--dsh-sidebar-inline-padding);
+  box-sizing: border-box;
+  background: var(--dsw-specific-sidebar-fill);
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+.quietBars { --dsh-scrollbar-thumb: transparent; --dsh-scrollbar-thumb-hover: transparent; }
+.logoRow { flex: none; display: flex; align-items: center; gap: 8px; height: 60px; padding: 8px 0 8px 4px; margin-bottom: 4px; box-sizing: border-box; }
+.brand { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; }
+.brandMark { font-size: 16px; font-weight: 700; }
+.iconButton { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: var(--dsw-radius-sm); background: transparent; cursor: pointer; color: var(--dsw-alias-label-secondary); }
+.iconButton:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.iconButton:focus-visible, .newSession:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }
+.newSession { flex: none; display: flex; align-items: center; justify-content: center; gap: 6px; height: 38px; padding: 8px 12px; margin: 0 2px 12px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-button-elevated-fill); color: var(--dsw-alias-label-primary); font: inherit; font-weight: 500; line-height: 22px; cursor: pointer; }
+.newSession:hover { background: var(--dsw-alias-button-floating-hover); }
+.regionArea { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-left: -4px; margin-right: calc(-1 * var(--dsh-sidebar-inline-padding)); padding-left: 4px; overflow: hidden; }
+.footer { flex: none; display: flex; align-items: center; gap: 8px; }
+:global([data-platform='darwin']) .root { background: transparent; }
+:global([data-platform='darwin']:not([data-fullscreen])) .logoRow { min-height: 60px; }
+:global([data-windows-titlebar]) .logoRow { height: 40px; margin: 0; padding: 0 0 0 4px; }

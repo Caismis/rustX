@@ -1,5 +1,8 @@
 # File-preview behavior alignment
 
+2026-11-06 update against Harness `ce7073d51254c26cd63b22a60835b8f948deb447`: shared PreviewFrame and quiet LoadingIndicator for all sidebar states, source-line text rendering, image loading/fit inset/panning, and pane-owned workspace navigation (560px push, 400px overlay, narrow/fullscreen fill). Directory expansion, width, scroll and held tree focus survive file replacement; the navigator shares the Files page's tree. Existing Markdown, code, spreadsheet, HTML and zoom source ports retain native ownership. Office uses visible-page PDF rendering, bounded content-addressed PDFs and one reusable converter per Host. Linux retains the actual UNO Desktop/process; macOS retains the kit converter instance. Native source admission, supported-format policy and original file actions remain explicit rustX integration boundaries.
+
+
 Reference: DeepSeek Harness `687f282e8625c6b8d11ff58211a90524be2e4317` (dsh 0.2.1-rc.2). rustX inspection baseline: `006d1bb4ae5e6de9adb1ba1ae7af53e625dd9c71`, the development head of upstream PR #505.
 
 This comparison was derived from the pinned implementation and rustX's existing

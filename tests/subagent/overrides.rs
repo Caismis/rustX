@@ -652,7 +652,7 @@ async fn sub258_a_replaced_away_default_is_no_longer_a_requirement() {
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
 
-    // Only the effective Skill is frozen for materialization; the role's
+    // Only the effective Skill definition is frozen; the role's
     // default Skill is absent from the specification entirely.
     let replaced = delegate(
         &resources,
@@ -662,7 +662,7 @@ async fn sub258_a_replaced_away_default_is_no_longer_a_requirement() {
     .expect("resolution");
     assert!(
         replaced.skills.is_empty(),
-        "a replaced-away Skill is not a materialization requirement"
+        "a replaced-away Skill is not an initialization requirement"
     );
     assert!(replaced.materialization.is_empty());
     assert!(

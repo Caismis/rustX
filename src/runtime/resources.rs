@@ -135,6 +135,7 @@ pub(crate) struct ContextBinding {
     pub(crate) configuration: RuntimeConfiguration,
     pub(crate) project_context_files: Vec<ProjectContextFile>,
     pub(crate) root_agent_project_files: Vec<ProjectContextFile>,
+    pub(crate) skills: Arc<crate::skills::SkillSnapshot>,
 }
 
 /// The complete immutable resource generation observed by an attempt.
@@ -232,8 +233,9 @@ impl RuntimeResourceSnapshot {
 
     /// Rebinds this generation's context: its configuration is replaced by
     /// the binding's complete configuration and the root profile, project
-    /// instructions and agent profile are re-derived from it. Capability,
-    /// catalogs and provider resources are shared unchanged.
+    /// instructions and agent profile are re-derived from it. The inert Skill
+    /// catalog is replaced; executable Tools, environments and providers remain
+    /// shared unchanged.
     pub(crate) fn with_context_binding(&self, binding: &ContextBinding) -> Result<Self, String> {
         self.configuration.as_ref().ok_or("missing configuration")?;
         let mut snapshot = self.clone();
@@ -249,8 +251,18 @@ impl RuntimeResourceSnapshot {
             self.capability
                 .as_ref()
                 .clone()
+                .with_skills(binding.skills.clone())
                 .with_resolved_profile(Some(Arc::new(profile))),
         );
+        snapshot.skill_catalog = snapshot.capability.skill_catalog().map(Arc::from);
+        snapshot.skill_sources = snapshot
+            .capability
+            .skills()
+            .locations()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>()
+            .into();
         snapshot.project_context_files = binding.project_context_files.clone().into();
         let mut files = if agent.agents_md.inherit {
             binding.project_context_files.clone()
@@ -262,7 +274,7 @@ impl RuntimeResourceSnapshot {
         snapshot.agent_profile =
             (!agent.instructions.is_empty()).then(|| Arc::from(agent.instructions.as_str()));
         snapshot.configuration = Some(Arc::new(binding.configuration.clone()));
-        snapshot.refresh_inspection();
+        snapshot.resolve_profiles();
         // Context adoption does not recover an external source. Keep the
         // runtime-owned failure until a successful catalog generation replaces it.
         Arc::make_mut(&mut snapshot.inspection)

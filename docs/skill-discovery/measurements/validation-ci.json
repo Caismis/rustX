@@ -1,0 +1,210 @@
+{
+  "implementation_commit": "28bb6d4fd63f86ff2ec61a0e0947f6ac6edfa7a5",
+  "branch": "codex/ui-experience",
+  "profile": "FULL",
+  "attempt": 2,
+  "created_at": "2026-11-06T12:56:06Z",
+  "updated_at": "2026-11-06T14:31:24Z",
+  "runs": [
+    {
+      "conclusion": "success",
+      "databaseId": 42221459145,
+      "event": "workflow_dispatch",
+      "headBranch": "codex/ui-experience",
+      "headSha": "28bb6d4fd63f86ff2ec61a0e0947f6ac6edfa7a5",
+      "jobs": [
+        {
+          "id": 127935414163,
+          "name": "Browser acceptance (shard 2/2)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935414163"
+        },
+        {
+          "id": 127935414290,
+          "name": "Verification plan",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935414290"
+        },
+        {
+          "id": 127935415030,
+          "name": "Platform-sensitive boundaries (macOS full)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935415030"
+        },
+        {
+          "id": 127935415228,
+          "name": "Documentation contracts (Linux)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935415228"
+        },
+        {
+          "id": 127935415526,
+          "name": "Boundary suites (Linux)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935415526"
+        },
+        {
+          "id": 127935415643,
+          "name": "Format, lint, and whitespace",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935415643"
+        },
+        {
+          "id": 127935416181,
+          "name": "Web client, Host and launcher tests",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935416181"
+        },
+        {
+          "id": 127935416508,
+          "name": "Browser acceptance (shard 1/2)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935416508"
+        },
+        {
+          "id": 127935459672,
+          "name": "Platform-sensitive external boundaries (macOS core)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935459672"
+        },
+        {
+          "id": 127935462099,
+          "name": "TUI typecheck and tests",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935462099"
+        },
+        {
+          "id": 127935469521,
+          "name": "Fast Rust contracts and real-process workflows (Linux)",
+          "status": "completed",
+          "conclusion": "skipped",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935469521"
+        },
+        {
+          "id": 127935474193,
+          "name": "App Server generated protocol",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935474193"
+        },
+        {
+          "id": 127935477631,
+          "name": "Notification metadata and signing",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935477631"
+        },
+        {
+          "id": 127935480065,
+          "name": "Browser inputs (build once)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935480065"
+        },
+        {
+          "id": 127935481730,
+          "name": "Deterministic contracts (Linux)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935481730"
+        },
+        {
+          "id": 127935493349,
+          "name": "Desktop adapter and Host (macOS Node)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127935493349"
+        },
+        {
+          "id": 127948709719,
+          "name": "Browser acceptance coverage",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127948709719"
+        },
+        {
+          "id": 127948947128,
+          "name": "Merge verification",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221459145/job/127948947128"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/Caismis/rustX/actions/runs/42221459145",
+      "workflowName": "CI"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 42221431550,
+      "event": "push",
+      "headBranch": "codex/ui-experience",
+      "headSha": "28bb6d4fd63f86ff2ec61a0e0947f6ac6edfa7a5",
+      "jobs": [
+        {
+          "id": 127904172114,
+          "name": "Workspace filesystem and PTY (macos-latest)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221431550/job/127904172114"
+        },
+        {
+          "id": 127904172187,
+          "name": "Workspace filesystem and PTY (ubuntu-latest)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/Caismis/rustX/actions/runs/42221431550/job/127904172187"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/Caismis/rustX/actions/runs/42221431550",
+      "workflowName": "Workspace Host platform conformance"
+    }
+  ],
+  "selection_note": "FULL selected 15 successful jobs; its three alternative FAST-profile jobs were intentionally not selected.",
+  "browser_cases": {
+    "passed": 655,
+    "failed": 0,
+    "skipped": 0,
+    "shards": [
+      {
+        "index": 1,
+        "passed": 302
+      },
+      {
+        "index": 2,
+        "passed": 353
+      }
+    ]
+  },
+  "macos_full": {
+    "in_crate_passed": 4148,
+    "external_passed": 558,
+    "ignored": 12,
+    "linux_owned_filtered": 1094
+  },
+  "manual_rerun": {
+    "job": "Browser acceptance (shard 2/2)",
+    "original_job_id": 127906367199,
+    "successful_job_id": 127935414163,
+    "reference": "settings-delete-confirm-light-linux.png",
+    "initial_changed_pixels": 61,
+    "initial_max_channel_delta": 1,
+    "location": "Background behind the confirmation backdrop blur",
+    "focused_local_repetitions_passed": 3,
+    "reference_changed": false,
+    "pixel_policy_changed": false,
+    "deadlines_changed": false,
+    "implementation_changed": false
+  }
+}

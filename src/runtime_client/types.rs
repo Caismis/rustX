@@ -286,7 +286,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 84;
+/// Version 85 combines shared-control errors and bounded Trace refresh progress.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1020,6 +1021,8 @@ pub struct InteractionFieldItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientError {
+    /// An input may have committed; reconcile its native correlation before any new submission.
+    OutcomeUnknown,
     /// A newer Session binding superseded the model selection's fence.
     ModelSelectionConflict,
     /// The negotiated protocol version is not supported by this runtime.
@@ -1028,14 +1031,6 @@ pub enum RuntimeClientError {
         supported: u16,
         /// The version the client requested.
         requested: u16,
-    },
-    /// A control attachment is already active: the host allows one control
-    /// attachment per live runtime instance, and a second control attach
-    /// never evicts the active one. Read-only inspection attachments use a
-    /// separate admission lane.
-    AttachmentInUse {
-        /// The identity of the active attachment.
-        existing_attachment_id: AttachmentId,
     },
     /// The request arrived without an admitted attachment.
     NotAttached,
@@ -1383,7 +1378,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 84);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 85);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

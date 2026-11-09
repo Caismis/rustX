@@ -97,6 +97,9 @@ pub struct SourceCredentials {
     pub(crate) captured: CredentialSnapshot,
     #[serde(skip)]
     pub(crate) resolved: Arc<OnceLock<Result<ResolvedSourceCredentials, String>>>,
+    /// Native transport literals remain write-only in every observation.
+    #[serde(skip)]
+    pub(crate) literal_redactions: Vec<ResolvedCredential>,
 }
 
 impl PartialEq for SourceCredentials {
@@ -104,6 +107,7 @@ impl PartialEq for SourceCredentials {
         self.environment == other.environment
             && self.headers == other.headers
             && self.captured == other.captured
+            && self.literal_redactions == other.literal_redactions
     }
 }
 impl Eq for SourceCredentials {}
@@ -136,17 +140,37 @@ impl SourceCredentials {
     }
 
     pub(crate) fn redact(&self, message: &str) -> String {
-        let mut message = message.to_owned();
+        let mut values = self
+            .literal_redactions
+            .iter()
+            .map(ResolvedCredential::expose)
+            .collect::<Vec<_>>();
         if let Some(Ok(resolved)) = self.resolved.get() {
-            for value in resolved
-                .environment
-                .values()
-                .chain(resolved.headers.values())
-            {
-                message = message.replace(value.expose(), "<redacted>");
+            values.extend(
+                resolved
+                    .environment
+                    .values()
+                    .chain(resolved.headers.values())
+                    .map(ResolvedCredential::expose),
+            );
+        }
+        // Redact complete values before any overlapping shorter value.
+        values.sort_unstable_by(|left, right| right.len().cmp(&left.len()).then(left.cmp(right)));
+        values.dedup();
+        values.retain(|value| !value.is_empty());
+        let mut redacted = String::with_capacity(message.len());
+        let mut remaining = message;
+        while !remaining.is_empty() {
+            if let Some(value) = values.iter().find(|value| remaining.starts_with(**value)) {
+                redacted.push_str("<redacted>");
+                remaining = &remaining[value.len()..];
+            } else {
+                let character = remaining.chars().next().expect("nonempty text");
+                redacted.push(character);
+                remaining = &remaining[character.len_utf8()..];
             }
         }
-        message
+        redacted
     }
     /// Bind host authority without resolving any reference.
     pub fn capture(&mut self, captured: CredentialSnapshot) {
@@ -186,6 +210,44 @@ mod tests {
     use super::*;
 
     const SENTINEL: &str = "CFG233_SENTINEL_NEVER_PROJECT_8b94";
+
+    #[test]
+    fn literal_redactions_are_private_nonempty_and_longest_first() {
+        let credentials = SourceCredentials {
+            literal_redactions: ["", "literal", "literal-secret"]
+                .into_iter()
+                .map(ResolvedCredential::new)
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            credentials.redact("literal-secret literal"),
+            "<redacted> <redacted>"
+        );
+        for projection in [
+            format!("{credentials:?}"),
+            serde_json::to_string(&credentials).unwrap(),
+        ] {
+            assert!(!projection.contains("literal-secret"));
+        }
+    }
+
+    #[test]
+    fn redaction_never_rescans_inserted_masks() {
+        let mask = "<redacted>";
+        let mut credentials = SourceCredentials::default();
+        credentials
+            .literal_redactions
+            .push(ResolvedCredential::new("secret"));
+        for start in 0..mask.len() {
+            for end in start + 1..=mask.len() {
+                credentials
+                    .literal_redactions
+                    .push(ResolvedCredential::new(&mask[start..end]));
+            }
+        }
+        assert_eq!(credentials.redact("secret / λ"), "<redacted> / λ");
+    }
 
     #[test]
     fn references_are_explicit_validated_and_not_interpolation() {

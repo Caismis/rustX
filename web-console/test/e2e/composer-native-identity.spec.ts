@@ -4,7 +4,7 @@ import { AppServerClient } from '../../src/client/app-server';
 import { ComposerDraft } from '../../src/app/composer/draft';
 import { AttachmentIntake } from '../../src/client/uploads';
 import { CommandSession } from '../../src/app/commands/native';
-import type { Request } from '../../../protocol/app-server/v73';
+import type { Request } from '../../../protocol/app-server/v76';
 
 function barrier<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 for (const replacement of ['reattach', 'switch'] as const) test(`real native ${replacement} settles old input by canonical Conversation, not attachment`, async () => {
@@ -15,7 +15,7 @@ for (const replacement of ['reattach', 'switch'] as const) test(`real native ${r
     socket = new WebSocket(url, protocols);
     socket.addEventListener('message', event => {
       const reply = JSON.parse(String(event.data));
-      if (hold && methods.get(String(reply.id)) === 'turn/start') {
+      if (hold && methods.get(String(reply.id)) === 'inbound/queue') {
         event.stopImmediatePropagation();
         received.resolve(() => socket.onmessage?.(event));
       }
@@ -37,7 +37,7 @@ for (const replacement of ['reattach', 'switch'] as const) test(`real native ${r
   };
   try {
     await client.connect(fixture.endpoint, fixture.token);
-    const created = await client.request({ method: 'session/create', params: { settings: { cwd: fixture.workspaceA } } }, 'session_transition');
+    const created = await client.request({ method: 'thread/start', params: { settings: { cwd: fixture.workspaceA } } }, 'session_transition');
     sessionId = created.session.id;
     await client.request({ method: 'session/name', params: { session_id: sessionId, name: 'New session' } }, 'session'); await client.attach(sessionId, created.session.active_node);
     const firstDone = terminal(); await client.send(sessionId, 'Composer identity 0'); await firstDone;
@@ -76,8 +76,8 @@ for (const replacement of ['reattach', 'switch'] as const) test(`real native ${r
     expect(owner.snapshot()?.incarnation).toBe(editor.incarnation);
     if (replacement === 'switch') expect(owner.snapshot()?.revision).toBe(revision);
     expect(requests.slice(before)).toEqual([]);
-    expect(requests.filter(request => request.method === 'turn/start')).toHaveLength(2);
-    expect(requests.filter(request => request.method === 'session/attach')).toHaveLength(2);
+    expect(requests.filter(request => request.method === 'inbound/queue')).toHaveLength(2);
+    expect(requests.filter(request => request.method === 'thread/resume')).toHaveLength(2);
     expect(requests.filter(request => request.method === 'session/switchNode')).toHaveLength(replacement === 'switch' ? 1 : 0);
     passed = true;
   } finally { await client.disconnect(); await fixture.stop(passed); }

@@ -57,3 +57,7 @@ label { display: grid; gap: 5px; font-size: 12px; }
 .repair-notice > span { flex: 1; }
 .repair-notice.error { border: 1px solid var(--dsw-alias-state-error-secondary); }
 .repair-notice button { color: inherit; pointer-events: auto; }
+
+/* Retained primary pages preserve local editors without owning native work. */
+.primary-page { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.primary-page[hidden] { display: none; }

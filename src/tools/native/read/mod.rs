@@ -325,7 +325,7 @@ mod tests {
 
     use super::{NAME, ReadTool, document, testdata};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
-    use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillPackageError, SkillSnapshot};
+    use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillSnapshot};
     use crate::tools::artifacts::ArtifactStore;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
@@ -438,6 +438,7 @@ mod tests {
                     stdout_capture: None,
                     workspace_changes: None,
                     model_invocation: None,
+                    attempt_id: None,
                     goal: None,
                     schedule: None,
                     conversation_id: &conversation_id,
@@ -513,6 +514,16 @@ mod tests {
             panic!("Read returned unexpected content: {asset_result:?}");
         };
         assert!(text.text.contains("procedure"));
+        // Internal resource links use exactly the normal host-file Tool path
+        // contract; the Skill boundary adds no filesystem permission or ACL.
+        let shared = directory.path().join("shared-reference.md");
+        std::fs::write(&shared, "shared reference").unwrap();
+        let linked = skill.join("reference.md");
+        std::os::unix::fs::symlink(shared, &linked).unwrap();
+        let (invocation, execution) =
+            context("read-skill-reference-link", &linked.to_string_lossy());
+        let linked = ReadTool.start(invocation, execution).completion.await;
+        assert_eq!(linked.status, ToolExecutionStatus::Success);
 
         // A missing workspace-relative path still fails; Skill locations are
         // ordinary host paths, not virtual aliases.
@@ -529,7 +540,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn skill_resource_symlink_escape_is_rejected_at_discovery() {
+    fn skill_resource_links_are_left_to_normal_tools() {
         let directory = tempfile::tempdir().expect("temporary root");
         let workspace = Workspace::new(directory.path()).expect("workspace");
         let skill_root = directory.path().join(".agents/skills");
@@ -550,14 +561,8 @@ mod tests {
             SkillDiscoveryConfig::workspace_root(skill_root),
         )
         .discover();
-        assert!(outcome.packages.is_empty());
-        assert!(matches!(
-            outcome.diagnostics.as_slice(),
-            [crate::skills::SkillDiagnostic::PackageInvalid {
-                cause: SkillPackageError::UnsupportedSymlink { .. },
-                ..
-            }]
-        ));
+        assert_eq!(outcome.packages.len(), 1);
+        assert!(outcome.diagnostics.is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -642,6 +647,7 @@ mod tests {
                 stdout_capture: None,
                 workspace_changes: None,
                 model_invocation: None,
+                attempt_id: None,
                 goal: None,
                 schedule: None,
                 conversation_id: &self.conversation_id,

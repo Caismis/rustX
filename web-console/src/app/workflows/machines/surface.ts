@@ -8,7 +8,7 @@ export interface SurfaceContext {
   library: WorkflowLibraryActor;
   editor?: WorkflowEditorActor;
   /** The navigation to continue once unsaved edits are discarded. */
-  leaving?: { kind: 'back' } | { kind: 'external'; proceed: () => void };
+  leaving?: { kind: 'back' } | { kind: 'external'; proceed: () => void; cancelled?: () => void };
 }
 
 export type SurfaceEvent =
@@ -16,7 +16,7 @@ export type SurfaceEvent =
   | { type: 'OPEN'; id: string; port: WorkflowScopePort }
   | LibraryCreated | { type: 'LIBRARY.CHANGED' }
   | { type: 'BACK' }
-  | { type: 'LEAVE'; proceed: () => void }
+  | { type: 'LEAVE'; proceed: () => void; cancelled?: () => void }
   | { type: 'CONFIRM' } | { type: 'CANCEL' };
 
 /** Unsaved semantic edits, or a write whose outcome is not yet settled. */
@@ -49,6 +49,7 @@ export const workflowSurfaceMachine = setup({
       enqueue.assign({ editor: undefined, leaving: undefined });
     }),
     proceed: ({ context }) => { if (context.leaving?.kind === 'external') context.leaving.proceed(); },
+    cancelLeave: ({ context }) => { if (context.leaving?.kind === 'external') context.leaving.cancelled?.(); },
   },
 }).createMachine({
   id: 'workflowSurface',
@@ -57,7 +58,7 @@ export const workflowSurfaceMachine = setup({
   on: {
     // Leaving the route keeps a clean editor for return; unsaved edits ask first.
     LEAVE: [
-      { guard: 'holds', target: '.confirming', actions: assign(({ event }) => ({ leaving: { kind: 'external' as const, proceed: event.proceed } })) },
+      { guard: 'holds', target: '.confirming', actions: assign(({ event }) => ({ leaving: { kind: 'external' as const, proceed: event.proceed, cancelled: event.cancelled } })) },
       { actions: ({ event }) => event.proceed() },
     ],
   },
@@ -79,7 +80,7 @@ export const workflowSurfaceMachine = setup({
     confirming: {
       on: {
         CONFIRM: { target: 'library', actions: ['proceed', 'close'] },
-        CANCEL: { target: 'editor', actions: assign({ leaving: undefined }) },
+        CANCEL: { target: 'editor', actions: ['cancelLeave', assign({ leaving: undefined })] },
       },
     },
   },

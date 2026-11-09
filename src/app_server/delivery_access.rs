@@ -2,7 +2,7 @@
 //!
 //! Two transport-authenticated callers enter it: the private Product Host lane
 //! (whose roots come from its current Workspace registrations) and a connection
-//! holding delivery access (stdio owner or separate WebSocket credential).
+//! with ordinary API eligibility (OS-trusted stdio or authenticated WebSocket).
 //! Neither JSON fields, client names, coordinates nor paths create authority:
 //! the caller passes a cancellation token minted by transport authentication.
 //!
@@ -423,39 +423,6 @@ impl Revocations {
     pub(crate) fn publish<T>(&self, publish: impl FnOnce() -> T) -> T {
         let _shared = self.order.read().expect("delivery revocations");
         publish()
-    }
-}
-
-/// WebSocket clients offer this beside the ordinary transport credential.
-pub(crate) const CREDENTIAL_PREFIX: &str = "rustx-delivery-access.";
-
-/// The separate WebSocket delivery credential. Distinct from the ordinary
-/// transport token and the Product Host secret; never serialized. Dropping or
-/// replacing it synchronously revokes every connection it admitted.
-pub(crate) struct Grant {
-    credential: super::transport::websocket::Credential,
-    revoked: CancellationToken,
-}
-impl std::fmt::Debug for Grant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("DeliveryAccessGrant")
-    }
-}
-impl Grant {
-    pub(crate) fn new(credential: super::transport::websocket::Credential) -> Self {
-        Self {
-            credential,
-            revoked: CancellationToken::new(),
-        }
-    }
-    pub(crate) fn authenticate(&self, offered: &[&str]) -> Option<CancellationToken> {
-        (self.credential.offered(offered, CREDENTIAL_PREFIX) && !self.revoked.is_cancelled())
-            .then(|| self.revoked.child_token())
-    }
-}
-impl Drop for Grant {
-    fn drop(&mut self) {
-        self.revoked.cancel();
     }
 }
 

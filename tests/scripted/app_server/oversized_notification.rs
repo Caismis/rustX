@@ -72,8 +72,7 @@ async fn attach(
         client,
         id,
         Method::SessionAttach {
-            session_id: fixture.sessions[index].id.clone(),
-            node_id: None,
+            thread_id: fixture.sessions[index].active_conversation_id.clone(),
         },
     )
     .await
@@ -90,10 +89,11 @@ async fn start(
     text: &str,
     id: i64,
 ) -> crate::runtime::identity::MessageId {
-    let MethodResult::InboundAccepted { message_id, .. } = call(
+    let MethodResult::TurnInputAccepted { message_id, .. } = call(
         client,
         id,
         Method::TurnStart {
+            input_id: uuid::Uuid::new_v4().to_string(),
             target: target.clone(),
             content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                 text: text.into(),

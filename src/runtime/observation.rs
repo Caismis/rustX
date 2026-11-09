@@ -653,6 +653,7 @@ impl SessionObservationMetadata {
 }
 
 pub(crate) struct ObservationFanout {
+    activity: tokio::sync::watch::Sender<()>,
     /// The primary queue owned by the Runtime Client projection.
     primary: Arc<PendingObservations>,
     /// Serializes publication and close so every consumer sees the same
@@ -673,6 +674,7 @@ impl ObservationFanout {
     pub(crate) fn new(primary: Arc<PendingObservations>) -> Self {
         Self {
             primary,
+            activity: tokio::sync::watch::channel(()).0,
             dispatch: Mutex::new(()),
             session_metadata: tokio::sync::watch::channel(SessionObservationMetadata::default()).0,
 
@@ -685,6 +687,10 @@ impl ObservationFanout {
                 .0,
             )),
         }
+    }
+
+    pub(crate) fn activity_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.activity.subscribe()
     }
 
     pub(crate) fn session_metadata(
@@ -721,6 +727,15 @@ impl ObservationFanout {
     fn fold_child_activity(&self, observation: &ConversationObservation) {
         let mut activity = self.child_activity.lock().expect("native activity slot");
         for fact in observation.facts() {
+            if matches!(
+                fact,
+                ConversationObservation::PendingHead { .. }
+                    | ConversationObservation::InteractionPending { .. }
+                    | ConversationObservation::InteractionSettled { .. }
+                    | ConversationObservation::DurabilityFailed { .. }
+            ) {
+                self.activity.send_replace(());
+            }
             if activity.0.fold(fact, chrono::Utc::now()) {
                 let value = activity.0.observation().clone();
                 activity.1.send_replace(value);

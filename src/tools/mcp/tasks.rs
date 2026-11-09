@@ -282,6 +282,7 @@ impl RemoteTask {
     /// act on.
     pub(super) fn observe(
         &mut self,
+        credentials: &crate::credentials::SourceCredentials,
         snapshot: &GetTaskResult,
     ) -> Result<RemoteTaskObservation, McpTaskViolation> {
         let task = &snapshot.task.task;
@@ -291,8 +292,8 @@ impl RemoteTask {
         if task.task_id != self.task_id {
             return Err(McpTaskViolation::new(format!(
                 "the MCP server answered tasks/get for task {:?} with a snapshot of task {:?}",
-                bounded_id(&self.task_id),
-                bounded_id(&task.task_id)
+                bounded_id(&credentials.redact(&self.task_id)),
+                bounded_id(&credentials.redact(&task.task_id))
             )));
         }
         if let Some(message) = &task.status_message
@@ -315,7 +316,8 @@ impl RemoteTask {
                     |error| {
                         Err(McpTaskViolation::new(format!(
                             "the completed MCP task carries a result that is not a tools/call \
-                             result: {error}"
+                             result: {}",
+                            super::diagnostics::decode_error(&error)
                         )))
                     },
                     |result| Ok(RemoteTaskObservation::Completed(Box::new(result))),
@@ -327,7 +329,8 @@ impl RemoteTask {
                     |error| {
                         Err(McpTaskViolation::new(format!(
                             "the failed MCP task carries an error that is not a JSON-RPC error \
-                             object: {error}"
+                             object: {}",
+                            super::diagnostics::decode_error(&error)
                         )))
                     },
                     |error| Ok(RemoteTaskObservation::Failed(Box::new(error))),
@@ -497,6 +500,43 @@ mod tests {
     }
 
     #[test]
+    fn peer_identity_diagnostics_redact_before_truncation_and_keep_native_facts() {
+        let secret = format!("PR533_\"ESCAPED\\TASK_{}", "x".repeat(100));
+        let credentials = crate::credentials::SourceCredentials {
+            literal_redactions: [&secret, "e", "1"]
+                .into_iter()
+                .map(crate::model::catalog::ResolvedCredential::new)
+                .collect(),
+            ..Default::default()
+        };
+        let mut task = RemoteTask::create(&seed(&secret)).unwrap();
+        let error = task
+            .observe(&credentials, &snapshot("foreign", TaskPayload::Working))
+            .unwrap_err()
+            .diagnostic;
+        assert!(
+            !error.contains("PR533_"),
+            "raw identity was clipped before redaction: {error}"
+        );
+        assert!(error.contains("answered tasks/get for task"));
+        assert!(error.contains("<redacted>"));
+        assert_eq!(
+            task.task_id, secret,
+            "redaction must not change protocol identity"
+        );
+        let malformed = serde_json::from_value(serde_json::json!({"code":secret})).unwrap();
+        let error = task
+            .observe(
+                &credentials,
+                &snapshot(&secret, TaskPayload::Failed { error: malformed }),
+            )
+            .unwrap_err()
+            .diagnostic;
+        assert!(!error.contains("PR533_"));
+        assert!(error.contains("JSON-RPC error object"));
+    }
+
+    #[test]
     fn a_task_id_must_be_a_usable_bounded_protocol_identity() {
         assert!(RemoteTask::create(&seed("")).is_err());
         let oversized = "t".repeat(MCP_TASK_ID_MAX_BYTES + 1);
@@ -513,7 +553,10 @@ mod tests {
     fn a_snapshot_of_another_task_is_a_second_identity_and_is_refused() {
         let mut task = RemoteTask::create(&seed("task-a")).expect("task");
         let error = task
-            .observe(&snapshot("task-b", TaskPayload::Working))
+            .observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot("task-b", TaskPayload::Working),
+            )
             .expect_err("a foreign snapshot is refused");
         assert!(
             error.diagnostic.contains("task-a") && error.diagnostic.contains("task-b"),
@@ -529,15 +572,21 @@ mod tests {
             input_requests: requests(serde_json::json!({"a": elicitation("channel")})),
         };
         assert!(matches!(
-            task.observe(&snapshot("task-a", payload.clone()))
-                .expect("an outstanding ask"),
+            task.observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot("task-a", payload.clone())
+            )
+            .expect("an outstanding ask"),
             RemoteTaskObservation::InputRequired(_)
         ));
         task.record_answered(["a"]).expect("one answered key");
         // The stale repeat: the same key, after a successful update.
         assert!(matches!(
-            task.observe(&snapshot("task-a", payload))
-                .expect("a stale repeat"),
+            task.observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot("task-a", payload)
+            )
+            .expect("a stale repeat"),
             RemoteTaskObservation::Working
         ));
         assert_eq!(task.answered_count(), 1);
@@ -554,7 +603,10 @@ mod tests {
             })),
         };
         let RemoteTaskObservation::InputRequired(outstanding) = task
-            .observe(&snapshot("task-a", payload))
+            .observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot("task-a", payload),
+            )
             .expect("a mixed snapshot")
         else {
             panic!("a genuinely new key is outstanding work");
@@ -566,12 +618,15 @@ mod tests {
     fn an_input_required_task_naming_no_request_is_contradictory() {
         let mut task = RemoteTask::create(&seed("task-a")).expect("task");
         let error = task
-            .observe(&snapshot(
-                "task-a",
-                TaskPayload::InputRequired {
-                    input_requests: InputRequests::new(),
-                },
-            ))
+            .observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot(
+                    "task-a",
+                    TaskPayload::InputRequired {
+                        input_requests: InputRequests::new(),
+                    },
+                ),
+            )
             .expect_err("a contradictory snapshot is refused");
         assert!(error.diagnostic.contains("input_required"), "{error:?}");
     }
@@ -581,10 +636,10 @@ mod tests {
         let mut task = RemoteTask::create(&seed("task-a")).expect("task");
         let malformed = serde_json::from_value(serde_json::json!({"content": 7})).expect("object");
         assert!(
-            task.observe(&snapshot(
-                "task-a",
-                TaskPayload::Completed { result: malformed }
-            ))
+            task.observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot("task-a", TaskPayload::Completed { result: malformed })
+            )
             .is_err()
         );
         let valid = serde_json::from_value(serde_json::json!({
@@ -593,10 +648,10 @@ mod tests {
         }))
         .expect("object");
         let RemoteTaskObservation::Completed(result) = task
-            .observe(&snapshot(
-                "task-a",
-                TaskPayload::Completed { result: valid },
-            ))
+            .observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot("task-a", TaskPayload::Completed { result: valid }),
+            )
             .expect("a completed task")
         else {
             panic!("a completed task carries its result");
@@ -611,17 +666,20 @@ mod tests {
         let malformed =
             serde_json::from_value(serde_json::json!({"code": "boom"})).expect("object");
         assert!(
-            task.observe(&snapshot(
-                "task-a",
-                TaskPayload::Failed { error: malformed }
-            ))
+            task.observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot("task-a", TaskPayload::Failed { error: malformed })
+            )
             .is_err()
         );
         let valid =
             serde_json::from_value(serde_json::json!({"code": -32603, "message": "remote boom"}))
                 .expect("object");
         let RemoteTaskObservation::Failed(error) = task
-            .observe(&snapshot("task-a", TaskPayload::Failed { error: valid }))
+            .observe(
+                &crate::credentials::SourceCredentials::default(),
+                &snapshot("task-a", TaskPayload::Failed { error: valid }),
+            )
             .expect("a failed task")
         else {
             panic!("a failed task carries its error");
@@ -680,6 +738,9 @@ mod tests {
         let mut task = RemoteTask::create(&seed).expect("identity remains addressable");
         assert!(RemoteTask::validate_creation(&seed).is_err());
         let snapshot = GetTaskResult::new(DetailedTask::new(seed.task, TaskPayload::Working));
-        assert!(task.observe(&snapshot).is_err());
+        assert!(
+            task.observe(&crate::credentials::SourceCredentials::default(), &snapshot)
+                .is_err()
+        );
     }
 }

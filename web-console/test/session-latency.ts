@@ -25,7 +25,7 @@ function completed(row: RequestTiming): row is CompletedTiming {
  * observation. Return the original evidence rows; never erase their errors. */
 export function supersededHistoryReads(rpc: readonly RequestTiming[]): RequestTiming[] {
   const successful = rpc.filter((row): row is CompletedTiming => completed(row) && row.error === undefined);
-  const following = successful.filter(attach => attach.method === 'session/attach' && attach.resultType === 'attached' && attach.target
+  const following = successful.filter(attach => attach.method === 'thread/resume' && attach.resultType === 'attached' && attach.target
     && successful.some(checkpoint => checkpoint.method === 'session/checkpoint' && checkpoint.resultType === 'checkpoint'
       && checkpoint.target === attach.target && attach.end <= checkpoint.start
       && successful.some(subscribe => subscribe.method === 'session/subscribe' && subscribe.resultType === 'subscribed'

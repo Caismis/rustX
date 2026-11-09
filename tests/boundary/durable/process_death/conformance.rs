@@ -51,7 +51,7 @@ fn shapes(messages: &[MessageBlock]) -> Vec<&'static str> {
         .map(|message| match message {
             MessageBlock::User(user) => match user.kind {
                 InboundKind::Context(_) => "context",
-                InboundKind::Message => "user",
+                InboundKind::Message | InboundKind::QueuedMessage => "user",
                 InboundKind::GoalContinuation(_) => "goal_continuation",
             },
             MessageBlock::Assistant(assistant) => {

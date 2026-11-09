@@ -120,7 +120,7 @@ export interface RustxTuiAppOptions {
   /** Absent while browsing the resume catalog, before explicit selection. */
   session?: AppServerSession;
   connecting?: ConnectingSession;
-  /** `session/create` inputs for Sessions this client creates. */
+  /** `thread/start` inputs for Sessions this client creates. */
   sessionSettings: SessionSettings;
   /** A read-only catalog page acquired during resume bootstrap. */
   resumePage?: SessionCatalogPage;
@@ -165,6 +165,7 @@ export class RustxTuiApp {
   readonly #footer = new FooterView(() => ({
     state: this.#connecting ? undefined : this.#session?.state,
     connection: this.#connectionLabel(),
+    threadStatus:this.#session?this.#host.threadStatusLabel(this.#session.target.conversation_id):undefined,
     session: this.#connecting ? undefined : this.#sessionInfo,
     conversation: this.#connecting ? undefined : this.#conversationContext(),
     application: this.#connecting ? undefined : this.#session?.application,
@@ -215,6 +216,7 @@ export class RustxTuiApp {
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
   #removeClosedListener: (() => void) | undefined;
+  #removeThreadStatusListener:()=>void=()=>{};
   #removeConnectionListener: () => void = () => {};
   /** The durable metadata of the visible Session, refreshed authoritatively. */
   #sessionInfo: SessionView | undefined;
@@ -279,6 +281,7 @@ export class RustxTuiApp {
 
     this.#watchConnection();
     this.#watchSourceRepairs();
+    this.#watchThreadStatuses();
     this.#bindSession(this.#session);
   }
 
@@ -296,6 +299,16 @@ export class RustxTuiApp {
    */
   #watchSourceRepairs(): void {
     this.#repairStatus.watch(this.#host, host => this.#host === host && !this.#quitting && !this.#finished, () => { if (this.#started) this.#tui.requestRender(); });
+  }
+
+  #watchThreadStatuses():void {
+    this.#removeThreadStatusListener();
+    const host=this.#host;
+    this.#removeThreadStatusListener=host.onThreadStatus(()=>{
+      if(this.#host!==host||this.#quitting||this.#finished)return;
+      if(this.#session)this.#renderState(this.#session.state);
+      this.#tui.requestRender();
+    });
   }
 
   #watchConnection(): void {
@@ -338,6 +351,7 @@ export class RustxTuiApp {
       await oldHost.shutdown();
       replacement = await this.#reconnect();
       replacement.inheritModelSelectionUncertainty(oldHost);
+      replacement.inheritInputUncertainty(oldHost);
       let focus = focused;
       let observedDeletion: SessionDeleteResult | undefined;
       // A historical deletion target is independent of the currently focused Session.
@@ -366,6 +380,7 @@ export class RustxTuiApp {
       this.#bindSession(undefined, this.#draft);
       this.#watchConnection();
       this.#watchSourceRepairs();
+      this.#watchThreadStatuses();
       if (focus !== undefined) {
         this.#switching = false;
         await this.#focusSession(focus.sessionId, focus.nodeId, undefined, undefined, this.#presentationLease(), false, focus);
@@ -575,7 +590,9 @@ export class RustxTuiApp {
     try {
       // Resolve cold navigation through durable metadata before any native
       // preparation wait. Attach and first Send must name the same exact node.
-      const selectedNode = nodeId ?? (await host.readSession(sessionId)).active_node;
+      const selection = nodeId === undefined ? await host.readSession(sessionId) : undefined;
+      const selectedNode = nodeId ?? selection!.active_node;
+      const selectedThread = selection?.active_conversation_id ?? (previous?.nodeId === selectedNode ? previous.target.conversation_id : undefined);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       if (retryInitialization) {
         await host.retryInitialization(sessionId, selectedNode);
@@ -584,7 +601,7 @@ export class RustxTuiApp {
       if (!changingNode) beginConnecting(selectedNode);
       const next = changingNode
         ? await host.openNode(sessionId, selectedNode, () => beginConnecting(selectedNode))
-        : await host.attach(sessionId, selectedNode, previous);
+        : await host.attach(sessionId, selectedNode, previous, selectedThread);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       if (targetConversation !== undefined && next.target.conversation_id !== targetConversation) {
         throw new Error('The attached Conversation changed. Original input remains in its previous Conversation draft; select the current target explicitly.');
@@ -1232,6 +1249,7 @@ export class RustxTuiApp {
       return;
     }
     this.#quitting = true;
+    this.#removeThreadStatusListener();
     this.#invalidatePresentation();
     this.#editor.disableSubmit = true;
     this.#showTransient(
@@ -1550,6 +1568,7 @@ export class RustxTuiApp {
     }
     this.#view.render(state, {
       preferences: this.#preferences,
+      threadStatus:this.#session?this.#host.threadStatus(this.#session.target.conversation_id):undefined,
       sessionInfo: this.#sessionInfo,
       workspace: this.#workspace,
       selectedAgentId: this.#subagentListFocused ? this.#selectedAgentId : undefined,

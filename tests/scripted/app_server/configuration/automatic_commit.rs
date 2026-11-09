@@ -1303,10 +1303,9 @@ async fn external_workspace_edit_commits_through_the_bounded_source_watch() {
     .await;
 }
 
-/// Editing only a selected Skill's body keeps its catalog entry byte-identical
-/// but replaces its content version: the commit records it as `changed`.
+/// Body edits stay inert; frontmatter edits publish exactly one definition change.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn body_only_skill_edit_records_one_changed_fact() {
+async fn skill_resources_stay_inert_and_frontmatter_changes_are_recorded() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
@@ -1318,6 +1317,7 @@ async fn body_only_skill_edit_records_one_changed_fact() {
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         select_all_skills(&fixture).await;
         let before = configuration_changes(&runtime).len();
+        let revision = runtime.runtime_resources().capability().revision();
         let entries = runtime
             .runtime_resources()
             .capability()
@@ -1349,12 +1349,32 @@ async fn body_only_skill_edit_records_one_changed_fact() {
                 .model_skill_entries(),
             entries.as_slice()
         );
+        assert_eq!(configuration_changes(&runtime).len(), before);
+        assert_eq!(
+            runtime.runtime_resources().capability().revision(),
+            revision
+        );
+        // Only a changed definition, including a preserved metadata field,
+        // starts configuration preparation and publishes a new version.
+        let frontmatter = "---\nname: guide\ndescription: Project guide\nlicense: MIT\n---\n";
+        std::fs::write(skill.join("SKILL.md"), frontmatter).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        applied(&fixture, 0).await;
         let changes = configuration_changes(&runtime);
         assert_eq!(changes.len(), before + 1, "{changes:?}");
         assert_eq!(changes[before].skills.changed.names, ["guide"]);
         assert!(
             changes[before].skills.added.is_empty() && changes[before].skills.removed.is_empty()
         );
+        let frontmatter = frontmatter.replace("license: MIT", "license: Apache-2.0");
         // A third version with no request between them: each fact keeps the
         // version it installed, readable after the file moved on and the
         // runtime that recorded them is gone.
@@ -1595,7 +1615,9 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
             std::fs::create_dir_all(skills.join(name)).unwrap();
             std::fs::write(
                 skills.join(name).join("SKILL.md"),
-                format!("---\nname: {name}\ndescription: Guide {name}\n---\n{body}\n"),
+                format!(
+                    "---\nname: {name}\ndescription: Guide {name}\nlicense: {body}\n---\nbody\n"
+                ),
             )
             .unwrap();
         };
@@ -1680,6 +1702,128 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
         fixture.close().await;
     })
     .await;
+}
+
+/// Invocation overrides read the current inert catalog, even when no profile
+/// selects the changed Skill. Existing Attempt captures keep the old catalog;
+/// publication neither prepares dependencies nor records an effective change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unselected_skill_catalog_updates_future_overrides_without_preparation_or_facts() {
+    bounded(async {
+        use crate::runtime::subagent::{
+            SubagentInvocationOverride, SubagentName, SubagentResolution,
+            SubagentResolutionError, SubagentResolver,
+        };
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let agents = workspace.join(".agents/agents");
+        let skills = workspace.join(".agents/skills");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.toml"),
+            "description='Review'\ninstructions='Review the task'\nskills=[]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\nagents=['reviewer']\nskills=[]\n",
+        )
+        .unwrap();
+        let skill = |name: &str, description: &str, disabled: bool, pin: &str| {
+            std::fs::create_dir_all(skills.join(name)).unwrap();
+            std::fs::write(skills.join(name).join("SKILL.md"), format!(
+                "---\nname: {name}\ndescription: {description}\ndisable-model-invocation: {disabled}\nmetadata:\n  rustx.python-dependencies: '{{\"rustx-review-must-not-install\":\"{pin}\"}}'\n---\nbody\n"
+            )).unwrap();
+        };
+        skill("idle", "Original", false, "1.0");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let old = runtime.runtime_resources();
+        let capability_revision = old.capability().revision();
+        let facts = configuration_changes(&runtime).len();
+        let resolve = |resources: &crate::runtime::RuntimeResourceSnapshot, name: &str| {
+            let agent = SubagentName::parse("reviewer").unwrap();
+            let invocation = SubagentInvocationOverride {
+                skills: Some(vec![name.into()]),
+                ..Default::default()
+            };
+            let model = runtime.model_state_for_test();
+            SubagentResolver::resolve(&SubagentResolution {
+                resources,
+                agent: &agent,
+                attempt_model: model.config(),
+                models: &resources.configuration().unwrap().models,
+                invocation: Some(&invocation),
+            })
+        };
+        let reconcile = || async {
+            fixture.manager.reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+            ).await.unwrap();
+            settled(&fixture, 0).await
+        };
+        assert_eq!(resolve(&old, "idle").unwrap().skills[0].catalog_entry.description, "Original");
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        skill("idle", "Updated", false, "2.0");
+        skill("new-skill", "New", false, "1.0");
+        let staged = reconcile().await;
+        assert_eq!(staged.units[&ApplyUnit::Instructions], UnitApplication::Ready);
+        assert!(Arc::ptr_eq(&old, &runtime.runtime_resources()));
+        assert_eq!(runtime.capability().current_snapshot().skills(), old.capability().skills());
+        skill("idle", "Latest", false, "3.0");
+        let latest = reconcile().await;
+        assert_ne!(latest.desired, staged.desired);
+        assert!(Arc::ptr_eq(&old, &runtime.runtime_resources()));
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[0].release();
+        settlement.wait().await;
+        applied(&fixture, 0).await;
+        let updated = runtime.runtime_resources();
+        let idle = resolve(&updated, "idle").unwrap();
+        assert_eq!(idle.skills[0].catalog_entry.description, "Latest");
+        assert_eq!(idle.skills[0].dependencies.python["rustx-review-must-not-install"], "3.0");
+        assert_eq!(resolve(&updated, "new-skill").unwrap().skills[0].catalog_entry.description, "New");
+        assert_eq!(resolve(&old, "idle").unwrap().skills[0].catalog_entry.description, "Original");
+        assert!(matches!(resolve(&old, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
+        assert_eq!(runtime.capability().current_snapshot().skills(), updated.capability().skills());
+        runtime.refresh_runtime_catalogs().await.unwrap();
+        assert_eq!(resolve(&runtime.runtime_resources(), "idle").unwrap().skills, idle.skills);
+        skill("idle", "Disabled", true, "3.0");
+        std::fs::remove_dir_all(skills.join("new-skill")).unwrap();
+        reconcile().await;
+        applied(&fixture, 0).await;
+        let removed = runtime.runtime_resources();
+        assert!(matches!(resolve(&removed, "idle"), Err(SubagentResolutionError::SkillNotModelVisible { .. })));
+        assert!(matches!(resolve(&removed, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
+        assert_eq!(removed.capability().revision(), capability_revision);
+        assert_eq!(configuration_changes(&runtime).len(), facts);
+        assert!(removed.capability().python_environment().is_none());
+        fixture.manager.unload(&fixture.sessions[0].active_conversation_id).await.unwrap();
+        skill("cold-skill", "Added while cold", false, "1.0");
+        let mut changes = fixture.manager.configuration_changes();
+        fixture.manager.reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: workspace.clone(),
+            },
+        ).await.unwrap();
+        while !fixture.manager.applications.is_deferred(id.as_ref()) {
+            changes.changed().await.unwrap();
+        }
+        assert!(fixture.manager.configuration_runtime(&id).is_none());
+        fixture.manager.load(&id, None).await.unwrap();
+        applied(&fixture, 0).await;
+        let reloaded = fixture.manager.configuration_runtime(&id).unwrap();
+        let cold = reloaded.runtime_resources();
+        assert_eq!(resolve(&cold, "cold-skill").unwrap().skills[0].catalog_entry.description, "Added while cold");
+        assert!(matches!(resolve(&cold, "idle"), Err(SubagentResolutionError::SkillNotModelVisible { .. })));
+        assert_eq!(configuration_changes(&reloaded).len(), facts);
+        assert!(cold.capability().python_environment().is_none());
+        fixture.close().await;
+    }).await;
 }
 
 /// The Model domain compares the invocations that run, not the Session's
@@ -2261,6 +2405,124 @@ async fn a_replaced_skill_directory_keeps_feeding_the_source_watch() {
             stop.cancel();
         };
         let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), edit);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// Hidden entries count toward collection admission even though they are not
+/// Skill candidates. Their own structural events remove and restore the
+/// selected catalog, including definition edits while candidate watches are
+/// absent at the over-budget boundary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hidden_skill_collection_entries_invalidate_the_budget_and_recover_watches() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let collection = fixture.workspaces[0].join(".agents/skills");
+        let package = collection.join("guide");
+        std::fs::create_dir_all(package.join("assets/deep")).unwrap();
+        std::fs::File::create(package.join("assets/deep/large.bin"))
+            .unwrap()
+            .set_len(2 * 1024 * 1024 * 1024)
+            .unwrap();
+        let definition = package.join("SKILL.md");
+        let write_definition = |description: &str| {
+            std::fs::write(
+                &definition,
+                format!("---\nname: guide\ndescription: {description}\n---\nlive body\n"),
+            )
+            .unwrap();
+        };
+        write_definition("Original");
+        for index in 0..1023 {
+            std::fs::write(collection.join(format!(".ignored-{index}")), []).unwrap();
+        }
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        select_all_skills(&fixture).await;
+        let descriptions = || {
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .iter()
+                .map(|entry| entry.description.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(descriptions(), ["Original"]);
+        injected_only(&fixture);
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            watch_settled(&fixture).await;
+            let overflow = collection.join(".overflow");
+            captured.arm();
+            std::fs::write(&overflow, []).unwrap();
+            assert!(
+                fixture.manager.notify_source_watch(
+                    notify::Event::new(notify::EventKind::Create(notify::event::CreateKind::File))
+                        .add_path(overflow.clone())
+                )
+            );
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            assert!(
+                descriptions().is_empty(),
+                "1,025 entries must suppress the collection"
+            );
+            assert!(
+                runtime
+                    .runtime_resources()
+                    .capability()
+                    .skills()
+                    .diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.to_string().contains("exceeds 1024"))
+            );
+            // Candidate watches are gone while the collection is over budget.
+            // No definition event is injected: only removing the hidden entry
+            // may recover the changed definition.
+            write_definition("Changed while unwatched");
+            let passes = *settled_passes(&fixture).borrow();
+            captured.release();
+            captured.parked(0).await;
+            settled_passes(&fixture)
+                .wait_for(|settled| *settled > passes)
+                .await
+                .unwrap();
+            captured.arm();
+            std::fs::remove_file(&overflow).unwrap();
+            assert!(
+                fixture.manager.notify_source_watch(
+                    notify::Event::new(notify::EventKind::Remove(notify::event::RemoveKind::File))
+                        .add_path(overflow)
+                )
+            );
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            assert_eq!(descriptions(), ["Changed while unwatched"]);
+            // A definition event received after recovery's capture, before the
+            // next watch adjustment, must continue to update the catalog.
+            let mut changes = fixture.manager.configuration_changes();
+            write_definition("After rearm");
+            assert!(fixture.manager.notify_source_watch(modified(&definition)));
+            captured.release();
+            captured.parked(0).await;
+            while descriptions() != ["After rearm"] {
+                changes.changed().await.unwrap();
+            }
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
         watched.unwrap();
         fixture.close().await;
     })

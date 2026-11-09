@@ -157,7 +157,7 @@ impl RuntimeInner {
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
-            attempt_id,
+            attempt_id: attempt_id.clone(),
             conversation,
             initial_turn_trigger: match fresh {
                 Some(fresh) => InitialTurnTrigger::FreshInbound(fresh),
@@ -222,6 +222,13 @@ impl RuntimeInner {
         }
         execution.observe(&observer);
         let settled = execution.run_to_settlement().await;
+        {
+            let mut steering = self.mailbox.steering.lock().expect("steering admission");
+            if steering.active.as_ref() == Some(&attempt_id) {
+                steering.open = false;
+            }
+        }
+
         if let Some(changes) = workspace_changes {
             // The optional card belongs to this runtime, not the Agent Loop.
             // Cancelled observations cannot hold terminal publication or the

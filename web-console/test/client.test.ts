@@ -1,8 +1,9 @@
+import { threadFor } from '../../protocol/app-server/testing.ts';
 import {applicationReceipt} from './fixture';
 import {readCut} from './fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v73';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v76';
 import { interactionKey } from '../src/client/contracts';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure } from '../src/client/errors';
 import { conversation } from '../src/bindings/projection';
@@ -52,8 +53,8 @@ describe('native App Server connection', () => {
   it('initializes with browser admission and generated protocol capabilities', async () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
-    expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 73 } });
+    expect(s.client.getSnapshot().capabilities).toEqual(s.capabilities);
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 76 } });
     expect(JSON.stringify(s.client.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -140,11 +141,11 @@ describe('native App Server connection', () => {
     expect(fresh.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([]);
   });
   it.each([
-    { method: 'session/create', params: { settings: { cwd: '/workspace/A' } } },
+    { method: 'thread/start', params: { settings: { cwd: '/workspace/A' } } },
     { method: 'session/delete', params: { session_id: 'A', expected_target_revision: 'revision' } },
   ] as const)('never replays a lost $method response', async operation => {
     const s = server(); await s.connect(); s.held.add(operation.method);
-    const pending = operation.method === 'session/create' ? s.client.request(operation, 'session_transition') : s.client.deleteSession('A', 'revision');
+    const pending = operation.method === 'thread/start' ? s.client.request(operation, 'session_transition') : s.client.deleteSession('A', 'revision');
     const rejected = expect(pending).rejects.toBeInstanceOf(OutcomeUncertain);
     await s.waitFor(operation.method, 1);
     s.handlers.set('session/deletePreview', () => ({ type: 'deletion', result: { status: 'not_found', session_id: 'A' } }));
@@ -153,30 +154,32 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().uncertain[0].method).toBe(operation.method);
   });
   it('a timed-out turn acknowledgement closes transport, keeps uncertainty, and does not replay', async () => {
-    const s = server(); await s.attached('A'); s.held.add('turn/start'); vi.useFakeTimers();
+    const s = server(); await s.attached('A'); s.held.add('inbound/queue'); vi.useFakeTimers();
     const rejected = expect(s.client.send('A', 'run once')).rejects.toBeInstanceOf(OutcomeUncertain);
     await vi.advanceTimersByTimeAsync(30_000); await rejected;
     expect(s.client.getSnapshot().connection).toBe('stale');
-    await s.connect(); await s.client.waitForAttachment('A', () => true); expect(s.requests.filter(item => item.request.method === 'turn/start')).toHaveLength(1);
-    expect(s.client.getSnapshot().uncertain[0].method).toBe('turn/start');
+    await s.connect(); await s.client.waitForAttachment('A', () => true); expect(s.requests.filter(item => item.request.method === 'inbound/queue')).toHaveLength(1);
+    expect(s.client.getSnapshot().uncertain[0].method).toBe('inbound/queue');
   });
-  it('lost interaction acknowledgement never fabricates settlement; native resolution removes controls without cross-talk', async () => {
+  it('a live callback replay permits an explicit new answer without replaying the lost decision or cross-talk', async () => {
     const s = server(); const a = interaction('approval'); const b = interaction('questionnaire', 'B');
     s.snapshots.get('A')!.pending_interactions = [a]; s.snapshots.get('B')!.pending_interactions = [b];
-    await s.attached('A', 'B'); s.held.add('interaction/respond');
-    const rejected = expect(s.client.answer('A', a.interaction, { type: 'approval', decision: { type: 'allow' } })).rejects.toBeInstanceOf(OutcomeUncertain);
-    s.socket.close(); await rejected; await s.connect();
+    await s.attached('A', 'B'); s.holdCallbackReplies=true;
+    const responding = s.client.answer('A', a.interaction, { type: 'approval', decision: { type: 'allow' } }).catch(error=>expect(error).not.toBeInstanceOf(OutcomeUncertain));
+    await s.waitForReply();await Promise.resolve();
+    s.socket.close(); await responding; await s.connect();
     await Promise.all(['A', 'B'].map(id => s.client.waitForAttachment(id, () => true)));
     const key = interactionKey(a.interaction);
-    expect(s.client.getSnapshot().interactionOperations[key].status).toBe('uncertain');
+    expect(s.client.getSnapshot().interactionOperations[key]).toBeUndefined();
     expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toEqual([a]);
-    await expect(s.client.answer('A', a.interaction, { type: 'approval', decision: { type: 'allow' } })).rejects.toThrow('uncertain');
-    await s.client.refresh('B'); expect(s.client.getSnapshot().interactionOperations[key].status).toBe('uncertain');
-    await s.update('A', { ...snapshot(), pending_interactions: [] });
+    await s.client.refresh('B');
+    expect(s.replies).toHaveLength(1); // reconnect did not replay a decision
+    s.holdCallbackReplies=false;
+    await s.client.answer('A', a.interaction, { type: 'approval', decision: { type: 'deny',reason:'Explicit replacement decision' } });
     expect(s.client.getSnapshot().interactionOperations[key]).toBeUndefined();
     expect(s.client.getSnapshot().uncertain).toEqual([]);
     expect(s.client.getSnapshot().views.B.snapshot?.pending_interactions).toEqual([b]);
-    expect(s.requests.filter(item => item.request.method === 'interaction/respond')).toHaveLength(1);
+    expect(s.replies).toHaveLength(2);
   });
 
   it('close view releases attachment and preserves runtime for reopen', async () => {
@@ -195,8 +198,8 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().uncertain).toEqual([]);
   });
   it('repairs a notification interleaved before its attach response with a fresh snapshot and subscription', async () => {
-    const s = server(); await s.connect(); s.held.add('session/attach');
-    const work = s.client.attach('A'); const request = await s.waitFor('session/attach', 1);
+    const s = server(); await s.connect(); s.held.add('thread/resume');
+    const work = s.client.attach('A'); const request = await s.waitFor('thread/resume', 1);
     const attached = s.commit(request); const target = s.target('A');
     s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target, after_cursor: '0', earliest_serviceable: '1' } });
     s.snapshots.set('A', { ...snapshot(), pending_interactions: [interaction('approval')] }); s.cursor = 1n;
@@ -204,16 +207,14 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toHaveLength(1);
     expect(s.requests.filter(row => row.request.method === 'session/subscribe').at(-1)?.request).toMatchObject({ method: 'session/subscribe', params: { target, after_cursor: '1' } });
   });
-  it('discards a capacity-queued interaction without marking an unsent response uncertain', async () => {
-    const s = server(); s.snapshots.get('A')!.pending_interactions = [interaction('approval')]; await s.attached('A');
+  it('server replies progress independently of the ordinary RPC capacity', async () => {
+    const s=server();s.snapshots.get('A')!.pending_interactions=[interaction('approval')];await s.attached('A');
     s.held.add('session/summary');
-    const reads = Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary').catch(() => {}));
-    const response = s.client.answer('A', interaction('approval').interaction, { type: 'approval', decision: { type: 'allow' } });
-    const rejected = expect(response).rejects.not.toBeInstanceOf(OutcomeUncertain);
-    expect(s.requests.filter(item => item.request.method === 'interaction/respond')).toEqual([]);
-    s.socket.close(); await Promise.all([...reads, rejected]);
+    const reads=Array.from({length:6},()=>s.client.request({method:'session/summary',params:{session_id:'A'}},'session_summary').catch(()=>{}));
+    const answer=s.client.answer('A',interaction('approval').interaction,{type:'approval',decision:{type:'allow'}});
+    await s.waitForReply();expect(s.replies).toHaveLength(1);
+    s.socket.close();await Promise.all([...reads,answer.catch(()=>{})]);
     expect(s.client.getSnapshot().uncertain).toEqual([]);
-    expect(s.client.getSnapshot().interactionOperations).toEqual({});
   });
 
   it('lost close acknowledgement preserves released intent and never reattaches or replays', async () => {
@@ -228,14 +229,14 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });
     await s.connect();
     await s.client.waitForAttachment('B', () => true);
-    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
+    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'thread/resume').map(({ request }) => request.params)).toEqual([{ threadId: 'conversation-B' }]);
     expect(s.requests.filter(({ request }) => request.method === method)).toHaveLength(1);
     expect(s.loaded.has('A')).toBe(true); expect(s.coldLoads.get('A')).toBe(1);
     expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method, sessionId: 'A' })]);
     await s.client.attach('A');
     expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'wanted', attachment: 'attached' });
     expect(s.coldLoads.get('A')).toBe(1);
-    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
+    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'thread/resume' && s.sessionForThread(request.params.threadId) === 'A')).toHaveLength(1);
     // A new explicit attachment cannot prove the old request's outcome.
     expect(s.client.getSnapshot().uncertain).toHaveLength(1);
   });
@@ -250,11 +251,11 @@ describe('native App Server connection', () => {
     expect(s.maxClaims).toBe(2);
     const baseline = s.requests.length; await s.connect();
     await s.client.waitForAttachment('B', () => true);
-    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
+    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'thread/resume').map(({ request }) => request.params)).toEqual([{ threadId: 'conversation-B' }]);
   });
   it('close during attach waits for its exact target, then detaches without changing runtime facts', async () => {
-    const s = server(); await s.connect(); s.held.add('session/attach');
-    const opening = s.client.attach('A'); const request = await s.waitFor('session/attach', 1);
+    const s = server(); await s.connect(); s.held.add('thread/resume');
+    const opening = s.client.attach('A'); const request = await s.waitFor('thread/resume', 1);
     const closing = s.client.release('A');
     expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('released');
     s.reply(request); await Promise.all([opening, closing]);
@@ -269,25 +270,25 @@ describe('native App Server connection', () => {
     expect(() => s.client.target('A')).toThrow('not authoritatively attached');
     const opening = s.client.attach('A'); const duplicate = s.client.attach('A');
     expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
-    expect(s.requests.filter(({ request }) => request.method === 'session/attach')).toHaveLength(1);
+    expect(s.requests.filter(({ request }) => request.method === 'thread/resume')).toHaveLength(1);
     s.snapshots.get('A')!.pending_interactions = [interaction('questionnaire')];
     s.reply(request); await Promise.all([closing, opening, duplicate]);
-    expect(s.requests.filter(({ request }) => request.method === 'session/attach')).toHaveLength(2);
+    expect(s.requests.filter(({ request }) => request.method === 'thread/resume')).toHaveLength(2);
     expect(s.claims()).toHaveLength(1); expect(s.client.target('A')).not.toEqual(oldTarget);
     expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toHaveLength(1);
   });
   it('reconnect reads intent after each await instead of restoring a captured historical intent', async () => {
-    const s = server(); s.client.restoreViews(['A', 'B']); s.held.add('session/attach');
+    const s = server(); s.client.restoreViews(['A', 'B']); s.held.add('thread/resume');
     const entered = deferred<void>(), gate = deferred<void>();
     s.client.setSessionAdmission(async id => {
       if (id === 'B') { entered.resolve(); await gate.promise; }
       return { current: () => true, validate: async () => true };
     });
-    const connecting = s.connect(); const request = await s.waitFor('session/attach', 1);
+    const connecting = s.connect(); const request = await s.waitFor('thread/resume', 1);
     await entered.promise;
     const releasing = s.client.release('B'); gate.resolve(); await releasing;
     s.reply(request); await connecting; await s.client.waitForAttachment('A', () => true);
-    expect(s.requests.filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'A', node_id: 'node-A' }]);
+    expect(s.requests.filter(({ request }) => request.method === 'thread/resume').map(({ request }) => request.params)).toEqual([{ threadId: 'conversation-A' }]);
     expect(s.client.getSnapshot().views.B.attachmentIntent).toBe('released');
   });
   it('a rejected release does not restore attachment intent or claim successful detach', async () => {
@@ -363,7 +364,7 @@ it.each(['not_found', 'committed_cleanup_pending', 'committed_durability_uncerta
     : s.client.getSnapshot().views.A?.deletionRecovery === status);
   expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(1);
   expect(s.requests.slice(before).filter(row => row.request.method === 'session/deletePreview')).toHaveLength(1);
-  expect(s.requests.slice(before).filter(row => row.request.method === 'session/attach')).toHaveLength(0); // Unknown deletion never creates another attachment mutation.
+  expect(s.requests.slice(before).filter(row => row.request.method === 'thread/resume')).toHaveLength(0); // Unknown deletion never creates another attachment mutation.
   if (status === 'not_found') expect(s.client.getSnapshot().views.A).toBeUndefined();
   if (status === 'committed_cleanup_pending' || status === 'committed_durability_uncertain') expect(s.client.getSnapshot().views.A.deletionRecovery).toBe(status);
   if (status === 'committed_durability_uncertain') expect(s.client.getSnapshot().views.A.deleting).toBe(true);
@@ -421,11 +422,11 @@ it('first-submit authority retirement drops a capacity-queued admission before d
   let current = true;
   const admission = s.client.send('A', 'retained', [], 'send', undefined, () => current);
   const rejected = expect(admission).rejects.toThrow('before dispatch');
-  expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
+  expect(s.requests.filter(item => item.request.method === 'inbound/queue')).toEqual([]);
   current = false;
   for (const item of s.requests.filter(item => item.request.method === 'session/summary').slice(-6)) s.reply(item.request);
   await Promise.all([...reads, rejected]);
-  expect(s.requests.filter(item => item.request.method === 'turn/start')).toEqual([]);
+  expect(s.requests.filter(item => item.request.method === 'inbound/queue')).toEqual([]);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
   expect(s.client.getSnapshot().views.A.inboundRequests).toBe(0);
 });
@@ -433,17 +434,17 @@ it('first-submit authority retirement drops a capacity-queued admission before d
 
 it('ACK observer exceptions cannot strand a mutation or block queued request dispatch', async () => {
   const s = server(); await s.connect();
-  s.held.add('session/create'); s.held.add('session/settings');
+  s.held.add('thread/start'); s.held.add('session/settings');
   const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {});
   const facts: string[] = [];
-  const created = s.client.request({ method: 'session/create', params: { settings: { cwd: '/workspace/A' } } }, 'session_transition', result => {
+  const created = s.client.request({ method: 'thread/start', params: { settings: { cwd: '/workspace/A' } } }, 'session_transition', result => {
     facts.push(result.session.id);
     throw new Error('broken presentation subscriber');
   });
   const reads = Array.from({ length: 2 }, () => s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings'));
   expect(s.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(1);
-  const mutation = s.requests.find(row => row.request.method === 'session/create')!.request;
-  const result = { type: 'session_transition' as const, session: { id: 'created', active_node: 'node', active_conversation_id: 'conversation', node_count: 1, created_at: '0', updated_at: '0' }, editor: null, durability_diagnostic: null };
+  const mutation = s.requests.find(row => row.request.method === 'thread/start')!.request;
+  const result = { thread: threadFor({ id: 'created', active_node: 'node', active_conversation_id: 'conversation', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition' as const, session: { id: 'created', active_node: 'node', active_conversation_id: 'conversation', node_count: 1, created_at: '0', updated_at: '0' }, editor: null, durability_diagnostic: null };
   s.socket.success(mutation, result);
   expect((await created).session.id).toBe(facts[0]);
   expect(facts).toHaveLength(1);
@@ -453,7 +454,7 @@ it('ACK observer exceptions cannot strand a mutation or block queued request dis
   for (const row of s.requests.filter(row => row.request.method === 'session/settings')) s.reply(row.request);
   await Promise.all(reads);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
-  expect(s.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
   expect(diagnostic).toHaveBeenCalledOnce();
   diagnostic.mockRestore();
 });
@@ -476,9 +477,9 @@ it('explicit catalog scope controls rereads even for a Session absent from local
 
 it('durable preview arrives while attachment is held and cannot overwrite the live snapshot', async () => {
   const s = server(); await s.connect();
-  s.held.add('session/attach'); s.held.add('session/history');
+  s.held.add('thread/resume'); s.held.add('session/history');
   const work = s.client.attach('A');
-  const history = await s.waitFor('session/history', 1), attach = await s.waitFor('session/attach', 1);
+  const history = await s.waitFor('session/history', 1), attach = await s.waitFor('thread/resume', 1);
   s.reply(history); await Promise.resolve(); await Promise.resolve();
   await vi.waitFor(() => expect(s.client.getSnapshot().views.A.preview?.conversationId).toBe('conversation-A'));
   expect(s.client.getSnapshot().views.A.target).toBeUndefined();
@@ -500,10 +501,10 @@ it('late history cannot replace an attached conversation or a retired navigation
 
 it.each(['before attachment', 'after attachment', 'after release'] as const)('a cold history stale_runtime %s cannot fail or replay the attachment', async timing => {
   const s = server(); await s.connect();
-  s.held.add('session/attach'); s.held.add('session/history');
+  s.held.add('thread/resume'); s.held.add('session/history');
   const requests = vi.spyOn(s.client, 'request');
   const work = s.client.attach('A');
-  const history = await s.waitFor('session/history', 1), attach = await s.waitFor('session/attach', 1);
+  const history = await s.waitFor('session/history', 1), attach = await s.waitFor('thread/resume', 1);
   const historyCall = requests.mock.calls.findIndex(([operation]) => operation.method === 'session/history');
   expect(historyCall).toBeGreaterThanOrEqual(0);
   // Observe the real request's settlement, rather than waiting a fixed number
@@ -544,30 +545,30 @@ it.each(['before attachment', 'after attachment', 'after release'] as const)('a 
     expect(deriveSessionProductState(translator('en'), state, view)).toMatchObject({ status: 'idle', severity: 'quiet' });
   }
   expect(s.requests.filter(row => row.request.method === 'session/history')).toHaveLength(1);
-  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
   expect(s.requests.filter(row => row.request.method === 'session/detach')).toHaveLength(timing === 'after release' ? 1 : 0);
-  expect(s.requests.filter(row => ['session/create', 'session/fork', 'session/switchNode', 'turn/start', 'turn/cancel'].includes(row.request.method))).toEqual([]);
+  expect(s.requests.filter(row => ['thread/start', 'thread/fork', 'session/switchNode', 'inbound/queue', 'turn/interrupt'].includes(row.request.method))).toEqual([]);
   requests.mockRestore();
 });
 
 it('pages durable preview while connecting without starting another attachment', async () => {
-  const s = server(); await s.connect(); s.held.add('session/attach');
+  const s = server(); await s.connect(); s.held.add('thread/resume');
   const entry = (cursor: string) => ({ cursor, item: { type: 'message' as const, message: { id: `message-${cursor}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: cursor }] } } });
   s.handlers.set('session/history', request => ({ type: 'session_history', conversation_id: 'conversation-A', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: request.method === 'session/history' && request.params.at.type === 'latest' ? { entries: [entry('2')], next_cursor: '2' } : { entries: [entry('1')], next_cursor: null } } }));
   const work = s.client.attach('A');
   await vi.waitFor(() => expect(s.client.getSnapshot().views.A.preview).toBeTruthy());
   await s.client.loadEarlierPreview('A');
   expect(s.client.getSnapshot().views.A.preview?.history.page.entries?.map(entry => entry.cursor)).toEqual(['1', '2']);
-  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
-  s.reply(await s.waitFor('session/attach', 1)); await work;
+  expect(s.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
+  s.reply(await s.waitFor('thread/resume', 1)); await work;
 });
 
 it('late cold statistics cannot replace the attached live reading', async () => {
   const s = server(); await s.connect();
-  s.held.add('session/statistics'); s.held.add('session/attach');
+  s.held.add('session/statistics'); s.held.add('thread/resume');
   const work = s.client.attach('A');
   const statistics = await s.waitFor('session/statistics', 1);
-  s.reply(await s.waitFor('session/attach', 1)); await work;
+  s.reply(await s.waitFor('thread/resume', 1)); await work;
   const snapshot = s.client.getSnapshot().views.A.snapshot;
   s.reply(statistics); await Promise.resolve(); await Promise.resolve();
   expect(s.client.getSnapshot().views.A.statisticsPreview).toBeUndefined();
@@ -575,8 +576,8 @@ it('late cold statistics cannot replace the attached live reading', async () => 
 });
 
 it('native attach acknowledgement after Release and queued Open retains detach identity without restoring observation authority', async () => {
-  const s = server(); await s.connect(); s.held.add('session/attach'); s.held.add('session/detach');
-  const first = s.client.attach('A'), request = await s.waitFor('session/attach', 1);
+  const s = server(); await s.connect(); s.held.add('thread/resume'); s.held.add('session/detach');
+  const first = s.client.attach('A'), request = await s.waitFor('thread/resume', 1);
   const closing = s.client.release('A'), reopening = s.client.attach('A');
   s.reply(request); await first;
   const retained = s.client.getSnapshot().views.A.target;
@@ -587,7 +588,7 @@ it('native attach acknowledgement after Release and queued Open retains detach i
   expect(detach).toMatchObject({ params: { target: retained } });
   expect(s.claims()).toEqual([retained]);
   s.reply(detach); await closing; expect(s.claims()).toEqual([]);
-  const second = await s.waitFor('session/attach', 2);
+  const second = await s.waitFor('thread/resume', 2);
   expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   s.reply(second); await reopening;
   const admission = s.client.getSnapshot().views.A.attachmentObservation;
@@ -596,7 +597,7 @@ it('native attach acknowledgement after Release and queued Open retains detach i
   s.reply(request); // Duplicate old acknowledgement cannot overwrite the new claim.
   expect(s.client.target('A')).toEqual(admission?.target);
   expect(s.claims()).toEqual([admission?.target]); expect(s.maxClaims).toBe(1);
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach', 'session/detach', 'session/attach']);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume', 'session/detach', 'thread/resume']);
 });
 
 
@@ -607,7 +608,7 @@ function deferred<T>() {
 }
 
 const attachmentRequests = (s: Server) => s.requests.map(({ request }) => request)
-  .filter(request => request.method === 'session/attach' || request.method === 'session/detach');
+  .filter(request => request.method === 'thread/resume' || request.method === 'session/detach');
 
 it('an Open revoked while still queued starts no native attachment', async () => {
   const s = server(); await s.attached('A'); const initial = s.target('A');
@@ -619,7 +620,7 @@ it('an Open revoked while still queued starts no native attachment', async () =>
   s.held.delete('session/detach'); s.reply(detach);
   await Promise.all([firstRelease, firstOpen, secondRelease, secondOpen]);
   expect(refreshed).not.toHaveBeenCalled();
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach', 'session/detach', 'session/attach']);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume', 'session/detach', 'thread/resume']);
   const admission = s.client.getSnapshot().views.A.attachmentObservation;
   expect(admission?.target).not.toEqual(initial);
   expect(s.client.isAttachmentObservationCurrent('A', admission)).toBe(true);
@@ -641,7 +642,7 @@ it('Release permanently revokes an Open suspended in Product Host admission', as
   expect(oldCurrent()).toBe(false);
   gate.resolve(); await Promise.all([old, release, latest]);
   expect(oldCurrent()).toBe(false); expect(admissions).toBe(2);
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume']);
   expect(s.claims()).toEqual([s.client.target('A')]); expect(s.maxClaims).toBe(1);
 });
 
@@ -653,7 +654,7 @@ it('Release revokes an Open waiting for RPC capacity before final dispatch', asy
   const request = s.client.request.bind(s.client);
   vi.spyOn(s.client, 'request').mockImplementation(((...args: Parameters<typeof request>) => {
     const work = request(...args);
-    if (args[0].method === 'session/attach') entered.resolve();
+    if (args[0].method === 'thread/resume') entered.resolve();
     return work;
   }) as typeof request);
   const old = s.client.attach('A');
@@ -663,7 +664,7 @@ it('Release revokes an Open waiting for RPC capacity before final dispatch', asy
   s.held.delete('session/summary');
   for (const { request } of s.requests.filter(({ request }) => request.method === 'session/summary')) s.reply(request);
   await Promise.all([...reads, refused, release, latest]);
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume']);
   expect(s.claims()).toEqual([s.client.target('A')]); expect(s.maxClaims).toBe(1);
   expect(s.client.getSnapshot().uncertain).toEqual([]);
   // Every original RPC slot is reusable after refusal and settlement.
@@ -690,7 +691,7 @@ it('Release revokes an Open during final asynchronous validation', async () => {
   await entered.promise;
   const release = s.client.release('A'), latest = s.client.attach('A');
   gate.resolve(true); await Promise.all([refused, release, latest]);
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume']);
   expect(s.claims()).toEqual([s.client.target('A')]); expect(s.maxClaims).toBe(1);
 });
 
@@ -707,12 +708,12 @@ it.each([true, false])('alternating queued gestures leave only the final Open cl
     s.held.delete('session/detach'); s.reply(detach);
     await Promise.all(work);
     expect(s.claims()).toEqual(wantsOpen ? [s.client.target('A')] : []);
-    expect(attachmentRequests(s).filter(request => request.method === 'session/attach')).toHaveLength(batch + 1 + Number(wantsOpen));
+    expect(attachmentRequests(s).filter(request => request.method === 'thread/resume')).toHaveLength(batch + 1 + Number(wantsOpen));
     expect(attachmentRequests(s).filter(request => request.method === 'session/detach')).toHaveLength(batch + 1);
   }
   expect(attachmentRequests(s).map(request => request.method)).toEqual([
-    'session/attach', 'session/detach', 'session/attach', 'session/detach', 'session/attach', 'session/detach',
-    ...(finalOpen ? ['session/attach'] : []),
+    'thread/resume', 'session/detach', 'thread/resume', 'session/detach', 'thread/resume', 'session/detach',
+    ...(finalOpen ? ['thread/resume'] : []),
   ]);
   expect(s.maxClaims).toBe(1); expect(s.client.getSnapshot().uncertain).toEqual([]);
 });
@@ -747,7 +748,7 @@ it('terminal local Release permits a later explicit Open through normal native a
   const closing = s.client.release('A'); gate.resolve(); await Promise.all([opening, closing]);
   expectReleased(s); expect(attachmentRequests(s)).toEqual([]);
   await s.client.attach('A'); expect(admissions).toBe(2);
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume']);
   expect(s.claims()).toEqual([s.client.target('A')]);
   expect(s.client.isAttachmentObservationCurrent('A', s.client.getSnapshot().views.A.attachmentObservation)).toBe(true);
 });
@@ -758,7 +759,7 @@ it('terminal Release after RPC backpressure settles an unsent Open without publi
   await s.waitFor('session/summary', 6);
   const entered = deferred<void>(), request = s.client.request.bind(s.client);
   vi.spyOn(s.client, 'request').mockImplementation(((...args: Parameters<typeof request>) => {
-    const work = request(...args); if (args[0].method === 'session/attach') entered.resolve(); return work;
+    const work = request(...args); if (args[0].method === 'thread/resume') entered.resolve(); return work;
   }) as typeof request);
   const states: string[] = []; s.client.subscribe(() => { if (s.client.getSnapshot().views.A) states.push(s.client.getSnapshot().views.A.attachment); });
   const opening = s.client.attach('A'), refused = expect(opening).rejects.toBeInstanceOf(RequestNotDispatched);
@@ -818,12 +819,12 @@ it('terminal cleanup from an old generation cannot overwrite a new Open after re
   gate.resolve(); await Promise.all([old, closing]);
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'wanted', attachment: 'attached', target, attachmentObservation: observation });
   expect(s.client.isAttachmentObservationCurrent('A', observation)).toBe(true);
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']); expect(s.claims()).toEqual([target]);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume']); expect(s.claims()).toEqual([target]);
 });
 
 it('terminal Release waits for a transmitted attach and the exact native detach acknowledgement', async () => {
-  const s = server(); await s.connect(); s.held.add('session/attach'); s.held.add('session/detach');
-  const opening = s.client.attach('A'), attach = await s.waitFor('session/attach', 1);
+  const s = server(); await s.connect(); s.held.add('thread/resume'); s.held.add('session/detach');
+  const opening = s.client.attach('A'), attach = await s.waitFor('thread/resume', 1);
   let released = false; const closing = s.client.release('A').then(() => { released = true; });
   expect(released).toBe(false); expect(s.client.getSnapshot().views.A.attachment).toBe('attaching');
   expect(s.client.getSnapshot().views.A.target).toBeUndefined();
@@ -834,14 +835,14 @@ it('terminal Release waits for a transmitted attach and the exact native detach 
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachment: 'attached', target });
   expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   s.reply(detach); await closing; expectReleased(s);
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach', 'session/detach']);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume', 'session/detach']);
 });
 
 it.each([false, true])('terminal native attach rejection preserves only current errors; Release=%s', async release => {
-  const s = server(); await s.connect(); s.held.add('session/attach');
-  s.handlers.set('session/attach', () => { throw new RpcFailure({ code: -32000, message: 'Native attach rejected', data: { kind: 'invalid_state' } }); });
+  const s = server(); await s.connect(); s.held.add('thread/resume');
+  s.handlers.set('thread/resume', () => { throw new RpcFailure({ code: -32000, message: 'Native attach rejected', data: { kind: 'invalid_state' } }); });
   const opening = s.client.attach('A'), rejected = expect(opening).rejects.toBeInstanceOf(RpcFailure);
-  const attach = await s.waitFor('session/attach', 1);
+  const attach = await s.waitFor('thread/resume', 1);
   const closing = release ? s.client.release('A') : Promise.resolve();
   expect(s.client.getSnapshot().views.A.attachment).toBe('attaching');
   s.reply(attach); await Promise.all([rejected, closing]);
@@ -850,18 +851,18 @@ it.each([false, true])('terminal native attach rejection preserves only current 
     expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'wanted', attachment: 'error' });
     expect(s.client.getSnapshot().views.A.error).toContain('Native attach rejected');
   }
-  expect(s.claims()).toEqual([]); expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(s.claims()).toEqual([]); expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume']);
 });
 
 it('terminal Release cannot turn a lost transmitted attach outcome into local absence or replay', async () => {
-  const s = server(); await s.connect(); s.held.add('session/attach');
+  const s = server(); await s.connect(); s.held.add('thread/resume');
   const opening = s.client.attach('A'), uncertain = expect(opening).rejects.toBeInstanceOf(OutcomeUncertain);
-  const attach = await s.waitFor('session/attach', 1), closing = s.client.release('A');
+  const attach = await s.waitFor('thread/resume', 1), closing = s.client.release('A');
   s.commit(attach); expect(s.claims()).toHaveLength(1); // Native success, deliberately lost ACK.
   expect(s.client.getSnapshot().views.A.target).toBeUndefined(); expect(s.client.getSnapshot().views.A.attachment).toBe('attaching');
   s.socket.close(); await Promise.all([uncertain, closing]);
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });
-  expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method: 'session/attach', sessionId: 'A' })]);
+  expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method: 'thread/resume', sessionId: 'A' })]);
   expect(s.claims()).toEqual([]); // The fixture's native connection-close path released its claim.
   await s.connect(); await s.client.release('A');
   expect(s.client.getSnapshot().views.A.attachment).toBe('stale');
@@ -873,7 +874,7 @@ it('terminal Release cannot turn a lost transmitted attach outcome into local ab
   const release = s.client.release('A'); gate.resolve(); await Promise.all([next, release]);
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });
   expect(s.client.getSnapshot().uncertain).toHaveLength(1); expect(s.claims()).toEqual([]);
-  expect(attachmentRequests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(attachmentRequests(s).map(request => request.method)).toEqual(['thread/resume']);
   expect(deriveSessionProductState(translator('en'), s.client.getSnapshot(), s.client.getSnapshot().views.A).status).toBe('uncertain');
 });
 
@@ -892,7 +893,7 @@ it.each(['session/detach', 'session/switchNode'] as const)('terminal unsent Open
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });
   expect(s.client.getSnapshot().views.A.target).toBeUndefined(); expect(s.client.getSnapshot().views.A.error).toBeUndefined();
   expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method, sessionId: 'A' })]);
-  expect(s.requests.filter(({ request }) => request.method === 'session/attach')).toHaveLength(1);
+  expect(s.requests.filter(({ request }) => request.method === 'thread/resume')).toHaveLength(1);
   expect(s.requests.filter(({ request }) => request.method === method)).toHaveLength(1);
   expect(s.claims()).toEqual([]);
 });
@@ -920,4 +921,19 @@ it.each(['delivery/read','delivery/locate','server/diagnostics','mcp/probe'] as 
  await s.waitFor(method,1);s.socket.close();
  expect(await failure).not.toBeInstanceOf(OutcomeUncertain);expect(s.client.getSnapshot().uncertain).toEqual([]);
  await s.connect();expect(s.requests.filter(row=>row.request.method===method)).toHaveLength(1);expect(s.client.getSnapshot().uncertain).toEqual([]);
+});
+
+it('lost input receipts repair by exact native correlation without retransmitting input',async()=>{
+  const s=server();await s.attached('A');s.held.add('inbound/queue');
+  const sending=s.client.send('A','accepted once'),uncertain=expect(sending).rejects.toBeInstanceOf(OutcomeUncertain);
+  const request=await s.waitFor('inbound/queue',1);
+  if(request.method!=='inbound/queue')throw Error('Expected explicit queue');
+  expect(request.params.inputId).toMatch(/^[a-f0-9-]{36}$/);
+  s.commit(request);s.socket.close();await uncertain;
+  expect(s.client.getSnapshot().uncertain[0]).toMatchObject({inputId:request.params.inputId,conversationId:request.params.target.conversation_id});
+  await s.connect();await s.client.waitForAttachment('A',()=>true);
+  await vi.waitFor(()=>expect(s.client.getSnapshot().uncertain).toEqual([]));
+  expect(s.requests.filter(row=>row.request.method==='inbound/queue')).toHaveLength(1);
+  const lookup=s.requests.find(row=>row.request.method==='inbound/submissionLookup')!.request;
+  expect(lookup.params).toMatchObject({inputId:request.params.inputId,target:{conversation_id:request.params.target.conversation_id}});
 });

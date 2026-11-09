@@ -13,10 +13,12 @@ mod catalog;
 mod configuration;
 mod control;
 pub(crate) mod delivery;
+pub(crate) mod environment;
 mod history;
 mod model_catalog;
 mod projection;
 mod schedule;
+mod status;
 mod upload;
 mod workflows;
 
@@ -709,8 +711,7 @@ async fn attach_session(
         connection,
         300,
         Method::SessionAttach {
-            session_id: session.id.clone(),
-            node_id: None,
+            thread_id: session.active_conversation_id.clone(),
         },
     )
     .await
@@ -729,8 +730,13 @@ pub(super) async fn attach(
         connection,
         10 + i64::try_from(index).unwrap(),
         Method::SessionAttach {
-            session_id: f.sessions[index].id.clone(),
-            node_id: None,
+            thread_id: f
+                .manager
+                .session_controller()
+                .read_session(&f.sessions[index].id)
+                .await
+                .unwrap()
+                .active_conversation_id,
         },
     )
     .await

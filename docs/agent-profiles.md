@@ -60,6 +60,10 @@ invalid or unavailable resource fails typed resolution/admission. Root and named
 Skills share progressive disclosure: the prompt identifies the two absolute
 roots and selected names/descriptions without enumerating absolute package paths.
 Skill visibility does not restrict a file-reading Tool's filesystem authority.
+Versions freeze normalized frontmatter definitions, not package bytes. A local
+child reuses the admitted live SKILL.md location without copying its resources.
+Only Skills selected by Root or an admitted Named Agent/Workflow profile
+contribute shared Python/Node dependency preparation.
 
 Plugins are explicitly authored closed capabilities. Empty or omitted objects
 use their own product defaults, including `enabled = false`. No automatic Todo,

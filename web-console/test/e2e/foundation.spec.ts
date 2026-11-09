@@ -81,7 +81,8 @@ test('portaled Menu placement, flip, shift, bounded height and anchor tracking',
   // A viewport too short for the rows: the list takes only the height the
   // viewport leaves and scrolls its rows inside itself.
   await page.setViewportSize({ width: 700, height: 150 });
-  await pin('position: fixed; left: 8px; top: 8px;');
+  // The permanent 56px primary rail owns its pointer region.
+  await pin('position: fixed; left: 64px; top: 8px;');
   await open();
   m = await box();
   expect(m.y).toBeGreaterThanOrEqual(12 - 0.5);

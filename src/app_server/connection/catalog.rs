@@ -17,6 +17,97 @@ impl AppServerConnection {
         request_owner: ServerOperation,
     ) -> Result<MethodResult, RpcError> {
         match method {
+            Method::ThreadRead { thread_id } => {
+                let metadata = self
+                    .sessions
+                    .thread(&thread_id)
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::Thread {
+                    thread: crate::app_server::thread_status::Thread::project(
+                        metadata,
+                        self.host.manager(),
+                    )
+                    .await?,
+                })
+            }
+            Method::ThreadLoadedList { offset, limit } => {
+                let (data, next_offset) = self
+                    .host
+                    .manager()
+                    .loaded_thread_statuses(offset, limit)
+                    .await
+                    .map_err(manager_error)?;
+                Ok(MethodResult::LoadedThreads {
+                    data: data.into_iter().map(Into::into).collect(),
+                    next_offset,
+                })
+            }
+            Method::ThreadList {
+                offset,
+                limit,
+                archived,
+            } => {
+                let (metadata, next_offset) = self
+                    .sessions
+                    .threads(offset, limit, archived)
+                    .await
+                    .map_err(session_error)?;
+                let data = crate::app_server::thread_status::ThreadSummary::project(
+                    metadata,
+                    self.host.manager(),
+                )
+                .await?;
+                Ok(MethodResult::Threads { data, next_offset })
+            }
+            Method::ThreadName { thread_id, name } => {
+                let metadata = self
+                    .sessions
+                    .update_thread(
+                        &thread_id,
+                        crate::local_runtime::session::threads::ThreadUpdate::Name(name),
+                    )
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::Thread {
+                    thread: crate::app_server::thread_status::Thread::project(
+                        metadata,
+                        self.host.manager(),
+                    )
+                    .await
+                    .map_err(|_| domain(ErrorData::OutcomeUnknown))?,
+                })
+            }
+            method @ (Method::ThreadArchive { .. } | Method::ThreadUnarchive { .. }) => {
+                let (thread_id, archived) = match method {
+                    Method::ThreadArchive { thread_id } => (thread_id, true),
+                    Method::ThreadUnarchive { thread_id } => (thread_id, false),
+                    _ => unreachable!("archive methods"),
+                };
+                let manager = self.host.manager().clone();
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                tokio::spawn(async move {
+                    let _request = request_owner;
+                    let result = async {
+                        let metadata = manager
+                            .archive_thread(thread_id, archived)
+                            .await
+                            .map_err(manager_error)?;
+                        Ok(MethodResult::Thread {
+                            thread: crate::app_server::thread_status::Thread::project(
+                                metadata, &manager,
+                            )
+                            .await
+                            .map_err(|_| domain(ErrorData::OutcomeUnknown))?,
+                        })
+                    }
+                    .await;
+                    let _ = sender.send(result);
+                });
+                receiver
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?
+            }
             Method::SessionDelete {
                 session_id,
                 expected_target_revision,
@@ -103,17 +194,31 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?;
                 Ok(MethodResult::Sessions {
-                    sessions: page.sessions,
+                    sessions: crate::app_server::thread_status::SessionSummary::project(
+                        page.sessions,
+                        self.host.manager(),
+                        &self.sessions,
+                    )
+                    .await?,
                     next_offset: page.next_offset,
                 })
             }
-            Method::SessionSummary { session_id } => Ok(MethodResult::SessionSummary {
-                summary: self
+            Method::SessionSummary { session_id } => {
+                let metadata = self
                     .sessions
                     .read_session_summary(&session_id)
                     .await
-                    .map_err(session_error)?,
-            }),
+                    .map_err(session_error)?;
+                let summary = crate::app_server::thread_status::SessionSummary::project(
+                    vec![metadata],
+                    self.host.manager(),
+                    &self.sessions,
+                )
+                .await?
+                .pop()
+                .expect("one Session summary");
+                Ok(MethodResult::SessionSummary { summary })
+            }
             Method::SessionRead { session_id } => Ok(MethodResult::Session {
                 session: self
                     .sessions
@@ -121,14 +226,18 @@ impl AppServerConnection {
                     .await
                     .map_err(session_error)?,
             }),
-            Method::SessionCreate { settings, .. } => {
+            Method::SessionCreate {
+                settings,
+                dynamic_tools,
+                ..
+            } => {
                 let result = self
                     .host
                     .manager()
-                    .create_session(settings)
+                    .create_thread(settings, dynamic_tools)
                     .await
                     .map_err(session_error)?;
-                transition(result, &self.sessions).await
+                transition(result, &self.sessions, self.host.manager()).await
             }
             Method::SessionName { session_id, name } => Ok(MethodResult::Session {
                 session: self
@@ -181,7 +290,7 @@ impl AppServerConnection {
                     .fork_projection(&session_id, node_id.as_ref(), ledger, activation)
                     .await
                     .map_err(session_error)?;
-                transition(result, &self.sessions).await
+                transition(result, &self.sessions, self.host.manager()).await
             }
             Method::SessionFork {
                 session_id,
@@ -217,7 +326,7 @@ impl AppServerConnection {
                     )
                     .await
                     .map_err(session_error)?;
-                transition(result, &self.sessions).await
+                transition(result, &self.sessions, self.host.manager()).await
             }
             Method::SessionBranch {
                 session_id,
@@ -249,7 +358,7 @@ impl AppServerConnection {
                     )
                     .await
                     .map_err(session_error)?;
-                transition(result, &self.sessions).await
+                transition(result, &self.sessions, self.host.manager()).await
             }
             Method::SessionDeletePreview { session_id } => {
                 Ok(deletion(self.sessions.delete_preview(&session_id).await))
@@ -279,6 +388,7 @@ impl AppServerConnection {
 pub(super) async fn transition(
     result: crate::local_runtime::session_controller::SessionTransitionResult,
     sessions: &SessionController,
+    manager: &crate::local_runtime::session_runtime_manager::SessionRuntimeManager,
 ) -> Result<MethodResult, RpcError> {
     let node = sessions
         .observe_node(&result.session.id, &result.session.active_node)
@@ -286,6 +396,15 @@ pub(super) async fn transition(
         .map_err(|_| domain(ErrorData::OutcomeUnknown))?;
     let editor = crate::app_server::editor_read::locator(result.session.id.clone(), &node);
     Ok(MethodResult::SessionTransition {
+        thread: crate::app_server::thread_status::Thread::project(
+            sessions
+                .thread(&result.session.active_conversation_id)
+                .await
+                .map_err(|_| domain(ErrorData::OutcomeUnknown))?,
+            manager,
+        )
+        .await
+        .map_err(|_| domain(ErrorData::OutcomeUnknown))?,
         session: result.session,
         editor,
         durability_diagnostic: result

@@ -47,8 +47,8 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await openEmptySession(page, fixture, 'Workspace A');
       if (locale === 'zh') {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       const input = page.getByRole('textbox', { name: copy('Message', '消息'), exact: true });
       // An idle Context seat renders nothing; no request occupancy is disclosed.

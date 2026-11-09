@@ -1,129 +1,20 @@
-/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-.triggerRow {
-  position: relative;
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: calc(100% + 4px);
-  margin: 4px -2px;
-}
-
-.triggerRow.railRow {
-  flex-direction: column;
-  width: 36px;
-  margin: 8px 0 10px;
-}
-
-.trigger {
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted page shell; see PROVENANCE.md. */
+.panel {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  width: auto;
-  height: 42px;
-  margin: 0;
-  padding: 0 10px 0 8px;
-  box-sizing: border-box;
-  border: none;
-  border-radius: 12px;
-  background: transparent;
-  cursor: pointer;
   overflow: hidden;
-  color: var(--dsw-alias-label-primary);
-  font-family: inherit;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.trigger:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-/* Rail trigger: the same 36x36 box and 12px rounding as the other rail
-   controls. */
-.trigger.rail {
-  flex: none;
-  width: 36px;
-  height: 36px;
-  margin: 0;
-  justify-content: center;
-  gap: 0;
-  padding: 0;
-}
-
-.triggerLabel {
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-/* Full-viewport layer (figma Mask 501:29946 #000@24%): mask tokens match the
-   Modal primitive (--dsw-alias-bg-mask-1 + --dsw-mask-blur). */
-.overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Base UI's DialogViewport is the mask element itself: it owns the
-     dismissable viewport, so no separate styled mask node is rendered. */
-  background: var(--dsw-alias-bg-mask-1);
-}
-
-/* Panel (figma Settings 501:29947): white, the figma lv3 effects superseded by
-   the shared elevation treatment. The inspected desktop uses an 800x704 panel,
-   bounded by the viewport, and r24. One height for every page, independent of
-   the content: pages differ by hundreds of pixels (a
-   settings list against a complete Model editor), and a content-sized panel
-   would resize under the pointer on every page change. Whatever does not fit
-   scrolls in `.options`.
-
-   The panel is also the size container every inner layout decision reads:
-   `@container settings (...)` below answers the panel's own usable width,
-   never the window's, so a narrow panel in a wide window is still narrow. */
-.panel {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  width: min(800px, 100vw - 48px);
-  height: min(704px, 100dvh - 48px);
-  border-radius: 24px;
-  overflow: hidden;
-  background: var(--dsw-alias-bg-layer-2);
-  box-shadow: var(--dsw-elevation-prominent);
-  /* Own compositing layer: the r24 corner arcs of the 0.5px elevation ring
-     otherwise rasterize differently with whichever partial repaint of the
-     page last drew them (measured in PR #459: three corner variants of one
-     state). Opacity, not transform, so fixed descendants keep the viewport. */
-  will-change: opacity;
+  background: var(--dsw-alias-bg-base);
   container: settings / inline-size;
-  /* Elevated surface: the scrollbar thumb takes the l2 elevation tokens.
-     Declared on the panel rather than the scrolling `.options` child so the
-     elevation choice sits with the surface; the custom properties inherit
-     down to whichever descendant scrolls (see ui-theme
-     styles/scrollbar.css for the rebinding contract). */
-  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
-  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
-/* The provider navigation and connection editor sit side by side. Keep their
- * fields usable without changing the compact frame of the preference pages. */
-.modelsPanel { width: min(1080px, 100vw - 48px); }
-
-/* A small viewport gives the panel almost all of itself; the panel then
-   narrows as a container and its content follows. This is the modal shell's
-   viewport bound, not a layout decision about its content. */
-@media (max-width: 640px) {
-  .panel { width: calc(100vw - 24px); height: calc(100dvh - 24px); }
-}
-
-/* The dialog is one grid with three owned regions: the rail, the fixed
+/* The page is one grid with three owned regions: the rail, the fixed
    header and the one scrolling options pane. React Aria's Tabs element is a
    pure pass-through (`display: contents`), so the rail and the options pane it
-   owns sit in the dialog's grid next to the header, which is outside it. */
-.dialog {
+   owns sit in the page's grid next to the header, which is outside it. */
+.page {
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -212,13 +103,13 @@
 }
 
 /* Header (figma .Header 501:29981): the owner and observation context of this
-   Settings instance on the left, Close on the right. It never scrolls. The
+   Settings instance. It never scrolls. The
    section menu seat is present in the grid only on a narrow panel. */
 .header {
   grid-area: header;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "context close";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "context";
   align-items: center;
   gap: 8px 12px;
   min-height: 60px;
@@ -228,7 +119,6 @@
 
 .sections { grid-area: sections; display: none; min-width: 0; }
 .context { grid-area: context; min-width: 0; }
-.close { grid-area: close; }
 
 /* Section menu trigger: the nav cell geometry as one button that names the
    current page. */
@@ -255,26 +145,6 @@
 .sectionLabel { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .sectionChevron { flex: none; color: var(--dsw-alias-label-tertiary); }
 
-/* Close button (figma .Icon_container 501:29982): 28x28, r28, 14px glyph. */
-.close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 28px;
-  background: transparent;
-  cursor: pointer;
-  color: var(--dsw-alias-label-primary);
-}
-
-.close:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.close:focus-visible,
 .sectionTrigger:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 2px;
@@ -290,26 +160,16 @@
   overflow-x: hidden;
 }
 
-/* Visually-hidden text seat (close button accessible name from slot content). */
-.hiddenLabel {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
 /* Narrow panel: the rail gives way to the section menu, the header takes two
-   rows (page selector and Close, then the owner context), and the options
+   rows (section selector, then the owner context), and the options
    lose their wide gutters. Decided by the panel's own width, see `.panel`. */
 @container settings (max-width: 680px) {
-  .dialog { grid-template-columns: minmax(0, 1fr); grid-template-areas: "header" "options"; }
+  .page { grid-template-columns: minmax(0, 1fr); grid-template-areas: "header" "options"; }
   .nav { display: none; }
   .sections { display: block; }
   .header {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "sections close" "context context";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "sections" "context";
     padding: 12px 12px 10px 16px;
   }
   /* Keep the bottom gutter outside the scrolling content. Long cards must

@@ -38,22 +38,22 @@ const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<
     fixture = await startDogfood(readingScenario);
     phase = 'connect';
     const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    phase = 'session/create';
-    const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
+    phase = 'thread/start';
+    const created = await remote.client.call('thread/start', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
     const id = created.session.id;
     await remote.renameSession(id, 'New session');
-    phase = 'session/attach';
-    const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
+    phase = 'thread/resume';
+    const attached = await remote.client.call('thread/resume', {threadId:(await remote.readSession(id)).active_conversation_id}, 'attached');
     phase = 'checkpoint/subscribe';
     following = await followRoot(remote, attached.target);
     // Every terminal barrier is a real native event. Seeding does not repeatedly
     // rebuild full snapshots or synthesize any history entry.
     for (let i = 0; i < 300; i++) {
       inFlight = i;
-      phase = 'turn/start';
+      phase = 'inbound/queue';
       const started = performance.now();
       const terminal = following.nextSettlement();
-      await remote.client.call('turn/start', { target: attached.target, content: [{ type: 'text', text: `Reading ${i}` }] }, 'inbound_accepted');
+      await remote.client.call('inbound/queue', { inputId:crypto.randomUUID(), target: attached.target, content: [{ type: 'text', text: `Reading ${i}` }] }, 'inbound_accepted');
       const admitted = performance.now();
       phase = 'terminal event';
       await terminal;
@@ -81,8 +81,8 @@ const test = base.extend<{ readingScenario: string; reading: { fixture: Awaited<
     expect(exact.page.entries![0].item).toMatchObject({ type: 'message', message: { id: sourceEntry.item.message.id } });
     const completed = sourceEntry.completed_response;
     if (!completed) throw new Error('The selected source Message has no native completed-response cut.');
-    phase = 'session/fork';
-    const fork = await remote.client.call('session/fork', { session_id: id, node_id: created.session.active_node, surface_revision: completed.surface_revision, boundary: completed.closing_locator, side: 'after' }, 'session_transition');
+    phase = 'thread/fork';
+    const fork = await remote.client.call('thread/fork', { session_id: id, node_id: created.session.active_node, surface_revision: completed.surface_revision, boundary: completed.closing_locator, side: 'after' }, 'session_transition');
     phase = 'session/detach';
     await remote.client.call('session/detach', { target: attached.target }, 'detached'); await remote.shutdown();
       clearTimeout(diagnostic);
@@ -237,8 +237,8 @@ test('native distant reading rail, detached/latest follow and measured width in 
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await openSettingsPage(page, 'General');
-    await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-    await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+    await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+    await page.getByRole('button', { name: '主页', exact: true }).click();
     // As in Harness, a narrow reading column has no rail.
     await expect(page.getByRole('navigation',{name:'轮次导航'})).toBeHidden();
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

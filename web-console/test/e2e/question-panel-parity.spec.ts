@@ -8,7 +8,7 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
     await page.addInitScript(() => {
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function(data) {
-        if (typeof data === 'string' && JSON.parse(data).method === 'interaction/respond') document.documentElement.dataset.interactionResponses = String(Number(document.documentElement.dataset.interactionResponses ?? 0) + 1);
+        if (typeof data === 'string' && !('method' in JSON.parse(data)) && ('result' in JSON.parse(data) || 'error' in JSON.parse(data))) document.documentElement.dataset.interactionResponses = String(Number(document.documentElement.dataset.interactionResponses ?? 0) + 1);
         return send.call(this, data);
       };
     });

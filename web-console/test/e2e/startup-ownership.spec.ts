@@ -3,6 +3,26 @@ import { test, expect, type Page } from '@playwright/test';
 const fixture = `${fixtureOrigin}/test/fixtures/startup.html`;
 const methods = (page: Page): Promise<string[]> => page.evaluate(() => (window as any).startupFixture.requests().map((r: any) => r.method));
 const release = (page: Page, method: string, failure?: string) => page.evaluate(({ method, failure }) => (window as any).startupFixture.release(method, failure), { method, failure });
+for (const width of [390, 1440]) test(`initial Workspace reads are silent and preserve composer geometry (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 1000 });
+  await page.goto(`${fixture}?source-gate`);
+  await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
+  const input = page.getByRole('textbox', { name: 'Message', exact: true }), card = page.locator('[data-composer-card]');
+  await input.fill('Typing while configuration loads');
+  await input.evaluate(element => { element.setAttribute('data-retained-editor', ''); (element as HTMLTextAreaElement).setSelectionRange(2, 8); });
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+  await expect(page.getByText('Awaiting authoritative Workspace permissions.', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Model and thinking effort' })).toBeHidden();
+  const before = await card.boundingBox();
+  await page.evaluate(() => (window as any).startupFixture.releaseSource());
+  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Model and thinking effort' })).toContainText('fixture/native');
+  await expect(page.locator('[data-retained-editor]')).toBeFocused();
+  await expect(input).toHaveValue('Typing while configuration loads');
+  expect(await input.evaluate(element => [(element as HTMLTextAreaElement).selectionStart, (element as HTMLTextAreaElement).selectionEnd])).toEqual([2, 8]);
+  expect(await card.boundingBox()).toEqual(before);
+});
 async function begin(page: Page, language = 'en', files = false, model?: 'explicit' | 'preference') {
   await page.addInitScript(({ language, model }) => { localStorage.clear(); localStorage.setItem('rustx-locale-v1', language); if (model === 'preference') localStorage.setItem('rustx-new-session-model-v1', JSON.stringify({ 'ws://127.0.0.1:8080/': { model: 'fixture/second' } })); }, { language, model });
   await page.goto(fixture);
@@ -12,108 +32,108 @@ async function begin(page: Page, language = 'en', files = false, model?: 'explic
   await page.locator('textarea').fill('Retained first input');
   if (files) await page.locator('input[type=file]').setInputFiles([{ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('first') }, { name: 'second.txt', mimeType: 'text/plain', buffer: Buffer.from('second') }]);
   await page.locator('[data-composer-primary]').click();
-  await expect.poll(() => methods(page)).toContain('session/create');
+  await expect.poll(() => methods(page)).toContain('thread/start');
 }
 for (const language of ['en', 'zh']) test(`create ACK renders Conversation before attach/catalog; remount owns exactly one send (${language})`, { tag: language === 'en' ? ['@smoke'] : [] }, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   await begin(page, language, true);
   await expect(page.locator('[data-draft-conversation]')).toBeVisible();
-  await release(page, 'session/create');
+  await release(page, 'thread/start');
   await expect(page.locator('[data-draft-conversation]')).toHaveCount(0);
   await expect(page.locator('#session-view')).toHaveAttribute('data-phase', 'active');
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'attaching');
-  await expect.poll(() => methods(page)).toContain('session/attach');
-  expect((await methods(page)).filter(m => ['session/uploadPrepare', 'turn/start', 'session/setModel'].includes(m))).toEqual([]);
+  await expect.poll(() => methods(page)).toContain('thread/resume');
+  expect((await methods(page)).filter(m => ['session/uploadPrepare', 'inbound/queue', 'session/setModel'].includes(m))).toEqual([]);
   await expect(page.locator('button[data-session-id=created]')).toHaveCount(0);
   await page.screenshot({ path: `test-results/startup-${language}-attaching.png`, fullPage: true });
   await page.evaluate(() => (window as any).startupFixture.remount());
   await expect(page.locator('#session-view')).toHaveAttribute('data-phase', 'active');
   await expect(page.locator('[data-pending-message]')).toContainText('Retained first input');
-  await release(page, 'session/attach');
-  await expect.poll(() => methods(page)).toContain('turn/start');
+  await release(page, 'thread/resume');
+  await expect.poll(() => methods(page)).toContain('inbound/queue');
   await expect(page.locator('[data-pending-message]')).toContainText('first.txt');
   await expect(page.locator('[data-pending-message]')).toContainText('second.txt');
   const requests = await page.evaluate(() => (window as any).startupFixture.requests());
-  expect(requests.filter((r: any) => r.method === 'session/attach')).toHaveLength(1);
+  expect(requests.filter((r: any) => r.method === 'thread/resume')).toHaveLength(1);
   expect(requests.filter((r: any) => r.method === 'session/uploadPrepare').map((r: any) => r.params.files[0].name)).toEqual(['first.txt', 'second.txt']);
-  const sent = requests.find((r: any) => r.method === 'turn/start');
+  const sent = requests.find((r: any) => r.method === 'inbound/queue');
   const retained = await page.evaluate(() => (window as any).startupFixture.operation());
   expect(sent.params.content).toEqual([...retained.receipts.map((receipt: any) => ({ type: 'upload', ...receipt })), { type: 'text', text: 'Retained first input' }]);
   expect(new Set(retained.receipts.map((receipt: any) => receipt.batch_id)).size).toBe(2);
   await page.evaluate(() => (window as any).startupFixture.remount());
   await expect(page.locator('[data-pending-message]')).toContainText('Retained first input');
-  await release(page, 'turn/start');
+  await release(page, 'inbound/queue');
   await expect(page.locator('textarea')).toHaveValue('');
-  expect((await methods(page)).filter(m => m === 'turn/start')).toHaveLength(1);
+  expect((await methods(page)).filter(m => m === 'inbound/queue')).toHaveLength(1);
   expect((await methods(page)).filter(m => m === 'session/setModel')).toHaveLength(0);
   // The independent catalog owner can now observe native facts.
   await page.evaluate(() => (window as any).startupFixture.resumeCatalog());
   await expect(page.locator('button[data-session-id=created]')).toBeVisible();
   expect(errors).toEqual([]);
 });
-for (const language of ['en', 'zh']) for (const phase of ['session/attach', 'turn/start']) test(`post-create ${phase} rejection is Session-scoped and not replayed (${language})`, async ({ page }) => {
-  await begin(page, language); await release(page, 'session/create');
-  await expect.poll(() => methods(page)).toContain('session/attach');
-  await release(page, 'session/attach', phase === 'session/attach' ? 'startup rejected' : undefined);
-  if (phase === 'turn/start') { await expect.poll(() => methods(page)).toContain('turn/start'); await release(page, 'turn/start', 'admission rejected'); }
+for (const language of ['en', 'zh']) for (const phase of ['thread/resume', 'inbound/queue']) test(`post-create ${phase} rejection is Session-scoped and not replayed (${language})`, async ({ page }) => {
+  await begin(page, language); await release(page, 'thread/start');
+  await expect.poll(() => methods(page)).toContain('thread/resume');
+  await release(page, 'thread/resume', phase === 'thread/resume' ? 'startup rejected' : undefined);
+  if (phase === 'inbound/queue') { await expect.poll(() => methods(page)).toContain('inbound/queue'); await release(page, 'inbound/queue', 'admission rejected'); }
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'failed');
   await page.evaluate(() => (window as any).startupFixture.remount());
   await expect(page.locator('#session-view')).toHaveAttribute('data-phase', 'active');
   await expect(page.locator('textarea')).toHaveValue('Retained first input');
   expect((await methods(page)).filter(m => m === phase)).toHaveLength(1);
-  expect((await methods(page)).filter(m => m === 'session/create')).toHaveLength(1);
+  expect((await methods(page)).filter(m => m === 'thread/start')).toHaveLength(1);
   await page.screenshot({ path: `test-results/startup-${language}-${phase.replace('/', '-')}-failed.png`, fullPage: true });
 });
 test('lost admission response survives remount/reconnect without replay', async ({ page }) => {
-  await begin(page); await release(page, 'session/create');
-  await expect.poll(() => methods(page)).toContain('session/attach'); await release(page, 'session/attach');
-  await expect.poll(() => methods(page)).toContain('turn/start');
+  await begin(page); await release(page, 'thread/start');
+  await expect.poll(() => methods(page)).toContain('thread/resume'); await release(page, 'thread/resume');
+  await expect.poll(() => methods(page)).toContain('inbound/queue');
   await page.evaluate(() => (window as any).startupFixture.disconnect());
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'uncertain');
   await page.evaluate(() => (window as any).startupFixture.remount());
   await page.evaluate(() => (window as any).startupFixture.reconnect());
   await expect(page.locator('textarea')).toHaveValue('Retained first input');
-  expect((await methods(page)).filter(m => m === 'turn/start')).toHaveLength(1);
+  expect((await methods(page)).filter(m => m === 'inbound/queue')).toHaveLength(1);
 });
 
-for (const method of ['session/create', 'session/uploadPrepare']) test(`lost ${method} response is not replayed by remount/reconnect`, async ({ page }) => {
+for (const method of ['thread/start', 'session/uploadPrepare']) test(`lost ${method} response is not replayed by remount/reconnect`, async ({ page }) => {
   await begin(page, 'en', method === 'session/uploadPrepare');
   if (method === 'session/uploadPrepare') {
     await page.evaluate(() => (window as any).startupFixture.hold('session/uploadPrepare'));
-    await release(page, 'session/create');
-    await expect.poll(() => methods(page)).toContain('session/attach'); await release(page, 'session/attach');
+    await release(page, 'thread/start');
+    await expect.poll(() => methods(page)).toContain('thread/resume'); await release(page, 'thread/resume');
     await expect.poll(() => methods(page)).toContain('session/uploadPrepare');
   }
   await page.evaluate(method => (window as any).startupFixture.lose(method), method);
-  await expect(page.getByRole('alert').last()).toContainText(method === 'session/create' ? 'uncertain' : 'committed');
+  await expect(page.getByRole('alert').last()).toContainText(method === 'thread/start' ? 'uncertain' : 'committed');
   await page.evaluate(() => (window as any).startupFixture.remount());
   await page.evaluate(() => (window as any).startupFixture.reconnect());
   await expect(page.locator('textarea')).toHaveValue('Retained first input');
   if (method === 'session/uploadPrepare') await expect(page.getByText('Upload outcome uncertain', { exact: true })).toBeVisible();
   expect((await methods(page)).filter(m => m === method)).toHaveLength(1);
-  expect((await methods(page)).filter(m => m === 'turn/start')).toHaveLength(0);
+  expect((await methods(page)).filter(m => m === 'inbound/queue')).toHaveLength(0);
 });
 
 test('failed catalog refresh cannot reject attach or block admission; later native invalidation repairs it', async ({ page }) => {
-  await begin(page); await release(page, 'session/create');
-  await expect.poll(() => methods(page)).toContain('session/attach');
+  await begin(page); await release(page, 'thread/start');
+  await expect.poll(() => methods(page)).toContain('thread/resume');
   await release(page, 'session/list', 'catalog unavailable');
-  await release(page, 'session/attach');
-  await expect.poll(() => methods(page)).toContain('turn/start'); await release(page, 'turn/start');
+  await release(page, 'thread/resume');
+  await expect.poll(() => methods(page)).toContain('inbound/queue'); await release(page, 'inbound/queue');
   await expect(page.locator('textarea')).toHaveValue('');
   await page.evaluate(() => { (window as any).startupFixture.allow('session/list'); (window as any).startupFixture.invalidateCatalog(); });
   await expect(page.locator('button[data-session-id=created]')).toBeVisible();
-  expect((await methods(page)).filter(m => m === 'turn/start')).toHaveLength(1);
+  expect((await methods(page)).filter(m => m === 'inbound/queue')).toHaveLength(1);
 });
 
 for (const intent of ['explicit', 'preference', 'omitted'] as const) test(`creation owns ${intent} model intent without a second mutation`, async ({ page }) => {
   await begin(page, 'en', false, intent === 'omitted' ? undefined : intent);
-  const create = await page.evaluate(() => (window as any).startupFixture.requests().find((r: any) => r.method === 'session/create'));
+  const create = await page.evaluate(() => (window as any).startupFixture.requests().find((r: any) => r.method === 'thread/start'));
   expect(create.params.settings.model).toEqual(intent === 'omitted' ? undefined : { model: 'fixture/second' });
   // A display-only default changed after draft render and request dispatch.
   if (intent === 'omitted') await page.evaluate(() => (window as any).startupFixture.defaultModel('fixture/second'));
-  await release(page, 'session/create'); await expect.poll(() => methods(page)).toContain('session/attach'); await release(page, 'session/attach');
-  await expect.poll(() => methods(page)).toContain('turn/start');
+  await release(page, 'thread/start'); await expect.poll(() => methods(page)).toContain('thread/resume'); await release(page, 'thread/resume');
+  await expect.poll(() => methods(page)).toContain('inbound/queue');
   expect(await page.evaluate(() => (window as any).startupFixture.model().configured.model)).toBe('fixture/second');
   const preference = await page.evaluate(() => localStorage.getItem('rustx-new-session-model-v1'));
   if (intent === 'omitted') expect(preference).toBeNull();
@@ -127,14 +147,14 @@ for (const intent of ['explicit', 'preference', 'omitted'] as const) test(`creat
   expect(checkpoints[0].params.target).toEqual(observation.target);
   expect(subscriptions[0].params).toEqual({ target: observation.target, after_cursor: observation.cursor });
   expect(observation.revision).toBe(observation.cursor); expect(observation.state).toBe('following');
-  for (const method of ['session/create', 'session/attach', 'turn/start']) expect(requests.filter((request: any) => request.method === method)).toHaveLength(1);
+  for (const method of ['thread/start', 'thread/resume', 'inbound/queue']) expect(requests.filter((request: any) => request.method === method)).toHaveLength(1);
 });
 
 for (const language of ['en', 'zh']) test(`lost ready read is reconciled from the original operation after remount (${language})`, async ({ page }) => {
   await begin(page, language, true);
   await page.evaluate(() => (window as any).startupFixture.hold('session/uploadStatus'));
-  await release(page, 'session/create');
-  await expect.poll(() => methods(page)).toContain('session/attach'); await release(page, 'session/attach');
+  await release(page, 'thread/start');
+  await expect.poll(() => methods(page)).toContain('thread/resume'); await release(page, 'thread/resume');
   await expect.poll(() => methods(page)).toContain('session/uploadStatus');
   const operation = await page.evaluate(() => (window as any).startupFixture.operation().operations[0]);
   await page.evaluate(() => (window as any).startupFixture.lose('session/uploadStatus'));
@@ -147,12 +167,12 @@ for (const language of ['en', 'zh']) test(`lost ready read is reconciled from th
   const repaired = await page.evaluate(() => (window as any).startupFixture.operation());
   expect(repaired.operations[0]).toBe(operation); expect(repaired.receipts).toHaveLength(1);
   expect((await methods(page)).filter(m => m === 'session/uploadPrepare')).toHaveLength(1);
-  expect((await methods(page)).filter(m => m === 'turn/start')).toHaveLength(0);
+  expect((await methods(page)).filter(m => m === 'inbound/queue')).toHaveLength(0);
   await page.getByRole('button', { name: language === 'en' ? 'Continue submission' : '继续提交', exact: true }).click();
-  await expect.poll(() => methods(page)).toContain('turn/start');
+  await expect.poll(() => methods(page)).toContain('inbound/queue');
   expect((await methods(page)).filter(m => m === 'session/uploadPrepare')).toHaveLength(2);
-  expect((await methods(page)).filter(m => m === 'session/create')).toHaveLength(1);
-  await release(page, 'turn/start'); await expect(page.locator('textarea')).toHaveValue('');
+  expect((await methods(page)).filter(m => m === 'thread/start')).toHaveLength(1);
+  await release(page, 'inbound/queue'); await expect(page.locator('textarea')).toHaveValue('');
 });
 
 
@@ -160,24 +180,25 @@ test('existing Session accepts text and files before connection, then sends once
   await page.goto(`${fixture}?existing`);
   await page.evaluate(() => { (window as any).startupFixture.allow('session/summary'); (window as any).startupFixture.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
-  await expect.poll(() => methods(page)).toContain('session/attach');
+  await expect.poll(() => methods(page)).toContain('thread/resume');
   await expect(page.getByText('Connecting…', { exact: true })).toHaveCount(0);
   await expect(page.getByText('Previously saved message', { exact: true })).toBeVisible();
   await page.locator('textarea').fill('Ready when connected');
   await page.locator('input[type=file]').setInputFiles({ name: 'queued.txt', mimeType: 'text/plain', buffer: Buffer.from('queued attachment') });
   await page.locator('[data-composer-primary]').click();
-  await expect(page.locator('[data-pending-message]').getByText('Connecting…', { exact: true })).toBeVisible();
-  expect((await methods(page)).filter(method => ['turn/start', 'session/uploadPrepare'].includes(method))).toEqual([]);
+  await expect(page.locator('[data-pending-message]').getByRole('status', { name: 'Sending…', exact: true })).toBeVisible();
+  await expect(page.locator('[data-pending-message]')).not.toContainText('Connecting…');
+  expect((await methods(page)).filter(method => ['inbound/queue', 'session/uploadPrepare'].includes(method))).toEqual([]);
   await expect(page.getByText('Retained first input outside this Conversation')).toHaveCount(0);
   await page.screenshot({ path: 'test-results/existing-connecting.png', fullPage: true });
-  await release(page, 'session/attach');
-  await expect.poll(() => methods(page)).toContain('turn/start');
+  await release(page, 'thread/resume');
+  await expect.poll(() => methods(page)).toContain('inbound/queue');
   const requests = await page.evaluate(() => (window as any).startupFixture.requests());
-  expect(requests.filter((r: any) => r.method === 'session/attach')).toHaveLength(1);
-  expect(requests.filter((r: any) => r.method === 'turn/start')).toHaveLength(1);
-  expect(requests.filter((r: any) => r.method === 'session/create')).toHaveLength(0);
-  const sent = requests.find((r: any) => r.method === 'turn/start');
+  expect(requests.filter((r: any) => r.method === 'thread/resume')).toHaveLength(1);
+  expect(requests.filter((r: any) => r.method === 'inbound/queue')).toHaveLength(1);
+  expect(requests.filter((r: any) => r.method === 'thread/start')).toHaveLength(0);
+  const sent = requests.find((r: any) => r.method === 'inbound/queue');
   expect(sent.params.content).toEqual([expect.objectContaining({ type: 'upload' }), { type: 'text', text: 'Ready when connected' }]);
-  await release(page, 'turn/start');
+  await release(page, 'inbound/queue');
   await expect(page.locator('textarea')).toHaveValue('');
 });

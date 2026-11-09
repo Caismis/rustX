@@ -39,15 +39,15 @@ test('workspace primary/menu actions, keyboard, failure, retry and localization 
   expect(await page.evaluate(() => (window as any).desktop.catalogs)).toEqual([false, false, false, false, true, false, false, true]);
   await page.keyboard.press('Escape'); await expect(menu).toBeFocused();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+  await page.getByRole('button', { name: '主页', exact: true }).click();
   await expect(page.getByRole('button', { name: '打开工作区', exact: true })).toBeVisible();
   for (const width of [1440, 390]) {
     if (width === 390) await page.getByRole('button', { name: '收起侧边栏', exact: true }).click();
     await page.setViewportSize({ width, height: 1000 });
     if (width === 390) {
       await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
-      await expect.poll(() => page.locator('[data-harness-frame]').evaluate(el => parseFloat(getComputedStyle(el).gridTemplateColumns))).toBeLessThan(100);
+      await expect.poll(() => page.locator('[data-harness-frame]').evaluate(el => parseFloat(getComputedStyle(el).gridTemplateColumns.split(' ')[1]!))).toBe(0);
     }
     const control = page.getByRole('button', { name: '打开工作区', exact: true });
     await expect(control).toBeVisible();

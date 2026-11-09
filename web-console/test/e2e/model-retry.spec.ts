@@ -29,8 +29,8 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await connectRemote(page, fixture.endpoint, fixture.token); const sessionId = await openEmptySession(page, fixture, 'Workspace A');
       if (locale === 'zh') {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       const input = page.getByRole('textbox', { name: copy('Message', '消息'), exact: true });
       await input.fill('Timeout and recover'); await input.press('Enter'); await fixture.gate('retry-started');
@@ -73,7 +73,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await expect(input).toBeEditable();
       if (locale === 'en' && theme === 'light') {
         await page.reload(); await connectRemote(page, fixture.endpoint, fixture.token);
-        const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+        const expand = page.getByRole('button', { name: 'Home', exact: true });
         if (await expand.isVisible()) await expand.click();
         await page.locator(`button[data-session-id="${sessionId}"]`).click();
         await expect(page.getByText('Recovered after timeout.', { exact: true })).toBeVisible();

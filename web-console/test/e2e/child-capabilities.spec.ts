@@ -127,7 +127,7 @@ test('native child live cuts, independent title, active and file-only resume upl
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await fixture.release(`child-first-${parentGate}`); await fixture.release(`child-second-${parentGate}`);
     await expect(page.getByText('Parent and child remain independent.', { exact: true })).toBeVisible();
-    const parentTarget=wire.requests.find(request=>request.method==='turn/start')!.params.target;
+    const parentTarget=wire.requests.find(request=>request.method==='inbound/queue')!.params.target;
     const rootFacts=()=>wire.notifications.filter(note=>note.method==='session/event'
       &&JSON.stringify(note.params.target)===JSON.stringify(parentTarget)).flatMap(note=>transitionFacts(note.params.event));
     const parentAttempt=rootFacts().find(fact=>fact.type==='attempt_started');

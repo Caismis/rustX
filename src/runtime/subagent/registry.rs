@@ -504,6 +504,9 @@ impl SubagentRecord {
 }
 
 struct RegistryState {
+    activity_records: std::collections::BTreeSet<usize>,
+    activity_fault_records: std::collections::BTreeSet<usize>,
+    failed_admissions: std::collections::BTreeSet<AgentId>,
     max_active: usize,
     /// Pins an idle Goal admission while its durable append runs off-lock.
     goal_idle_committing: bool,
@@ -659,6 +662,7 @@ pub struct SubagentRegistryConfig {
 /// Cheaply cloneable: every clone shares the one registry state, the same
 /// contract as the background registry.
 pub struct SubagentRegistry {
+    resume_activity: Arc<std::sync::atomic::AtomicUsize>,
     recovery_reconciliation: tokio::sync::watch::Sender<bool>,
     config: SubagentRegistryConfig,
     identities: Arc<dyn crate::runtime::identity::UuidV7Generator>,
@@ -708,6 +712,9 @@ impl SubagentRegistry {
                 next_ordinal: 1,
                 next_response_id: 1,
                 next_guidance_id: 1,
+                activity_records: std::collections::BTreeSet::new(),
+                activity_fault_records: std::collections::BTreeSet::new(),
+                failed_admissions: std::collections::BTreeSet::new(),
                 agents: BTreeMap::new(),
                 agent_observation_order: Vec::new(),
                 agent_observation_index: HashMap::new(),
@@ -771,6 +778,7 @@ impl SubagentRegistry {
                 #[cfg(test)]
                 resume_preflight_hook: None,
             })),
+            resume_activity: Arc::default(),
             state_version: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
             interaction_published: Arc::new(tokio::sync::Notify::new()),
@@ -910,6 +918,7 @@ impl SubagentRegistry {
             config: self.config.clone(),
             identities: Arc::clone(&self.identities),
             state: Arc::clone(&self.state),
+            resume_activity: self.resume_activity.clone(),
             state_version: self.state_version.clone(),
             #[cfg(test)]
             interaction_published: Arc::clone(&self.interaction_published),

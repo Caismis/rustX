@@ -62,7 +62,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     expect(resident.loaded).toBe(1);
     await closeSessionView(page, id);
     await expect.poll(async () => (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
-    const attached = await remoteA.client.call('session/attach', { session_id: id }, 'attached');
+    const attached = await remoteA.client.call('thread/resume', {threadId:(await remoteA.readSession(id)).active_conversation_id}, 'attached');
     const baselineCheckpoint=await remoteA.client.call('session/checkpoint',{target:attached.target},'checkpoint');
     await remoteA.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_receipt');
     const refreshed = await remoteA.client.call('session/checkpoint', { target: attached.target }, 'checkpoint');
@@ -82,7 +82,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     await page.getByRole('button', { name: 'Toggle Workspace A' }).click();
     await page.screenshot({ path: 'test-results/workspaces-desktop.png', fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('button', { name: 'Expand Sidebar' }).click();
+    await page.getByRole('button', { name: 'Home' }).click();
     await page.getByRole('button', { name: 'Select Workspace Workspace A' }).scrollIntoViewIfNeeded();
     await expect(page.locator(`button[data-session-id="${id}"]`)).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

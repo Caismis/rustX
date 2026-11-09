@@ -1,4 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. MarkdownBody and ImageBody adapted; see PROVENANCE.md. */
+import { LoadingIndicator } from '../../../presentation/primitives/LoadingIndicator';
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { MarkdownText } from '../../../presentation/markdown/MarkdownText';
 import { useLocale, useTranslation } from '../../../locale/react';
@@ -27,7 +28,7 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
   const change = (patch: typeof state) => { view.document = {...view.document,...patch}; setState(view.document); };
 
   const split = useMemo(() => splitFrontmatter(text), [text]);
-  const loading = <p role="status">{tx('artifacts:workbench.loading')}</p>;
+  const loading = <LoadingIndicator label={tx('artifacts:workbench.loading')}/>;
   if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} dependencies={dependencies}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><div className={css.document} data-document-markdown>
     {split && <div className={css.frontmatter} data-document-frontmatter><FrontmatterFields source={split.source} fallback={<pre className={css.frontmatterSource}>{split.source}</pre>}/></div>}
     <MarkdownText text={split?.body ?? text} streaming={false}/>
@@ -46,5 +47,5 @@ function ImageBody({bytes,path,view,signal}: {bytes:Uint8Array<ArrayBuffer>;path
   const [error, setError] = useState(false);
   useEffect(()=>{ setError(false); try { validateRaster(bytes); const mime = `image/${path.split('.').at(-1)}`; const next = URL.createObjectURL(new Blob([bytes],{type:mime}));setUrl(next);return ()=>URL.revokeObjectURL(next); } catch { setError(true); } },[bytes,path]);
   if (error) return <p role="alert">{tx('artifacts:document.malformed')}</p>;
-  return url ? <ImagePreview url={url} name={path} signal={signal} decodeError={() => setError(true)} viewState={metadata} onViewStateChange={patch => { view.document = { ...view.document, ...patch }; setMetadata(view.document); }}/> : <p role="status">{tx('artifacts:document.loading')}</p>;
+  return url ? <ImagePreview url={url} name={path} signal={signal} decodeError={() => setError(true)} viewState={metadata} onViewStateChange={patch => { view.document = { ...view.document, ...patch }; setMetadata(view.document); }}/> : <LoadingIndicator label={tx('artifacts:document.loading')}/>;
 }

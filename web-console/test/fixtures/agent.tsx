@@ -18,7 +18,7 @@ import { workflowRunsFixture } from './workflow-runs';
 import { chatSpacingFixture } from './chat-spacing';
 import { workflowReviewHistoryFixture } from './workflow-review-history';
 import { questionHistoryFixture } from './question-history';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v73';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v76';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -66,7 +66,7 @@ if (mode === 'streaming') {
  s.attempt!.in_flight = { message_id: 'streaming-1', blocks: [{ type: 'reasoning', block_index: 0, text: 'Checking the native Tool lifecycle…\nThe canonical ledger owns committed output.' }, { type: 'text', block_index: 1, text: 'The browser renders a replaceable projection. It does not reconstruct execution from events.' }] };
 }
 if (mode === 'tools' || mode === 'error') {
- const calls = [{ id: 'read-1', tool_id: 'tool-read', name: 'read', arguments: { path: 'src/runtime_client/snapshot.rs' } }, { id: 'bash-1', tool_id: 'tool-bash', name: 'bash', arguments: { command: 'cargo test --lib' } }, { id: 'edit-1', tool_id: 'tool-edit', name: 'edit', arguments: { path: 'src/main.rs', edits: [{ oldText: 'legacy_view()', newText: 'native_projection()' }] } }];
+ const calls = [{ id: 'read-1', tool_id: 'tool-read', name: 'read', arguments: { path: 'src/runtime_client/snapshot.rs' } }, { id: 'bash-1', tool_id: 'tool-bash', name: 'bash', arguments: { description: 'Run native boundary tests', command: 'cargo test --lib' } }, { id: 'edit-1', tool_id: 'tool-edit', name: 'edit', arguments: { path: 'src/main.rs', edits: [{ oldText: 'legacy_view()', newText: 'native_projection()' }] } }];
  s.messages[1] = { role: 'assistant', id: 'calls-1', content: [{ type: 'reasoning', text: 'Inspect the projection, then validate the native contract.' }, ...calls.map(call => ({ type: 'tool_call' as const, ...call }))] };
  s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: calls.map((call, index) => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'calls-1'},block_index:index + 1},assembly_complete:true, message_id: 'calls-1', block_index: index + 1, call_id: call.id, tool_id: call.tool_id, name: call.name, state: index === 1 && mode === 'tools' ? { type: 'running', arguments: JSON.stringify(call.arguments) } : { type: 'settled', arguments: JSON.stringify(call.arguments), result: { status: index === 1 ? { type: 'failed', error: 'Native test failure: assertion failed' } : { type: 'success' }, duration_ms: '12', content: [{ type: 'text', text: index === 0 ? 'pub struct RuntimeClientSnapshot {\n    pub conversation_id: ConversationId,\n}' : index === 2 ? 'Replaced one occurrence.' : 'test native_boundary ... FAILED' }] } } })) };
 }
@@ -166,30 +166,30 @@ if (mode === 'composer') {
       next.inbound = { pending: value ? [{ sequence: '1', revision: '0', message: { id: 'queued', source: 'human', content: [{ type: 'text', text: 'Verify the native queue controls' }] } }] : [] };
       await server.update('A', next);
     },
-    holdCancellation: () => { server.held.add('turn/cancel'); },
-    holdSubmission: () => { server.held.add('turn/start'); server.held.add('turn/steer'); },
+    holdCancellation: () => { server.held.add('turn/interrupt'); },
+    holdSubmission: () => { server.held.add('inbound/queue'); server.held.add('turn/steer'); },
     acknowledgeSubmission: () => {
-      const row = server.requests.filter(({ request }) => request.method === 'turn/start' || request.method === 'turn/steer').at(-1);
+      const row = server.requests.filter(({ request }) => request.method === 'inbound/queue' || request.method === 'turn/steer').at(-1);
       if (!row) throw new Error('No submission requested');
-      server.held.delete('turn/start'); server.held.delete('turn/steer'); server.reply(row.request, row.socket);
+      server.held.delete('inbound/queue'); server.held.delete('turn/steer'); server.reply(row.request, row.socket);
     },
     // Stands in for the General Settings row, which owns this preference.
     busyEnter: value => composerPreferences().setBusyEnter(value),
-    cancellations: () => server.requests.flatMap(row => row.request.method === 'turn/cancel' ? [row.request.params.target] : []),
+    cancellations: () => server.requests.flatMap(row => row.request.method === 'turn/interrupt' ? [row.request.params.target] : []),
     acknowledgeCancellation: async () => {
-      const request = server.requests.find(row => row.request.method === 'turn/cancel')?.request;
+      const request = server.requests.find(row => row.request.method === 'turn/interrupt')?.request;
       if (!request) throw new Error('No cancellation requested');
       server.reply(request);
       const next = structuredClone(server.snapshots.get('A')!);
       next.attempt!.phase = { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } };
       server.snapshots.set('A', next); await server.client.refresh('A');
     },
-    submissions: () => server.requests.flatMap(row => row.request.method === 'turn/start' || row.request.method === 'turn/steer' ? [row.request.method] : []),
+    submissions: () => server.requests.flatMap(row => row.request.method === 'inbound/queue' || row.request.method === 'turn/steer' ? [row.request.method] : []),
   };
 }
 declare global {
  interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
-  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; holdSubmission(): void; acknowledgeSubmission(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v73').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; holdSubmission(): void; acknowledgeSubmission(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v76').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

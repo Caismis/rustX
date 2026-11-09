@@ -2,7 +2,7 @@ import { message } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import type { ReactNode } from 'react';
 import { useSelector } from '@xstate/react';
-import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v73';
+import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v76';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
@@ -24,9 +24,10 @@ export function WorkspaceControls({ client, host, workspaceId, children }: { cli
 }
 function useWorkspaceApproval(source?: SourceSettings) {
   const actor = useSettingsActor();
+  const readError = useSelector(actor, s => s.context.readError);
   const revision = source?.workspace?.revision ?? '';
   const unit = useUnitEditing<ApprovalMode>({ authored: source?.workspace?.authored?.approval_mode ?? undefined, blank: 'policy', revision, mutation: approvalMutation });
-  return { actor, revision, unit, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
+  return { actor, revision, unit, loading: !source && !readError, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
 }
 type WorkspaceApproval = ReturnType<typeof useWorkspaceApproval>;
 function ApprovalScope({ source, children }: { source?: SourceSettings; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {

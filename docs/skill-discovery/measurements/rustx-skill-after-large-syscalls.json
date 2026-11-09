@@ -1,0 +1,23 @@
+{
+  "case": "large",
+  "asset_read_opens": 0,
+  "header_read_opens": 4,
+  "header_read_calls": 4,
+  "header_requested_bytes": 16384,
+  "read_scope": "Two discovery passes, each with two verified prefix reads. Setup O_WRONLY asset creation is excluded.",
+  "header_open_calls": [
+    "1694206 openat(4</tmp/.tmp2RQCkW/skill-0>, \"SKILL.md\", O_RDONLY|O_NOCTTY|O_NONBLOCK|O_LARGEFILE|O_NOFOLLOW|O_CLOEXEC) = 3</tmp/.tmp2RQCkW/skill-0/SKILL.md>",
+    "1694206 openat(4</tmp/.tmp2RQCkW/skill-0>, \"SKILL.md\", O_RDONLY|O_NOCTTY|O_NONBLOCK|O_LARGEFILE|O_NOFOLLOW|O_CLOEXEC) = 3</tmp/.tmp2RQCkW/skill-0/SKILL.md>",
+    "1694206 openat(4</tmp/.tmp2RQCkW/skill-0>, \"SKILL.md\", O_RDONLY|O_NOCTTY|O_NONBLOCK|O_LARGEFILE|O_NOFOLLOW|O_CLOEXEC) = 3</tmp/.tmp2RQCkW/skill-0/SKILL.md>",
+    "1694206 openat(4</tmp/.tmp2RQCkW/skill-0>, \"SKILL.md\", O_RDONLY|O_NOCTTY|O_NONBLOCK|O_LARGEFILE|O_NOFOLLOW|O_CLOEXEC) = 3</tmp/.tmp2RQCkW/skill-0/SKILL.md>"
+  ],
+  "header_read_calls_raw": [
+    "1694206 read(3</tmp/.tmp2RQCkW/skill-0/SKILL.md>, \"---\\nname: skill-0\\ndescription: B\"..., 4096) = 4096",
+    "1694206 read(3</tmp/.tmp2RQCkW/skill-0/SKILL.md>, \"---\\nname: skill-0\\ndescription: B\"..., 4096) = 4096",
+    "1694206 read(3</tmp/.tmp2RQCkW/skill-0/SKILL.md>, \"---\\nname: skill-0\\ndescription: B\"..., 4096) = 4096",
+    "1694206 read(3</tmp/.tmp2RQCkW/skill-0/SKILL.md>, \"---\\nname: skill-0\\ndescription: B\"..., 4096) = 4096"
+  ],
+  "asset_calls_including_setup": [
+    "1694206 openat(AT_FDCWD</home/capi/Documents/codes/rustX>, \"/tmp/.tmp2RQCkW/skill-0/asset.bin\", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0666) = 4</tmp/.tmp2RQCkW/skill-0/asset.bin>"
+  ]
+}

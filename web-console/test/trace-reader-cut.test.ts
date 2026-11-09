@@ -1,6 +1,6 @@
 import {traceRefreshed} from './fixture';
 import {expect,it} from 'vitest';
-import type {TraceFieldSource} from '../../protocol/app-server/v73';
+import type {TraceFieldSource} from '../../protocol/app-server/v76';
 import {readTraceFieldWindow} from '../../protocol/app-server/trace-field';
 import {Server,checkpoint,snapshot} from './fixture';
 import {traceRecord} from './trace-fixture';

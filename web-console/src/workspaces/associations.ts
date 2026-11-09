@@ -8,6 +8,8 @@ export type AssociationStatus = 'pending' | 'refreshing' | 'ready' | 'unavailabl
 /** Display evidence deliberately has no authorized field. */
 export interface DisplayAssociation {
   readonly cwd: string;
+  /** Native activity metadata retained with the bounded association, across list searches. */
+  readonly updatedAt?: number;
   readonly confirmed?: { readonly workspaceId?: string };
   readonly status: AssociationStatus;
 }
@@ -117,11 +119,11 @@ export class WorkspaceAssociations {
     }
     if (replaced || generationChanged || connected !== this.connected) this.invalidate();
     this.generation = state.generation; this.connected = connected;
-    const rows = state.sessions.slice(0, 32).map(({ id, cwd }) => ({ id, cwd }));
+    const rows = state.sessions.slice(0, 32).map(({ id, cwd, updated_at }) => ({ id, cwd, updatedAt: Date.parse(updated_at) }));
     if (this.selected && !rows.some(row => row.id === this.selected)) {
       const view = state.views[this.selected];
       const cwd = view?.summary?.cwd ?? view?.settings?.cwd;
-      if (cwd && !view?.deleting) rows.push({ id: this.selected, cwd });
+      if (cwd && !view?.deleting) rows.push({ id: this.selected, cwd, updatedAt: Date.parse(view?.summary?.updated_at ?? '') });
     }
     const key = JSON.stringify(rows.map(({ id, cwd }) => [id, cwd]).sort());
     const demandChanged = key !== this.demandKey;
@@ -135,8 +137,13 @@ export class WorkspaceAssociations {
       }
       while (this.entries.size > LIMIT) this.entries.delete(this.entries.keys().next().value!);
     }
+    let activityChanged = false;
+    for (const row of rows) {
+      const entry = this.entries.get(row.id), updatedAt = Number.isFinite(row.updatedAt) ? row.updatedAt : undefined;
+      if (entry?.cwd === row.cwd && entry.updatedAt !== updatedAt) { this.entries.set(row.id, { ...entry, updatedAt }); activityChanged = true; }
+    }
     if (replaced || resumed) this.refresh();
-    else if (demandChanged || generationChanged || connectionChanged) { this.publish(); this.schedule(); }
+    else if (demandChanged || generationChanged || connectionChanged || activityChanged) { this.publish(); this.schedule(); }
   };
   /** Only a completion from this captured Product Host scope may commit display evidence.
    * Native authority replacement can retire the display baseline without retiring
@@ -211,7 +218,7 @@ export class WorkspaceAssociations {
     const current = () => this.currentRead(read);
     for (const row of rows) {
       const entry = this.entries.get(row.id);
-      this.entries.set(row.id, { cwd: row.cwd, confirmed: entry?.cwd === row.cwd ? entry.confirmed : undefined, status: entry?.confirmed ? 'refreshing' : 'pending', revision: -1 });
+      this.entries.set(row.id, { cwd: row.cwd, updatedAt: entry?.updatedAt, confirmed: entry?.cwd === row.cwd ? entry.confirmed : undefined, status: entry?.confirmed ? 'refreshing' : 'pending', revision: -1 });
     }
     this.publish();
     void (async () => {
@@ -232,7 +239,7 @@ export class WorkspaceAssociations {
         const result = results[index], old = next.get(row.id);
         // Eviction or a newer observation cannot be undone by a captured row.
         if (old?.cwd !== row.cwd || old.revision === revision) return;
-        next.set(row.id, { cwd: row.cwd, revision,
+        next.set(row.id, { cwd: row.cwd, updatedAt: old.updatedAt, revision,
           confirmed: result.authorized ? { workspaceId: result.workspaceId } : result.reason === 'unavailable' ? old?.confirmed : undefined,
           status: result.authorized ? 'ready' : result.reason === 'unavailable' ? 'unavailable' : 'revoked' });
       });
@@ -242,7 +249,7 @@ export class WorkspaceAssociations {
       for (const row of rows) {
         const old = this.entries.get(row.id);
         if (old?.cwd !== row.cwd || old.revision === revision) continue;
-        this.entries.set(row.id, { cwd: row.cwd, confirmed: old?.confirmed, status: 'unavailable', revision });
+        this.entries.set(row.id, { cwd: row.cwd, updatedAt: old.updatedAt, confirmed: old?.confirmed, status: 'unavailable', revision });
       }
       this.publish();
     }).finally(() => { this.reading.delete(id); this.schedule(); });
@@ -253,7 +260,7 @@ export class WorkspaceAssociations {
   }
   private publish() {
     const entries = new Map<string, DisplayAssociation>();
-    for (const [id, entry] of this.entries) entries.set(id, { cwd: entry.cwd, confirmed: entry.confirmed,
+    for (const [id, entry] of this.entries) entries.set(id, { cwd: entry.cwd, updatedAt: entry.updatedAt, confirmed: entry.confirmed,
       status: !this.connected ? 'disconnected' : this.catalogStatus === 'unavailable' ? 'unavailable'
         : this.catalogStatus !== 'ready' && entry.confirmed ? 'refreshing' : entry.status });
     // Historical entries retain evidence but cannot report current read demand.

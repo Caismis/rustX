@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
-import { closeSettings, connectRemote, openEmptySession, openWorkspaceSettings, selectedSettingsPage } from './shell-actions';
+import { returnHome, connectRemote, openEmptySession, openWorkspaceSettings, selectedSettingsPage } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
 // Issue #464 against a real App Server: the bound User source is repaired at
@@ -28,10 +28,10 @@ test('automatic configuration repair is announced once and inspected at its exac
     const notice = page.getByRole('status', { name: 'Configuration repair', exact: true });
     await expect(notice).toContainText('Configuration automatically repaired · 3 changes in User configuration');
     // Nonblocking: nothing modal opened and nothing navigated.
-    await expect(page.getByRole('dialog', { name: 'Settings', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Settings', exact: true })).toHaveCount(0);
     await notice.screenshot({ path: test.info().outputPath('config-repair-notice-user.png') });
     await notice.getByRole('button', { name: 'View details', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     await expect(settings).toBeVisible();
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     const section = settings.getByRole('region', { name: 'Auto Repair', exact: true });
@@ -46,7 +46,7 @@ test('automatic configuration repair is announced once and inspected at its exac
     // fresh authoritative read is in flight; only that read's presentation
     // acknowledges the receipt, so wait for it before leaving Settings.
     await expect(notice).toHaveCount(0);
-    await closeSettings(page);
+    await returnHome(page);
 
     // Workspace A is repaired before its first Session resolves; entering it
     // announces that Workspace receipt to this browser.
@@ -62,7 +62,7 @@ test('automatic configuration repair is announced once and inspected at its exac
     await expect(workspace).not.toContainText('future_trust');
     // Presenting the Workspace's current details acknowledges its receipt.
     await expect(notice).toHaveCount(0);
-    await closeSettings(page);
+    await returnHome(page);
 
     // A reload is a new connection: its server announces the User receipt after
     // initialize and the Workspace receipt once the Workspace is addressed. On

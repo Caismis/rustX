@@ -54,7 +54,7 @@ describe("AppServerChild", () => {
     // The subcommand and the transport selection are not options: this owner
     // exists precisely to run one `rustx app-server --listen stdio` child.
     // As that child's pipe owner it explicitly delegates delivery access.
-    assert.deepEqual(appServerArguments({}), ["app-server", "--listen", "stdio", "--stdio-delivery-access"]);
+    assert.deepEqual(appServerArguments({}), ["app-server", "--listen", "stdio"]);
   });
 
   it("forwards only process-level source bindings, in a deterministic order", async () => {
@@ -65,7 +65,7 @@ describe("AppServerChild", () => {
 
     // Every flag here binds a source for the whole App Server *process*. None
     // of them is a Session selection: a Session's cwd and project
-    // configuration travel in `session/create`, never in this argv.
+    // configuration travel in `thread/start`, never in this argv.
     assert.deepEqual(JSON.parse((await output).trim()), [
       "app-server",
       "--config",
@@ -74,7 +74,6 @@ describe("AppServerChild", () => {
       "/private/state",
       "--listen",
       "stdio",
-      "--stdio-delivery-access",
     ]);
   });
 
@@ -94,7 +93,6 @@ describe("AppServerChild", () => {
       "app-server",
       "--listen",
       "stdio",
-      "--stdio-delivery-access",
     ]);
   });
 

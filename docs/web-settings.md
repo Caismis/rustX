@@ -28,19 +28,20 @@ redirected to User or another Workspace. Resolved source previews are read-only 
 not the Session's committed binding. The actual User pathname is displayed separately
 from fixed `~/rustx/.agents`.
 
-Settings is organized by product task into exactly six primary pages:
+Settings is organized by product task into seven sections:
 
 | Page | What it holds |
 | --- | --- |
-| **General** | Browser-owned preferences: Appearance (theme) and Language (English / 中文). Global Settings opens here. |
+| **General** | Browser-owned preferences: Appearance (theme) and Language (English / 中文). Explicit User Settings opens here; the primary Settings item resumes its previous section. |
 | **Models** | The default model for new Sessions, then Provider list → Provider detail (endpoint, credential, its Models) → Model detail (the complete typed Model, Model Profiles and protocol compatibility under progressive disclosure). |
 | **Agent** | Root identity, description, instructions and project guidance. |
 | **Tools & Permissions** | Approval mode, Native Tools, Tool-source selections, Skill visibility, the Agent and Workflow delegation allowlists, and per-Tool/MCP policies under **Advanced Tool policies**. |
-| **Extensions** | One searchable inventory of MCP servers, Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Native**. |
-| **Advanced** | Context and runtime limits, environment identities, App Server process policy, **Auto Repair** (this owner's latest native automatic `rustx.toml` repair receipt, #464), native diagnostics (source paths, revisions, application observations, process bindings, raw projections) and **Rescan configuration files**. **Connection** is a sub-surface of Advanced, not a seventh page. |
+| **MCP Servers** | Native MCP source definitions, permissions and observation for the exact Settings owner. |
+| **Extensions** | One searchable inventory of Skills, named Agents, Workflows and Managed Python sources, filtered by kind, with a detail per resource; plus the native Todo, Goal and Agent Status extensions under **Native**. |
+| **Advanced** | Context and runtime limits, environment identities, App Server process policy, **Auto Repair** (this owner's latest native automatic `rustx.toml` repair receipt, #464), native diagnostics (source paths, revisions, application observations, process bindings, raw projections) and **Rescan configuration files**. **Connection** is a sub-surface of Advanced, not a separate Settings section. |
 
-The six pages share one modal frame: about 1000 px wide, bounded by the
-viewport, `min(820 px, viewport − 48 px)` high and 24 px round, with a fixed
+Settings is an independent application page beside the permanent primary rail.
+Its sections fill the available content area, with a fixed
 header naming the owner (User or `Workspace Settings — <workspace>`), the state
 of its authoritative observation and **Reload configuration**, and one scrolling
 page pane. Changing page never resizes or moves the frame. Each page has its own
@@ -52,9 +53,9 @@ a wide panel shows a vertical page rail (ArrowUp/ArrowDown, one tab stop); a
 narrow one (390 × 844 phones included) replaces the rail with a section menu in
 the header, which names the current page, opens from pointer, touch or keyboard,
 marks the current page, and returns focus to its trigger. If the panel widens
-while the section menu is open, the menu closes and the Settings dialog keeps
-the keyboard. Escape closes the
-topmost layer only — the section menu, then a confirmation, then Settings.
+while the section menu is open, the menu closes and the Settings page keeps
+the keyboard. Escape closes a section menu or transient confirmation; the
+Settings page has no backdrop, close control or Escape-close behavior.
 Resource pages are list → detail at every width; a detail replaces its list and
 keeps **← Models** / **← Extensions** pinned at the top of the pane. A unit card
 with a draft keeps its **Save** / **Discard** row pinned at the bottom of the pane
@@ -133,7 +134,7 @@ What a resource kind supports comes from a single native capability matrix
 structured editors. Skills and Managed Python have no authoring operation on
 this protocol, so their details show inventory, diagnostics and the supported
 root selection with no Edit, Save or Delete for the definition itself. Workflow
-files are authored in the dedicated **Workflows** area of the sidebar (see
+files are authored in the **Workflows** destination of the primary rail (see
 [Workflow authoring](workflow-authoring.md#file-authoring-app-server-and-web));
 Settings keeps their inventory and root selection only. Skill-package and
 Python-source editing are outside this Settings scope.
@@ -171,7 +172,7 @@ These captures come from the real App Server/provider-emulator acceptance suite:
 ## Harness integration
 
 [Settings architecture](../web-console/SETTINGS-ARCHITECTURE.md) describes the one
-Harness shell, the six product pages, Provider/Model drill-down, structured
+Harness shell, the product sections, Provider/Model drill-down, structured
 exact-identity rows, the Extensions inventory and target-scoped unsaved drafts. A pure presentation
 projection (`app/settings/projection.ts`) maps native facts into display state
 without becoming authority: it never recomputes inheritance and never materializes
@@ -181,10 +182,11 @@ The browser's asynchronous configuration semantics are owned by explicit XState
 v5 actors under `app/settings/machines/`, not by component effects: the Settings
 authority of one exact target (its authoritative reads, its one in-flight
 mutation and its single level-triggered convergence obligation), one CAS editing
-transaction per native semantic unit, Session observation, and top-level Settings navigation. React subscribes and submits intent. Those
-actors are addressed by `(endpoint, authority revision, subject)`, so a Settings
-dialog closing is a detach — never a cancelled native commit and never a
-discarded editing transaction — and replacing the App Server authority retires
+transaction per native semantic unit, Session observation, and internal Settings navigation. React subscribes and submits intent. Those
+actors are addressed by `(endpoint, authority revision, subject)`. The Settings
+page remains mounted across primary navigation, so its configuration actors keep
+settling. An actual editor unmount detaches observation without cancelling a
+native commit or discarding editing transactions. Replacing the App Server authority retires
 the old lifetime at that replacement itself, observed by the configuration actor
 system rather than discovered by a later actor lookup, without letting it
 publish into or issue work through its replacement. Detach
@@ -211,9 +213,9 @@ conflict, rejection or unknown outcome) has been adopted, every other unit stays
 editable but cannot save or remove; nothing is queued, replayed or retried.
 The pending write and its reread's authority to publish are separate facts. The
 write always settles, even across a connection generation replacement; the
-reservation survives a plain Settings close and reopen, but a newer read or a
-replaced connection generation revokes it for good, so reopening Settings while
-that write is still pending performs a fresh read instead of reviving it.
+reservation survives leaving and returning to the retained Settings page. A
+newer read or replaced connection generation revokes that read reservation for
+good; later observation performs a fresh read rather than reviving an old one.
 
 Replacing a connection generation retires only what that generation observed:
 its projection, its read failure and its convergence report. A mutation outcome
@@ -244,16 +246,17 @@ are disabled. Editing resumes from the observed source once the observation
 settles the commit or reveals a divergence. Other units stay editable, and
 still cannot submit until the observation arrives.
 
-The Settings navigation machine is the one owner of which Settings surface is
-displayed. Opening Settings, opening Connection, opening an owning Workspace,
-selecting a page and focusing a detail inside it are all its events, so a
-top-level decision taken while the dialog stays mounted is exactly what the
-dialog shows. Page focus is presentation navigation only: no draft, CAS base or
+Shell owns primary page selection. The internal Settings navigation machine owns
+the exact target, permitted section and detail displayed within Settings. Explicit
+User, Workspace and Connection entry points select their requested target;
+the primary Settings item resumes the previous target and section. The retained
+page renders those decisions without separate visibility or section state.
+Page focus is presentation navigation only: no draft, CAS base or
 mutation identity lives there, so leaving a detail never discards editing
 intent.
 
 The shared Base UI-backed dialog primitive owns modal containment, layering,
-Escape, dismissal and the explicit close-focus lifecycle for Settings and its
+Escape, dismissal and the explicit close-focus lifecycle for transient Settings
 confirmations. Settings workflows provide the intended focus destination:
 dismissal returns to the usable trigger (otherwise the unit form); confirmation
 settles on the stable unit form while native writes are in flight.
@@ -420,7 +423,7 @@ Simultaneous User and Workspace repairs share one sentence; an unresolved or
 uncertain repair is an alert naming its source. View details opens the exact
 owner at Settings → Advanced → Auto Repair and acknowledges that source's receipt
 only once those details are on screen, so the other source of a combined notice
-stays presented, and an owner lookup that fails, a closed dialog or any other
+stays presented, and an owner lookup that fails, leaving Settings or any other
 navigation acknowledges nothing; Dismiss acknowledges the whole notice. Nothing
 opens by itself and a healthy source shows nothing. Each receipt is acknowledged
 once per browser for the App Server authority that produced it, so reconnects,

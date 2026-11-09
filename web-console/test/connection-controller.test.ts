@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { ConnectionController } from '../src/connection/controller';
 import { Server, TOKEN, endpoint } from './fixture';
-function bootstrap() { return Promise.resolve(new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN, appServerDeliveryToken: 'D'.repeat(43) }), { headers: { 'content-type': 'application/json' } })); }
+function bootstrap() { return Promise.resolve(new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN }), { headers: { 'content-type': 'application/json' } })); }
 it('local bootstrap is the only local material source; no remembered remote fallback', async () => {
   localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'wss://remembered.example/' }));
   const server = new Server(), fetcher = vi.fn(bootstrap), owner = new ConnectionController(server.client, fetcher);
@@ -35,7 +35,7 @@ it('invalid remote inputs use client validation and never activate local mode', 
   const server = new Server(), fetcher = vi.fn(bootstrap), owner = new ConnectionController(server.client, fetcher);
   await owner.select('remote');
   for (const url of ['http://example.com/', 'ws://user:pass@example.com/', 'wss://example.com/path', 'ws://example.com/?token=x', 'ws://example.com/#x']) await owner.connectRemote(url, TOKEN);
-  await owner.connectRemote(endpoint, 'bad');
+  await owner.connectRemote(endpoint, 'bad token');
   expect(server.sockets).toHaveLength(0); expect(fetcher).not.toHaveBeenCalled(); expect(owner.getSnapshot().mode).toBe('local');
   await owner.connectRemote('wss://remote.example/', TOKEN); expect(server.sockets).toHaveLength(1);
   expect(JSON.stringify({ ...localStorage })).not.toContain(TOKEN); expect(JSON.stringify({ ...sessionStorage })).not.toContain(TOKEN);
@@ -65,23 +65,18 @@ it('invalid replacement material leaves the active Local connection untouched', 
   const before = server.client.getSnapshot(), close = vi.spyOn(server.socket, 'close');
   await owner.connectRemote('https://remote.example/', TOKEN);
   expect(owner.getSnapshot().error).toContain('Use a ws://');
-  await owner.connectRemote('wss://remote.example/', 'bad');
-  expect(owner.getSnapshot().error).toContain('transport token');
+  await owner.connectRemote('wss://remote.example/', 'bad token');
+  expect(owner.getSnapshot().error).toContain('bearer token');
   expect(close).not.toHaveBeenCalled(); expect(server.sockets).toHaveLength(1);
   expect(server.client.getSnapshot()).toBe(before); expect(owner.getSnapshot().mode).toBe('local');
   await server.client.listSessions(); await owner.disconnect();
 });
 
-it('keeps separate delivery credentials in page memory through reconnect and rejects token reuse', async () => {
+it('keeps the ordinary credential through reconnect', async () => {
   const server = new Server(), connect = vi.spyOn(server.client, 'connect'), owner = new ConnectionController(server.client, bootstrap);
-  const delivery = 'D'.repeat(43);
-  await owner.connectRemote(endpoint, TOKEN, delivery);
-  expect(connect.mock.calls.at(-1)?.[4]).toBe(delivery);
+  await owner.connectRemote(endpoint, TOKEN);
+  expect(connect.mock.calls.at(-1)?.[1]).toBe(TOKEN);
   await owner.reconnect();
-  expect(connect.mock.calls.at(-1)?.[4]).toBe(delivery);
-  const before = server.sockets.length;
-  await owner.connectRemote(endpoint, TOKEN, TOKEN);
-  expect(owner.getSnapshot().error).toContain('separate');
-  expect(server.sockets).toHaveLength(before);
+  expect(connect.mock.calls.at(-1)?.[1]).toBe(TOKEN);
   await owner.disconnect();
 });

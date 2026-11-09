@@ -171,6 +171,7 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             &connection,
             101,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "request-A".into(),

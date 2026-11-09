@@ -223,7 +223,7 @@ async fn catalog_observer_is_registered_before_activation_and_never_competes_aft
             flight.initialization.prepared_runtime().unwrap()
         };
         assert!(!runtime.is_activated());
-        let lifecycle = runtime.title_lifecycle();
+        let lifecycle = runtime.lifecycle();
         lifecycle.wait_for_no_active_operations().await;
         assert!(
             futures_util::poll!(Box::pin(lifecycle.wait_for_no_admissions())).is_pending(),

@@ -904,6 +904,12 @@ impl DurabilityGate {
             .clone()
     }
 
+    /// Nonblocking status observation never holds Coordinator while waiting
+    /// for a Gate -> leaf reservation critical section.
+    pub(crate) fn try_is_failed(&self) -> Option<bool> {
+        let state = self.state.try_lock().ok()?;
+        Some(state.failure.is_some() || state.requested_failure.is_some())
+    }
     /// Whether a committed or pending failure closes new admission.
     pub(crate) fn is_failed(&self) -> bool {
         self.with_healthy_commit(|| ()).is_err()

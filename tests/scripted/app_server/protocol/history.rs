@@ -291,6 +291,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
             &connection,
             100,
             Method::SessionCreate {
+                dynamic_tools: Vec::new(),
                 submission: None,
                 settings,
             },
@@ -472,6 +473,7 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
             &connection,
             900,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: (input("request-A"))
                     .into_iter()
@@ -720,7 +722,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             assert!(copied.read_events(None, 128).unwrap().events.is_empty());
             let child_id = session.id.clone(); let child_node = session.active_node.clone();
             drop(copied); drop(destination);
-            let MethodResult::Attached { target: child_target, .. } = call(&connection, 4198, Method::SessionAttach { session_id: child_id.clone(), node_id: Some(child_node.clone()) }).await else { panic!("attach inherited lineage") };
+            let MethodResult::Attached { target: child_target, .. } = call(&connection, 4198, Method::SessionAttach { thread_id: f.manager.sessions.read_node(&child_id, &child_node).await.unwrap().conversation_id }).await else { panic!("attach inherited lineage") };
             let MethodResult::Checkpoint {checkpoint:attached}=call(&connection,41980,Method::SessionCheckpoint{target:child_target.clone(),trace_records:vec![]}).await else {panic!("checkpoint")};
             assert_eq!(attached.snapshot.transcript.entries.last().unwrap().completed_response.as_ref(), Some(&tail));
             call(&connection, 4199, Method::SessionDetach { target: child_target }).await;

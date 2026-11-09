@@ -27,6 +27,12 @@
 
 /* An unrendered page holds its place as a quiet block; the block itself is
    the loading feedback, so no spinner competes with the centred open wait. */
+.unmeasured {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: var(--dsw-alias-bg-skeleton);
+}
+
 .placeholder {
   width: 100%;
   position: absolute;

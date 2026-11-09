@@ -269,6 +269,8 @@ pub trait SkillEnvironmentBackend: Send + Sync {
 #[derive(Clone)]
 pub struct RunnerBackedSkillEnvironmentBackend {
     runner: Arc<dyn crate::runtime::process_runner::SupervisedProcessRunner>,
+    // Owner lifetime, not an individual candidate waiter's cancellation.
+    cancellation: CancellationSignal,
 }
 
 impl RunnerBackedSkillEnvironmentBackend {
@@ -277,8 +279,12 @@ impl RunnerBackedSkillEnvironmentBackend {
     #[must_use]
     pub(crate) fn new(
         runner: Arc<dyn crate::runtime::process_runner::SupervisedProcessRunner>,
+        cancellation: CancellationSignal,
     ) -> Self {
-        Self { runner }
+        Self {
+            runner,
+            cancellation,
+        }
     }
 }
 
@@ -290,8 +296,13 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
         Box::pin(async move {
             match ecosystem {
                 Ecosystem::Python => {
-                    let runtime =
-                        probe(&self.runner, "python3 --version", RUNTIME_PROBE_TIMEOUT).await?;
+                    let runtime = probe(
+                        &self.runner,
+                        &self.cancellation,
+                        "python3 --version",
+                        RUNTIME_PROBE_TIMEOUT,
+                    )
+                    .await?;
                     let runtime = runtime.trim();
                     if !runtime.starts_with("Python ") || runtime.contains('\n') {
                         return Err(format!(
@@ -300,6 +311,7 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
                     }
                     let package_manager = probe(
                         &self.runner,
+                        &self.cancellation,
                         "python3 -m pip --version",
                         RUNTIME_PROBE_TIMEOUT,
                     )
@@ -317,16 +329,26 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
                     })
                 }
                 Ecosystem::Node => {
-                    let runtime =
-                        probe(&self.runner, "node --version", RUNTIME_PROBE_TIMEOUT).await?;
+                    let runtime = probe(
+                        &self.runner,
+                        &self.cancellation,
+                        "node --version",
+                        RUNTIME_PROBE_TIMEOUT,
+                    )
+                    .await?;
                     let runtime = runtime.trim();
                     if runtime.is_empty() || runtime.contains('\n') {
                         return Err(format!(
                             "node --version returned an unexpected identity {runtime:?}"
                         ));
                     }
-                    let package_manager =
-                        probe(&self.runner, "npm --version", RUNTIME_PROBE_TIMEOUT).await?;
+                    let package_manager = probe(
+                        &self.runner,
+                        &self.cancellation,
+                        "npm --version",
+                        RUNTIME_PROBE_TIMEOUT,
+                    )
+                    .await?;
                     let package_manager = package_manager.trim();
                     if package_manager.is_empty() || package_manager.contains('\n') {
                         return Err(format!(
@@ -351,6 +373,7 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
             // 1. Create the virtual environment at its final digest path.
             run_checked(
                 &self.runner,
+                &self.cancellation,
                 format!("python3 -m venv {}", shell_quote(environment_dir)),
                 environment_dir,
                 ENVIRONMENT_COMMAND_TIMEOUT,
@@ -368,6 +391,7 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
                 .join(" ");
             run_checked(
                 &self.runner,
+                &self.cancellation,
                 format!(
                     "{} -m pip install --disable-pip-version-check --no-input {pins}",
                     shell_quote(&venv_python)
@@ -379,6 +403,7 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
             // 3. Validate the installation.
             run_checked(
                 &self.runner,
+                &self.cancellation,
                 format!("{} -m pip check", shell_quote(&venv_python)),
                 environment_dir,
                 ENVIRONMENT_COMMAND_TIMEOUT,
@@ -411,6 +436,7 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
             //    the staging directory; audit/fund network work is disabled.
             run_checked(
                 &self.runner,
+                &self.cancellation,
                 format!(
                     "npm install --prefix {} --no-audit --no-fund --cache {}/.npm-cache",
                     shell_quote(staging),
@@ -423,6 +449,7 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
             // 3. Validate the resulting installation.
             run_checked(
                 &self.runner,
+                &self.cancellation,
                 format!("npm ls --prefix {} --all", shell_quote(staging)),
                 staging,
                 ENVIRONMENT_COMMAND_TIMEOUT,
@@ -1071,6 +1098,7 @@ fn validate_published_manifest(
 /// Runs one supervised command and returns its bounded combined output.
 async fn probe(
     runner: &Arc<dyn SupervisedProcessRunner>,
+    cancellation: &CancellationSignal,
     command: &str,
     timeout: Duration,
 ) -> Result<String, String> {
@@ -1081,7 +1109,7 @@ async fn probe(
                 cwd: std::env::temp_dir(),
                 command_environment: materialization_environment(&std::env::temp_dir()),
                 timeout: Some(timeout),
-                cancellation: CancellationSignal::new(),
+                cancellation: cancellation.child(),
             },
             None,
         )
@@ -1108,6 +1136,7 @@ async fn probe(
 /// process-control failure fails the materialization.
 async fn run_checked(
     runner: &Arc<dyn SupervisedProcessRunner>,
+    cancellation: &CancellationSignal,
     command: String,
     cwd: &Path,
     timeout: Duration,
@@ -1119,7 +1148,7 @@ async fn run_checked(
                 cwd: cwd.to_path_buf(),
                 command_environment: materialization_environment(cwd),
                 timeout: Some(timeout),
-                cancellation: CancellationSignal::new(),
+                cancellation: cancellation.child(),
             },
             None,
         )
@@ -1309,7 +1338,7 @@ mod tests {
                 stderr: Vec::new(),
             })])),
         });
-        let backend = RunnerBackedSkillEnvironmentBackend::new(runner);
+        let backend = RunnerBackedSkillEnvironmentBackend::new(runner, CancellationSignal::new());
 
         let error = backend
             .resolve_runtime_versions(Ecosystem::Python)
@@ -1317,6 +1346,37 @@ mod tests {
             .expect_err("a non-zero probe cannot publish a runtime identity");
 
         assert!(error.contains("python3 --version exited with code Some(1)"));
+    }
+
+    #[tokio::test]
+    async fn child_owned_dependency_probe_cancellation_awaits_physical_settlement() {
+        let mut control = RunnerTestControl::new();
+        control.pause_at_shell_exit = true;
+        let hook = control.lifecycle.clone();
+        let runner = Arc::new(RunnerBackedProcessRunner::with_test_control(control));
+        let cancellation = CancellationSignal::new();
+        let backend = RunnerBackedSkillEnvironmentBackend::new(runner, cancellation.clone());
+        let task =
+            tokio::spawn(async move { backend.resolve_runtime_versions(Ecosystem::Python).await });
+        tokio::time::timeout(Duration::from_secs(15), hook.await_ownership_established())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(15), hook.await_shell_exit())
+            .await
+            .unwrap();
+        cancellation.cancel();
+        hook.release();
+        let result = tokio::time::timeout(Duration::from_secs(15), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.unwrap_err().contains("cancelled"));
+        tokio::time::timeout(Duration::from_secs(15), hook.await_terminal())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(15), hook.await_direct_child_reaped())
+            .await
+            .unwrap();
     }
 
     /// A real capability preparation reaches the production runner-backed
@@ -1344,7 +1404,10 @@ mod tests {
         control.pause_at_shell_exit = true;
         let hook = control.lifecycle.clone();
         let runner = Arc::new(RunnerBackedProcessRunner::with_test_control(control));
-        let backend = Arc::new(RunnerBackedSkillEnvironmentBackend::new(runner));
+        let backend = Arc::new(RunnerBackedSkillEnvironmentBackend::new(
+            runner,
+            CancellationSignal::new(),
+        ));
         let coordinator = crate::capabilities::CapabilityCoordinator::with_backend(
             crate::capabilities::CapabilityCoordinatorConfig {
                 source_demand: crate::capabilities::source::ToolSourceDemand::default(),
@@ -1352,7 +1415,13 @@ mod tests {
                 workspace: workspace.clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: crate::extensions::ExtensionToolPlane::none(),
-                agent_activation: crate::capabilities::AgentActivation::default(),
+                agent_activation: crate::capabilities::AgentActivation {
+                    profile: crate::local_runtime::config::AgentProfileDocument {
+                        skills: Some(crate::runtime::agent_profile::AgentSkillSelection::All),
+                        ..crate::capabilities::AgentActivation::default().profile
+                    },
+                    ..Default::default()
+                },
                 skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
                     workspace.root().join(".agents/skills"),
                 ),

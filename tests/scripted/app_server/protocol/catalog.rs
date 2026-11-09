@@ -260,6 +260,7 @@ async fn human_message_activity_reorders_live_catalog_without_focus_or_rename_ac
             &connection,
             801,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("activity moves this conversation"),
             },
@@ -566,6 +567,7 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                 rejected(
                     &connection,
                     Method::TurnStart {
+                        input_id: uuid::Uuid::new_v4().to_string(),
                         target: target_a.clone(),
                         content: vec![UserInputBlock::Text(crate::message::TextBlock {
                             text: "must not execute".into()
@@ -646,8 +648,7 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                         jsonrpc: JsonRpcVersion::V2,
                         id: RequestId::Integer(8103),
                         call: Method::SessionAttach {
-                            session_id: selected.id,
-                            node_id: Some(selected.active_node),
+                            thread_id: selected.active_conversation_id.clone(),
                         },
                     })
                     .await
@@ -658,19 +659,6 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                 ResidencyState::Loading
             );
             assert_eq!(inspector.attachment_counts(), (0, 1));
-            let competing = AppServerConnection::new(f.host.clone());
-            initialize(&competing).await;
-            assert_eq!(
-                rejected(
-                    &competing,
-                    Method::SessionAttach {
-                        session_id: branch.id.clone(),
-                        node_id: Some(f.sessions[0].active_node.clone())
-                    }
-                )
-                .await,
-                ErrorData::OperationFailed
-            );
             probe.before_compose.release();
             let prepared = preparation.await.unwrap();
             if outcome == "composition_failure" {
@@ -717,7 +705,6 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                 ResidencyState::Loaded
             );
             assert!(f.provider.request_bodies().is_empty());
-            competing.close();
             inspector.close();
             connection.close();
             f.close().await;
@@ -770,5 +757,52 @@ async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
         assert_eq!(connection.attachment_counts(), (0, 0));
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn thread_identity_tools_names_archive_and_unarchive_remain_native_metadata() {
+    bounded(async {
+        let f = Fixture::with_session_count(None, 0).await;
+        let first = AppServerConnection::new(f.host.clone());
+        let second = AppServerConnection::new(f.host.clone());
+        initialize(&first).await; initialize(&second).await;
+        let tools = vec![crate::tools::host::HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Look up an application record".into(),input_schema:serde_json::json!({"type":"object","properties":{},"additionalProperties":false})}];
+        let MethodResult::SessionTransition {thread,session,..} = call(&first,100,Method::SessionCreate {dynamic_tools:tools.clone(),submission:None,settings:crate::local_runtime::session::SessionPersistentState {cwd:f.workspaces[0].clone(),model:None}}).await else {panic!("Thread creation")};
+        assert_eq!(thread.id,session.active_conversation_id); assert_eq!(thread.node_id,session.active_node); assert_eq!(thread.dynamic_tools,tools);
+        let MethodResult::Attached {target:a,..}=call(&first,101,Method::SessionAttach {thread_id:thread.id.clone()}).await else {panic!("resume")};
+        let MethodResult::Attached {target:b,..}=call(&second,102,Method::SessionAttach {thread_id:thread.id.clone()}).await else {panic!("shared resume")};
+        assert_eq!(a.runtime_incarnation,b.runtime_incarnation); assert_ne!(a.attachment_id,b.attachment_id);
+        let MethodResult::Thread {thread:renamed}=call(&second,103,Method::ThreadName {thread_id:thread.id.clone(),name:Some("Renamed native Thread".into())}).await else {panic!("rename")};
+        assert_eq!(renamed.id,thread.id);
+        let MethodResult::Thread {thread:archived}=call(&second,104,Method::ThreadArchive {thread_id:thread.id.clone()}).await else {panic!("archive")};
+        assert!(archived.archived);
+        assert!(matches!(f.manager.residency(&thread.id),crate::local_runtime::session_runtime_manager::ResidencyState::Unloaded));
+        assert_eq!(rejected(&first,Method::SessionAttach {thread_id:thread.id.clone()}).await,ErrorData::InvalidParams,"one connection still owns its retired route until detached");
+        call(&first,105,Method::SessionDetach {target:a.clone()}).await;
+        // Keep second's old native route without consuming its Closed notification.
+        assert_eq!(rejected(&first,Method::SessionAttach {thread_id:thread.id.clone()}).await,ErrorData::OperationFailed);
+        let MethodResult::Threads {data,..}=call(&first,107,Method::ThreadList {offset:0,limit:32,archived:true}).await else {panic!("archived list")};assert_eq!(data.len(),1);assert_eq!(data[0].id,thread.id);
+        let MethodResult::Thread {thread:restored}=call(&first,108,Method::ThreadUnarchive {thread_id:thread.id.clone()}).await else {panic!("unarchive")};assert!(!restored.archived);assert_eq!(restored.name,renamed.name);assert_eq!(restored.dynamic_tools,tools);
+        let MethodResult::Attached {target:next,..}=call(&first,109,Method::SessionAttach {thread_id:thread.id.clone()}).await else {panic!("resume restored Thread")};assert_ne!(next.runtime_incarnation,a.runtime_incarnation);assert_eq!(next.conversation_id,thread.id);
+        {
+            use crate::tools::{host::HostToolDispatcher,ToolInvocation,ToolInvocationMode,ToolExecutionStatus};
+            use crate::runtime::{identity::{AttemptId,ToolCallId,ToolId},cancellation::{CancellationSignal,ExecutionCancellation},types::CancellationReason};
+            use futures_util::FutureExt;
+            let attempt=AttemptId::new("incarnation-probe");
+            let invocation=ToolInvocation {id:crate::tools::types::ToolInvocationId::Agent{call_id:ToolCallId::new("incarnation-probe")},tool_id:ToolId::new("probe"),tool_name:"lookup".into(),mode:ToolInvocationMode::Foreground,arguments:serde_json::json!({})};
+            let mut operation=f.host.callbacks().call(&thread.id,&attempt,&tools[0],invocation,ExecutionCancellation::detached(CancellationSignal::new(),CancellationReason::UserRequested));
+            assert!(futures_util::poll!(&mut operation).is_pending());
+            let Some(ServerMessage::Request(request))=first.next_server_message().await else {panic!("new native incarnation receives callback")};
+            assert!(second.next_server_message().now_or_never().is_none(),"retired native subscription cannot receive new-incarnation calls even before Closed delivery");
+            let response=serde_json::to_string(&ClientReply::Success(ClientSuccess{jsonrpc:JsonRpcVersion::V2,id:request.id,result:serde_json::json!({"success":true,"contentItems":[]})})).unwrap();
+            assert!(second.handle_json(&response).await.is_none());
+            assert!(futures_util::poll!(&mut operation).is_pending(),"old native subscription cannot claim a known new request ID");
+            assert!(first.handle_json(&response).await.is_none());
+            assert!(matches!(operation.await.status,ToolExecutionStatus::Success));
+        }
+        call(&second,106,Method::SessionDetach {target:b}).await;
+        let controller=crate::runtime::local_storage::ProductRoot::existing(&f.archive_root).unwrap();let persisted=crate::local_runtime::session::SessionCatalog::read_under_guard(&controller).unwrap().unwrap().thread(&thread.id).unwrap();assert_eq!(persisted.id,restored.id);assert_eq!(persisted.name,restored.name);assert_eq!(persisted.archived,restored.archived);assert_eq!(persisted.dynamic_tools,restored.dynamic_tools);
+        first.close(); second.close(); f.manager.unload(&thread.id).await.unwrap(); f.close().await;
     }).await;
 }

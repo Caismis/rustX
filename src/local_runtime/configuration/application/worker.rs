@@ -257,7 +257,9 @@ impl ConfigurationApplications {
                 && capture.preserves_adopted_models(old)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
-                let others_unchanged = capture.same_capabilities(old) && capture.same_context(old);
+                let others_unchanged = capture.same_capabilities(old)
+                    && capture.same_context(old)
+                    && capture.same_skill_catalog(old);
                 // Capture validated the catalog and its default; publication
                 // resolves it. Source availability composes the whole
                 // generation, so it waits for any unit still to prepare.

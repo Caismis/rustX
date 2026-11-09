@@ -12,14 +12,14 @@ const boundary = vi.hoisted(() => ({ owners: [] as OwnerRecord[] }));
 vi.mock('../src/client/pdf-document', () => ({ PdfDocumentOwner: class {
   resolveDocument!: (document: { numPages: number }) => void;
   document = new Promise<{ numPages: number }>(resolve => { this.resolveDocument = resolve; });
-  pageSizes = this.document.then(document => Array.from({ length: document.numPages }, () => ({ width: 800, height: 1200 })));
+  firstPageSize = this.document.then(() => ({ width: 800, height: 1200 }));
   renders: RenderRecord[] = [];
   release(canvas: HTMLCanvasElement) { const record = this.renders.find(record => record.canvas === canvas); if (record) { canvas.width = canvas.height = 0; record.layer.replaceChildren(); } }
   dispose = vi.fn(() => { for (const record of this.renders) this.release(record.canvas); });
   constructor() { boundary.owners.push(this); }
   render(number: number, zoom: number, canvas: HTMLCanvasElement, layer: HTMLDivElement, signal: AbortSignal) {
     canvas.width = 800; canvas.height = 1200; layer.textContent = `page ${number}`;
-    return new Promise<void>(resolve => { this.renders.push({ number, zoom, canvas, layer, signal, resolve }); });
+    return new Promise<{ width: number; height: number }>(resolve => { this.renders.push({ number, zoom, canvas, layer, signal, resolve: () => resolve({ width: 800, height: 1200 }) }); });
   }
 } }));
 import PdfPreview from '../src/app/components/documents/PdfPreview';
@@ -128,7 +128,7 @@ it('retiring a PDF lease immediately cancels a gated render and clears both canv
   const view = render(<PdfPreview bytes={new Uint8Array([1])} signal={lease.signal} viewState={{ pdfZoom: { kind: 'fixed', scale: 1 } }} onViewStateChange={() => {}} retry={() => {}}/>);
   const owner = boundary.owners[0];
   await act(async () => owner.resolveDocument({ numPages: 2 }));
-  expect(owner.renders[0].canvas.width).toBe(800); expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
+  expect(owner.renders[0].canvas.width).toBe(800);
   act(() => lease.abort());
   expect(owner.dispose).toHaveBeenCalledOnce(); expect(owner.renders[0].signal.aborted).toBe(true);
   expect(owner.renders[0].canvas.width).toBe(0); expect(owner.renders[0].canvas.height).toBe(0);

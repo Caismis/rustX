@@ -30,7 +30,7 @@ test('structured output uses transactional Dify-style visual and JSON editors wi
     const file = join(directory, 'schema_editor.yaml'); writeFileSync(file, JSON.stringify(document));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'schema_editor', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const model = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Model node model', { exact: true });
@@ -140,7 +140,7 @@ test('structured output rename preserves a preceding Iteration with an independe
     const file = join(directory, 'scope_rename.yaml'); writeFileSync(file, JSON.stringify(document));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'scope_rename', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const root = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Model node generate', { exact: true }).filter({ hasText: 'Root generator' });
@@ -181,7 +181,7 @@ test('cross-workflow paste rejects incomplete groups and preserves local and inh
     const file = join(directory, 'scope_paste.yaml'); writeFileSync(file, JSON.stringify(example.target));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'scope_paste', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const canvas = page.getByRole('region', { name: 'Workflow canvas' });

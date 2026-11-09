@@ -146,8 +146,8 @@ mod subagent_child;
 mod tests;
 
 pub(crate) use resources::LocalRuntimeResourceLoader;
-pub(in crate::local_runtime) use resources::admitted_source_demand;
 pub(crate) use resources::captured_mcp_bindings;
+pub(in crate::local_runtime) use resources::{admitted_source_demand, delegated_skill_selections};
 pub use runtimes::{
     HeadlessConversationRuntime, LocalConversationRuntime, LocalConversationShutdownError,
     LocalProjectionJoinFailure,
@@ -184,6 +184,7 @@ pub struct LocalRuntimeDependencies {
     /// UTC wall time; deterministic fixtures can supply the same model input
     /// without changing runtime event clocks or monotonic deadlines.
     pub status_clock: Arc<dyn crate::context::AgentStatusClock>,
+    pub host_tools: Arc<crate::tools::host::HostToolService>,
     /// Local product Session selection; never part of effective configuration.
     pub startup_session: StartupSession,
     /// Optional test/embedding provider environment. Production uses the
@@ -201,6 +202,7 @@ pub struct LocalRuntimeDependencies {
 impl Default for LocalRuntimeDependencies {
     fn default() -> Self {
         Self {
+            host_tools: Arc::default(),
             startup_session: StartupSession::Empty,
             status_clock: Arc::new(crate::context::SystemClock),
             credentials: None,
@@ -462,6 +464,11 @@ impl LocalConversationCore {
             }
         };
         let (session_id, node, intent) = planned.destination_lineage()?;
+        if node.archived {
+            return Err(LocalRuntimeError::Capability {
+                detail: "archived Threads cannot execute".into(),
+            });
+        }
         let manager = super::configuration::UserConfigManager::new(paths.sources.clone())
             .map_err(|detail| LocalRuntimeError::Capability { detail })?;
         let current = manager
@@ -488,6 +495,7 @@ impl LocalConversationCore {
             current.config.as_ref().clone(),
             intent,
             node.conversation_id,
+            node.dynamic_tools,
             allocation,
             lifecycle,
             startup,
@@ -519,6 +527,7 @@ impl LocalConversationCore {
             runtime_config,
             session_state,
             conversation_id,
+            Vec::new(),
             artifacts_root,
             lifecycle,
             McpInitialSubmission::default(),
@@ -534,6 +543,7 @@ impl LocalConversationCore {
         runtime_config: CurrentRuntimeConfig,
         session_state: SessionPersistentState,
         conversation_id: ConversationId,
+        dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
         artifacts_root: PathBuf,
         lifecycle: Arc<crate::runtime::local_storage::ProductController>,
         startup: McpInitialSubmission,
@@ -559,6 +569,7 @@ impl LocalConversationCore {
             access,
             startup,
             &crate::runtime::cancellation::CancellationSignal::new(),
+            &dynamic_tools,
         )
         .await
     }
@@ -577,6 +588,7 @@ impl LocalConversationCore {
         conversation_access: Arc<crate::runtime::local_storage::ConversationAccess>,
         startup: McpInitialSubmission,
         cancellation: &crate::runtime::cancellation::CancellationSignal,
+        host_tools: &[crate::tools::host::HostToolDefinition],
     ) -> Result<Self, LocalRuntimeError> {
         startup.note_recovery_receipt(SubmissionIntent::now()); // Keep the one-shot preparation state off the awaiting caller's stack.
         Box::pin(async move {
@@ -732,7 +744,12 @@ impl LocalConversationCore {
             )
             .map_err(|error| LocalRuntimeError::NativeTools {
                 detail: format!("{error:?}"),
-            })?; // Launch resolution froze the fixed User and Workspace Skill roots.
+            })?;
+
+            crate::tools::host::register(&mut base_registry, host_tools, &dependencies.host_tools)
+                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+
+            // Launch resolution froze the fixed User and Workspace Skill roots.
             // Package discovery reserves Workspace shadows before validation;
             // Agent profiles independently select prompt visibility.
             let skill_discovery = SkillDiscoveryConfig {
@@ -763,6 +780,11 @@ impl LocalConversationCore {
                         admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
                         admitted_workflows: workflows.entries().keys().cloned().collect(),
                         project_files: paths.root_agent_project_files.clone(),
+                        delegated_skills: delegated_skill_selections(
+                            &runtime_config,
+                            &subagent_catalog,
+                            &workflows,
+                        ),
                     },
                     skill_discovery,
                     mcp_servers: captured_mcp_bindings(&runtime_config, &paths.credentials)?,

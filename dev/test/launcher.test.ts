@@ -11,6 +11,7 @@ import type { Spawn, ChildSpec } from '../src/process.ts';
 import { LocalWorkspaceHost } from '../../web-console/host/workspaces.ts';
 import { parseArguments as parseTui } from '../../tui/src/cli.ts';
 import { handoff } from '../src/browser.ts';
+import { workspaceRegistry } from '../src/workspace-registry.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const nativeDirectory = mkdtempSync(join(tmpdir(), 'rustx-native-test-'));
@@ -80,38 +81,31 @@ test('TUI delegates unchanged arguments to the existing composition root and nat
 
 test('Web creates one token/config, passes the bound endpoint, and cleanup waits for BOTH owned children', async t => {
   const f = fixture(); t.after(f.remove);
-  const h = harness(), launcher = new Launcher(root, h.spawn);
+  const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state'));
   const starting = launcher.start(f.args);
   await h.count(1);
-  const app = h.calls[0], tokenFile = app.spec.args[app.spec.args.indexOf('--token-file') + 1], productHostTokenFile = app.spec.args[app.spec.args.indexOf('--product-host-token-file') + 1], deliveryTokenFile = app.spec.args[app.spec.args.indexOf('--delivery-access-token-file') + 1];
+  const app = h.calls[0], tokenFile = app.spec.args[app.spec.args.indexOf('--token-file') + 1], productHostTokenFile = app.spec.args[app.spec.args.indexOf('--product-host-token-file') + 1];
   const scratch = dirname(tokenFile);
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
   assert.equal(app.spec.component, 'app-server');
-  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile, '--delivery-access-token-file', deliveryTokenFile]);
+  assert.deepEqual(app.spec.args, ['app-server', ...f.args.forwarded, '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile]);
   assert.match(readFileSync(tokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
   assert.equal(statSync(tokenFile).mode & 0o777, 0o600);
   assert.equal(statSync(productHostTokenFile).mode & 0o777, 0o600);
   assert.match(readFileSync(productHostTokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
   assert.notEqual(readFileSync(productHostTokenFile, 'utf8'), readFileSync(tokenFile, 'utf8'));
   assert.equal(statSync(scratch).mode & 0o777, 0o700);
-  assert.deepEqual(readdirSync(scratch), ['delivery-token', 'product-host-token', 'transport-token']);
+  assert.deepEqual(readdirSync(scratch), ['product-host-token', 'transport-token']);
   app.ready.resolve('ws://127.0.0.1:4242/');
   await h.count(2);
   const web = h.calls[1], configFile = web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!;
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
-  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, metadataFile: join(scratch, 'workspaces.json'), roots: [
-    { id: 'root-1', cwd: f.a, displayName: 'workspace with spaces' }, { id: 'root-2', cwd: f.b, displayName: 'second' },
-  ] });
-  assert.deepEqual(readdirSync(scratch).sort(), ['delivery-token', 'host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
+  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, ...workspaceRegistry(f.args.workspaces, f.args.forwarded, join(f.directory, 'state')) });
+  assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
   const bootstrapFile = web.spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!;
   const bootstrap = JSON.parse(readFileSync(bootstrapFile, 'utf8'));
   assert.equal(statSync(bootstrapFile).mode & 0o777, 0o600);
   assert.equal(bootstrap.transportTokenFile, tokenFile);
-  assert.equal(bootstrap.deliveryTokenFile, deliveryTokenFile);
-  assert.equal(statSync(deliveryTokenFile).mode & 0o777, 0o600);
-  assert.match(readFileSync(deliveryTokenFile, 'utf8'), /^[A-Za-z0-9_-]{43}$/);
-  assert.notEqual(readFileSync(deliveryTokenFile, 'utf8'), readFileSync(tokenFile, 'utf8'));
-  assert.notEqual(readFileSync(deliveryTokenFile, 'utf8'), readFileSync(productHostTokenFile, 'utf8'));
   assert.equal(JSON.stringify(bootstrap).includes(config.productHostToken), false);
   assert.equal(JSON.stringify(bootstrap).includes(productHostTokenFile), false);
   assert.equal(JSON.stringify(await new LocalWorkspaceHost(config).listWorkspaces()).includes(config.productHostToken), false);
@@ -126,7 +120,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   assert.equal(web.spec.component, 'web');
   assert.deepEqual(web.spec.args, [join(root, 'web-console/scripts/dev-carrier.ts')]);
   web.ready.resolve('http://127.0.0.1:4243/');
-  assert.deepEqual(await starting, { url: `http://127.0.0.1:4243/?token=${bootstrap.browserLaunchToken}`, endpoint: config.endpoint, tokenFile, deliveryTokenFile, hostConfigFile: configFile, workspaces: [f.a, f.b] });
+  assert.deepEqual(await starting, { url: `http://127.0.0.1:4243/?token=${bootstrap.browserLaunchToken}`, endpoint: config.endpoint, tokenFile, hostConfigFile: configFile, workspaces: [f.a, f.b] });
   assert.equal(h.calls.length, 2); // no provider, fixture, or extra Host writer
   const terminal = launcher.settle(130);
   assert.equal(launcher.settle(143), terminal);
@@ -144,7 +138,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
 
 test('partial startup failure: A ready, B starts/fails, A reaped before scratch disappears', async t => {
   const f = fixture(); t.after(f.remove);
-  const h = harness(), launcher = new Launcher(root, h.spawn);
+  const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state'));
   const starting = launcher.start(f.args);
   const app = h.calls[0], scratch = dirname(app.spec.args.at(-1)!);
   app.ready.resolve('ws://127.0.0.1:4444/');
@@ -162,16 +156,52 @@ test('partial startup failure: A ready, B starts/fails, A reaped before scratch 
   assert.equal(readFileSync(join(f.a, 'user-owned'), 'utf8'), 'keep');
 });
 
+test('Web restart keeps Workspace registration, order and unsent selection across new ports and root order', async t => {
+  const f = fixture(); t.after(f.remove);
+  const state = join(f.directory, 'state');
+  const launch = async (endpoint: string, workspaces: string[]) => {
+    const h = harness(), launcher = new Launcher(root, h.spawn, state);
+    const starting = launcher.start({ ...f.args, workspaces });
+    h.calls[0].ready.resolve(endpoint); await h.count(2);
+    const config = JSON.parse(readFileSync(h.calls[1].spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!, 'utf8'));
+    const host = new LocalWorkspaceHost(config);
+    h.calls[1].ready.resolve('http://127.0.0.1:4243/'); await starting;
+    const stop = async () => {
+      await host.close(); const stopping = launcher.settle(0);
+      h.calls.forEach(call => call.reap.resolve()); await stopping;
+    };
+    t.after(stop);
+    return { config, host, stop, scratch: dirname(h.calls[0].spec.args.at(-1)!) };
+  };
+  const first = await launch('ws://127.0.0.1:4242/', f.args.workspaces);
+  const catalog = await first.host.listWorkspaces(), [a, b] = catalog.workspaces;
+  await first.host.renameWorkspace(catalog, b.id, 'Chosen before Send');
+  await first.host.reorderWorkspace(catalog, b.id, a.id);
+  await first.host.selectWorkspace(catalog, b.id, { client: '11111111-1111-4111-8111-111111111111', sequence: 1 });
+  await first.stop();
+  assert.equal(existsSync(first.scratch), false);
+  assert.equal(existsSync(first.config.metadataFile), true);
+  const second = await launch('ws://127.0.0.1:5252/', [...f.args.workspaces].reverse());
+  const restored = await second.host.listWorkspaces();
+  assert.equal(second.config.metadataFile, first.config.metadataFile);
+  assert.notEqual(restored.authorityId, catalog.authorityId);
+  assert.equal(restored.preferredWorkspace, b.id);
+  assert.deepEqual(restored.workspaces.map(row => [row.id, row.displayName, row.displayPath]), [[b.id, 'Chosen before Send', f.b], [a.id, a.displayName, f.a]]);
+  await assert.rejects(second.host.selectWorkspace(catalog, a.id, { client: '11111111-1111-4111-8111-111111111111', sequence: 2 }), /authority replaced/);
+  assert.notEqual(workspaceRegistry(f.args.workspaces, [...f.args.forwarded, '--model', 'other'], state).metadataFile, first.config.metadataFile);
+  await second.stop();
+});
+
 test('signal fence wins over late readiness: no Host config or second child after settlement', async t => {
   const f = fixture(); t.after(f.remove);
-  const h = harness(), launcher = new Launcher(root, h.spawn);
+  const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state'));
   const starting = launcher.start(f.args), app = h.calls[0];
   const scratch = dirname(app.spec.args.at(-1)!);
   const terminal = launcher.settle(129);
   app.ready.resolve('ws://127.0.0.1:4444/');
   await Promise.resolve();
   assert.equal(h.calls.length, 1);
-  assert.deepEqual(readdirSync(scratch), ['delivery-token', 'product-host-token', 'transport-token']);
+  assert.deepEqual(readdirSync(scratch), ['product-host-token', 'transport-token']);
   app.exit(0); app.reap.resolve();
   await starting;
   assert.equal(await terminal, 129);
@@ -192,7 +222,7 @@ test('terminal fence before start creates nothing, and missing binary is actiona
 
 test('unexpected successful child exit while running still stops its sibling and fails composition', async t => {
   const f = fixture(); t.after(f.remove);
-  const h = harness(), launcher = new Launcher(root, h.spawn);
+  const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state'));
   const starting = launcher.start(f.args), app = h.calls[0];
   app.ready.resolve('ws://127.0.0.1:4444/'); await h.count(2);
   const web = h.calls[1]; web.ready.resolve('http://127.0.0.1:4445/');
@@ -228,7 +258,7 @@ test('each composition mints distinct credentials; browser handoff waits for car
   const f = fixture(); t.after(f.remove);
   const seen = new Set<string>();
   for (const noOpen of [false, true]) {
-    const h = harness(), launcher = new Launcher(root, h.spawn), opened: string[] = [], printed: string[] = [];
+    const h = harness(), launcher = new Launcher(root, h.spawn, join(f.directory, 'state')), opened: string[] = [], printed: string[] = [];
     const started = launcher.start({ ...f.args, noOpen }).then(async ready => {
       assert.ok(ready); await handoff(ready.url, noOpen, async url => { opened.push(url); }, line => printed.push(line)); return ready;
     });

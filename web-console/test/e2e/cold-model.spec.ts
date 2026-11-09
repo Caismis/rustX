@@ -22,13 +22,13 @@ test('connecting conversation accepts dropdown and slash model choices before qu
   await expect(model).toContainText('low');
   await page.evaluate(() => (window as any).startupFixture.hold('session/setModel'));
   await input.fill('Send with my selected model'); await input.press('Enter');
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   await page.waitForFunction(() => (window as any).startupFixture.requests().some((r: any) => r.method === 'session/setModel'));
-  const before = await page.evaluate(() => (window as any).startupFixture.requests().filter((r: any) => ['session/setModel', 'turn/start'].includes(r.method)));
+  const before = await page.evaluate(() => (window as any).startupFixture.requests().filter((r: any) => ['session/setModel', 'inbound/queue'].includes(r.method)));
   expect(before).toHaveLength(1);
   expect(before[0].params.config).toEqual({ model: 'fixture/native', profile: 'low' });
   await page.evaluate(() => (window as any).startupFixture.release('session/setModel'));
-  await page.waitForFunction(() => (window as any).startupFixture.requests().some((r: any) => r.method === 'turn/start'));
+  await page.waitForFunction(() => (window as any).startupFixture.requests().some((r: any) => r.method === 'inbound/queue'));
   expect(await page.evaluate(() => (window as any).startupFixture.model('A').configured)).toEqual({ model: 'fixture/native', profile: 'low' });
   expect(errors).toEqual([]);
 });

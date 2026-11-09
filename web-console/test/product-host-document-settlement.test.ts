@@ -9,7 +9,7 @@ import { WorkspaceHostError } from '../src/workspaces/host';
 
 const boundary = vi.hoisted(() => ({ read: vi.fn(), convert: vi.fn() }));
 vi.mock('../host/file-read', async original => ({ ...await original<typeof import('../host/file-read')>(), readNativeDelivery: boundary.read }));
-vi.mock('../host/documents/converter', () => ({ convertOffice: boundary.convert }));
+vi.mock('../host/documents/converter', () => ({ OfficeConverter: class { warm = async () => {}; render = boundary.convert; dispose = async () => {}; } }));
 const directories: string[] = [];
 afterEach(() => { vi.resetAllMocks(); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })); });
 

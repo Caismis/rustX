@@ -537,6 +537,7 @@ fn message_id_of(message: &MessageBlock) -> MessageId {
 /// observation, and the process-local wake.
 #[derive(Clone)]
 pub struct ConversationInboundMailbox {
+    pub(crate) steering: Arc<Mutex<SteeringState>>,
     conversation_id: ConversationId,
     state: Arc<Mutex<MailboxState>>,
     publication: Arc<Mutex<()>>,
@@ -571,7 +572,24 @@ pub struct ConversationInboundMailbox {
     pending_probe_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+/// Admission/terminal arbitration for input targeting one native Attempt.
+/// Receipts are disposable waiters, never another execution or history store.
+#[derive(Default)]
+pub(crate) struct SteeringState {
+    pub(crate) active: Option<AttemptId>,
+    pub(crate) open: bool,
+    pub(crate) waiting:
+        std::collections::BTreeMap<MessageId, tokio::sync::oneshot::Sender<AttemptId>>,
+}
+
 impl ConversationInboundMailbox {
+    pub(crate) fn lookup_inbound(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<crate::durable::inbox::InboundAcceptance>, MailboxError> {
+        self.inbound.lookup_inbound(correlation).map_err(Into::into)
+    }
+
     /// Creates a fresh inbound boundary over one conversation backed by an
     /// in-memory durable inbox.
     ///
@@ -613,6 +631,7 @@ impl ConversationInboundMailbox {
     pub fn over_inbound_capability(inbound: Arc<dyn ConversationInboundCapability>) -> Self {
         let conversation_id = inbound.conversation_id().clone();
         Self {
+            steering: Arc::default(),
             conversation_id,
             publication: Arc::new(Mutex::new(())),
             state: Arc::new(Mutex::new(MailboxState {
@@ -1185,6 +1204,20 @@ impl ConversationInboundMailbox {
                 })
                 .collect(),
         }))
+    }
+
+    pub(crate) fn select_steering_batch(&self) -> Result<Option<InboundBatch>, MailboxError> {
+        let Some(mut batch) = self.select_pending_batch()? else {
+            return Ok(None);
+        };
+        batch
+            .items
+            .retain(|item| item.message.kind != InboundKind::QueuedMessage);
+        let Some(last) = batch.items.last() else {
+            return Ok(None);
+        };
+        batch.watermark = last.sequence;
+        Ok(Some(batch))
     }
 
     /// Whether the durable Pending Inbound Inbox currently holds any

@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openWorkspaceSettings, openSettingsPage, closeSettings } from './shell-actions';
+import { connectRemote, openWorkspaceSettings, openSettingsPage, returnHome } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { transitionFacts } from '../../../protocol/app-server/projection';
 
@@ -31,14 +31,14 @@ test('Harness New Conversation, permission, model, native process and Models con
     }); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.getByRole('region', { name: 'New Conversation', exact: true })).toBeVisible();
-    expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
+    expect(wire.requests.filter(r => r.method === 'thread/start')).toHaveLength(0);
     await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Workspace permissions', exact: true })).toBeEnabled();
     await shot('01-new-conversation-desktop-dark');
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
-    await expect(page.locator('[data-sidebar-wide]')).toHaveAttribute('data-sidebar-wide', 'false');
+    await expect(page.locator('[data-harness-frame]')).toHaveAttribute('data-sidebar-collapsed', 'true');
     await noOverflow(); await shot('02-new-conversation-mobile-dark');
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
@@ -65,7 +65,7 @@ test('Harness New Conversation, permission, model, native process and Models con
     await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toHaveValue('Converge the conversation');
     await page.getByRole('button', { name: 'Choose Workspace', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
-    expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
+    expect(wire.requests.filter(r => r.method === 'thread/start')).toHaveLength(0);
     const permissions = page.getByRole('button', { name: 'Workspace permissions', exact: true });
     await expect(permissions).toBeEnabled(); await permissions.focus(); await page.keyboard.press('Enter');
     await shot('04-permission-menu');
@@ -76,7 +76,7 @@ test('Harness New Conversation, permission, model, native process and Models con
     await risk.getByRole('button', { name: 'Enable full access', exact: true }).focus(); await page.keyboard.press('Enter');
     await beforeWrite.promise;
     const send = page.getByRole('button', { name: 'Send', exact: true });
-    const noAdmission = () => { expect(wire.requests.filter(r => r.method === 'session/create' || r.method === 'turn/start')).toHaveLength(0); };
+    const noAdmission = () => { expect(wire.requests.filter(r => r.method === 'thread/start' || r.method === 'inbound/queue')).toHaveLength(0); };
     await expect(send).toBeDisabled();
     await page.getByRole('textbox', { name: 'Message', exact: true }).press('Enter'); noAdmission();
     await expect(page.getByText('Applying Workspace permission…', { exact: true })).toBeVisible();
@@ -94,15 +94,15 @@ test('Harness New Conversation, permission, model, native process and Models con
     await page.getByRole('menuitem', { name: 'Model', exact: true }).click();
     await shot('06-new-conversation-model-picker');
     await page.getByRole('menuitemradio', { name: 'fixture/second-model', exact: true }).click();
-    expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(0);
+    expect(wire.requests.filter(r => r.method === 'thread/start')).toHaveLength(0);
     expect(wire.requests.filter(r => r.method === 'configuration/sourceWrite' && r.params.mutation?.unit === 'default_model')).toHaveLength(0);
     // Hold the real creation acknowledgement until the fixture's native manual
     // label commits. The browser still performs all creation/admission work.
-    wire.holdNext('session/create');
+    wire.holdNext('thread/start');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.held()).toBe(1);
     const named = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    try { await named.renameSession(wire.responses.find(row => row.method === 'session/create')!.result.session.id, 'New session'); }
+    try { await named.renameSession(wire.responses.find(row => row.method === 'thread/start')!.result.session.id, 'New session'); }
     finally { await named.shutdown(); }
     wire.releaseHeld();
     await expect(page.getByRole('heading', { name: 'Workspace ready' })).toBeVisible();
@@ -110,15 +110,15 @@ test('Harness New Conversation, permission, model, native process and Models con
     expect(await residentSeat!.evaluate(node => node === document.querySelector('[data-resident-composer]'))).toBe(true);
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     await expect(page.getByText(/^(Creating|Attaching)…$/)).toHaveCount(0);
-    expect(wire.requests.filter(r => r.method === 'session/create')).toHaveLength(1);
-    expect(wire.requests.filter(r => r.method === 'turn/start')).toHaveLength(1);
+    expect(wire.requests.filter(r => r.method === 'thread/start')).toHaveLength(1);
+    expect(wire.requests.filter(r => r.method === 'inbound/queue')).toHaveLength(1);
     const admitted = wire.notifications.filter(n => n.method === 'session/event' && transitionFacts(n.params.event).some(fact => fact.type === 'attempt_started'));
     expect(admitted).toHaveLength(1);
     const started = transitionFacts(admitted[0].params.event).find(fact => fact.type === 'attempt_started');
     if (started?.type !== 'attempt_started' || !started.execution_settings) throw new Error('Missing original admitted Attempt execution settings.');
     expect(started.execution_settings.approval_mode).toBe('full_access');
     const methods = wire.requests.map(r => r.method);
-    expect(wire.requests.find(request => request.method === 'session/create')!.params.settings.model).toMatchObject({ model: 'fixture/second-model' });
+    expect(wire.requests.find(request => request.method === 'thread/start')!.params.settings.model).toMatchObject({ model: 'fixture/second-model' });
     expect(methods.filter(method => method === 'session/setModel')).toHaveLength(0);
     const process = page.locator('[data-turn-process]');
     await expect(process).toHaveAttribute('aria-expanded', 'false');
@@ -140,7 +140,7 @@ test('Harness New Conversation, permission, model, native process and Models con
     await shot('11-models-desktop');
     await page.setViewportSize({ width: 390, height: 844 }); await noOverflow(); await shot('12-models-mobile');
     expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()).violations).toEqual([]);
-    await closeSettings(page); await noOverflow();
+    await returnHome(page); await noOverflow();
     expect(errors).toEqual([]); passed = true;
   } finally { await fixture.stop(passed); }
 });

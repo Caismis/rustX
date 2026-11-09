@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, RefObject } from 'react'
-import { useDialogPortal } from './DialogSurface';
+import { useDialogPortal, useOverlayActive } from './DialogSurface';
 import { createPortal } from 'react-dom'
 import { autoUpdate, flip, hide, offset, shift, size, useFloating, type Placement, type VirtualElement } from '@floating-ui/react-dom'
 import clsx from 'clsx'
@@ -189,7 +189,7 @@ function placementOf(side: 'bottom' | 'top' | 'right', align: 'start' | 'end'): 
  * focused without scrolling.
  * @returns anchor wrapper with the conditional list.
  */
-export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', closeOnPointerLeave = false, dense = false, compact = false, autoFocus = false, selection = 'check', getAnchorRect, focusOwner, footer, className, listClassName }: {
+export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', closeOnPointerLeave = false, dense = false, compact = false, autoFocus = false, selection = 'check', getAnchorRect, focusOwner, footer, className, listClassName }: {
   open: boolean
   autoFocus?: boolean
   anchor: ReactNode
@@ -211,6 +211,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   /** DSH per-surface styling; does not alter shared placement or keyboard behavior. */
   listClassName?: string | undefined
 }) {
+  const open = useOverlayActive() && requestedOpen;
   const portalContainer = useDialogPortal();
   const rootRef = useRef<HTMLSpanElement>(null)
   const listRef = useRef<HTMLDivElement>(null)

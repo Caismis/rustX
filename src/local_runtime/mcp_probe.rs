@@ -16,8 +16,47 @@ use crate::{
 };
 use std::{collections::BTreeMap, sync::Arc};
 
-// Reject excess work rather than retaining an unbounded native queue.
-static PROBES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+const PROBE_CAPACITY: usize = 4;
+
+/// Unproven native owners retain their existing finite admission slot. This
+/// evidence belongs to the instance, including when no RPC waiter survives.
+#[derive(Debug)]
+pub(crate) struct McpProbeRegistry {
+    capacity: Arc<tokio::sync::Semaphore>,
+    unsettled: std::sync::Mutex<Vec<UnsettledProbe>>,
+}
+impl Default for McpProbeRegistry {
+    fn default() -> Self {
+        Self {
+            capacity: Arc::new(tokio::sync::Semaphore::new(PROBE_CAPACITY)),
+            unsettled: std::sync::Mutex::default(),
+        }
+    }
+}
+#[derive(Debug)]
+struct UnsettledProbe {
+    id: String,
+    _runtime: Option<Arc<McpServerRuntime>>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+impl McpProbeRegistry {
+    pub(crate) fn failures(&self) -> Vec<String> {
+        self.unsettled
+            .lock()
+            .expect("MCP probe settlement")
+            .iter()
+            .map(|probe| format!("MCP management {}: physical settlement unproven", probe.id))
+            .collect()
+    }
+    pub(crate) fn is_settled(&self) -> bool {
+        self.capacity.available_permits() == PROBE_CAPACITY
+            && self
+                .unsettled
+                .lock()
+                .expect("MCP probe settlement")
+                .is_empty()
+    }
+}
 
 #[derive(
     Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -32,13 +71,12 @@ pub enum McpProbeOutcome {
     SettlementFailed,
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct McpProbeResult {
     pub id: McpServerId,
     pub revision: String,
     pub outcome: McpProbeOutcome,
+    pub page: Option<crate::tools::mcp::catalog::CatalogPage>,
 }
 
 struct CancelOnDrop(CancellationSignal);
@@ -56,22 +94,79 @@ impl SessionRuntimeManager {
         target: SourceTarget,
         id: McpServerId,
         revision: String,
+        request_owner: impl Send + 'static,
     ) -> Result<McpProbeResult, SettingsError> {
-        probe(self.configuration.clone(), target, id, revision).await
+        probe_query(
+            self.configuration.clone(),
+            target,
+            id,
+            revision,
+            None,
+            request_owner,
+            self.mcp_probes.clone(),
+        )
+        .await
     }
 }
 
+impl SessionRuntimeManager {
+    pub(crate) async fn mcp_catalog(
+        &self,
+        target: SourceTarget,
+        id: McpServerId,
+        revision: String,
+        kind: crate::tools::mcp::catalog::CatalogKind,
+        request_owner: impl Send + 'static,
+    ) -> Result<McpProbeResult, SettingsError> {
+        probe_query(
+            self.configuration.clone(),
+            target,
+            id,
+            revision,
+            Some(kind),
+            request_owner,
+            self.mcp_probes.clone(),
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
 async fn probe(
     owner: UserConfigManager,
     target: SourceTarget,
     id: McpServerId,
     revision: String,
 ) -> Result<McpProbeResult, SettingsError> {
-    let permit = PROBES.try_acquire().map_err(|_| SettingsError::Invalid)?;
-    let cancellation = CancellationSignal::new();
+    probe_query(owner, target, id, revision, None, (), Arc::default()).await
+}
+
+async fn probe_query(
+    owner: UserConfigManager,
+    target: SourceTarget,
+    id: McpServerId,
+    revision: String,
+    query: Option<crate::tools::mcp::catalog::CatalogKind>,
+    request_owner: impl Send + 'static,
+    registry: Arc<McpProbeRegistry>,
+) -> Result<McpProbeResult, SettingsError> {
+    // Reject excess work rather than retaining an unbounded native queue.
+    let permit = registry
+        .capacity
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| SettingsError::Invalid)?;
+    let cancellation = owner.resource_io.child();
     let _cancel = CancelOnDrop(cancellation.clone());
+    #[cfg(test)]
+    let close = CLOSE_PROBES
+        .lock()
+        .unwrap()
+        .remove(&owner.sources.config_path);
     tokio::spawn(async move {
-        let _permit = permit;
+        let _request_owner = request_owner;
+        // Return successful native capacity before publishing host request zero.
+        let probe_permit = permit;
         let capture_owner = owner.clone();
         let capture_target = target.clone();
         let capture_id = id.clone();
@@ -86,7 +181,27 @@ async fn probe(
         })
         .await
         .map_err(|_| SettingsError::Io)??;
-        let outcome = run(&id, &binding, &workspace, cancellation).await;
+        let (outcome, page, unsettled) = run_query(
+            &id,
+            &binding,
+            &workspace,
+            cancellation,
+            query,
+            #[cfg(test)]
+            close,
+        )
+        .await;
+        if outcome == McpProbeOutcome::SettlementFailed {
+            registry
+                .unsettled
+                .lock()
+                .expect("MCP probe settlement")
+                .push(UnsettledProbe {
+                    id: id.as_str().chars().take(128).collect(),
+                    _runtime: unsettled,
+                    _permit: probe_permit,
+                });
+        }
         // A changed definition cannot receive a successful result for old bytes.
         let check_id = id.clone();
         let check_revision = revision.clone();
@@ -97,6 +212,7 @@ async fn probe(
             id,
             revision,
             outcome,
+            page,
         })
     })
     .await
@@ -144,12 +260,30 @@ fn capture(
     Ok((binding, workspace))
 }
 
+#[cfg(test)]
 async fn run(
     id: &McpServerId,
     binding: &crate::tools::mcp::McpServerBinding,
     workspace: &Workspace,
     cancellation: CancellationSignal,
 ) -> McpProbeOutcome {
+    run_query(id, binding, workspace, cancellation, None, None)
+        .await
+        .0
+}
+
+async fn run_query(
+    id: &McpServerId,
+    binding: &crate::tools::mcp::McpServerBinding,
+    workspace: &Workspace,
+    cancellation: CancellationSignal,
+    query: Option<crate::tools::mcp::catalog::CatalogKind>,
+    #[cfg(test)] close: Option<Arc<crate::tools::mcp::test_sync::CloseProbe>>,
+) -> (
+    McpProbeOutcome,
+    Option<crate::tools::mcp::catalog::CatalogPage>,
+    Option<Arc<McpServerRuntime>>,
+) {
     use McpProbeOutcome as O;
     let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
     let connect = McpServerRuntime::connect_owned(OwnedConnect::new(
@@ -170,14 +304,36 @@ async fn run(
         ProbeState::Cancelled => O::Cancelled,
         _ => O::ConnectionFailed,
     };
+    let mut page = None;
+    let mut unsettled = None;
     match connected {
         Ok(runtime) => {
-            outcome = inspect_and_close(&runtime, &cancellation, deadline, outcome).await;
+            #[cfg(test)]
+            if let Some(close) = close {
+                runtime.install_close_probe(close);
+            }
+            (outcome, page) =
+                inspect_and_close(&runtime, &cancellation, deadline, outcome, query).await;
+            if outcome == O::SettlementFailed {
+                unsettled = Some(runtime);
+            }
         }
         Err(crate::tools::mcp::McpError::PhysicalSettlement(_)) => outcome = O::SettlementFailed,
         Err(_) => {}
     }
-    outcome
+    (outcome, page, unsettled)
+}
+
+#[cfg(test)]
+static CLOSE_PROBES: std::sync::LazyLock<
+    std::sync::Mutex<BTreeMap<std::path::PathBuf, Arc<crate::tools::mcp::test_sync::CloseProbe>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(BTreeMap::new()));
+#[cfg(test)]
+pub(crate) fn install_close_probe(
+    path: std::path::PathBuf,
+    close: Arc<crate::tools::mcp::test_sync::CloseProbe>,
+) {
+    assert!(CLOSE_PROBES.lock().unwrap().insert(path, close).is_none());
 }
 
 async fn inspect_and_close(
@@ -185,21 +341,32 @@ async fn inspect_and_close(
     cancellation: &CancellationSignal,
     deadline: tokio::time::Instant,
     mut outcome: McpProbeOutcome,
-) -> McpProbeOutcome {
+    query: Option<crate::tools::mcp::catalog::CatalogKind>,
+) -> (
+    McpProbeOutcome,
+    Option<crate::tools::mcp::catalog::CatalogPage>,
+) {
     use McpProbeOutcome as O;
+    let mut page = None;
     if !cancellation.is_cancelled() {
         outcome = tokio::select! {
             biased;
             () = cancellation.cancelled() => O::Cancelled,
             () = tokio::time::sleep_until(deadline) => O::TimedOut,
-            result = runtime.list_tools() => if result.is_ok() { O::Reachable } else { O::ListFailed },
+            result = async {
+                match query {
+                    Some(kind) => runtime.catalog_inventory(kind).await.map(Some),
+                    None => runtime.list_tools().await.map(|_| None),
+                }
+            } => match result { Ok(catalog) => { page=catalog; O::Reachable }, Err(_) => O::ListFailed },
         };
     }
     // Never report success before physical cleanup has settled.
     if runtime.close().await.is_err() {
         outcome = O::SettlementFailed;
+        page = None;
     }
-    outcome
+    (outcome, page)
 }
 
 #[cfg(all(test, feature = "mcp-fixture"))]
@@ -221,6 +388,146 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("mcp.toml"), text).unwrap();
         super::super::settings::revision(Some(text.as_bytes()))
+    }
+
+    #[tokio::test]
+    async fn public_catalog_finishes_remote_pagination_before_closing_one_native_owner() {
+        catalog_projection_scenario("", McpProbeOutcome::Reachable).await;
+        for cursor in ["cycle", "too-many", "oversized"] {
+            catalog_projection_scenario(cursor, McpProbeOutcome::ListFailed).await;
+        }
+    }
+
+    async fn catalog_projection_scenario(cursor: &str, expected: McpProbeOutcome) {
+        use crate::tools::mcp::{catalog::CatalogKind, fixture::FixtureServer};
+        use rmcp::transport::streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        };
+        use std::sync::atomic::Ordering;
+        let fixture = FixtureServer {
+            resources_supported: true,
+            tools_empty: true,
+            resource_state: crate::tools::mcp::fixture::resources::ResourceFixtureState {
+                first_cursor: Some(cursor.into()),
+                ..Default::default()
+            },
+            ..FixtureServer::default()
+        };
+        let state = fixture.resource_state.clone();
+        let service = StreamableHttpService::<FixtureServer, LocalSessionManager>::new(
+            move || Ok(fixture.clone()),
+            Arc::default(),
+            StreamableHttpServerConfig::default(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, axum::Router::new().nest_service("/mcp", service))
+                .await
+                .unwrap();
+        });
+        let temporary = tempfile::tempdir().unwrap();
+        let owner = owner(temporary.path());
+        let revision = write(
+            &owner,
+            &SourceTarget::User,
+            &format!("[mcp_servers.inventory]\nurl = 'http://{address}/mcp'\n"),
+        );
+        let result = probe_query(
+            owner,
+            SourceTarget::User,
+            McpServerId::new("inventory"),
+            revision,
+            Some(CatalogKind::Resources),
+            (),
+            Arc::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.outcome, expected);
+        if expected == McpProbeOutcome::Reachable {
+            assert_eq!(result.page.unwrap().resources.len(), 2);
+        } else {
+            assert!(result.page.is_none());
+        }
+        assert_eq!(state.lists.load(Ordering::SeqCst), 2);
+        assert_eq!(state.reads.load(Ordering::SeqCst), 0);
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn public_stdio_catalog_keeps_process_bound_cursor_until_physical_close() {
+        use crate::tools::mcp::{catalog::CatalogKind, fixture};
+        let temporary = tempfile::tempdir().unwrap();
+        let owner = owner(temporary.path());
+        let journal = temporary.path().join("native-catalog.jsonl");
+        let program = std::env::current_exe().unwrap();
+        let arguments = fixture::fixture_spawn_args(
+            "tools::mcp::resources::tests::resource_only_stdio_negotiates_modern_and_legacy_without_tools_list",
+        );
+        let environment = BTreeMap::from([
+            (fixture::FIXTURE_MODE_ENV, "1".to_string()),
+            (fixture::RESOURCES_ENV, "1".to_string()),
+            (fixture::TOOLS_DISABLED_ENV, "1".to_string()),
+            ("RUSTX_FIXTURE_RESOURCE_CURSOR", "process".to_string()),
+            (
+                fixture::resources::RESOURCE_OBSERVATION_FILE_ENV,
+                journal.display().to_string(),
+            ),
+        ]);
+        let config = format!(
+            "[mcp_servers.inventory]\ncommand = {:?}\nargs = {}\nenv = {{{}}}\n",
+            program.to_str().unwrap(),
+            serde_json::to_string(&arguments).unwrap(),
+            environment
+                .iter()
+                .map(|(key, value)| format!("{key} = {value:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let revision = write(&owner, &SourceTarget::User, &config);
+        let result = probe_query(
+            owner,
+            SourceTarget::User,
+            McpServerId::new("inventory"),
+            revision,
+            Some(CatalogKind::Resources),
+            (),
+            Arc::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.outcome, McpProbeOutcome::Reachable);
+        assert_eq!(result.page.unwrap().resources.len(), 2);
+        let records: Vec<serde_json::Value> = std::fs::read_to_string(journal)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(records.len(), 2);
+        assert!(
+            records
+                .iter()
+                .all(|record| record["method"] == "resources/list")
+        );
+        assert!(records[0]["value"].is_null());
+        let cursor = records[1]["value"].as_str().unwrap();
+        assert!(
+            cursor.starts_with("process-"),
+            "the continuation belongs to the actual native process"
+        );
+        let pid = cursor
+            .strip_prefix("process-")
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        assert_eq!(
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+            Err(nix::errno::Errno::ESRCH),
+            "successful discovery waits for physical process close"
+        );
     }
 
     #[cfg(unix)]
@@ -378,8 +685,10 @@ mod tests {
                     &CancellationSignal::new(),
                     tokio::time::Instant::now() + PROBE_TIMEOUT,
                     McpProbeOutcome::ConnectionFailed,
+                    None,
                 )
                 .await
+                .0
             });
             close.wait_entered().await;
             if !fail {

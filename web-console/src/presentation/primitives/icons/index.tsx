@@ -1056,3 +1056,10 @@ export const IconPinFill16 = ({ size = 16, className }: IconProps) => (
     <path d="M6.05285 9.47511C6.27284 9.16094 6.70586 9.08458 7.02003 9.30457C7.3342 9.52455 7.41055 9.95757 7.19057 10.2717L3.98587 14.4708L3.21223 13.9291L6.05285 9.47511Z" fill="currentColor"/>
   </svg>
 );
+
+/** Home destination, matching the compact outline navigation glyphs. */
+export const IconHomeOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M1.5 7 8 1.5 14.5 7M3 6v8h3.5V9h3v5H13V6" />
+  </svg>
+)

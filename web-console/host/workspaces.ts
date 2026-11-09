@@ -2,7 +2,7 @@ import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, type W
 import { materializeSource } from '../../protocol/app-server/source-observation.ts';
 import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
-import { deriveWorkspaceOffice } from './documents/operation.ts';
+import { OfficeDocuments } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
 import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
@@ -20,7 +20,6 @@ import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspa
 import type { WorkbenchCall, WorkbenchResult } from '../src/workspaces/workbench.ts';
 import { NativeFileReadError, readNativeDelivery, readNativeSource, validDeliveryLocator, validateDeliveryRead, validateDeliveryObservation } from './file-read.ts';
 
-import { deriveDocument } from './documents/operation.ts';
 import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
 import { FILE_PREVIEW_LIMITS } from '../shared/file-preview.ts';
 import { observeFile } from './file-observation.ts';
@@ -42,7 +41,7 @@ export interface LocalHostConfig {
   /** Operator-owned file outside the browser and rustX runtime root. */
   metadataFile: string;
 }
-type Registration = { id: string; location: string; displayName: string };
+type Registration = { id: string; location: string; displayName: string; selected?: true };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly terminals: WorkspaceTerminals;
   private terminalObserver?: Promise<() => Promise<void>>;
@@ -50,6 +49,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private terminalObserverEnded = false;
   private closing?: Promise<void>;
   private documentReads = new Set<AbortController>();
+  private readonly documents = new OfficeDocuments();
   private fileReads = new Set<AbortController>();
   private fileObservations = new Set<AbortController>();
   private fileObservationTasks = new Set<Promise<void>>();
@@ -59,6 +59,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private closed = false;
   private readonly authorityId = randomUUID();
   private registrations: Registration[];
+  private readonly selections = new Map<string, number>();
   private readonly roots: LocalHostConfig['roots'];
   private readonly config: LocalHostConfig;
   private readonly desktop: DesktopAdapter;
@@ -77,7 +78,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (new Set(this.roots.map(root => root.id)).size !== this.roots.length || new Set(this.roots.map(root => root.cwd)).size !== this.roots.length) throw new Error('Duplicate Host location');
     this.registrations = existsSync(config.metadataFile) ? JSON.parse(readFileSync(config.metadataFile, 'utf8')) as Registration[]
       : this.roots.map(root => ({ id: randomUUID(), location: root.id, displayName: root.displayName }));
-    if (!Array.isArray(this.registrations) || this.registrations.some(row => typeof row.id !== 'string' || typeof row.displayName !== 'string' || !this.roots.some(root => root.id === row.location))) throw new Error('Invalid Host registrations');
+    if (!Array.isArray(this.registrations) || this.registrations.some(row => !row || typeof row.id !== 'string' || typeof row.displayName !== 'string' || !this.roots.some(root => root.id === row.location) || (row.selected !== undefined && row.selected !== true))
+      || this.registrations.filter(row => row.selected).length > 1) throw new Error('Invalid Host registrations');
     this.commit(this.registrations);
   }
   private commit(rows: Registration[]) {
@@ -104,8 +106,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (!sameEndpoint(endpoint, this.config.endpoint)) throw new Error('Workspace Host belongs to a different rustX process');
   }
   async listWorkspaces(): Promise<WorkspaceCatalog> {
+    const preferredWorkspace = this.registrations.find(row => row.selected)?.id;
     return { authorityId: this.authorityId, endpoint: this.config.endpoint,
-      workspaces: this.registrations.map(row => ({ ...row, displayPath: this.roots.find(root => root.id === row.location)!.cwd })),
+      workspaces: this.registrations.map(({ id, location, displayName }) => ({ id, location, displayName, displayPath: this.roots.find(root => root.id === location)!.cwd })),
+      ...(preferredWorkspace ? { preferredWorkspace } : {}),
       picker: this.config.picker ? { kind: 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
@@ -118,7 +122,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.closed = true;
     for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations]) read.abort();
     return this.closing ??= (async () => {
-      const result = await Promise.allSettled([this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks]);
+      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks]);
       const failures = result.flatMap(item => item.status === 'rejected' ? [item.reason] : []);
       if (this.terminalFailure) failures.push(this.terminalFailure);
       if (failures.length) throw new AggregateError(failures, 'Host terminal settlement failed');
@@ -141,7 +145,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v73.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v76.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -259,7 +263,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const abort = () => operation.abort(); signal?.addEventListener('abort', abort, { once: true });
     try {
       signal?.throwIfAborted();
-      return await deriveDocument(request, async () => {
+      return await this.documents.deriveDocument(request, async () => {
         this.mutationScope(scope); operation.signal.throwIfAborted();
         if (source.kind === 'session_file') return this.readFile(scope, { target: request.target, locator: source.locator, delivery_index: source.delivery_index, agent_id: source.agent_id }, FILE_PREVIEW_LIMITS.officeBytes, operation.signal);
         const result = await readNativeSource(this.config.endpoint, this.config.productHostToken!, request.target, source, [], operation.signal, { kind: 'bytes' }, FILE_PREVIEW_LIMITS.officeBytes);
@@ -346,7 +350,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (request.kind === 'office') {
       const path = request.path, extension = path.split('.').at(-1)?.toLowerCase();
       if (extension !== 'docx' && extension !== 'pptx') throw new Error('converter_unavailable');
-      const result = await deriveWorkspaceOffice(extension, async () => {
+      const result = await this.documents.deriveWorkspaceOffice(extension, async () => {
         this.mutationScope(scope); signal?.throwIfAborted();
         const { cwd: current } = await read();
         check(current);
@@ -430,6 +434,15 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const rows = this.registrations.filter(row => row.id !== id);
     rows.splice(before ? rows.findIndex(row => row.id === before) : rows.length, 0, row);
     this.commit(rows);
+  }
+  async selectWorkspace(scope: WorkspaceAuthorityScope, id: string, intent: import('../src/workspaces/host.ts').WorkspaceSelectionIntent) {
+    this.mutationScope(scope); this.registered(id);
+    if (!intent || typeof intent.client !== 'string' || !/^[a-f0-9-]{36}$/.test(intent.client)
+      || !Number.isSafeInteger(intent.sequence) || intent.sequence < 1) throw new Error('Invalid Workspace selection');
+    if (intent.sequence <= (this.selections.get(intent.client) ?? 0)) return;
+    this.commit(this.registrations.map(({ selected: _selected, ...row }) => row.id === id ? { ...row, selected: true } : row));
+    this.selections.delete(intent.client); this.selections.set(intent.client, intent.sequence);
+    while (this.selections.size > 32) this.selections.delete(this.selections.keys().next().value!);
   }
   /** Per-registration authority lane. A native configuration mutation holds its
    * registration's lane from first resolution to final reread, so removal can
@@ -568,7 +581,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         case 'write': {
           // The native write is the linearization point; its reread is a
           // separate fact that can fail without undoing the commit.
-          const commit = (edit: import('../../protocol/app-server/v73.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
+          const commit = (edit: import('../../protocol/app-server/v76.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
           const acknowledgement = operation.edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, operation.edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(operation.edit);
           let reread: WorkflowReread;
           try {

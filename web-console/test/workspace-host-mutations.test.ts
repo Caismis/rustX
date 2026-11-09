@@ -24,6 +24,43 @@ function metadata(file: string) {
 }
 function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 
+it('selection commits before Send and a delayed older choice cannot overwrite it', async () => {
+  const f = fixture(), scope = await f.host.listWorkspaces(), [a, b] = scope.workspaces;
+  const client = '11111111-1111-4111-8111-111111111111';
+  await f.host.selectWorkspace(scope, b.id, { client, sequence: 2 });
+  const committed = metadata(f.config.metadataFile);
+  await f.host.selectWorkspace(scope, a.id, { client, sequence: 1 });
+  expect((await f.host.listWorkspaces()).preferredWorkspace).toBe(b.id);
+  expect(metadata(f.config.metadataFile)).toEqual(committed);
+  await expect(f.host.selectWorkspace(scope, a.id, { client: '', sequence: 3 })).rejects.toThrow('Invalid');
+  await expect(f.host.selectWorkspace({ ...scope, authorityId: 'retired' }, a.id, { client, sequence: 3 })).rejects.toMatchObject({ kind: 'authority_replaced' });
+  expect(metadata(f.config.metadataFile)).toEqual(committed);
+  await f.host.removeWorkspace(scope, b.id);
+  expect((await f.host.listWorkspaces()).preferredWorkspace).toBeUndefined();
+  await f.host.close();
+});
+
+it('the HTTP selection carrier persists the preference and stays alive during page unload', async () => {
+  const f = fixture(), server = createServer(workspaceHandler(f.host));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Missing Host address');
+  const origin = `http://127.0.0.1:${address.port}`;
+  vi.stubGlobal('location', { href: origin, origin });
+  const fetcher = globalThis.fetch, requests: RequestInit[] = [];
+  vi.stubGlobal('fetch', (input: RequestInfo | URL, init: RequestInit) => { requests.push(init); return fetcher(input, init); });
+  try {
+    const browser = new HttpWorkspaceHost(), catalog = await browser.listWorkspaces(), id = catalog.workspaces[0].id;
+    await browser.selectWorkspace(catalog, id, { client: '11111111-1111-4111-8111-111111111111', sequence: 1 });
+    expect(requests.at(-1)?.keepalive).toBe(true);
+    expect((await browser.listWorkspaces()).preferredWorkspace).toBe(id);
+    await f.host.close();
+    const restarted = new LocalWorkspaceHost({ ...f.config, endpoint: 'ws://localhost:9090/' });
+    expect((await restarted.listWorkspaces()).preferredWorkspace).toBe(id);
+    await restarted.close();
+  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
 it('a gated A-scoped HTTP remove cannot write replacement B with the same persistent Workspace ID', async () => {
   const f = fixture(), authority = new WorkspaceAuthority(f.host), observation = await authority.observe();
   const id = observation.catalog.workspaces[0].id;
@@ -100,6 +137,7 @@ it.each(['different', 'equivalent'] as const)('mutation scope compares %s normal
 it.each([
   ['adopt', { location: 'a' }], ['rename', { id: 'W', displayName: 'renamed' }],
   ['reorder', { id: 'W' }], ['remove', { id: 'W' }],
+  ['select', { id: 'W', intent: { client: '11111111-1111-4111-8111-111111111111', sequence: 1 } }],
 ] as const)('HTTP %s refuses missing or malformed scope before calling the Host', async (method, params) => {
   const f = fixture(), call = vi.spyOn(f.host, `${method}Workspace`);
   const server = createServer(workspaceHandler(f.host));

@@ -1,5 +1,10 @@
 # Issue #454 unified `present` delivery: architecture record and validation
 
+This is a historical validation record. Issue #532 removed its separate ordinary
+Delivery Access credential and Controller assumptions; see the current
+[shared-control and authentication contract](app-server/shared-control.md).
+
+
 Validated on Linux x86_64 on 2026-10-08 in the independent worktree
 `../rustX-issue-454`, on branch `issue-454-unified-present`. It is based on fetched
 `origin/main` `26def795775884d07e013dc51939028a52cb56b2`. The primary checkout was

@@ -352,13 +352,13 @@ Exit criteria:
 
 Implemented:
 
-- Skill package discovery from bounded user/global and project roots, plus
-  explicit configured and CLI paths (deterministic ordering, duplicate
-  identity rejection, symlink rejection, whole-transaction failure on any
-  malformed candidate)
+- Skill definition discovery from exactly the fixed User and Workspace roots,
+  with bounded direct candidate enumeration, deterministic replacement,
+  root/entry symlink rejection and isolated invalid-candidate diagnostics
 - Standard Agent Skills `SKILL.md` frontmatter parsing/validation and the
   compact model-visible catalog projection
-- Content-derived `SkillVersionId` hashing over the complete package state
+- Normalized frontmatter-only `SkillVersionId`, non-recursive definition watches
+  and live local child resource bindings; see [Skill discovery](skill-discovery.md)
 - rustX dependency declarations (`rustx.python-dependencies`,
   `rustx.node-dependencies`) with deterministic normalization and
   merge/conflict detection before any package-manager subprocess

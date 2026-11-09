@@ -10,8 +10,8 @@ import { wireProbe } from './wire-probe';
 async function chinese(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await openSettingsPage(page, 'General');
-  await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+  await page.getByRole('button', { name: '主页', exact: true }).click();
 }
 async function pick(page: Page, locale: string, name: string) {
   await page.getByRole('button', { name: locale === 'zh' ? '选择工作区' : 'Choose Workspace', exact: true }).click();
@@ -37,23 +37,28 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh']) test(`silent
     native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     const wire = await wireProbe(page); await routeWorkspaceHost(page, fixture);
     await page.setViewportSize({ width, height: 900 }); await page.goto('/');
+    const selectedAt = performance.now();
     await connectRemote(page, fixture.endpoint, fixture.token);
     if (locale === 'zh') await chinese(page);
     await expect(page).toHaveTitle(/rustX/);
     await expect(page.locator('html')).toHaveAttribute('lang', locale === 'zh' ? 'zh-CN' : 'en');
     expect((await native.listSessions()).sessions).toHaveLength(0);
-    expect(gate.counts.processes).toBe(0);
-    const selectedAt = performance.now();
-    await pick(page, locale, 'Workspace A');
+    await expect(page.getByRole('button', { name: locale === 'zh' ? '选择工作区' : 'Choose Workspace', exact: true })).toContainText('Workspace A');
     await startupWait(() => gate!.reached, cancellation.signal);
+    expect(gate.counts.processes).toBe(1);
     const editor = page.getByRole('textbox', { name: locale === 'zh' ? '消息' : 'Message', exact: true });
     const send = page.getByRole('button', { name: locale === 'zh' ? '发送' : 'Send', exact: true });
     await expect(editor).toBeEditable();
     await editor.fill('mcp startup from a ready draft'); await expect(send).toBeEnabled();
+    // Connection/Home navigation can still be expanding the sidebar. Finish
+    // that user-navigation transition before measuring MCP-only stability.
+    await page.locator('[data-harness-frame]').evaluate(async frame => {
+      await Promise.allSettled(frame.getAnimations().map(animation => animation.finished));
+    });
     const composer = page.locator('[data-resident-composer]');
     const pendingText = await composer.innerText();
     const pendingBounds = await composer.boundingBox();
-    expect(wire.requests.filter(row => ['session/create', 'turn/start', 'session/uploadPrepare'].includes(row.method))).toHaveLength(0);
+    expect(wire.requests.filter(row => ['thread/start', 'inbound/queue', 'session/uploadPrepare'].includes(row.method))).toHaveLength(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect(gate.counts).toMatchObject({ processes: 1, initializations: 1, lists: 1 });
     await page.screenshot({ path: info.outputPath('silent-prewarm-pending.png'), fullPage: false });
@@ -68,10 +73,10 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh']) test(`silent
     await page.screenshot({ path: info.outputPath('silent-prewarm-ready.png'), fullPage: false });
     // Deliver creation normally. Only hold the later native Attach ACK so a
     // manual title can suppress unrelated inference after transfer has settled.
-    wire.holdNext('session/attach');
+    wire.holdNext('thread/resume');
     const sentAt = performance.now(); await send.click();
     await expect.poll(() => wire.held()).toBe(1);
-    const created = wire.responses.find(row => row.method === 'session/create')!.result.session;
+    const created = wire.responses.find(row => row.method === 'thread/start')!.result.session;
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
     expect(wire.requests.filter(row => row.method === 'mcp/draftCancel')).toHaveLength(0);
     await native.renameSession(created.id, 'Ready draft fixture'); wire.releaseHeld();
@@ -82,13 +87,13 @@ for (const width of [1440, 390]) for (const locale of ['en', 'zh']) test(`silent
     expect(requests[0].body.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(['startup_echo']);
     expect(requests[0].body.tools[0].function.parameters).toEqual(startupToolSchema);
     expect(gate.counts).toMatchObject({ processes: 1, initializations: 1, lists: 1, completedLists: 1 });
-    expect(wire.requests.filter(row => row.method === 'session/create')).toHaveLength(1);
-    expect(wire.requests.filter(row => row.method === 'turn/start')).toHaveLength(1);
+    expect(wire.requests.filter(row => row.method === 'thread/start')).toHaveLength(1);
+    expect(wire.requests.filter(row => row.method === 'inbound/queue')).toHaveLength(1);
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(0);
     await fixture.release('startup-request');
     await expect(page.getByText('Ready tools received.', { exact: true })).toBeVisible();
     expect(errors).toEqual([]);
-    const evidence = { scenario: 'send_after_ready', width, locale, selection_to_ready_ms: readyAt - selectedAt, controlled_list_gate_ms: releasedAt - gate.events.find(event => event.kind === 'L')!.at, send_to_first_model_request_ms: requestedAt - sentAt, composer_bounds: pendingBounds, counts: gate.counts, processes: gate.processes, events: gate.events, first_request_tools: requests[0].body.tools, provider_requests: requests.length, clock: 'Node performance.now; readiness is the native diagnostic, request is the emulator gate', limits: 'Single fixture sample; includes the controlled discovery gate, browser, Host and observation overhead; no claim of faster MCP networking.' };
+    const evidence = { scenario: 'send_after_ready', width, locale, startup_to_ready_ms: readyAt - selectedAt, controlled_list_gate_ms: releasedAt - gate.events.find(event => event.kind === 'L')!.at, send_to_first_model_request_ms: requestedAt - sentAt, composer_bounds: pendingBounds, counts: gate.counts, processes: gate.processes, events: gate.events, first_request_tools: requests[0].body.tools, provider_requests: requests.length, clock: 'Node performance.now from connection start; readiness is the native diagnostic, request is the emulator gate', limits: 'Single fixture sample; includes the controlled discovery gate, browser, Host and observation overhead; no claim of faster MCP networking.' };
     writeFileSync(info.outputPath('prewarm-evidence.json'), JSON.stringify(evidence, null, 2) + '\n');
     await info.attach('prewarm-evidence', { path: info.outputPath('prewarm-evidence.json'), contentType: 'application/json' });
     passed = true;
@@ -122,13 +127,13 @@ for (const width of [1440, 390]) test(`A to B to A settles abandoned real proces
     expect(absent(b.processes[0].pid)).toBe(true); expect(absent(b.processes[0].supervisorPid)).toBe(true);
     await expect(editor).toHaveValue('mcp startup with preserved draft');
     await expect(page.getByText('first.txt', { exact: true })).toBeVisible(); await expect(page.getByText('second.txt', { exact: true })).toBeVisible();
-    expect(wire.requests.filter(row => ['session/create', 'session/uploadPrepare', 'turn/start'].includes(row.method))).toHaveLength(0);
-    wire.holdNext('session/attach'); const sentAt = performance.now(); await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect.poll(() => wire.responses.filter(row => row.method === 'session/create').length).toBe(1);
-    const created = wire.responses.find(row => row.method === 'session/create')!.result.session;
+    expect(wire.requests.filter(row => ['thread/start', 'session/uploadPrepare', 'inbound/queue'].includes(row.method))).toHaveLength(0);
+    wire.holdNext('thread/resume'); const sentAt = performance.now(); await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect.poll(() => wire.responses.filter(row => row.method === 'thread/start').length).toBe(1);
+    const created = wire.responses.find(row => row.method === 'thread/start')!.result.session;
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
     const cancelled = wire.requests.filter(row => row.method === 'mcp/draftCancel').map(row => row.params.target.generation);
-    const submittedGeneration = wire.requests.find(row => row.method === 'session/create')!.params.submission.generation;
+    const submittedGeneration = wire.requests.find(row => row.method === 'thread/start')!.params.submission.generation;
     expect(cancelled).not.toContain(submittedGeneration);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     a.release(); await expect.poll(() => wire.held()).toBe(1);
@@ -162,11 +167,11 @@ test('immediate Send measures the pending discovery on one real process', async 
     const wire = await wireProbe(page); await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('mcp startup sent immediately');
-    wire.holdNext('session/attach');
+    wire.holdNext('thread/resume');
     const selectedAt = performance.now(); await pick(page, 'en', 'Workspace A');
     const sentAt = performance.now(); await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect.poll(() => wire.responses.filter(row => row.method === 'session/create').length).toBe(1);
-    const created = wire.responses.find(row => row.method === 'session/create')!.result.session;
+    await expect.poll(() => wire.responses.filter(row => row.method === 'thread/start').length).toBe(1);
+    const created = wire.responses.find(row => row.method === 'thread/start')!.result.session;
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
     expect(wire.requests.filter(row => row.method === 'mcp/draftCancel')).toHaveLength(0);
     await startupWait(() => gate!.reached, cancellation.signal);

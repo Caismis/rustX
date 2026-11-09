@@ -31,7 +31,7 @@ it('discards a schedule page when its displayed Session is replaced', async () =
 });
 
 it('preserves strict native uint8 bounds on Scheduler request budgets', async () => {
-  const { decodeProtocolMessage } = await import('../src/protocol/decoder.ts');
+  const { decodeServerOutput } = await import('../src/protocol/decoder.ts');
   const record = (used: unknown) => ({ jsonrpc:'2.0', id: 'budget', result: {
     type:'schedule_command', result:{ status:'applied', receipt:{
       id:{conversation_id:'conv_00000000-0000-7000-8000-000000000001',ordinal:'1'}, revision:'1',
@@ -39,8 +39,8 @@ it('preserves strict native uint8 bounds on Scheduler request budgets', async ()
       request_budget:{ human_message_id:'human_fixture', original_attempt_id:'attempt_fixture', mutations_used:used, mutation_limit:8 },
     } },
   } });
-  assert.ok(decodeProtocolMessage(record(8)));
-  for (const used of [-1, 256, 1.5, '8']) assert.equal(decodeProtocolMessage(record(used)), undefined);
+  assert.ok(decodeServerOutput(record(8)));
+  for (const used of [-1, 256, 1.5, '8']) assert.equal(decodeServerOutput(record(used)), undefined);
 });
 
 it('reads exact scheduled recovery with a lossless effect cursor and no activation',async()=>{

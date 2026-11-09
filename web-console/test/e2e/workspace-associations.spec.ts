@@ -30,8 +30,10 @@ for (const locale of ['en', 'zh'] as const) test(`UX-04 retains grouped and sele
     if (locale === 'zh') {
       await page.getByRole('button', { name: 'Settings', exact: true }).click();
       await openSettingsPage(page, 'General');
-      await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-      await page.getByRole('button', { name: '关闭设置' }).click();
+      await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+      const home = page.getByRole('button', { name: '主页', exact: true });
+      await home.click();
+      await expect(home).toHaveAttribute('aria-current', 'page');
     }
     await page.route('**/product-host/classify', async route => {
       reached.resolve(); await gate.promise; await route.fallback();
@@ -42,7 +44,7 @@ for (const locale of ['en', 'zh'] as const) test(`UX-04 retains grouped and sele
     await reached.promise;
     // These assertions execute before releasing the Host reply.
     await expect(session).toBeVisible(); await expect(group.locator('[aria-current="page"]:not([data-session-id])')).toBeVisible();
-    await expect(page.getByRole('status').filter({ hasText: tx.pending })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: tx.pending })).toHaveCount(0);
     await session.focus(); await expect(session).toBeFocused();
     await page.screenshot({ path: `test-results/ux-04-held-${locale}.png` });
     gate.resolve();

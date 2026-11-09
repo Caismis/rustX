@@ -1,5 +1,9 @@
 # Issue #527 validation and ownership
 
+> Historical measurements: the whole-package Skill hashing/copying described here
+> was superseded by [frontmatter-only discovery](../skill-discovery.md). Managed
+> Python and Workflow contracts in this report remain independent.
+
 Initial base: `origin/main@7e9010035fcb457ac415aa23fb946aba51bd1588`.
 Integration base after upstream advanced: `d4645468282dc6df56015fd72d0ad442946694c5`.
 Upstream already allocated App Server v70; this change uses v71 and retains

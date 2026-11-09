@@ -10,15 +10,15 @@ for (const width of [1440, 390]) test(`context reading survives streaming at ${w
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   await page.setViewportSize({ width, height: 900 });
   if (width < 600) {
-    await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
     await expect(page.locator('main')).toHaveAttribute('inert', '');
     await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
     await expect(page.locator('main')).not.toHaveAttribute('inert', '');
-    await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeFocused();
     await expect(page.getByRole('button', { name: 'Close navigation' })).toHaveCount(0);
   }
   await page.evaluate(() => (window as any).startupFixture.contextReading(25000));

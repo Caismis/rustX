@@ -245,6 +245,9 @@ mod tests {
             next.sessions.get_mut(&session_id).unwrap().nodes.insert(
                 id.clone(),
                 super::super::SessionNode {
+                    name: None,
+                    archived: false,
+                    dynamic_tools: Vec::new(),
                     ordinal,
                     id,
                     parent: Some(source_node.clone()),

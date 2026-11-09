@@ -23,5 +23,6 @@ mod common;
 mod launch_fixture;
 
 mod agent_loop;
+mod app_server_host;
 mod lifecycle;
 mod workflow;

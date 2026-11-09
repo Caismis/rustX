@@ -297,6 +297,7 @@ pub(super) fn publish_committed_snapshot(
     index: usize,
     committed: &crate::events::types::RuntimeEventEnvelope,
 ) {
+    state.refresh_activity(index);
     state
         .observation_layouts
         .insert(state.records[index].child_agent_id.clone(), Arc::default());
@@ -321,6 +322,7 @@ pub(super) fn publish_snapshot(
     version: &tokio::sync::watch::Sender<u64>,
     index: usize,
 ) {
+    state.refresh_activity(index);
     let snapshot = state.records[index].snapshot();
     state
         .observation_layouts
@@ -349,6 +351,7 @@ fn publish_activity_snapshot(
     version: &tokio::sync::watch::Sender<u64>,
     index: usize,
 ) {
+    state.refresh_activity(index);
     let snapshot = state.records[index].snapshot();
     state
         .observation_layouts
@@ -873,5 +876,31 @@ impl SubagentRegistry {
             })
             .map(SubagentRecord::snapshot)
             .collect()
+    }
+}
+
+impl super::RegistryState {
+    pub(super) fn refresh_activity(&mut self, index: usize) {
+        let record = &self.records[index];
+        let active = !record.publication_abandoned
+            && (record.lifecycle.is_active()
+                || matches!(
+                    record.lifecycle,
+                    super::SubagentLifecycle::PublishingTerminal
+                )
+                || record.lifecycle.is_terminal() && !record.physical_settlement_proven);
+        if !record.publication_abandoned
+            && record.lifecycle.is_terminal()
+            && !record.physical_settlement_proven
+        {
+            self.activity_fault_records.insert(index);
+        } else {
+            self.activity_fault_records.remove(&index);
+        }
+        if active {
+            self.activity_records.insert(index);
+        } else {
+            self.activity_records.remove(&index);
+        }
     }
 }

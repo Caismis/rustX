@@ -39,8 +39,6 @@ pub(crate) struct ReadProbe {
     pub credential_waited: tokio::sync::watch::Sender<bool>,
     /// Inside an authentication, holding its credential slot.
     pub authenticating: std::sync::Arc<crate::runtime::conversation_runtime::Gate>,
-    /// Delivery credentials in the order rotations installed them.
-    pub rotations: Rotations,
     pub authority: std::sync::Mutex<Option<CancellationToken>>,
 }
 #[cfg(test)]
@@ -55,30 +53,8 @@ impl Default for ReadProbe {
             cancel_waited: tokio::sync::watch::channel(false).0,
             credential_waited: tokio::sync::watch::channel(false).0,
             authenticating: std::sync::Arc::default(),
-            rotations: Rotations::default(),
             authority: std::sync::Mutex::default(),
         }
-    }
-}
-
-/// What each delivery credential rotation installed, in its linearization
-/// order. Secrets are never printed.
-#[cfg(test)]
-#[derive(Default)]
-pub(crate) struct Rotations(std::sync::Mutex<Vec<Option<super::transport::websocket::Credential>>>);
-#[cfg(test)]
-impl std::fmt::Debug for Rotations {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Rotations")
-    }
-}
-#[cfg(test)]
-impl Rotations {
-    pub(crate) fn record(&self, installed: Option<super::transport::websocket::Credential>) {
-        self.0.lock().expect("rotations").push(installed);
-    }
-    pub(crate) fn take(&self) -> Vec<Option<super::transport::websocket::Credential>> {
-        std::mem::take(&mut self.0.lock().expect("rotations"))
     }
 }
 

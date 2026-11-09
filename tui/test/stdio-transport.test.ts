@@ -19,11 +19,9 @@ it("partial stdout EOF before process exit retains an uncertain mutation", async
   peer.respond(initialize.id, initialized.result);
   const client = await initializing;
 
-  const pending = client.call("session/attach", {
-    session_id: "ses_01900000-0000-7000-8000-000000001001", node_id: null,
-  }, "attached");
+  const pending = client.call("thread/resume", {threadId:("ses_01900000-0000-7000-8000-000000001001").replace(/^ses_/, 'conv_')}, "attached");
   const settled = pending.then(() => assert.fail("a partial response cannot settle the mutation"), (error: unknown) => error);
-  const [attach] = await peer.awaitMethod("session/attach");
+  const [attach] = await peer.awaitMethod("thread/resume");
   assert.ok(attach);
   const partial = `{"jsonrpc":"2.0","id":${JSON.stringify(attach.id)},"result":`;
   peer.writeRaw(partial);
@@ -40,5 +38,5 @@ it("partial stdout EOF before process exit retains an uncertain mutation", async
   transport.reportProcessExit(null, "SIGKILL");
   assert.equal(transport.closed, first);
   assert.equal(client.closed, first);
-  assert.equal(peer.log.count("session/attach"), 1, "a lost mutation is never replayed");
+  assert.equal(peer.log.count("thread/resume"), 1, "a lost mutation is never replayed");
 });

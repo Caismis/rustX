@@ -26,7 +26,7 @@
  *   A remote App Server was launched by someone else and already has its own;
  *   accepting them against `--connect` would be a flag that pretends to
  *   configure a server it cannot reach.
- * - **Session settings** (`--workspace`, `--model`): these are `session/create` inputs. A Session's cwd is
+ * - **Session settings** (`--workspace`, `--model`): these are `thread/start` inputs. A Session's cwd is
  *   a Session selection, never the App Server's launch directory, and the two
  *   are never substituted for one another. In remote mode these paths are
  *   resolved by the server, on the server's filesystem.
@@ -47,7 +47,7 @@ export const USAGE = `usage:
               [--runtime-root <dir>] [session options] [routing options]
 
   existing / remote App Server (WebSocket):
-    rustx-tui --connect <ws://host:port> --token-file <path> [--delivery-access-token-file <path>] \\
+    rustx-tui --connect <ws://host:port> --token-file <path> \\
               --workspace <server-absolute-dir> [session options] [routing options]
 
   session options (applied to Sessions this launch creates; paths resolve on the App Server host):
@@ -74,7 +74,6 @@ export type ConnectionMode =
        * File holding the server operator's separate delivery-access
        * credential. Optional: without it `/files` shows metadata only.
        */
-      deliveryAccessTokenFile?: string;
     };
 
 /** Which Session the terminal opens on. Client focus, never server state. */
@@ -87,7 +86,7 @@ export interface SessionRouting {
 
 export interface TuiArguments {
   mode: ConnectionMode;
-  /** `session/create` inputs for Sessions this launch creates. */
+  /** `thread/start` inputs for Sessions this launch creates. */
   sessionSettings: SessionSettings;
   /** Name applied to the Session this launch binds, when supplied. */
   sessionName?: string;
@@ -105,7 +104,6 @@ const VALUE_FLAGS = [
   "--binary",
   "--connect",
   "--token-file",
-  "--delivery-access-token-file",
   "--runtime-root",
   "--workspace",
   "--config",
@@ -230,11 +228,6 @@ function localMode(
       "argument --token-file applies only to --connect; a stdio App Server child needs no transport credential",
     );
   }
-  if (values.has("--delivery-access-token-file")) {
-    throw new ArgumentError(
-      "argument --delivery-access-token-file applies only to --connect; this TUI delegates delivery access to the stdio child it owns",
-    );
-  }
   return {
     kind: "local",
     binary,
@@ -267,8 +260,5 @@ function remoteMode(
       "argument --connect requires --token-file; the App Server WebSocket transport admits only credentialed clients",
     );
   }
-  const deliveryAccessTokenFile = values.get("--delivery-access-token-file");
-  return deliveryAccessTokenFile === undefined
-    ? { kind: "remote", endpoint, tokenFile }
-    : { kind: "remote", endpoint, tokenFile, deliveryAccessTokenFile };
+  return { kind: "remote", endpoint, tokenFile };
 }

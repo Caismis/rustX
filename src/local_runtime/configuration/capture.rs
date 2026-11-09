@@ -695,6 +695,9 @@ impl UserConfigManager {
             admitted_agents: subagents.names().into_iter().cloned().collect(),
             admitted_workflows: workflows.enabled_ids().clone(),
             project_files: root_agent_project_files.clone(),
+            delegated_skills: super::super::composition::delegated_skill_selections(
+                &config, &subagents, &workflows,
+            ),
         };
         let main = crate::capabilities::inspect_profile(
             &definitions.iter().collect::<Vec<_>>(),

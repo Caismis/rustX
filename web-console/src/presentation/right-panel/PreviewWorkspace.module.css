@@ -7,8 +7,10 @@
 .panes:not([data-preview-split]) .paneGroup { margin-left: 0; }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
 /* Shared Harness dockkit owns strip/chip geometry; only the native tab hit target and finite scroll gutter are local. */
-.tabs { flex: 1 1 auto; padding-inline-end: 1px; touch-action: pan-x; }
-.tabItem { flex: 0 0 auto; padding: 0; }
+.tabs { flex: 1 1 auto; padding-inline-end: 1px; touch-action: pan-x; container-type: inline-size; }
+/* A focused chip must fit even when the permanent rail and strip controls
+   leave less room than the shared dockkit's preferred chip width. */
+.tabItem { flex: 0 0 auto; padding: 0; min-width: min(80px, 100cqi); max-width: min(170px, 100cqi); }
 .tab { height: 100%; padding: 0 10px; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .tab svg { flex: none; }
 .tab span { overflow: hidden; white-space: nowrap; }

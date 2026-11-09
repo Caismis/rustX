@@ -153,7 +153,7 @@ async fn capability_projection_covers_native_python_and_skills() {
     assert_eq!(skill.id.as_str(), "skill-readme");
     assert!(
         skill.version_id.as_str().starts_with("sha256:"),
-        "the Skill version is the deterministic content hash"
+        "the Skill version is the normalized definition hash"
     );
 
     // No executor, environment path, package-manager, or dependency

@@ -5,7 +5,7 @@ import { boundedSettings } from "./fixture";
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v73';
+import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v76';
 import { findOnAdvanced, openSettingsPage, queryOnAdvanced, settingsReady, SettingsSurface } from './settings-harness';
 import { RpcFailure } from '../src/client/errors';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -167,7 +167,7 @@ it('S5 automatic convergence never replays the write or rewrites an unsaved draf
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   // Convergence is bounded by the versions actually published, never a poll.
   expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(3);
-  expect(s.requests.every(item => !['session/attach', 'session/create', 'turn/start'].includes(item.request.method))).toBe(true);
+  expect(s.requests.every(item => !['thread/resume', 'thread/start', 'inbound/queue'].includes(item.request.method))).toBe(true);
 });
 
 it('S6 a publication arriving during an outstanding convergence read still drives the follow-up read', async () => {

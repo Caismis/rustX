@@ -55,9 +55,8 @@
 //! identities, versions, catalog metadata, and dependency declarations at
 //! candidate-generation time. Package *bodies* are read at use time through
 //! ordinary tool semantics — discovery never loads a `SKILL.md` body into
-//! model context — and an external rewrite is observed only at the next
-//! quiescent re-discovery, which publishes a later generation without
-//! mutating an already admitted one.
+//! model context. Only definition edits publish a later generation at the
+//! existing safe boundary. Bodies and assets remain live Tool inputs.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -65,7 +64,7 @@ use std::path::{Path, PathBuf};
 use crate::runtime::identity::{SkillId, SkillVersionId};
 use crate::skills::dependencies::{DependencyManifest, parse_dependency_map};
 use crate::skills::diagnostics::{ShadowedSkill, SkillDiagnostic, SkillProvenance};
-use crate::skills::identity::inspect_package;
+use crate::skills::identity::definition_version_id;
 use crate::skills::source::{AutomaticSkillRoot, SkillSource};
 use crate::tools::workspace::Workspace;
 
@@ -149,9 +148,8 @@ pub enum SkillPackageError {
         #[serde(skip)]
         detail: String,
     },
-    /// A symlinked package root or a symlink entry inside the package was
-    /// found. Package-internal symlinks are rejected; this is Skill-package
-    /// validation, not a change to normal Workspace semantics.
+    /// A symlinked package root was found. Internal resources are validated
+    /// by the Tool that actually opens them, never by discovery.
     UnsupportedSymlink { path: String },
     /// The canonical package root is not losslessly representable as UTF-8,
     /// so it cannot be published as a model-visible location.
@@ -242,25 +240,17 @@ impl std::error::Error for SkillPackageError {}
 /// One discovered and validated Skill package.
 ///
 /// The package is immutable after discovery: its `SkillVersionId` is
-/// derived from the complete accepted package content, and its dependency
-/// declarations are already parsed and normalized. `root` is canonical and
-/// absolute, and `location` is the model-visible host path of its
+/// derived only from its normalized frontmatter definition, and its dependency
+/// declarations are already parsed and normalized. `location` is the canonical,
+/// absolute model-visible host path of its
 /// `SKILL.md` — see the package root invariant in the module documentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillPackage {
     id: SkillId,
     version_id: SkillVersionId,
-    name: String,
-    description: String,
-    metadata: BTreeMap<String, String>,
-    license: Option<String>,
-    compatibility: Option<String>,
-    allowed_tools: Option<String>,
+    definition: Frontmatter,
     dependencies: DependencyManifest,
-    files: Vec<PathBuf>,
-    root: PathBuf,
     location: String,
-    disable_model_invocation: bool,
     source: SkillSource,
 }
 
@@ -281,7 +271,7 @@ impl SkillPackage {
         &self.id
     }
 
-    /// The content-derived immutable package version identity.
+    /// The normalized frontmatter definition version, independent of body/assets.
     #[must_use]
     pub fn version_id(&self) -> &SkillVersionId {
         &self.version_id
@@ -290,63 +280,45 @@ impl SkillPackage {
     /// The standard validated Skill name.
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.name
+        &self.definition.name
     }
 
     /// The standard validated Skill description.
     #[must_use]
     pub fn description(&self) -> &str {
-        &self.description
+        &self.definition.description
     }
 
     /// The preserved standard `metadata` map (including the rustX
     /// dependency declaration keys).
     #[must_use]
     pub fn metadata(&self) -> &BTreeMap<String, String> {
-        &self.metadata
+        &self.definition.metadata
     }
 
     /// The preserved standard optional `license` field.
     #[must_use]
     pub fn license(&self) -> Option<&str> {
-        self.license.as_deref()
+        self.definition.license.as_deref()
     }
 
     /// The preserved standard optional `compatibility` field.
     #[must_use]
     pub fn compatibility(&self) -> Option<&str> {
-        self.compatibility.as_deref()
+        self.definition.compatibility.as_deref()
     }
 
     /// The preserved standard optional `allowed-tools` field. M6 parses and
     /// preserves it but invents no runtime policy for it.
     #[must_use]
     pub fn allowed_tools(&self) -> Option<&str> {
-        self.allowed_tools.as_deref()
+        self.definition.allowed_tools.as_deref()
     }
 
     /// The parsed and normalized rustX dependency declarations.
     #[must_use]
     pub fn dependencies(&self) -> &DependencyManifest {
         &self.dependencies
-    }
-
-    /// The sorted workspace-relative file paths of the accepted package.
-    #[must_use]
-    pub fn files(&self) -> &[PathBuf] {
-        &self.files
-    }
-
-    /// The canonical absolute host root of this package, as a
-    /// **materialization source** for a separate-process runtime (Issue
-    /// #145).
-    ///
-    /// A consumer of this path
-    /// is copying bytes out of it and must prove the copy still hashes to
-    /// the package's `SkillVersionId`. The path is never an identity.
-    #[must_use]
-    pub fn materialization_root(&self) -> &Path {
-        &self.root
     }
 
     /// The model-visible host path of this package's `SKILL.md`.
@@ -361,7 +333,11 @@ impl SkillPackage {
     /// Whether this validated Skill is omitted from the model catalog.
     #[must_use]
     pub fn disable_model_invocation(&self) -> bool {
-        self.disable_model_invocation
+        self.definition.disable_model_invocation
+    }
+    /// Frozen normalized definition metadata for the configuration Journal.
+    pub(crate) fn definition(&self) -> serde_json::Value {
+        serde_json::to_value(&self.definition).expect("validated Skill definition serializes")
     }
 }
 
@@ -905,6 +881,26 @@ fn collect_collection_entries(path: &Path) -> Result<Vec<(String, PathBuf)>, Str
     Ok(children)
 }
 
+/// Watch the same bounded direct candidate identities discovery enumerates.
+/// Invalid or symlinked collection roots never authorize recursive watching.
+pub(crate) fn candidate_directories(root: &Path) -> Vec<PathBuf> {
+    if !std::fs::symlink_metadata(root)
+        .is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+    {
+        return Vec::new();
+    }
+    collect_collection_entries(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(_, path)| {
+            std::fs::symlink_metadata(&path)
+                .ok()
+                .filter(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+                .map(|_| path)
+        })
+        .collect()
+}
+
 /// Parses, validates, and hashes one Skill package directory.
 #[allow(clippy::too_many_lines)] // Bounded package validation stays in its owner.
 fn discover_package(
@@ -930,19 +926,18 @@ fn discover_package(
             directory: directory_name.to_owned(),
         });
     }
-    let mut files = Vec::new();
-    walk_package_files(root, root, &mut files, &mut 4096)?;
-    let (version_id, header) =
-        inspect_package(root, &files, cancellation).map_err(|detail| SkillPackageError::Io {
-            path: root.display().to_string(),
+    let header = super::frontmatter::read(root, cancellation).map_err(|detail| {
+        SkillPackageError::MalformedFrontmatter {
+            directory: directory_name.to_owned(),
             detail,
-        })?;
+        }
+    })?;
     let markdown_text =
         std::str::from_utf8(&header).map_err(|error| SkillPackageError::MalformedFrontmatter {
             directory: directory_name.to_owned(),
             detail: error.to_string(),
         })?;
-    let frontmatter = parse_frontmatter(markdown_text).map_err(|failure| match failure {
+    let mut frontmatter = parse_frontmatter(markdown_text).map_err(|failure| match failure {
         FrontmatterFailure::Malformed(detail) => SkillPackageError::MalformedFrontmatter {
             directory: directory_name.to_owned(),
             detail,
@@ -992,20 +987,36 @@ fn discover_package(
         }
     })?;
 
+    // Dependency metadata carries JSON, whose formatting/key order is not
+    // definition semantics. Reuse the parsed normalized manifest, not a second parser.
+    for (key, pins) in [
+        (
+            crate::skills::dependencies::PYTHON_DEPENDENCIES_METADATA_KEY,
+            &dependencies.python,
+        ),
+        (
+            crate::skills::dependencies::NODE_DEPENDENCIES_METADATA_KEY,
+            &dependencies.node,
+        ),
+    ] {
+        if frontmatter.metadata.contains_key(key) {
+            frontmatter.metadata.insert(
+                key.to_owned(),
+                serde_json::to_string(pins).expect("normalized dependency pins serialize"),
+            );
+        }
+    }
+    frontmatter.description = description.to_owned();
+    frontmatter.compatibility = frontmatter
+        .compatibility
+        .map(|value| value.trim().to_owned());
+    let version_id = definition_version_id(&frontmatter);
     Ok(SkillPackage {
         id: SkillId::new(directory_name.to_owned()),
         version_id,
-        name: directory_name.to_owned(),
-        description: description.to_owned(),
-        metadata: frontmatter.metadata,
-        license: frontmatter.license,
-        compatibility: frontmatter.compatibility,
-        allowed_tools: frontmatter.allowed_tools,
+        definition: frontmatter,
         dependencies,
-        files,
-        root: root.to_path_buf(),
         location,
-        disable_model_invocation: frontmatter.disable_model_invocation,
         source,
     })
 }
@@ -1022,67 +1033,6 @@ fn published_location(root: &Path, skill_markdown: &Path) -> Result<String, Skil
             path: root.to_string_lossy().into_owned(),
         }
     })
-}
-
-/// Recursively collects every regular file of the package with symlinks
-/// rejected at every level.
-fn walk_package_files(
-    root: &Path,
-    directory: &Path,
-    files: &mut Vec<PathBuf>,
-    remaining: &mut usize,
-) -> Result<(), SkillPackageError> {
-    if directory
-        .strip_prefix(root)
-        .map_or(usize::MAX, |path| path.components().count())
-        > 64
-    {
-        return Err(SkillPackageError::Io {
-            path: directory.display().to_string(),
-            detail: "Skill directory depth exceeds 64".into(),
-        });
-    }
-    let entries = std::fs::read_dir(directory).map_err(|error| SkillPackageError::Io {
-        path: directory.display().to_string(),
-        detail: error.to_string(),
-    })?;
-    let mut paths = Vec::new();
-    for entry in entries {
-        *remaining = remaining
-            .checked_sub(1)
-            .ok_or_else(|| SkillPackageError::Io {
-                path: directory.display().to_string(),
-                detail: "Skill package exceeds 4096 entries".into(),
-            })?;
-        let entry = entry.map_err(|error| SkillPackageError::Io {
-            path: directory.display().to_string(),
-            detail: error.to_string(),
-        })?;
-        paths.push(entry.path());
-    }
-    paths.sort();
-    for path in paths {
-        let file_type =
-            std::fs::symlink_metadata(&path).map_err(|error| SkillPackageError::Io {
-                path: path.display().to_string(),
-                detail: error.to_string(),
-            })?;
-        if file_type.file_type().is_symlink() {
-            return Err(SkillPackageError::UnsupportedSymlink {
-                path: path.display().to_string(),
-            });
-        }
-        if file_type.is_dir() {
-            walk_package_files(root, &path, files, remaining)?;
-        } else if file_type.is_file() {
-            let relative = path.strip_prefix(root).map_err(|_| SkillPackageError::Io {
-                path: path.display().to_string(),
-                detail: "cannot relativize the package file".to_owned(),
-            })?;
-            files.push(relative.to_path_buf());
-        }
-    }
-    Ok(())
 }
 
 /// Validates one Skill name against the Agent Skills naming rules:
@@ -1110,7 +1060,7 @@ pub(crate) fn validate_skill_name(name: &str) -> Result<(), String> {
 }
 
 /// The parsed and shape-validated `SKILL.md` frontmatter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 struct Frontmatter {
     name: String,
     description: String,
@@ -1573,13 +1523,6 @@ mod frontmatter_tests {
         )
         .discover();
         assert_eq!(names(&outcome.packages), vec!["alpha", "middle", "zeta"]);
-        assert_eq!(
-            outcome.packages[1].files(),
-            &[
-                std::path::PathBuf::from("SKILL.md"),
-                std::path::PathBuf::from("references.md")
-            ]
-        );
     }
 
     /// #280 (22): the obsolete rustX-config-relative Skill root is not a

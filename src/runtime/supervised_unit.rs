@@ -150,24 +150,36 @@ pub(crate) fn become_child_subreaper() -> Result<(), String> {
     }
 }
 
-/// The no-op `SIGTERM` handler of the inner supervisor: the unit group
-/// `TERM` must not kill the inner supervisor while the owned child and its
-/// descendants handle it.
+/// The inner supervisor shares the terminal's foreground process group with
+/// owned programs. Terminal signals and group TERM must leave its lifecycle
+/// owner alive while the business program handles or terminates on them.
 ///
 /// A **caught** handler (not `SIG_IGN`) is required: `exec` resets caught
 /// dispositions to the default, so the owned child starts with a default
-/// `SIGTERM` disposition and its own `trap`/signal handlers stay effective.
+/// signal dispositions and its own `trap`/signal handlers stay effective.
 /// An ignored signal would be inherited by the child.
-extern "C" fn ignore_sigterm(_signal: libc::c_int) {}
+extern "C" fn survive_group_signal(_signal: libc::c_int) {}
 
 #[allow(unsafe_code)]
-pub(crate) fn ignore_group_term() -> Result<(), String> {
-    // SAFETY: installing a no-op handler with no pointer payload is a
-    // single scalar libc call; the handler never dereferences anything.
-    let handler = ignore_sigterm as extern "C" fn(libc::c_int) as libc::sighandler_t;
-    let result = unsafe { libc::signal(libc::SIGTERM, handler) };
-    if result == libc::SIG_ERR {
-        return Err(std::io::Error::last_os_error().to_string());
+pub(crate) fn protect_supervisor_signals() -> Result<(), String> {
+    use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, sigaction};
+    let action = SigAction::new(
+        SigHandler::Handler(survive_group_signal),
+        SaFlags::SA_RESTART,
+        SigSet::empty(),
+    );
+    for signal in [
+        Signal::SIGTERM,
+        Signal::SIGINT,
+        Signal::SIGQUIT,
+        Signal::SIGHUP,
+        Signal::SIGTSTP,
+        Signal::SIGTTIN,
+        Signal::SIGTTOU,
+    ] {
+        // SAFETY: installed in the dedicated single-threaded supervisor before
+        // spawn. The caught handler performs no operations or memory access.
+        unsafe { sigaction(signal, &action) }.map_err(|error| error.to_string())?;
     }
     Ok(())
 }

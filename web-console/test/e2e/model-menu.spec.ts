@@ -32,7 +32,7 @@ for (const width of [1440, 390]) test(`DSH model and effort panes retain layout 
  await expect(page).toHaveTitle('rustX');
  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
  await page.locator('button[data-session-id=A]').click();
- await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+ await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
  const trigger = page.locator('[data-model-select]');
  await expect(trigger).toBeEnabled();
  if (width < 600) {
@@ -94,7 +94,7 @@ for (const width of [1440, 390]) test(`DSH model and effort panes retain layout 
  };
  await switchHeld('effort', 'low', 'high'); await expect(trigger).toContainText('low');
  await switchHeld('model', 'fixture/second', 'fixture/native'); await expect(trigger).toContainText('fixture/second');
- expect(await page.evaluate(() => (window as any).startupFixture.requests().filter((r: any) => r.method === 'turn/start').length)).toBe(0);
+ expect(await page.evaluate(() => (window as any).startupFixture.requests().filter((r: any) => r.method === 'inbound/queue').length)).toBe(0);
  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
  await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });

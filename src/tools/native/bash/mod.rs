@@ -221,7 +221,8 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<BashInput>(
         "tool-bash",
         NAME,
-        "Run one non-interactive /bin/bash command inside the workspace. No shell state \
+        "Run one non-interactive /bin/bash command inside the workspace. Provide description \
+             before command: a concise explanation of why you are running it, shown in the UI. No shell state \
              survives between calls. The optional timeout is in seconds. A background execution \
              immediately returns its live output file's absolute path; use Read or Grep on it to \
              inspect the output while the command runs.",

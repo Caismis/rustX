@@ -318,7 +318,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         call(
             &browser,
             4100,
-            Method::TurnStart {
+            Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("request-A"),
             },
@@ -634,9 +634,10 @@ pub(crate) async fn delivery_access_boundary_scenario() {
         else {
             panic!("initialized")
         };
-        assert!(!capabilities.delivery_access);
+        assert!(capabilities.delivery_access);
         let authority = tokio_util::sync::CancellationToken::new();
-        let trusted = AppServerConnection::with_delivery_access(f.host.clone(), authority.clone());
+        let trusted =
+            AppServerConnection::with_connection_lifetime(f.host.clone(), authority.clone());
         let MethodResult::Initialized { capabilities, .. } =
             initialize_as(&trusted, "anything").await
         else {
@@ -664,7 +665,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             )
             .await,
             ErrorData::SessionFileRead {
-                reason: FileFailure::Unauthorized
+                reason: FileFailure::Unavailable
             }
         );
         let completion = AttemptCompletion::capture(&f, &target);
@@ -673,6 +674,7 @@ pub(crate) async fn delivery_access_boundary_scenario() {
             &ordinary,
             4300,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("request-A"),
             },
@@ -697,9 +699,10 @@ pub(crate) async fn delivery_access_boundary_scenario() {
         let tool = checkpoint_delivery_metadata(&ordinary, &target, &snapshot).await;
         let file = tool.result.deliveries[0].clone();
         let requests = f.provider.request_bodies().len();
-        // Every exact coordinate, the exact cwd and a forged trusted client
-        // name still grant an ordinary authenticated connection nothing.
-        for method in [
+        // Ordinary authenticated clients have the same native file eligibility.
+        let returned = call(
+            &ordinary,
+            4308,
             Method::DeliveryRead {
                 target: target.clone(),
                 locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
@@ -707,21 +710,9 @@ pub(crate) async fn delivery_access_boundary_scenario() {
                 },
                 delivery_index: 0,
             },
-            Method::DeliveryLocate {
-                target: target.clone(),
-                locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
-                    message_id: tool.id.clone(),
-                },
-                delivery_index: 0,
-            },
-        ] {
-            assert_eq!(
-                rejected(&ordinary, method).await,
-                ErrorData::SessionFileRead {
-                    reason: FileFailure::Unauthorized
-                }
-            );
-        }
+        )
+        .await;
+        assert!(matches!(returned, MethodResult::SessionFileBytes { .. }));
         // Access never reaches another connection's attachment.
         assert_eq!(
             rejected(
@@ -1189,6 +1180,7 @@ pub(in super::super) async fn committed_delivery(
         &ordinary,
         4300,
         Method::TurnStart {
+            input_id: uuid::Uuid::new_v4().to_string(),
             target: target.clone(),
             content: wire_text("request-A"),
         },
@@ -1300,7 +1292,7 @@ pub(in super::super) fn failed_with(response: &Response, expected: &ErrorData) {
 /// response, publication, physical settlement and permit restoration are
 /// checked separately.
 pub(crate) async fn delivery_cancellation_scenario() {
-    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
+    use crate::tools::session_files::SESSION_FILE_MAX_READS;
     bounded(async {
         let mut phases = FixturePhase::new("request-scoped delivery cancellation");
         phases.enter("fixture construction");
@@ -1309,7 +1301,7 @@ pub(crate) async fn delivery_cancellation_scenario() {
         let tool = committed_delivery(&f).await;
         phases.enter("initialize trusted connection");
         let authority = tokio_util::sync::CancellationToken::new();
-        let trusted = AppServerConnection::with_delivery_access(f.host.clone(), authority);
+        let trusted = AppServerConnection::with_connection_lifetime(f.host.clone(), authority);
         initialize(&trusted).await;
         let own = attach(&trusted, &f, 0).await;
         let read = |id| delivery_request(id, &own, &tool, false);
@@ -1387,9 +1379,9 @@ pub(crate) async fn delivery_cancellation_scenario() {
         assert!(!cancel_delivery(&trusted, 404).await, "unknown id");
 
         // 6. Concurrent requests: cancelling one never touches the other,
-        // nor can another connection (or an ordinary one) name it.
+        // nor can another ordinary connection name it.
         phases.enter("independent request ownership");
-        let other = AppServerConnection::with_delivery_access(
+        let other = AppServerConnection::with_connection_lifetime(
             f.host.clone(),
             tokio_util::sync::CancellationToken::new(),
         );
@@ -1407,17 +1399,9 @@ pub(crate) async fn delivery_cancellation_scenario() {
             !cancel_delivery(&other, 14).await,
             "another connection's id"
         );
-        assert_eq!(
-            rejected(
-                &ordinary,
-                Method::DeliveryCancel {
-                    request_id: RequestId::Integer(14)
-                }
-            )
-            .await,
-            ErrorData::SessionFileRead {
-                reason: SessionFileReadFailure::Unauthorized
-            }
+        assert!(
+            !cancel_delivery(&ordinary, 14).await,
+            "request ownership stays connection-local"
         );
         let sibling = trusted.reply(read(15)).await;
         assert!(cancel_delivery(&trusted, 14).await);
@@ -1471,6 +1455,7 @@ fn delivery_capacity_parties(target: &AttachmentTarget) -> Vec<Request> {
         jsonrpc: JsonRpcVersion::V2,
         id: RequestId::Integer(90),
         call: Method::TurnCancel {
+            turn_id: crate::runtime::identity::AttemptId::new("obsolete-turn"),
             target: target.clone(),
         },
     });
@@ -1521,7 +1506,7 @@ pub(crate) async fn delivery_cancellation_capacity_scenario() {
         phases.enter("commit present delivery");
         let tool = committed_delivery(&f).await;
         phases.enter("initialize and attach transport");
-        let connection = std::sync::Arc::new(AppServerConnection::with_delivery_access(
+        let connection = std::sync::Arc::new(AppServerConnection::with_connection_lifetime(
             f.host.clone(),
             tokio_util::sync::CancellationToken::new(),
         ));
@@ -1705,7 +1690,7 @@ pub(crate) async fn delivery_publication_revocation_scenario() {
         ] {
             let authority = tokio_util::sync::CancellationToken::new();
             let trusted =
-                AppServerConnection::with_delivery_access(f.host.clone(), authority.clone());
+                AppServerConnection::with_connection_lifetime(f.host.clone(), authority.clone());
             initialize(&trusted).await;
             let own = attach(&trusted, &f, 0).await;
             let committed = trusted

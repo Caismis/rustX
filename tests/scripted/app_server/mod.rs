@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_lines)]
 #[path = "../../support/app_server_conformance.rs"]
 mod app_server_conformance;
+mod authentication;
 mod compaction_ownership;
 mod configuration;
 mod inbound_model;
@@ -124,6 +125,9 @@ pub(super) struct Probe {
     pub(super) before_catalog_publication: AsyncGate,
     pub(super) idle_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) idle_after_claim: Arc<crate::runtime::conversation_runtime::Gate>,
+    pub(super) archive_before_idle: Arc<crate::runtime::conversation_runtime::Gate>,
+    pub(super) archive_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
+    pub(super) status_before_recovery: AsyncGate,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
     pub(super) catalog_observer_start:
         Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
@@ -132,6 +136,7 @@ pub(super) struct Probe {
     pub(super) compositions: AtomicUsize,
     pub(super) acquisitions: AtomicUsize,
     pub(super) before_allocation: AsyncGate,
+    pub(super) before_load_registration: AsyncGate,
     pub(super) before_submission_registration: AsyncGate,
     pub(super) after_writer_transfer: AsyncGate,
     pub(super) joined: watch::Sender<usize>,
@@ -171,12 +176,16 @@ impl Default for Probe {
             before_catalog_publication: AsyncGate::default(),
             idle_before_claim: Arc::default(),
             idle_after_claim: Arc::default(),
+            archive_before_idle: Arc::default(),
+            archive_before_claim: Arc::default(),
+            status_before_recovery: AsyncGate::default(),
             activation: Mutex::new(None),
             catalog_observer_start: Mutex::new(None),
             initialization_admission: Mutex::new(None),
             compositions: AtomicUsize::new(0),
             acquisitions: AtomicUsize::new(0),
             before_allocation: AsyncGate::default(),
+            before_load_registration: AsyncGate::default(),
             before_submission_registration: AsyncGate::default(),
             after_writer_transfer: AsyncGate::default(),
             joined: watch::channel(0).0,

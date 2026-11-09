@@ -6,7 +6,7 @@ import { join, dirname, resolve } from 'node:path';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { describe, it, expect } from 'vitest';
 import { runMacOfficeSandbox } from '../host/documents/office-macos';
-import { convertOffice } from '../host/documents/converter';
+import { OfficeConverter } from '../host/documents/converter';
 
 describe.skipIf(process.platform !== 'darwin')('real macOS engine and Seatbelt boundary', () => {
   it('denies outside content, network and inherited Host secrets', async () => {
@@ -54,7 +54,9 @@ process.stdout.write(JSON.stringify({denied,network,secret:process.env.RUSTX_OFF
       archive['word/document.xml']=strToU8(strFromU8(archive['word/document.xml']).replace('rustX document preview','rustX 中文文档预览'));
       bytes=Buffer.from(zipSync(archive));
     }
-    const pdf=await convertOffice(bytes,extension,new AbortController().signal);
+    const converter = new OfficeConverter();
+    let pdf: Buffer;
+    try { pdf = await converter.render(bytes,extension,new AbortController().signal); } finally { await converter.dispose(); }
     expect(pdf.subarray(0,5).toString()).toBe('%PDF-');
     expect(pdf.length).toBeGreaterThan(1000);
     const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');

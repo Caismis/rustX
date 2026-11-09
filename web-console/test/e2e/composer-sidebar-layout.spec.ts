@@ -100,7 +100,7 @@ for (const locale of ['en', 'zh']) test(`composer follows its pane width with bo
   await page.locator('[data-composer-seat]:visible').screenshot({ path: `/tmp/rustx-stats-sidebar-${locale}.png` });
   await page.getByRole('button', { name: locale === 'zh' ? '收起侧边栏' : 'Collapse Sidebar', exact: true }).click();
   await oneRow();
-  await page.getByRole('button', { name: locale === 'zh' ? '打开侧边栏' : 'Expand Sidebar', exact: true }).click();
+  await page.getByRole('button', { name: locale === 'zh' ? '主页' : 'Home', exact: true }).click();
   await oneRow();
   // A multiline draft reserves natural space above the sticky seat.
   await input.fill('A growing draft\n'.repeat(8));

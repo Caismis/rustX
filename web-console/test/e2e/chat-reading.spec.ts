@@ -3,13 +3,13 @@ const fixture = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/
 for (const width of [1440, 390]) test(`switching Chat after frame callbacks positions the first paint at ${width}px`, async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(fixture);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('thread/resume'); f.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
   await expect(page.getByText(/^Saved message 19:/)).toBeAttached();
   if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   await page.setViewportSize({ width, height: 900 });
   for (const id of ['B', 'A', 'B', 'A', 'B', 'A']) {
-    const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+    const expand = page.getByRole('button', { name: 'Home', exact: true });
     if (await expand.isVisible()) await expand.click();
     await expect(page.locator(`button[data-session-id="${id}"]`)).toBeAttached();
     // A navigation can commit after this frame's animation callbacks. Inspect
@@ -49,7 +49,7 @@ for (const width of [1440, 390]) test(`opening Chat preserves history through it
     observer.observe(port, { childList: true, subtree: true });
     (window as any).stopOpeningObserver = () => observer.disconnect();
   });
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   await expect.poll(() => page.evaluate(() => (window as any).startupFixture.observation('A').state)).toBe('checkpointLoading');
   await expect(first).toBeAttached();
   await page.evaluate(() => (window as any).startupFixture.release('session/checkpoint'));
@@ -70,7 +70,7 @@ for (const width of [1440, 390]) test(`Harness follow threshold and detached Cha
   await page.goto(fixture);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
   await page.locator('button[data-session-id=A]').click();
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
   if (width < 600) await page.getByRole('button', { name: 'Collapse Sidebar', exact: true }).click();
   await page.setViewportSize({ width, height: 900 });
   const viewport = page.locator('[data-conversation-scroll]').first();

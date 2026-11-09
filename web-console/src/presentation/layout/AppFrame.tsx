@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { computeColumns, SIDEBAR_DEFAULT, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_MIN, SIDEBAR_MAX, clampWidth } from './columns';
+import { computeColumns, SIDEBAR_DEFAULT, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_MIN, SIDEBAR_MAX, PRIMARY_RAIL_WIDTH, clampWidth } from './columns';
 import css from './AppFrame.module.css';
 export interface SidebarGeometry { overlay: boolean; collapsed: boolean; width: number; toggleSidebar: () => void; dismissSidebar: () => void }
 function DragHandle(props: { side: 'sidebar' | 'rightbar'; left: number; onStart: () => void; onDrag: (dx: number) => void; onEnd: () => void }) {
@@ -66,9 +66,14 @@ function DragHandle(props: { side: 'sidebar' | 'rightbar'; left: number; onStart
 }
 
 
-/** Harness measured three-column shell; every state here is disposable geometry. */
-export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, overlay, dismissSidebarLabel, onSidebarDismiss, sidebarPublication }: {
-  dismissSidebarLabel: string;
+export interface SidebarPreference { width: number; collapsed: boolean }
+
+/** Permanent primary rail, optional Home sidebar, content and retained workbench. */
+export function AppFrame({ primary, home = true, initialSidebarPreference, onSidebarPreferenceChange, sidebar, children, rightPanel, rightOpen = false, overlay, dismissSidebarLabel, onSidebarDismiss, sidebarPublication }: {
+  primary: (geometry: { sidebarExpanded: boolean; expandSidebar: () => void }) => ReactNode;
+  home?: boolean; dismissSidebarLabel: string;
+  initialSidebarPreference?: Partial<SidebarPreference>;
+  onSidebarPreferenceChange?: (value: SidebarPreference) => void;
   sidebarPublication?: { sidebar: boolean };
   /** User/breakpoint retirement of an overlay gesture; never native lifecycle work. */
   onSidebarDismiss?: () => void;
@@ -77,12 +82,17 @@ export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, ove
   rightOpen?: boolean; overlay?: ReactNode;
 }) {
   const frameRef = useRef<HTMLDivElement>(null);
+  const primaryRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState(() => window.innerWidth);
-  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT);
+  const [preference, setPreference] = useState<SidebarPreference>(() => ({
+    width: typeof initialSidebarPreference?.width === 'number' && Number.isFinite(initialSidebarPreference.width) ? clampWidth(initialSidebarPreference.width, SIDEBAR_MIN, SIDEBAR_MAX) : SIDEBAR_DEFAULT,
+    collapsed: initialSidebarPreference?.collapsed === true,
+  }));
   const [narrowExpanded, setNarrowExpanded] = useState(false);
   const [rightWidth, setRightWidth] = useState<number>();
   const [dragging, setDragging] = useState(false);
+  useEffect(() => { onSidebarPreferenceChange?.(preference); }, [preference, onSidebarPreferenceChange]);
   useLayoutEffect(() => {
     const element = frameRef.current!;
     const measure = () => { const width = element.getBoundingClientRect().width; if (width > 0) setViewport(width); };
@@ -93,48 +103,47 @@ export function AppFrame({ sidebar, children, rightPanel, rightOpen = false, ove
   }, []);
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE;
   const [previousNarrow, setPreviousNarrow] = useState(narrow);
-  if (previousNarrow !== narrow) {
-    setPreviousNarrow(narrow);
-    setNarrowExpanded(false);
-  }
-  const collapsed = narrow ? !narrowExpanded : sidebarWidth === 0;
-  const floatingSidebar = narrow && !collapsed;
-  const preference = collapsed ? 0 : sidebarWidth || SIDEBAR_DEFAULT;
-  const normal = computeColumns(viewport, narrow ? 0 : preference, rightWidth ?? viewport * .45);
-  const cols = computeColumns(viewport, narrow ? 0 : preference, rightOpen ? rightWidth ?? viewport * .45 : 0);
-  const visibleSidebarWidth = floatingSidebar ? Math.min(preference, viewport - 48) : cols.sidebar;
+  if (previousNarrow !== narrow) { setPreviousNarrow(narrow); setNarrowExpanded(false); }
+  const collapsed = narrow ? !narrowExpanded : preference.collapsed;
+  const expanded = home && !collapsed;
+  const floatingSidebar = expanded && narrow;
+  const normal = computeColumns(viewport, expanded && !narrow ? preference.width : 0, rightWidth ?? viewport * .45);
+  const cols = computeColumns(viewport, expanded && !narrow ? preference.width : 0, home && rightOpen ? rightWidth ?? viewport * .45 : 0);
+  const visibleSidebarWidth = narrow ? Math.min(preference.width, viewport - PRIMARY_RAIL_WIDTH) : preference.width;
   const base = useRef(0);
   const wasFloating = useRef(false);
   useLayoutEffect(() => {
     if (wasFloating.current && !narrow) onSidebarDismiss?.();
-    if (floatingSidebar || wasFloating.current) {
-      const toggle = sidebarRef.current?.querySelector<HTMLElement>('[data-sidebar-toggle]');
-      (toggle ?? sidebarRef.current)?.focus();
-    }
+    if (floatingSidebar) sidebarRef.current?.querySelector<HTMLElement>('[data-sidebar-toggle]')?.focus();
+    else if (wasFloating.current && home) primaryRef.current?.querySelector<HTMLElement>('[data-destination="home"]')?.focus();
     wasFloating.current = floatingSidebar;
-  }, [floatingSidebar, narrow, onSidebarDismiss]);
-  // Successful navigation closes presentation without revoking its own commit.
+  }, [floatingSidebar, narrow, home, onSidebarDismiss]);
+  // Page switches and successful publication close only the overlay geometry.
+  useLayoutEffect(() => { if (!home || sidebarPublication?.sidebar) setNarrowExpanded(false); }, [home, sidebarPublication]);
   const dismissSidebar = () => setNarrowExpanded(false);
-  useLayoutEffect(() => { if (sidebarPublication?.sidebar) setNarrowExpanded(false); }, [sidebarPublication]);
   const userDismissSidebar = () => { onSidebarDismiss?.(); dismissSidebar(); };
+  const expandSidebar = () => { if (narrow) setNarrowExpanded(true); else setPreference(value => ({ ...value, collapsed: false })); };
   const toggleSidebar = () => {
-    // The labelled gesture keeps its meaning if layout changes before dispatch.
-    if (narrow) { if (floatingSidebar) userDismissSidebar(); else setNarrowExpanded(true); }
-    else setSidebarWidth(collapsed ? SIDEBAR_DEFAULT : 0);
+    if (narrow) { if (floatingSidebar) userDismissSidebar(); else expandSidebar(); }
+    else {
+      if (!collapsed) primaryRef.current?.querySelector<HTMLElement>('[data-destination="home"]')?.focus({ preventScroll: true });
+      setPreference(value => ({ ...value, collapsed: !value.collapsed }));
+    }
   };
-  return <div ref={frameRef} className={css.frame} data-harness-frame
+  return <div ref={frameRef} className={css.frame} data-harness-frame data-primary-page={home ? 'home' : 'page'}
     data-sidebar-overlay={floatingSidebar || undefined}
-    onKeyDown={event => { if (floatingSidebar && event.key === 'Escape' && !event.defaultPrevented && sidebarRef.current?.contains(event.target as Node)) { event.preventDefault(); userDismissSidebar(); } }}
-    data-sidebar-collapsed={collapsed || undefined} data-rightbar-collapsed={cols.rightbar === 0 || undefined}
-    data-dragging={dragging || undefined} style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px` }}>
-    <div ref={sidebarRef} tabIndex={-1} className={css.sidebarCol} style={{ width: visibleSidebarWidth }}>{sidebar({ overlay: floatingSidebar, collapsed, width: visibleSidebarWidth, toggleSidebar, dismissSidebar })}</div>
+    onKeyDown={event => { if (floatingSidebar && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); userDismissSidebar(); } }}
+    data-sidebar-collapsed={!expanded || undefined} data-rightbar-collapsed={cols.rightbar === 0 || undefined}
+    data-dragging={dragging || undefined} style={{ gridTemplateColumns: `${cols.primary}px ${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px` }}>
+    <div ref={primaryRef} className={css.primaryCol}>{primary({ sidebarExpanded: expanded, expandSidebar })}</div>
+    <div ref={sidebarRef} id="home-sidebar" className={css.sidebarCol} hidden={!expanded} style={{ width: visibleSidebarWidth }}>{sidebar({ overlay: floatingSidebar, collapsed: !expanded, width: visibleSidebarWidth, toggleSidebar, dismissSidebar })}</div>
     <main className={css.centerCol} inert={floatingSidebar}>{children}</main>
-    <div className={css.rightbarCol} data-rightbar-col inert={floatingSidebar}>{rightPanel?.({ width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}</div>
+    <div className={css.rightbarCol} data-rightbar-col hidden={!home} inert={floatingSidebar || !home}>{rightPanel?.({ width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}</div>
     {floatingSidebar && <button type="button" className={css.sidebarBackdrop} tabIndex={-1} aria-label={dismissSidebarLabel} onClick={userDismissSidebar} />}
     <div className={css.overlayLayer} data-shell-overlay>{overlay}</div>
-    {!collapsed && !narrow && <DragHandle side="sidebar" left={cols.sidebar} onStart={() => { base.current = cols.sidebar; setDragging(true); }}
-      onDrag={dx => setSidebarWidth(clampWidth(base.current + dx, SIDEBAR_MIN, SIDEBAR_MAX))} onEnd={() => setDragging(false)} />}
-    {rightOpen && normal.rightbar > 0 && <DragHandle side="rightbar" left={viewport - normal.rightbar} onStart={() => { base.current = normal.rightbar; setDragging(true); }}
+    {expanded && !narrow && <DragHandle side="sidebar" left={cols.primary + cols.sidebar} onStart={() => { base.current = cols.sidebar; setDragging(true); }}
+      onDrag={dx => setPreference(value => ({ ...value, width: clampWidth(base.current + dx, SIDEBAR_MIN, SIDEBAR_MAX) }))} onEnd={() => setDragging(false)} />}
+    {home && rightOpen && normal.rightbar > 0 && <DragHandle side="rightbar" left={viewport - normal.rightbar} onStart={() => { base.current = normal.rightbar; setDragging(true); }}
       onDrag={dx => setRightWidth(base.current - dx)} onEnd={() => setDragging(false)} />}
   </div>;
 }

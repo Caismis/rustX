@@ -1,9 +1,10 @@
 // @vitest-environment node
 import { EventEmitter } from 'node:events';
-import { afterEach, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 const boundary = vi.hoisted(() => ({ create: vi.fn() }));
 vi.mock('node:worker_threads', () => ({ Worker: class { constructor(...args: unknown[]) { return boundary.create(...args); } } }));
-import { deriveDocument } from '../host/documents/operation';
+vi.mock('../host/documents/converter', () => ({ OfficeConverter: class { warm = async () => {}; render = vi.fn(); dispose = async () => {}; } }));
+import { OfficeDocuments } from '../host/documents/operation';
 import type { DocumentRequest } from '../shared/documents.ts';
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 afterEach(() => { boundary.create.mockReset(); vi.useRealTimers(); });
@@ -15,7 +16,7 @@ it.each(['cancel', 'timeout', 'failure'] as const)('parser %s retains settlement
   const bytes = Buffer.from('bounded source'), signal = new AbortController();
   const request: DocumentRequest = { extension: 'docx', target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: '1' }, source: { kind: 'artifact', artifact_id: 'id' } };
   let settled = false;
-  const result = deriveDocument(request, async () => ({ data: Uint8Array.from(bytes) }), signal.signal).finally(() => { settled = true; });
+  const result = documents.deriveDocument(request, async () => ({ data: Uint8Array.from(bytes) }), signal.signal).finally(() => { settled = true; });
   const rejected = expect(result).rejects.toThrow(mode === 'timeout' ? 'parser_timeout' : mode === 'failure' ? 'parser_failure' : 'obsolete');
   await entered.promise;
   if (mode === 'cancel') signal.abort();
@@ -29,7 +30,11 @@ it.each(['cancel', 'timeout', 'failure'] as const)('parser %s retains settlement
 });
 it('authorization and source budget are checked before any parser worker exists', async () => {
   const request: DocumentRequest = { extension: 'docx', target: { session_id: 's', conversation_id: 'c', attachment_id: 'a', runtime_incarnation: '1' }, source: { kind: 'artifact', artifact_id: 'id' } };
-  await expect(deriveDocument(request, async () => { throw new Error('revoked'); }, new AbortController().signal)).rejects.toThrow('revoked');
-  await expect(deriveDocument(request, async () => ({ data: new Uint8Array(256 * 1024 + 1) }), new AbortController().signal)).rejects.toThrow('too_large');
+  await expect(documents.deriveDocument(request, async () => { throw new Error('revoked'); }, new AbortController().signal)).rejects.toThrow('revoked');
+  await expect(documents.deriveDocument(request, async () => ({ data: new Uint8Array(256 * 1024 + 1) }), new AbortController().signal)).rejects.toThrow('too_large');
   expect(boundary.create).not.toHaveBeenCalled();
 });
+
+let documents: OfficeDocuments;
+beforeEach(() => { documents = new OfficeDocuments(); });
+afterEach(async () => { await documents.dispose(); });

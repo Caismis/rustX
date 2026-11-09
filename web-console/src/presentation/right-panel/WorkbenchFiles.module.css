@@ -89,6 +89,7 @@
 .row:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
+.row[aria-current='page'] { background: var(--dsw-alias-interactive-bg-hover-accent); }
 
 /* The folder glyph rides the tertiary ink, as the workspace tree's does (ui-workspace Rows `.slot`). */
 .icon {

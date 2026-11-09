@@ -1,7 +1,7 @@
 //! A real `rustx app-server --listen stdio` parent owning one Session.
 //!
 //! The parent is the product process: its Session is created by the durable
-//! Session owner before launch (as a client would through `session/create`),
+//! Session owner before launch (as a client would through `thread/start`),
 //! every control and read goes through the App Server protocol, and shutdown
 //! is the owner's explicit SIGTERM drain — never an inferred meaning of EOF.
 //!
@@ -192,10 +192,17 @@ impl Parent {
             matches!(initialized, Ok(MethodResult::Initialized { .. })),
             "{initialized:?}"
         );
+        let Ok(MethodResult::Session { session }) = self
+            .call(Method::SessionRead {
+                session_id: self.session_id.clone(),
+            })
+            .await
+        else {
+            panic!("Session projection")
+        };
         let attached = self
             .call(Method::SessionAttach {
-                session_id: self.session_id.clone(),
-                node_id: None,
+                thread_id: session.active_conversation_id,
             })
             .await;
         let Ok(MethodResult::Attached { target, .. }) = attached else {
@@ -359,6 +366,7 @@ impl Parent {
         let target = self.target();
         let started = self
             .call(Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target,
                 content: vec![UserInputBlock::Text(rustx::message::content::TextBlock {
                     text: text.to_owned(),
@@ -366,7 +374,7 @@ impl Parent {
             })
             .await;
         assert!(
-            matches!(started, Ok(MethodResult::InboundAccepted { .. })),
+            matches!(started, Ok(MethodResult::TurnInputAccepted { .. })),
             "turn/start must be accepted: {started:?}"
         );
     }

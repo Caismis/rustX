@@ -69,6 +69,96 @@ impl Drop for CreationReservation {
 }
 
 impl SessionRuntimeManager {
+    pub(crate) async fn archive_thread(
+        &self,
+        id: crate::runtime::identity::ConversationId,
+        archived: bool,
+    ) -> Result<super::super::session::threads::Thread, RuntimeManagerError> {
+        let thread = self.sessions.thread(&id).await.map_err(error)?;
+        let candidate = {
+            let registry = self.registry.0.lock().expect("registry mutex");
+            registry.check_session(&thread.session_id, &id)?;
+            match registry.entries.get(&id) {
+                Some(super::Entry::Loaded(resident)) if archived => Some(resident.clone()),
+                None | Some(super::Entry::Loaded(_)) => None,
+                _ => return Err(error("Thread initialization or retirement is in progress")),
+            }
+        };
+        // Composition and Coordinator probes may wait on this Thread. Keep
+        // those waits outside residency publication so other Threads proceed.
+        let candidate = if let Some(resident) = candidate {
+            let native = resident
+                .shutdown_runtime()
+                .ok_or_else(|| error("Thread writer is retiring"))?;
+            #[cfg(test)]
+            self.probe(&id).archive_before_idle.enter();
+            let epoch = native
+                .idle_epoch()
+                .map_err(|reason| error(format!("Thread is busy: {reason:?}")))?;
+            #[cfg(test)]
+            self.probe(&id).archive_before_claim.enter();
+            Some((resident, native, epoch))
+        } else {
+            None
+        };
+        let retirement = {
+            let mut registry = self.registry.0.lock().expect("registry mutex");
+            registry.check_session(&thread.session_id, &id)?;
+            let resident = match (registry.entries.get(&id), candidate.as_ref()) {
+                (Some(super::Entry::Loaded(current)), Some((resident, native, epoch)))
+                    if std::sync::Arc::ptr_eq(current, resident) =>
+                {
+                    if *resident.operations.borrow() != 0 || !native.claim_idle(*epoch) {
+                        return Err(error("Thread admission changed before archive"));
+                    }
+                    Some(resident.clone())
+                }
+                (None, None) => None,
+                (Some(super::Entry::Loaded(_)), None) if !archived => None,
+                _ => return Err(error("Thread residency changed before archive")),
+            };
+            if !registry.retiring_sessions.insert(thread.session_id.clone()) {
+                return Err(error("Session retirement already owns admission"));
+            }
+            resident.map(|resident| {
+                let flight = super::Flight::new();
+                registry.entries.insert(
+                    id.clone(),
+                    super::Entry::Unloading {
+                        _runtime: resident.clone(),
+                        flight: flight.clone(),
+                    },
+                );
+                (resident, flight)
+            })
+        };
+        if let Some((resident, flight)) = retirement {
+            self.spawn_unload(id.clone(), resident, flight.clone(), None);
+            if let super::Outcome::RetirementUnproven(failure) = flight.wait().await {
+                return Err(failure);
+            }
+        }
+        let result = self
+            .sessions
+            .update_thread(
+                &id,
+                super::super::session::threads::ThreadUpdate::Archive(archived),
+            )
+            .await;
+        if !result
+            .as_ref()
+            .is_err_and(super::super::session::SessionError::committed)
+        {
+            self.registry
+                .0
+                .lock()
+                .expect("registry mutex")
+                .retiring_sessions
+                .remove(&thread.session_id);
+        }
+        result.map_err(error)
+    }
+    #[cfg(test)]
     pub(crate) async fn create_session(
         &self,
         settings: super::super::session::SessionPersistentState,
@@ -76,26 +166,42 @@ impl SessionRuntimeManager {
         super::super::session_controller::SessionTransitionResult,
         super::super::session::SessionError,
     > {
-        self.create_session_inner(settings, None).await
+        self.create_session_inner(settings, Vec::new(), None).await
+    }
+    pub(crate) async fn create_thread(
+        &self,
+        settings: super::super::session::SessionPersistentState,
+        dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
+    ) -> Result<
+        super::super::session_controller::SessionTransitionResult,
+        super::super::session::SessionError,
+    > {
+        self.create_session_inner(settings, dynamic_tools, None)
+            .await
     }
     pub(crate) async fn create_session_submitted(
         &self,
         settings: super::super::session::SessionPersistentState,
+        dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
         claim: super::super::mcp_drafts::DraftClaim,
     ) -> Result<
         super::super::session_controller::SessionTransitionResult,
         super::super::session::SessionError,
     > {
-        self.create_session_inner(settings, Some(claim)).await
+        self.create_session_inner(settings, dynamic_tools, Some(claim))
+            .await
     }
     async fn create_session_inner(
         &self,
         mut settings: super::super::session::SessionPersistentState,
+        dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
         claim: Option<super::super::mcp_drafts::DraftClaim>,
     ) -> Result<
         super::super::session_controller::SessionTransitionResult,
         super::super::session::SessionError,
     > {
+        crate::tools::host::validate_definitions(&dynamic_tools)
+            .map_err(|detail| super::super::session::SessionError::Catalog { detail })?;
         let mut reservation = claim
             .as_ref()
             .map(|_| CreationReservation::reserve(&self.registry))
@@ -127,7 +233,7 @@ impl SessionRuntimeManager {
         let mut start = false;
         let result = self
             .sessions
-            .create_session_with_binding(settings, Some(capture.clone()), |result| {
+            .create_session_with_binding(settings, dynamic_tools, Some(capture.clone()), |result| {
                 if let (Some(flight), Some(reservation)) = (&flight, &mut reservation) {
                     start = reservation.publish(result, flight);
                 }

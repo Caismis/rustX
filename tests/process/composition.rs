@@ -362,13 +362,7 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
         id: RequestId::new(1),
         protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
-    assert!(
-        matches!(
-            response.error,
-            Some(rustx::runtime_client::RuntimeClientError::AttachmentInUse { .. })
-        ),
-        "{response:?}"
-    );
+    assert!(response.error.is_none(), "{response:?}");
 
     // The model catalog is reachable through the protocol, so a client never
     // reads rustx.toml itself.

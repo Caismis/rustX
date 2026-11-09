@@ -15,11 +15,11 @@ async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner()
         let files = binary_upload(&connection, target.clone(), "picture.png", b"NOT_EAGERLY_INJECTED").await;
         let native = f.load(0).await.unwrap().unwrap().inspect_runtime().unwrap();
         assert!(native.tool_runtime().durable_store().load_canonical().unwrap().is_empty());
-        rejected(&connection, Method::TurnStart { target: other, content: vec![UserInputBlock::Upload(files[0].receipt.clone())] }).await;
+        rejected(&connection, Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(), target: other, content: vec![UserInputBlock::Upload(files[0].receipt.clone())] }).await;
         assert!(native.tool_runtime().durable_store().load_canonical().unwrap().is_empty());
         assert_eq!(std::fs::read(&files[0].path).unwrap(), b"NOT_EAGERLY_INJECTED");
         let body = "request-A\n  exact body  \n";
-        call(&connection, 1002, Method::TurnStart { target: target.clone(), content: vec![UserInputBlock::Upload(files[0].receipt.clone()), UserInputBlock::Text(crate::message::content::TextBlock { text: body.into() })] }).await;
+        call(&connection, 1002, Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(), target: target.clone(), content: vec![UserInputBlock::Upload(files[0].receipt.clone()), UserInputBlock::Text(crate::message::content::TextBlock { text: body.into() })] }).await;
         f.gates[0].wait_entered().await;
         let requests = f.provider.request_bodies();
         assert_eq!(requests.len(), 1, "a text-only provider accepts a workspace image");
@@ -231,6 +231,7 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
         rejected(
             &connection,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Upload(files[0].receipt.clone())],
             },
@@ -251,6 +252,7 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
             &connection,
             1101,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target,
                 content: editor,
             },
@@ -1012,11 +1014,16 @@ async fn native_user_input_receipts_allow_large_collections_and_preserve_authori
                         &connection,
                         if steer {
                             Method::TurnSteer {
+                                input_id: uuid::Uuid::new_v4().to_string(),
+                                expected_turn_id: crate::runtime::identity::AttemptId::new(
+                                    "obsolete-turn",
+                                ),
                                 target: target.clone(),
                                 content,
                             }
                         } else {
                             Method::TurnStart {
+                                input_id: uuid::Uuid::new_v4().to_string(),
                                 target: target.clone(),
                                 content,
                             }
@@ -1072,7 +1079,16 @@ async fn native_user_input_receipts_allow_large_collections_and_preserve_authori
             content.push(UserInputBlock::Text(crate::message::content::TextBlock {
                 text: "request-A".into(),
             }));
-            call(&connection, 9910, Method::TurnStart { target, content }).await;
+            call(
+                &connection,
+                9910,
+                Method::TurnStart {
+                    input_id: uuid::Uuid::new_v4().to_string(),
+                    target,
+                    content,
+                },
+            )
+            .await;
             f.gates[0].wait_entered().await;
             assert_eq!(f.provider.request_bodies().len(), 1);
             connection.close();

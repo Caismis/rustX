@@ -42,12 +42,13 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
             &connection,
             50,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text(&text),
             },
         )
         .await;
-        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply, MethodResult::TurnInputAccepted { .. }));
         f.gates[0].wait_entered().await;
         probe
             .wait_for(|probe| probe.finished)
@@ -109,12 +110,13 @@ async fn the_first_turn_publishes_the_bounded_projection_and_later_turns_never_r
             &connection,
             53,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("a follow-up repaints nothing"),
             },
         )
         .await;
-        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply, MethodResult::TurnInputAccepted { .. }));
         completion.observed(&connection, &target).await;
         {
             let probe = probe.borrow();
@@ -179,12 +181,13 @@ async fn a_projection_published_underneath_a_name_survives_over_the_wire() {
             &connection,
             61,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("named session first subject"),
             },
         )
         .await;
-        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply, MethodResult::TurnInputAccepted { .. }));
         f.gates[0].wait_entered().await;
         probe
             .wait_for(|probe| probe.finished)
@@ -233,12 +236,13 @@ async fn an_agent_sourced_boundary_never_repaints_the_settled_projection() {
             &connection,
             63,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("human root subject"),
             },
         )
         .await;
-        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply, MethodResult::TurnInputAccepted { .. }));
         f.gates[0].wait_entered().await;
         probe
             .wait_for(|probe| probe.finished)
@@ -316,12 +320,13 @@ async fn a_failed_projection_commit_preserves_history_and_repairs_exactly_once()
             &connection,
             65,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("recovered after the fault"),
             },
         )
         .await;
-        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply, MethodResult::TurnInputAccepted { .. }));
         f.gates[0].wait_entered().await;
         gate.parked(1).await;
         activity_published(&f, &target.session_id).await;
@@ -449,12 +454,13 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
             &connection,
             71,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Upload(files[0].receipt.clone())],
             },
         )
         .await;
-        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply, MethodResult::TurnInputAccepted { .. }));
         f.gates[0].wait_entered().await;
         probe
             .wait_for(|probe| probe.finished)
@@ -486,12 +492,13 @@ async fn an_upload_only_first_turn_settles_the_projection_absent_and_never_repai
             &connection,
             73,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("text after the upload"),
             },
         )
         .await;
-        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply, MethodResult::TurnInputAccepted { .. }));
         completion.observed(&connection, &target).await;
         let MethodResult::SessionSummary { summary } = call(
             &connection,
@@ -538,12 +545,13 @@ async fn a_parked_publication_serves_a_null_summary_then_invalidates_it() {
             &connection,
             80,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("live convergence subject"),
             },
         )
         .await;
-        assert!(matches!(reply, MethodResult::InboundAccepted { .. }));
+        assert!(matches!(reply, MethodResult::TurnInputAccepted { .. }));
         // The provider request proves the canonical user boundary committed.
         f.gates[0].wait_entered().await;
         // The publisher has derived its line and is parked before the catalog
@@ -696,8 +704,11 @@ async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
             &connection,
             90,
             Method::SessionAttach {
-                session_id: session.id.clone(),
-                node_id: Some(branch_node.clone()),
+                thread_id: sessions
+                    .read_node(&session.id, &branch_node)
+                    .await
+                    .unwrap()
+                    .conversation_id,
             },
         )
         .await
@@ -785,8 +796,11 @@ async fn cold_loading_a_branch_repairs_the_projection_from_the_session_root() {
             &connection,
             93,
             Method::SessionAttach {
-                session_id: session.id.clone(),
-                node_id: Some(branch_node.clone()),
+                thread_id: sessions
+                    .read_node(&session.id, &branch_node)
+                    .await
+                    .unwrap()
+                    .conversation_id,
             },
         )
         .await

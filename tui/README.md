@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v73. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v76. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -134,10 +134,10 @@ Connect to an externally managed App Server with:
 pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --workspace /srv/project --session SESSION_ID
 ```
 
-Add `--delivery-access-token-file /private/user/delivery-token` when the server
-operator provisioned committed-delivery access for this client (see `/files`).
+Every initialized trusted connection can use committed-delivery APIs (see `/files`).
+The same token file may contain an opaque capability or a host-issued HS256 JWT.
 
-Both modes use App Server protocol v73. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v76. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -145,7 +145,7 @@ reads provider credentials. `--name` names the initial Session.
 
 By default, a launch creates a new Session. `--session ID` selects one explicitly;
 `--resume` browses the durable catalog without loading or attaching a Session.
-Only selecting a row acquires that Session's controller. A selection conflict
+Selecting a row creates this client's independent writable attachment. A native admission refusal
 leaves the picker available; another client's control cannot block browsing.
 An empty initial catalog automatically creates and attaches one Session using the
 launch settings. There is no global active Session or restart-based selection.
@@ -237,12 +237,12 @@ or adopts it.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v73)
-  -> session/create or choose a durable Session
-  -> resolve the exact Session/node; begin session/attach and editable connecting
+  -> initialize (App Server protocol v76)
+  -> thread/start or choose a durable Session
+  -> resolve the exact Session/node; begin thread/resume and editable connecting
        -> first explicit Send records session/submissionIntent
        -> native selected MCP readiness settles under that submission's budget
-  -> session/attach receipt establishes the fresh runtime identity
+  -> thread/resume receipt establishes the fresh runtime identity
   -> session/checkpoint (bounded authoritative cut and cursor)
   -> session/subscribe (receipt accepted before following events)
   -> interactive
@@ -684,8 +684,9 @@ snapshot. The renderer shows the immutable tool identity, mode, reason, and
 validated arguments for Approval, and the bounded questionnaire facts, option
 descriptions, previews, review tab, and client-owned custom row. Every
 response — an Approval decision or one typed whole-questionnaire submission —
-is sent through the same `interaction/respond` path with the exact routed
-`InteractionRef` it was collected for. Neither kind invokes a Tool, mutates
+is a JSON-RPC reply to the live `item/interaction/request`, retaining the exact
+routed `InteractionRef` it was collected for. Snapshot facts supply presentation;
+the current callback identity establishes answer eligibility. Neither kind invokes a Tool, mutates
 arguments, infers an outcome from detach/EOF, or callbacks into the Agent
 Loop.
 
@@ -1292,12 +1293,9 @@ a model request.
   the exact file matters. An Open the opener already received is still reported
   after `/files` closes.
 
-The owned stdio child grants delivery access to this TUI by explicit delegation.
-A remote (`--connect`) App Server grants it only for the operator's separate
-credential, passed with `--delivery-access-token-file <path>`. Without that
-credential, `/files` shows metadata only and reports both actions as unavailable.
-Remote server paths are never opened as local paths. See
-[file delivery](../docs/file-delivery.md#tui-consumption).
+Remote TUI delivery reads use the ordinary authenticated connection. Save writes
+byte-exactly on the client machine. Open remains available only with proven shared
+filesystem identity; a server path is never assumed to be a local client path.
 
 Upload policy distinguishes per-file and per-transfer bounds from per-User-input
 receipt count/byte bounds. `/attach` uses one file per transfer; native

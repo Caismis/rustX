@@ -1,3 +1,4 @@
+import {ServerCallbacks} from '../../protocol/app-server/callbacks.ts';
 import { checkpoint } from './support/fixtures.ts';
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
@@ -48,21 +49,23 @@ function interleavedDraft(uploads: number): UserInputBlock[] {
   return draft;
 }
 
-it('TUI refuses an ambiguous restored edit without turn/start and retains the draft for exact recovery', async (t) => {
+it('TUI refuses an ambiguous restored edit without inbound/queue and retains the draft for exact recovery', async (t) => {
   const draft = interleavedDraft(2);
   const original = structuredClone(draft);
   const turns: UserInputBlock[][] = [];
   const target = { session_id: 'destination', conversation_id: "conv_01900000-0000-7000-8000-000000000002", runtime_incarnation: '1', attachment_id: 'attachment' };
   const client = {
+    callbacks:new ServerCallbacks(async()=>{}),
     closed: undefined,
     onClose: () => () => {},
     onNotification: () => () => {},
     call: async (method: string, params: { content: UserInputBlock[] }) => {
-      if (method === 'session/attach') return {target,configuration_revision:'0',attachment_kind:'controller',observation_source:'live'};
+      if(method==='session/read')return {session:sessionView({id:'destination'})};
+      if (method === 'thread/resume') return {target,configuration_revision:'0',attachment_kind:'writable',observation_source:'live'};
       if(method==='session/checkpoint')return {checkpoint:checkpoint({...snapshot(),conversation_id:target.conversation_id},runtimeCursor(1))};
       if(method==='session/subscribe')return {target,registration_id:'fixture-registration',after_cursor:runtimeCursor(1)};
-      if(method==='session/configuration')return {application:null};
-      assert.equal(method, 'turn/start');
+      if(method==='session/configuration')return {projection:null};
+      assert.equal(method, 'inbound/queue');
       turns.push(params.content);
       return { message_id: 'accepted', inbound_sequence: '1' };
     },
@@ -73,6 +76,9 @@ it('TUI refuses an ambiguous restored edit without turn/start and retains the dr
     client, ownership: 'external',
     attach: async () => session,
     attachment: (id: string) => id === session.sessionId && !session.released && !session.serverClosed ? session : undefined,
+    threadStatus: () => undefined,
+    threadStatusLabel: () => 'Status unavailable',
+    onThreadStatus: () => () => {},
     sourceRepairs: () => [],
     onSourceRepair: () => () => {},
     readSession: async () => sessionView({ id: 'destination' }),
@@ -104,7 +110,7 @@ it('TUI refuses an ambiguous restored edit without turn/start and retains the dr
     const edited = '\n edited text \n';
     editor.setText(edited);
     editor.handleInput('\r');
-    assert.deepEqual(turns, [], 'no turn/start or reordered payload is sent');
+    assert.deepEqual(turns, [], 'no inbound/queue or reordered payload is sent');
     assert.equal(editor.getExpandedText(), edited, 'Pi-cleared editor is restored exactly');
     assert.deepEqual(draft, original, 'all receipts and original text remain intact');
     assert.equal(feedback.at(-1)?.level, 'error');

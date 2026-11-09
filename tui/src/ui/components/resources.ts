@@ -102,7 +102,7 @@ export function renderResourceBanner(
   const groups = new Map<string, string[]>();
   for (const tool of state.capabilities.tools ?? []) {
     const origin = tool.origin;
-    const label = origin === "builtin" ? "Builtin" : "mcp" in origin ? `MCP · ${origin.mcp.server_id}` : `Managed Python · ${origin.managed_python.package}`;
+    const label = origin === "builtin" ? "Builtin" : "host" in origin ? [origin.host.namespace, origin.host.name].filter(Boolean).join("/") : "mcp" in origin ? `MCP · ${origin.mcp.server_id}` : `Managed Python · ${origin.managed_python.package}`;
     const names = groups.get(label) ?? [];
     names.push(tool.name);
     groups.set(label, names);

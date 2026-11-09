@@ -67,7 +67,10 @@ chat_reasoning_replay = "omit"
     /// with the given fixture protocol behavior.
     fn fixture_binding(test_name: &str, environment: BTreeMap<String, String>) -> McpServerBinding {
         let mut environment = environment;
-        environment.insert(fixture::FIXTURE_MODE_ENV.to_owned(), "1".to_owned());
+        environment.insert(
+            fixture::FIXTURE_MODE_ENV.to_owned(),
+            "fixture-mode".to_owned(),
+        );
         McpServerBinding {
             credentials: rustx::credentials::SourceCredentials::default(),
             transport: McpTransportConfig::Stdio {
@@ -315,7 +318,7 @@ chat_reasoning_replay = "omit"
     async fn a_discover_less_server_falls_back_to_the_legacy_initialize_handshake() {
         use rustx::tools::mcp::fixture::legacy;
 
-        if legacy::serve_if_legacy_fixture_mode().await {
+        if legacy::serve_if_legacy_fixture_mode(legacy::LEGACY_FIXTURE_REVISION).await {
             return;
         }
         let workspace_dir = tempfile::tempdir().expect("workspace");
@@ -335,7 +338,10 @@ chat_reasoning_replay = "omit"
                 ),
                 cwd: None,
                 environment: BTreeMap::from([
-                    (legacy::LEGACY_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
+                    (
+                        legacy::LEGACY_FIXTURE_MODE_ENV.to_owned(),
+                        "fixture-mode".to_owned(),
+                    ),
                     (
                         legacy::LEGACY_JOURNAL_ENV.to_owned(),
                         journal.display().to_string(),
@@ -489,7 +495,7 @@ chat_reasoning_replay = "omit"
     async fn a_legacy_server_rejecting_the_probe_with_a_non_modern_error_falls_back() {
         use rustx::tools::mcp::fixture::legacy;
 
-        if legacy::serve_if_legacy_fixture_mode().await {
+        if legacy::serve_if_legacy_fixture_mode(legacy::LEGACY_FIXTURE_REVISION).await {
             return;
         }
         let workspace_dir = tempfile::tempdir().expect("workspace");
@@ -509,7 +515,10 @@ chat_reasoning_replay = "omit"
                 ),
                 cwd: None,
                 environment: BTreeMap::from([
-                    (legacy::LEGACY_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
+                    (
+                        legacy::LEGACY_FIXTURE_MODE_ENV.to_owned(),
+                        "fixture-mode".to_owned(),
+                    ),
                     (
                         legacy::LEGACY_JOURNAL_ENV.to_owned(),
                         journal.display().to_string(),
@@ -583,7 +592,13 @@ chat_reasoning_replay = "omit"
     async fn a_legacy_server_with_no_shared_revision_is_a_compatibility_error() {
         use rustx::tools::mcp::fixture::legacy;
 
-        if legacy::serve_if_legacy_fixture_mode().await {
+        if legacy::serve_if_legacy_fixture_mode(
+            fixture::parse_protocol_versions("1999-01-01")
+                .pop()
+                .unwrap(),
+        )
+        .await
+        {
             return;
         }
         let workspace_dir = tempfile::tempdir().expect("workspace");
@@ -599,13 +614,10 @@ chat_reasoning_replay = "omit"
                     "mcp_runtime::unix_tests::a_legacy_server_with_no_shared_revision_is_a_compatibility_error",
                 ),
                 cwd: None,
-                environment: BTreeMap::from([
-                    (legacy::LEGACY_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
-                    (
-                        legacy::LEGACY_REVISION_ENV.to_owned(),
-                        "1999-01-01".to_owned(),
-                    ),
-                ]),
+                environment: BTreeMap::from([(
+                    legacy::LEGACY_FIXTURE_MODE_ENV.to_owned(),
+                    "fixture-mode".to_owned(),
+                )]),
             },
             policy: ToolInvocationPolicy::default(),
         };
@@ -631,13 +643,18 @@ chat_reasoning_replay = "omit"
     /// compatibility error rather than a generic transport failure.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_server_with_no_shared_revision_fails_with_a_compatibility_error() {
-        if fixture::serve_if_fixture_mode(FixtureServer::from_env()).await {
+        if fixture::serve_if_fixture_mode(FixtureServer {
+            supported_versions: Some(fixture::parse_protocol_versions("1999-01-01")),
+            ..FixtureServer::from_env()
+        })
+        .await
+        {
             return;
         }
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let error = connect(
             "mcp_runtime::unix_tests::a_server_with_no_shared_revision_fails_with_a_compatibility_error",
-            BTreeMap::from([(PROTOCOL_VERSIONS_ENV.to_owned(), "1999-01-01".to_owned())]),
+            BTreeMap::new(),
             &workspace_dir,
         )
         .await
@@ -649,6 +666,123 @@ chat_reasoning_replay = "omit"
             detail.contains("2026-07-28") && detail.contains("1999-01-01"),
             "the failure must name both sides: {detail}"
         );
+    }
+
+    const REVISION_CASE_ENV: &str = "RUSTX_REVISION_REDACTION_CASE";
+    const REVISION_VALUE_ENV: &str = "RUSTX_REVISION_REDACTION_VALUE";
+    const REVISION_PID_ENV: &str = "RUSTX_REVISION_REDACTION_PID";
+    const REVISION_SECRET: &str = "PR533_REVISION_\"SENTINEL\\SECRET";
+
+    async fn serve_revision_redaction_fixture() -> bool {
+        if std::env::var_os(fixture::FIXTURE_MODE_ENV).is_none() {
+            return false;
+        }
+        let value = if std::env::var(REVISION_CASE_ENV).unwrap() == "long" {
+            "UNSUPPORTED_REVISION_".repeat(400)
+        } else {
+            std::env::var(REVISION_VALUE_ENV).unwrap()
+        };
+        std::fs::write(
+            std::env::var(REVISION_PID_ENV).unwrap(),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        let revision = fixture::parse_protocol_versions(&value).pop().unwrap();
+        if fixture::legacy::serve_if_legacy_fixture_mode(revision.clone()).await {
+            return true;
+        }
+        fixture::serve_if_fixture_mode(FixtureServer {
+            supported_versions: Some(vec![revision]),
+            ..FixtureServer::from_env()
+        })
+        .await
+    }
+
+    fn revision_redaction_binding(
+        legacy: bool,
+        case: &str,
+        pid_file: &std::path::Path,
+    ) -> McpServerBinding {
+        let mut environment = BTreeMap::from([
+            (REVISION_CASE_ENV.into(), case.into()),
+            (REVISION_PID_ENV.into(), pid_file.display().to_string()),
+        ]);
+        if legacy {
+            environment.insert(
+                fixture::legacy::LEGACY_FIXTURE_MODE_ENV.into(),
+                "fixture-mode".into(),
+            );
+        }
+        if case == "literal" {
+            environment.insert(REVISION_VALUE_ENV.into(), REVISION_SECRET.into());
+        }
+        let mut binding = fixture_binding(
+            "mcp_runtime::unix_tests::peer_revisions_are_redacted_before_bounded_native_compatibility_diagnostics",
+            environment,
+        );
+        if case == "reference" {
+            binding.credentials = serde_json::from_value(serde_json::json!({
+                "environment":{(REVISION_VALUE_ENV):"$REVISION_REFERENCE"}
+            }))
+            .unwrap();
+            binding
+                .credentials
+                .capture(rustx::credentials::CredentialSnapshot::new([(
+                    "REVISION_REFERENCE".into(),
+                    REVISION_SECRET.into(),
+                )]));
+        }
+        binding
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn peer_revisions_are_redacted_before_bounded_native_compatibility_diagnostics() {
+        if Box::pin(serve_revision_redaction_fixture()).await {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = rustx::tools::Workspace::new(directory.path()).unwrap();
+        for legacy in [false, true] {
+            for case in ["literal", "reference", "long"] {
+                let pid_file = directory.path().join(format!("pid-{legacy}-{case}"));
+                let binding = revision_redaction_binding(legacy, case, &pid_file);
+                let error = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    McpServerRuntime::connect(
+                        &McpServerId::new("revision-redaction"),
+                        &binding,
+                        &workspace,
+                        Arc::new(McpInvalidationState::new()),
+                    ),
+                )
+                .await
+                .expect("bounded native handshake")
+                .expect_err("unsupported peer revision");
+                let McpError::ProtocolCompatibility(detail) = error else {
+                    panic!("compatibility classification: {error:?}")
+                };
+                assert!(detail.len() <= 1024, "{legacy}/{case}: {detail}");
+                for version in rustx::tools::mcp::supported_protocol_versions() {
+                    assert!(
+                        detail.contains(version.as_str()),
+                        "native revision lost: {detail}"
+                    );
+                }
+                if case == "long" {
+                    assert!(detail.contains("UNSUPPORTED_REVISION_"), "{detail}");
+                } else {
+                    assert!(detail.contains("<redacted>"), "{detail}");
+                    assert!(!detail.contains("PR533_REVISION_"), "{detail}");
+                    assert!(!detail.contains("SENTINEL"), "{detail}");
+                }
+                let pid = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+                assert_eq!(
+                    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
+                    Err(nix::errno::Errno::ESRCH),
+                    "native stdio peer must be physically reaped",
+                );
+            }
+        }
     }
 
     /// rustX offers every revision the resolved rmcp build knows, newest

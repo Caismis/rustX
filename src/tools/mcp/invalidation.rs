@@ -23,8 +23,8 @@ use rmcp::model::{ServerNotification, SubscriptionFilter};
 
 use crate::runtime::identity::McpServerId;
 
+use super::McpError;
 use super::runtime::McpServerRuntime;
-use super::{McpError, bound_error};
 
 /// The one `tools/list_changed` admission, invalidation, and notification
 /// implementation of a connection generation.
@@ -216,7 +216,9 @@ impl McpServerRuntime {
             .peer
             .listen(SubscriptionFilter::builder().tools_list_changed().build())
             .await
-            .map_err(|error| McpError::Discovery(bound_error(&error.to_string())))?;
+            .map_err(|error| {
+                McpError::Discovery(super::diagnostics::service_error(&error, &self.credentials))
+            })?;
         let sink = self.tool_list_changed_sink();
         let task = tokio::spawn(async move {
             while let Ok(Some(notification)) = subscription.next().await {
