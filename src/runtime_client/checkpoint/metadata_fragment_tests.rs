@@ -38,8 +38,8 @@ fn metadata() -> ProjectionMetadata {
             domain_revisions: crate::observation::metadata::MetadataFragment::default(),
             collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         },
-        collections: Vec::new(),
-        content: Vec::new(),
+        collections: Default::default(),
+        content: Default::default(),
     }
 }
 fn encoded<T: Serialize + schemars::JsonSchema>(value: &T) -> serde_json::Result<Vec<u8>> {
@@ -111,10 +111,10 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
         let mut content = binding();
         content.path = vec![path.into()];
         content.content_ref.content_revision = revision;
-        value.content.push(content.into());
+        Arc::make_mut(&mut value.content).push(content.into());
     }
     for domain in ["z", "a", "a"] {
-        value.collections.push(
+        Arc::make_mut(&mut value.collections).push(
             CollectionFrontier {
                 domain: domain.into(),
                 revision: 1,
@@ -147,8 +147,8 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
         prepared.sort_into(&mut repeated);
         let mut expected = original.clone();
         expected.read_cut.revision = revision;
-        expected.content.sort_by(|a, b| a.path.cmp(&b.path));
-        expected.collections.sort_by(|a, b| a.domain.cmp(&b.domain));
+        Arc::make_mut(&mut expected.content).sort_by(|a, b| a.path.cmp(&b.path));
+        Arc::make_mut(&mut expected.collections).sort_by(|a, b| a.domain.cmp(&b.domain));
         assert_eq!(
             serde_json::to_vec(&repeated).unwrap(),
             serde_json::to_vec(&expected).unwrap()
@@ -162,7 +162,7 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
     assert_eq!(metadata_fragment::take_array_work(), [0, 0, 2]);
 
     let mut moved = original.clone();
-    moved.content.swap(1, 2);
+    Arc::make_mut(&mut moved.content).swap(1, 2);
     cache.prepare(&moved).sort_into(&mut moved);
     assert_eq!(metadata_fragment::take_array_work(), [1, 1, 1]);
     assert_eq!(
@@ -177,7 +177,7 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
     cache.prepare(&original);
     metadata_fragment::take_array_work();
     let mut new_owner = original.clone();
-    new_owner.content[0] = new_owner.content[0].clone().into_owned().into();
+    Arc::make_mut(&mut new_owner.content)[0] = new_owner.content[0].clone().into_owned().into();
     cache.prepare(&new_owner).sort_into(&mut new_owner);
     assert_eq!(metadata_fragment::take_array_work(), [1, 1, 1]);
     assert_eq!(encoded(&new_owner).unwrap(), encoded(&value).unwrap());
@@ -193,13 +193,13 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
 fn metadata_array_cache_invalidates_changed_authority_without_changing_old_cut() {
     let cache = metadata_fragment::MetadataArrays::default();
     let mut value = metadata();
-    value.content.push(binding().into());
+    Arc::make_mut(&mut value.content).push(binding().into());
     let old = value.clone();
     let old_bytes = encoded(&old).unwrap();
     let prepared = cache.prepare(&old);
     let mut reference = value.content[0].content_ref.clone();
     reference.content_revision = u64::MAX;
-    value.content[0] = value.content[0].resolve(&reference);
+    Arc::make_mut(&mut value.content)[0] = value.content[0].resolve(&reference);
     metadata_fragment::take_array_work();
     let changed = cache.prepare(&value);
     assert_eq!(metadata_fragment::take_array_work(), [1, 0, 1]);
@@ -215,8 +215,8 @@ fn array_metadata(keys: &[usize]) -> ProjectionMetadata {
         let mut content = binding();
         content.path = vec![format!("key-{key:03}")];
         content.content_ref.content_revision = u64::try_from(index).unwrap() + 1;
-        value.content.push(content.into());
-        value.collections.push(
+        Arc::make_mut(&mut value.content).push(content.into());
+        Arc::make_mut(&mut value.collections).push(
             CollectionFrontier {
                 domain: format!("key-{key:03}"),
                 revision: u64::try_from(index).unwrap() + 1,
@@ -248,8 +248,8 @@ fn metadata_sort_permutation_preserves_long_cycles_and_stable_duplicates_without
         let original = array_metadata(&keys);
         let original_bytes = encoded(&original).unwrap();
         let mut expected = original.clone();
-        expected.content.sort_by(|a, b| a.path.cmp(&b.path));
-        expected.collections.sort_by(|a, b| a.domain.cmp(&b.domain));
+        Arc::make_mut(&mut expected.content).sort_by(|a, b| a.path.cmp(&b.path));
+        Arc::make_mut(&mut expected.collections).sort_by(|a, b| a.domain.cmp(&b.domain));
         let expected_bytes = encoded(&expected).unwrap();
         for replay in 0..3 {
             let mut value = original.clone();
@@ -310,7 +310,7 @@ fn metadata_sort_live_binding_misses_keep_only_one_cached_owner_array() {
     let mut previous: Option<ProjectionMetadata> = None;
     for frame in 1..5 {
         let mut value = array_metadata(&[2, 0, 1]);
-        for (index, fragment) in value.content.iter_mut().enumerate() {
+        for (index, fragment) in Arc::make_mut(&mut value.content).iter_mut().enumerate() {
             let mut content = binding();
             content.path = fragment.path.clone();
             content.content_ref.source = ContentSource::LivePublicationPrefix {
@@ -373,8 +373,8 @@ fn immutable_metadata_fragments_preserve_schema_wire_and_exact_budget_boundaries
             let decoded: MetadataFragment<ContentBinding> =
                 serde_json::from_slice(&serde_json::to_vec(&fragment).unwrap()).unwrap();
             assert_eq!(decoded, fragment);
-            value.content.push(fragment);
-            value.collections.push(
+            Arc::make_mut(&mut value.content).push(fragment);
+            Arc::make_mut(&mut value.collections).push(
                 CollectionFrontier {
                     domain: format!("messages.{index}\"\\\n水"),
                     revision: 9,
@@ -398,7 +398,7 @@ fn immutable_metadata_fragments_preserve_invalid_and_oversized_admission() {
         let mut value = metadata();
         let mut content = binding();
         content.content_ref.content_revision = revision;
-        value.content.push(content.into());
+        Arc::make_mut(&mut value.content).push(content.into());
         compare(value, 2);
     }
     for length in [
@@ -409,7 +409,7 @@ fn immutable_metadata_fragments_preserve_invalid_and_oversized_admission() {
         let mut value = metadata();
         let mut content = binding();
         content.path.push("x".repeat(length));
-        value.content.push(content.into());
+        Arc::make_mut(&mut value.content).push(content.into());
         compare(value, 1);
     }
 }

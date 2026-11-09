@@ -127,6 +127,11 @@ impl<T> MetadataFragment<T> {
     pub(crate) fn owner_count(&self) -> usize {
         Arc::strong_count(&self.0)
     }
+    #[cfg(test)]
+    pub(crate) fn owner_probe(&self) -> impl Fn() -> usize + use<T> {
+        let owner = Arc::downgrade(&self.0);
+        move || owner.strong_count()
+    }
 }
 impl<T: Clone> MetadataFragment<T> {
     pub(crate) fn into_owned(self) -> T {

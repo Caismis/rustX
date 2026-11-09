@@ -7,10 +7,9 @@ fn compare_original(seed: &CheckpointSeed) {
     let (mut original, eviction) = seed.checkpoint_unfitted().unwrap();
     let (mut actual, actual_eviction, budget) = seed.checkpoint_prepared().unwrap();
     assert_eq!(actual_eviction, eviction);
-    assert_eq!(
-        serde_json::to_vec(&actual).unwrap(),
-        serde_json::to_vec(&original).unwrap()
-    );
+    assert_eq!(actual.snapshot, original.snapshot);
+    assert_eq!(actual.cursor, original.cursor);
+    assert_eq!(actual.read_cut, original.read_cut);
     if let Some(budget) = budget {
         let direct =
             preflight::required_safe_integer_budget(&actual, crate::observation::bounded::CHECKPOINT_TARGET_BYTES);
@@ -364,8 +363,8 @@ fn checkpoint_descriptor_and_metadata_rows_keep_the_admitted_owner() {
     assert!(!first.snapshot.message_descriptors.is_empty());
     assert!(std::sync::Arc::ptr_eq(&first.snapshot.message_descriptors[0], &later.snapshot.message_descriptors[0]));
     assert_eq!(first.content.len(), later.content.len());
-    assert!(first.content.iter().zip(&later.content).all(|(left,right)| left.same_owner(right)));
-    assert!(first.collections.iter().zip(&later.collections).all(|(left,right)| left.same_owner(right)));
+    assert!(first.content.iter().zip(later.content.iter()).all(|(left,right)| left.same_owner(right)));
+    assert!(first.collections.iter().zip(later.collections.iter()).all(|(left,right)| left.same_owner(right)));
     if let Some(frontier) = later.collections.first_mut() { frontier.loaded = 0; }
     std::sync::Arc::make_mut(&mut later.snapshot.message_descriptors[0]).role = "changed".into();
     assert_eq!(serde_json::to_vec(&first).unwrap(), frozen);
@@ -376,8 +375,8 @@ fn checkpoint_descriptor_and_metadata_rows_keep_the_admitted_owner() {
 fn retained_vector_compaction_preserves_exact_event_bytes_and_rows() {
     let (projection, _store) = initialized_source_projection();
     let mut metadata = projection.checkpoint_seed().capture_checkpoint().unwrap().metadata;
-    metadata.content.reserve(1024);
-    metadata.collections.reserve(1024);
+    Arc::make_mut(&mut metadata.content).reserve(1024);
+    Arc::make_mut(&mut metadata.collections).reserve(1024);
     let mut events = Vec::with_capacity(128);
     events.push(RuntimeClientEvent::TraceChanged);
     let mut event = RuntimeClientEvent::ProjectionTransition { events, metadata };

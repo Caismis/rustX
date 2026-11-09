@@ -27,64 +27,32 @@ fn array_size<T: Serialize + schemars::JsonSchema>(values: &[MetadataFragment<T>
     size
 }
 
+type Fragments<T> = Arc<Vec<MetadataFragment<T>>>;
+
 struct PreparedArray<T> {
-    original: Vec<MetadataFragment<T>>,
-    order: OnceLock<SortOrder>,
+    original: Fragments<T>,
+    sorted: OnceLock<Fragments<T>>,
     size: Size,
 }
-enum SortOrder {
-    Identity,
-    /// Original index -> sorted destination. Owners remain only in `original`.
-    Permute(Vec<usize>),
-}
+
 impl<T> PreparedArray<T> {
-    fn sort_into(
-        &self,
-        values: &mut [MetadataFragment<T>],
-        compare: impl Fn(&T, &T) -> std::cmp::Ordering,
-    ) {
-        // prepare() authenticates this exact input order. The publication only
-        // reads its budget before sorting, and applies this permutation once.
-        debug_assert!(
-            self.original.len() == values.len()
-                && self
-                    .original
-                    .iter()
-                    .zip(values.iter())
-                    .all(|(a, b)| a.same_owner(b))
-        );
-        let order = self.order.get_or_init(|| {
-            #[cfg(test)]
-            ARRAY_WORK.with(|work| {
-                let mut counts = work.get();
-                counts[1] += 1;
-                work.set(counts);
-            });
-            if self
-                .original
-                .windows(2)
-                .all(|pair| !compare(&pair[0], &pair[1]).is_gt())
-            {
-                return SortOrder::Identity;
-            }
-            let mut sources: Vec<_> = (0..self.original.len()).collect();
-            sources.sort_by(|a, b| compare(&self.original[*a], &self.original[*b]));
-            let mut destinations = vec![0; sources.len()];
-            for (destination, source) in sources.into_iter().enumerate() {
-                destinations[source] = destination;
-            }
-            SortOrder::Permute(destinations)
-        });
-        if let SortOrder::Permute(destinations) = order {
-            let mut remaining = destinations.clone();
-            for index in 0..remaining.len() {
-                while remaining[index] != index {
-                    let destination = remaining[index];
-                    values.swap(index, destination);
-                    remaining.swap(index, destination);
+    fn sorted(&self, compare: impl Fn(&T, &T) -> std::cmp::Ordering) -> Fragments<T> {
+        self.sorted
+            .get_or_init(|| {
+                #[cfg(test)]
+                ARRAY_WORK.with(|work| {
+                    let mut counts = work.get();
+                    counts[1] += 1;
+                    work.set(counts);
+                });
+                if self.original.is_sorted_by(|a, b| !compare(a, b).is_gt()) {
+                    return self.original.clone();
                 }
-            }
-        }
+                let mut sorted = self.original.as_ref().clone();
+                sorted.sort_by(|a, b| compare(a, b));
+                Arc::new(sorted)
+            })
+            .clone()
     }
 }
 
@@ -95,13 +63,13 @@ impl<T> Default for ArrayCache<T> {
     }
 }
 impl<T: Serialize + schemars::JsonSchema> ArrayCache<T> {
-    fn prepare(&mut self, values: &[MetadataFragment<T>]) -> Arc<PreparedArray<T>> {
+    fn prepare(&mut self, mut values: Vec<MetadataFragment<T>>) -> Arc<PreparedArray<T>> {
         if let Some(previous) = &self.0
             && previous.original.len() == values.len()
             && previous
                 .original
                 .iter()
-                .zip(values)
+                .zip(&values)
                 .all(|(a, b)| a.same_owner(b))
         {
             #[cfg(test)]
@@ -118,10 +86,12 @@ impl<T: Serialize + schemars::JsonSchema> ArrayCache<T> {
             counts[0] += 1;
             work.set(counts);
         });
+        let size = array_size(&values);
+        values.shrink_to_fit();
         let prepared = Arc::new(PreparedArray {
-            original: values.to_vec(),
-            order: OnceLock::new(),
-            size: array_size(values),
+            original: Arc::new(values),
+            sorted: OnceLock::new(),
+            size,
         });
         self.0 = Some(Arc::clone(&prepared));
         prepared
@@ -133,7 +103,7 @@ impl<T: Serialize + schemars::JsonSchema> ArrayCache<T> {
 /// Neither the cache nor its entries retain a seed or a previous cache entry.
 #[derive(Clone, Default)]
 pub(crate) struct MetadataArrays(Arc<Mutex<LatestMetadata>>);
-pub(crate) type BindingFragments = Arc<Vec<MetadataFragment<ContentBinding>>>;
+pub(crate) type BindingFragments = Fragments<ContentBinding>;
 #[derive(Default)]
 struct LatestMetadata {
     content: ArrayCache<ContentBinding>,
@@ -153,13 +123,27 @@ pub(crate) struct PreparedMetadata {
     read_cut: Size,
 }
 impl MetadataArrays {
-    pub(crate) fn prepare(&self, metadata: &ProjectionMetadata) -> PreparedMetadata {
+    pub(crate) fn prepare_capture(
+        &self,
+        read_cut: &crate::observation::cut::CheckpointReadCut,
+        content: Vec<MetadataFragment<ContentBinding>>,
+        collections: Vec<MetadataFragment<CollectionFrontier>>,
+    ) -> PreparedMetadata {
         let mut latest = self.0.lock().expect("immutable metadata cache");
         PreparedMetadata {
-            content: latest.content.prepare(&metadata.content),
-            collections: latest.collections.prepare(&metadata.collections),
-            read_cut: metadata.read_cut.size(),
+            content: latest.content.prepare(content),
+            collections: latest.collections.prepare(collections),
+            read_cut: read_cut.size(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare(&self, metadata: &ProjectionMetadata) -> PreparedMetadata {
+        self.prepare_capture(
+            &metadata.read_cut,
+            metadata.content.as_ref().clone(),
+            metadata.collections.as_ref().clone(),
+        )
     }
 
     /// Ordered immutable owners authenticate the complete merge input, including
@@ -211,11 +195,20 @@ impl MetadataArrays {
     }
 }
 impl PreparedMetadata {
+    pub(crate) fn metadata(
+        &self,
+        read_cut: crate::observation::cut::CheckpointReadCut,
+    ) -> ProjectionMetadata {
+        ProjectionMetadata {
+            read_cut,
+            content: self.content.sorted(|a, b| a.path.cmp(&b.path)),
+            collections: self.collections.sorted(|a, b| a.domain.cmp(&b.domain)),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn sort_into(&self, metadata: &mut ProjectionMetadata) {
-        self.content
-            .sort_into(&mut metadata.content, |a, b| a.path.cmp(&b.path));
-        self.collections
-            .sort_into(&mut metadata.collections, |a, b| a.domain.cmp(&b.domain));
+        *metadata = self.metadata(metadata.read_cut.clone());
     }
     pub(crate) fn fragment_budget(&self) -> Option<usize> {
         ProjectionMetadata::budget_with_arrays(
