@@ -988,7 +988,7 @@
           "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ],
-      "local_sha256": "a52d571c4b4b6893eed75e72795b5633d7f1dd2ee08909d80d53dbc10de217d4"
+      "local_sha256": "2d12855a9541760c369d4053fe2dced76c723288d3668dfb875f05ca664885b9"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1008,7 +1008,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "94431808d9b8ff3096a7a6b75a74d0cc699e5f579d63688b3ee0613d88aa3752",
+      "local_sha256": "6f530a599d653a68afb278eaa6111af3ea3a56823366e24fa6cb98f97603b978",
       "additional_sources": [
         {
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -1081,7 +1081,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "c087b1b96deed05d1bb86a8fb5f7a267f325c581c3656ba6ca5e252727d3a35a",
+      "local_sha256": "e5fcd7500620207f048fae0d497270591603f9f317e260a947c1556082379f06",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -1111,7 +1111,7 @@
           "upstream": "packages/client/ui-trajectory/src/client/trajectory-message-definitions.ts",
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "1a4eeb432d55820c36c50975ee37b052d2148818705941a9315a2ac0a5b78ea6",
-          "treatment": "Harness publishes Agent interaction through actual Tool and Context messages, without standalone Agent activation activity. Exclude native subagent lifecycle audits at the shared Web trajectory projection so ledger, search, Inspector targets and both timeline modes agree; retain canonical Trace facts and Agent controls."
+          "treatment": "Harness presents Agent interaction and background jobs through actual Tool and Context messages. Exclude native lifecycle audits at the shared Web trajectory projection so ledger, search, Inspector targets and both timeline modes agree; retain canonical Trace facts and header controls."
         }
       ]
     },
@@ -1170,7 +1170,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "4dd6491e43e05b6ad8bf92bd5094e9f717406c6b61b98399c765026bfe03585b",
+      "local_sha256": "7ac44fc948fe877523757d327932425ae8fb9a0809da044e6d4bdbd758e5ee0c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -3321,7 +3321,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "47ffe354b70d4d080a8f1b5064ab6a41e2a95c5a40a6a58268f40399973e890d"
+      "local_sha256": "22614ebe695007da20d2330b94afc1ab0a5ca6e2b420981d187febd65dd33bfa"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3420,7 +3420,6 @@
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
         "../../../../protocol/app-server/v77",
-        "../../bindings/status-labels",
         "../../locale/react",
         "../../locale/translation",
         "../../presentation/markdown/preview",
@@ -3450,7 +3449,7 @@
           "treatment": "Issue #421 semantic ledger adaptation; exact rustX native ownership replaces Harness runtime relationships."
         }
       ],
-      "local_sha256": "650502118fb9d328bb3dd55b2f23a919f484c2608514b23c3e0cbc244b11ab18"
+      "local_sha256": "428081a795561192e22ed12bc550f15c507962123deef7ccdd1011f95d3df589"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3961,7 +3960,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "59ac4497839daa3c7162ea49c60cd22be7b33f172528402c2a4cd08e37db9c24"
+      "local_sha256": "a35d956c8387427293db78e2c14da4483a94fa5b7c279253228ee178ad63249c"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4123,7 +4122,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "ca995301e40a8afede04e778f34dfeefc64f97cb079f7989c490a85b2cc3abf7"
+      "local_sha256": "943528ceeaf13613c415030e8596521331e293db6a6491b67e3394ec2073fa4d"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",

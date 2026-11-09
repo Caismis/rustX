@@ -79,7 +79,8 @@ export function inspectorTabs(item: InspectableDisplayItem): TrajectoryFacet[] {
   if (item.type === 'RequestBoundary') return ['overview', 'options', 'usage', 'timing'];
   if (item.type === 'ContextRow') return ['overview', 'rendered', 'raw', 'source'];
   switch (item.record.kind) {
-    case 'user': return ['overview', 'rendered', 'raw', 'source'];
+    case 'user':
+    case 'context': return ['overview', 'rendered', 'raw', 'source'];
     case 'assistant': return ['overview', 'rendered', 'raw'];
     case 'compaction': return ['overview', 'raw'];
     case 'tool': return ['overview', 'input', 'output', 'schema', 'timing'];
@@ -636,8 +637,6 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const ownRequest = record.kind === 'assistant' ? records.find(candidate => traceRequestAccepts(candidate,record)) : undefined;
   const assistantOf = (id: string) => [...executions].find(([, tools]) => tools.some(tool => tool.id === id))?.[0];
   const parentAssistant = record.kind === 'tool' ? assistantOf(record.id) : undefined;
-  const launchCalls = record.kind === 'background' && record.originating_tool_call_id ? records.filter(candidate => candidate.kind === 'tool' && candidate.tool?.call_id === record.originating_tool_call_id && sameTraceStep(candidate.location, record.location)) : [];
-  const launchCall = launchCalls.length === 1 ? launchCalls[0] : undefined;
   const requestAssistant = item.type === 'RequestBoundary' ? records.find(candidate => traceRequestAccepts(record,candidate)) : undefined;
   const openCall = (call: Extract<TraceContentBlock, {type:'tool_call'}>) => {
     const proposal = (call as TraceDisplayBlock).nativeOccurrence ?? record.calls.find(proposal => proposal.call_id != null && proposal.call_id === call.call_id)?.occurrence;
@@ -656,6 +655,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const artifacts = [...(resolved?.attachments ?? []), ...(item.type === 'ContextRow' ? item.context.attachments : record.attachments)];
   const source = item.type === 'ContextRow' ? item.context.source : resolved?.source ?? messagesHead?.items[0]?.source ?? messages?.[0]?.source ?? undefined;
   const kind = cellKind(item);
+  const isInput = kind === 'user' || kind === 'context';
   // Admitted input cells are complete facts, whatever their Request later did.
   const state = item.type === 'ContextRow' || item.type === 'SystemPromptCell' ? 'complete' : stateOf(record);
   const toolDetail = resolved?.tool ?? detail?.tool ?? undefined;
@@ -774,7 +774,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     const markdown = record.kind !== 'tool';
     return <>
       <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
-        {(item.type === 'ContextRow' || record.kind === 'user') && source !== undefined && <div>
+        {isInput && source !== undefined && <div>
           <dt>{tx('trajectory:details.source')}</dt>
           <dd className={css.overviewParentLinks}><NavLink label={sourceLabel(tx, source)} onClick={() => onFacet('source')} /></dd>
         </div>}
@@ -786,11 +786,9 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
           <dt>{tx('trajectory:details.hierarchy')}</dt>
           <dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(parentAssistant)} /></dd>
         </div>}
-        <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.kind === 'background' ? record.state : undefined}/></div>
-        {record.kind === 'background' && record.native_id && <div><dt>{tx('common:activity.background-jobs')}</dt><dd>{record.native_id}</dd></div>}
-        {launchCall && <div><dt>{tx('common:activity.background-launch-call')}</dt><dd><NavLink label={launchCall.tool?.name ?? launchCall.tool?.tool_id ?? launchCall.id} onClick={() => onOpen(launchCall.id)}/></dd></div>}
+        <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state}/></div>
         {record.kind === 'assistant' && <TokenRows usage={usage} />}
-        {(item.type === 'ContextRow' || record.kind === 'user') && <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms) ?? 0)}</dd></div>}
+        {isInput && <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms) ?? 0)}</dd></div>}
       </dl>
       <div className={css.overviewSections}>
         {markdown
@@ -805,7 +803,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
             </>
             : null}
         {ownRequest && <OverviewSection label={tx('trajectory:timing.request')} onOpen={() => onOpen(ownRequest.id, 'timing')}><RequestTiming request={ownRequest} /></OverviewSection>}
-        {record.kind !== 'user' && record.kind !== 'assistant' && item.type !== 'ContextRow' && <OverviewSection label={tx('trajectory:tab.timing')} onOpen={() => onFacet('timing')}><RecordTiming record={record} preview /></OverviewSection>}
+        {!isInput && record.kind !== 'assistant' && <OverviewSection label={tx('trajectory:tab.timing')} onOpen={() => onFacet('timing')}><RecordTiming record={record} preview /></OverviewSection>}
       </div>
     </>;
   };

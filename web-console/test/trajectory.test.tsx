@@ -23,17 +23,12 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const noop = () => {};
-it.each(['cancelling', 'settling', 'outcome_unknown', 'cancelled'] as const)('background Inspector preserves %s and links only its original launch Step', state => {
-  const source = traceTool(1), other = traceTool(2, { location: { attempt_id: 'other-attempt', step_id: '1' } });
-  other.tool!.call_id = source.tool!.call_id;
-  const record = traceRecord(3, { kind: 'background', request: null, native_id: 'job-background', originating_tool_call_id: source.tool!.call_id, state, preview: null });
-  show(cacheOf([source, other, record]));
-  fireEvent.click(row('RecordRow', record.id));
-  const summary = screen.getByRole('tabpanel');
-  expect(within(summary).getByText(traceStateLabel(translator('en'), state))).toBeTruthy();
-  expect(within(summary).getByText('job-background')).toBeTruthy();
-  expect(within(summary).getByRole('button', { name: 'bash' })).toBeTruthy();
-  expect(recordText(translator('en'), record)).toContain(traceStateLabel(translator('en'), state));
+it('a page of background lifecycle records does not create standalone rows or empty Turns', () => {
+  const records = [
+    traceRecord(1, { kind: 'background', request: null, state: 'running' }),
+    traceRecord(2, { kind: 'background', request: null, location: {}, state: 'outcome_unknown' }),
+  ];
+  expect(projectTrajectory(translator('en'), records).sections).toEqual([]);
 });
 
 it('background launch Trace output describes acceptance without claiming the command finished', () => {
@@ -280,7 +275,7 @@ it('T1-06/10 Turn anchors regroup within the same Attempt without acquiring deta
   expect(target.native_record?.id).toBe(nativeAttempt.id);
   expect(target.anchor_record_id).toBe(nativeAttempt.id);
   expect('owner_record_id' in target).toBe(false);
-  const split = trajectoryItems([traceRecord(9), traceRecord(11, { kind: 'background', request: null, location: {} }), middle]);
+  const split = trajectoryItems([traceRecord(9), traceTool(11, { location: {} }), middle]);
   expect(split.filter(item => item.type === 'GroupHeader')).toHaveLength(1);
   expect(split.filter(item => item.type === 'RecordRow' || item.type === 'RequestBoundary').map(item => item.owner_record_id)).toEqual(['trace:9', 'trace:10', 'trace:11']);
 });
@@ -321,7 +316,7 @@ it('T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page
   expect(matchingCalls([assistant, { ...assistant, id: 'other-proposer' }, execution(1)]).size).toBe(0);
 });
 
-it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves native domains independent', locale => {
+it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s without surfacing lifecycle audits', locale => {
   const tx = translator(locale);
   const assistant = proposal();
   const states = ['completed', 'failed', 'denied', 'waiting', 'outcome_unknown'] as const;
@@ -333,7 +328,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves n
   // Harness names the folded calls by count and Tool name, never by lifecycle.
   expect(summary.summary).toBe(locale === 'en' ? '5 tool calls · same name' : '5 个工具调用 · same name');
   expect(executions.map(record => record.state)).toEqual(states);
-  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(domain.kind === 'background');
+  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(false);
   expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe(tx('trajectory:copy.compacting'));
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
     const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
@@ -1673,7 +1668,7 @@ it('checkpoint summaries and unscoped reused history display Between turns witho
   expect(JSON.stringify(records)).toBe(original);
 });
 
-it.each(['background', 'workflow', 'tool'] as const)('unscoped %s activity is not a between-turn section or an inferred nearby Turn', kind => {
+it.each(['workflow', 'tool'] as const)('unscoped %s activity is not a between-turn section or an inferred nearby Turn', kind => {
   const records = [
     traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'Reused original context', truncated: false } }),
     traceRecord(1, { kind: 'compaction', request: null, location: {} }),

@@ -7,7 +7,6 @@ import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../p
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { recordLabel, type InspectableDisplayItem } from './layout';
 import { markdownPreviewText } from '../../presentation/markdown/preview';
-import { traceStateLabel } from '../../bindings/status-labels';
 import css from './Trajectory.module.css';
 import { isWorkflowCall } from './workflow';
 import { workflowStatus } from '../agent/workflow-state';
@@ -29,16 +28,9 @@ export function isErrorRecord(record: TraceRecord): boolean {
   return record.state === 'failed' || record.state === 'timed_out' || record.state === 'denied';
 }
 
-/**
- * Compact labels for the kinds that share no Harness glyph.
- *
- * `background` and `workflow` are rustX-specific
- * evidence with no distinct icon, so at narrow widths the icon alone cannot
- * tell them apart. They keep a short visible word instead.
- */
+/** Compact labels for the kinds that share no Harness glyph. */
 function narrowLabel(tx: Translate, kind: CellKind): string | undefined {
   switch (kind) {
-    case 'background': return tx('trajectory:short.background');
     case 'workflow': return tx('trajectory:short.workflow');
     case 'workflow_node': return tx('trajectory:short.workflow-node');
     case 'interaction': return tx('trajectory:short.interaction');
@@ -98,7 +90,6 @@ function compactionText(tx: Translate, record: TraceRecord): string {
 export function recordText(tx: Translate, record: TraceRecord): string {
   if (record.kind === 'compaction') return compactionText(tx, record);
   const preview = record.preview?.text ? markdownPreviewText(record.preview.text) : '';
-  if (record.kind === 'background' && preview === '') return `${tx('common:activity.background-jobs')} · ${traceStateLabel(tx, record.state)}`;
   const attachments = attachmentSummary(tx, record);
   return attachments === '' ? preview : preview === '' ? attachments : `${attachments} · ${preview}`;
 }

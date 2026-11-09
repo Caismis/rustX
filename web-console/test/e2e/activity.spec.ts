@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { captureEvidence } from './screenshot';
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 
 test('durable Agent detail remains selected through interruption and resume; Job reaches final settlement', async ({ page }) => {
@@ -126,25 +127,50 @@ test('Chat distinguishes background acceptance, recorded failure and command cop
   expect(errors).toEqual([]);
 });
 
-test('Trace links the native Job launch and preserves an unknown external outcome', async ({ page }) => {
+test('Trace shows the Job launch and delivered Context without a lifecycle row', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await page.setViewportSize({ width: 1440, height: 844 });
   await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html?background-jobs`);
-  await page.locator('[data-display-type="RecordRow"][data-owner="trace:20"]').click();
+  const ledger = page.getByRole('table', { name: 'Trace ledger' });
+  const notice = ledger.locator('[data-kind="context"]');
+  const close = page.getByRole('button', { name: 'Close details', exact: true });
+  await expect(ledger.locator('[data-display-type="RecordRow"]')).toHaveCount(3);
+  expect(await ledger.locator('[data-display-type="RecordRow"]').evaluateAll(rows => rows.map(row => row.getAttribute('data-owner')))).toEqual(['trace:20', 'trace:22', 'trace:23']);
+  await expect(notice).toContainText('settled: outcome_unknown');
+  await expect(page.locator('[data-timeline-span="background"]')).toHaveCount(0);
+  await ledger.locator('[data-owner="trace:20"]').click();
   await page.getByRole('tab', { name: 'Result', exact: true }).click();
   await expect(page.getByRole('tabpanel')).toContainText('Background task started');
-  await page.getByRole('button', { name: 'Close details', exact: true }).click();
-  await page.locator('[data-display-type="RecordRow"][data-owner="trace:21"]').click();
   await expect(page.getByRole('tabpanel')).toContainText('job-launched');
-  await expect(page.getByRole('tabpanel')).toContainText('outcome unknown');
-  await page.getByRole('tabpanel').getByRole('button', { name: 'bash', exact: true }).click();
-  await page.getByRole('tab', { name: 'Result', exact: true }).click();
-  await expect(page.getByRole('tabpanel')).toContainText('Background task started');
-  await page.getByRole('button', { name: 'Close details', exact: true }).click();
-  await page.locator('[data-display-type="RecordRow"][data-owner="trace:22"]').click();
+  await close.click();
+  const search = page.getByRole('searchbox');
+  await search.fill('Internal execution audit');
+  await expect(ledger.locator('[data-display-type="RecordRow"]')).toHaveCount(0);
+  await search.fill('settled: outcome_unknown');
+  await expect(notice).toBeVisible();
+  await search.clear();
+  await notice.click();
+  await expect(page.getByRole('tab')).toHaveText(['Summary', 'Preview', 'Raw', 'Source']);
+  await page.getByRole('tab', { name: 'Source', exact: true }).click();
+  await expect(page.getByRole('tabpanel')).toContainText('runtime');
+  await page.getByRole('tab', { name: 'Raw', exact: true }).click();
+  await expect(page.getByRole('tabpanel')).toContainText('External result was not proven');
+  await captureEvidence(page, 'background-trajectory-desktop');
+  await close.click();
+  await ledger.locator('[data-owner="trace:23"]').click();
   await page.getByRole('tab', { name: 'Result', exact: true }).click();
   await expect(page.getByRole('tabpanel')).toContainText('outcome_unknown');
   await expect(page.getByRole('tabpanel')).toContainText('External result was not proven');
-  await page.screenshot({ path: '/tmp/rustx-background-trajectory.png' });
+  await close.click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await notice.click();
+  await page.getByRole('tab', { name: 'Preview', exact: true }).click();
+  await expect(page.getByRole('tabpanel')).toContainText('External result was not proven');
+  await captureEvidence(page, 'background-trajectory-mobile');
+  await close.click();
+  await expect(notice).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
