@@ -688,7 +688,12 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
     loop {
         let chunk = store.content_read(&reference, offset, 65_536).unwrap();
         let (rows, bytes) = SqliteConversationStore::content_read_work();
-        assert!(rows <= 2 && bytes <= 65_536);
+        // Canonical raw Tool arguments retain the original 8 KiB stream
+        // geometry. A 64 KiB range may span nine rows at an unaligned offset.
+        assert!(
+            rows <= 9 && bytes <= 65_536,
+            "read {rows} rows, {bytes} bytes"
+        );
         restored.extend(
             base64::engine::general_purpose::STANDARD
                 .decode(chunk.data_base64)
