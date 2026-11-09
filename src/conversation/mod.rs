@@ -337,8 +337,8 @@ impl ConversationState {
     /// Returns [`ConversationError::Ledger`] for a duplicate `MessageId` and
     /// [`ConversationError::Surface`] when the identity is already active.
     pub fn commit(&mut self, message: MessageBlock) -> Result<MessageId, ConversationError> {
-        let id = self.validate_commit(&message)?;
-        Ok(self.install_prepared(PreparedCanonicalCommit { id, message }))
+        let prepared = self.prepare_owned_commit(message)?;
+        Ok(self.install_prepared(prepared))
     }
 
     fn validate_commit(&self, message: &MessageBlock) -> Result<MessageId, ConversationError> {
@@ -378,6 +378,15 @@ impl ConversationState {
             id,
             message: message.clone(),
         })
+    }
+
+    /// Validate and retain an already-owned message for durable commit.
+    pub(crate) fn prepare_owned_commit(
+        &self,
+        message: MessageBlock,
+    ) -> Result<PreparedCanonicalCommit, ConversationError> {
+        let id = self.validate_commit(&message)?;
+        Ok(PreparedCanonicalCommit { id, message })
     }
 
     /// Installs a commit whose exact message was already validated by
@@ -527,6 +536,53 @@ mod tests {
         assert!(state.commit(message.clone()).is_err());
         assert_eq!(state.active_messages().unwrap(), [message]);
     }
+    #[test]
+    fn owned_assistant_commit_moves_the_original_text_and_reasoning_into_the_ledger() {
+        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, ReasoningBlock};
+
+        fn owners(message: &MessageBlock) -> [*const u8; 2] {
+            let MessageBlock::Assistant(message) = message else {
+                panic!("Assistant message");
+            };
+            let [
+                AssistantContentBlock::Text(text),
+                AssistantContentBlock::Reasoning(reasoning),
+            ] = message.content.as_slice()
+            else {
+                panic!("text and reasoning");
+            };
+            [
+                text.text.as_ptr(),
+                reasoning.text.as_ref().unwrap().as_ptr(),
+            ]
+        }
+
+        let mut state = ConversationState::new();
+        let message = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("assistant"),
+            content: vec![
+                AssistantContentBlock::Text(TextBlock {
+                    text: "text".repeat(32_768),
+                }),
+                AssistantContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("reasoning".repeat(16_384)),
+                    provider_state: None,
+                }),
+            ],
+        });
+        let original = owners(&message);
+        let prepared = state.prepare_owned_commit(message).unwrap();
+        assert_eq!(owners(prepared.message()), original);
+        assert!(state.ledger().get(prepared.message_id()).is_none());
+        let id = state.install_prepared(prepared);
+        let committed = state.ledger().get(&id).unwrap();
+        assert_eq!(owners(committed), original);
+        assert!(std::ptr::eq(
+            state.freeze_active_surface().messages.get(&id).unwrap(),
+            committed
+        ));
+    }
+
     #[test]
     fn equal_content_preserves_distinct_canonical_identities() {
         let state =

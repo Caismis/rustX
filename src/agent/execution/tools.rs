@@ -371,7 +371,7 @@ impl AgentExecution<'_> {
     /// batch mutating a list it cannot publish.
     pub(super) async fn execute_tools(
         &mut self,
-        calls: &[ToolCall],
+        calls: Vec<ToolCall>,
         occurrences: Vec<crate::message::types::ToolCallOccurrenceRef>,
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
@@ -406,15 +406,14 @@ impl AgentExecution<'_> {
     #[allow(clippy::too_many_lines)] // one coherent scheduling/commit pipeline
     async fn execute_tools_staged(
         &mut self,
-        calls: &[ToolCall],
+        calls: Vec<ToolCall>,
         occurrences: Vec<crate::message::types::ToolCallOccurrenceRef>,
         preflight: Vec<PreflightOutcome>,
         todos: Option<crate::tools::todo::TodoBatch>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
         let todo_writer = todos.as_ref().map(crate::tools::todo::TodoBatch::writer);
         let mut slots: Vec<CallSlot> = calls
-            .iter()
-            .cloned()
+            .into_iter()
             .zip(preflight)
             .map(|(call, outcome)| match outcome {
                 PreflightOutcome::Ready(prepared) => CallSlot {

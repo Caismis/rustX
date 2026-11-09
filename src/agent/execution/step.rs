@@ -15,6 +15,7 @@ use super::{
 use crate::context::AcceptedContext;
 use crate::events::types::RuntimeEventEnvelope;
 use crate::events::types::{AttemptFailure, RuntimeEvent};
+use crate::message::types::{AssistantContentBlock, ContentBlockIndex, ToolCallOccurrenceRef};
 use crate::model::assembly::ModelEventAssembler;
 use crate::model::error::ModelErrorKind;
 use crate::model::snapshot::RequestIdentity;
@@ -677,8 +678,26 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
+        let occurrences = if has_tool_calls {
+            turn_assembly
+                .content
+                .iter()
+                .enumerate()
+                .filter(|(_, block)| matches!(block, AssistantContentBlock::ToolCall(_)))
+                .map(|(index, _)| {
+                    ToolCallOccurrenceRef::new(
+                        assistant_message_id.clone(),
+                        ContentBlockIndex::new(
+                            u32::try_from(index).expect("canonical block index"),
+                        ),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let boundary =
-            match self.commit_assistant_message(&assistant_message_id, &turn_assembly.content) {
+            match self.commit_assistant_message(&assistant_message_id, turn_assembly.content) {
                 Ok(boundary) => boundary,
                 Err(error) => {
                     return Some(self.commit_failure_terminal(
@@ -721,29 +740,7 @@ impl<'a> AgentExecution<'a> {
         // cancelled after the structurally complete result batch is
         // committed; no next model turn starts after cancellation.
         let settled = match self
-            .execute_tools(
-                &turn_assembly.tool_calls,
-                turn_assembly
-                    .content
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, block)| {
-                        matches!(
-                            block,
-                            crate::message::types::AssistantContentBlock::ToolCall(_)
-                        )
-                    })
-                    .map(|(index, _)| {
-                        crate::message::types::ToolCallOccurrenceRef::new(
-                            assistant_message_id.clone(),
-                            crate::message::types::ContentBlockIndex::new(
-                                u32::try_from(index).expect("canonical block index"),
-                            ),
-                        )
-                    })
-                    .collect(),
-                preflight,
-            )
+            .execute_tools(turn_assembly.tool_calls, occurrences, preflight)
             .await
         {
             Ok(settled) => settled,

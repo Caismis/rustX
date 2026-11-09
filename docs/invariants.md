@@ -6630,7 +6630,9 @@ forbidden; once canonical acceptance commits, no audit may be created for it.
 The canonical transition validates that the exact stream is
 publication-complete, appends the Ledger fact, advances the Surface, records
 `AssistantMessageCommitted`, and clears the stream's publication staging — all
-in one transaction.
+in one transaction. The assembled Assistant body moves into the prepared
+commit. Durable writing borrows it, and successful installation moves it into
+the Ledger before observers or tools use the committed result.
 
 The first stream open is itself a durable generation admission: the named
 Request Snapshot must exist and decode, its start fact must be present, and
