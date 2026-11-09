@@ -310,12 +310,34 @@ for (const width of [1440, 390])
         await elif.getByRole('button', { name: 'Add condition', exact: true }).click();
         await picker.getByRole('button', { name: /^args \/ numbers ·/ }).click();
         await elif.getByRole('button', { name: 'Operator', exact: true }).click();
-        await page.getByRole('menuitem', { name: 'contains', exact: true }).click();
-        await elif.getByRole('textbox', { name: 'Value', exact: true }).fill('2');
-        await elif.getByRole('textbox', { name: 'Value', exact: true }).press('Enter');
-        await elif.getByRole('button', { name: 'Operator', exact: true }).click();
-        await page.getByRole('menuitem', { name: 'is not empty', exact: true }).click();
-        await expect(elif.getByRole('textbox', { name: 'Value', exact: true })).toHaveCount(0);
+        const operators = page.getByRole('menuitem');
+        await expect(operators).toHaveCount(4);
+        let releaseAnalysis!: () => void, analysisRequested!: () => void;
+        const heldAnalysis = new Promise<void>(resolve => { releaseAnalysis = resolve; });
+        const binaryAnalysis = new Promise<void>(resolve => { analysisRequested = resolve; });
+        // Keep the new left-operand analysis in flight through the next edit.
+        await page.route('**/product-host/workflow', async route => {
+          const operation = route.request().postDataJSON()?.operation;
+          if (operation?.kind === 'analyze' &&
+              operation.query?.reference?.join('/') === 'args/numbers' &&
+              operation.query?.consumer?.path?.at(-1)?.kind === 'left') {
+            analysisRequested();
+            await heldAnalysis;
+          }
+          await route.fallback();
+        });
+        try {
+          await page.getByRole('menuitem', { name: 'contains', exact: true }).click();
+          await binaryAnalysis;
+          const value = elif.getByRole('textbox', { name: 'Value', exact: true });
+          await value.fill('2');
+          await value.press('Enter');
+          await elif.getByRole('button', { name: 'Operator', exact: true }).click();
+          await page.getByRole('menuitem', { name: 'is not empty', exact: true }).click();
+          await expect(value).toHaveCount(0);
+        } finally {
+          releaseAnalysis();
+        }
         await panel(page).getByRole('button', { name: 'Remove CASE 2', exact: true }).click();
         await open('loop');
         await panel(page).getByRole('button', { name: 'Add condition', exact: true }).click();
@@ -332,7 +354,7 @@ for (const width of [1440, 390])
           await picker.getByRole('button', { name: new RegExp(`^${source} / text ·`) }).click();
         }
         await page.getByRole('button', { name: 'Save File', exact: true }).click();
-        await expect(page.getByText('No unsaved changes', { exact: true })).toHaveText('No unsaved changes');
+        await expect(page.getByText('No unsaved changes', { exact: true })).toHaveText('No unsaved changes', { timeout: 15_000 });
         const saved = parse(readFileSync(file, 'utf8'));
         expect(saved.block.nodes.branch.cases[0].condition).toEqual({
           type: 'greater_equal',

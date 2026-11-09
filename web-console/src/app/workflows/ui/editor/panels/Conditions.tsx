@@ -184,7 +184,7 @@ function SimpleCondition({
 }) {
   const tx = useTranslation(),
     location = within(address, [unary ? 'value' : 'left']),
-    schema = useReferenceSchema(location, left.path);
+    schema = useReferenceSchema(location, left.path, address);
   const right: Value = 'right' in condition ? condition.right : constant('string');
   const inferred =
     right.type === 'literal'
