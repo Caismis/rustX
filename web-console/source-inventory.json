@@ -667,7 +667,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "74be81932a4af9a429e33732dcb8394ee8e629e8aae923ca3f0d0818475ca601"
+      "local_sha256": "822c5ce99f363e5dff6684f545d1faff6fc356e050ef892c6679049e7c814ca2"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -8359,12 +8359,21 @@
         "../../../../../protocol/app-server/v77",
         "../../../locale/react",
         "../../../presentation/primitives/Button",
+        "../../../presentation/primitives/Switch",
+        "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../workspaces/host",
+        "../../settings/SettingsFeedback",
+        "../../settings/SettingsScopeMenu",
         "../../settings/forms/bridge",
         "../../settings/forms/controls",
-        "../../settings/forms/fields",
         "../../settings/models/ModelsPage",
-        "../../settings/primitives/aria"
+        "../../settings/primitives/aria",
+        "../../settings/projection",
+        "../shared/inventory",
+        "./AgentToolFields",
+        "./Subagents.module.css",
+        "react"
       ],
       "excluded_dependencies": [
         "Cordis and dynamic plugin runtime",
@@ -8405,7 +8414,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "56972a73002233d3a82b97f9c5dd012ec84a9a9ebef2716cf5bb30b55397ccc9"
+      "local_sha256": "eae067099497e736d7087dd601906d0ac4469e82606aa5e7c074ca874e5319b8"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

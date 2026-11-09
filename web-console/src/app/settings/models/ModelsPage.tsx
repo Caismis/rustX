@@ -276,14 +276,10 @@ function DefaultModelSelection({ value, change, models, profiles }: ModelSelecti
   </>;
 }
 
-/** Full invocation settings for a named Agent. */
-export function ModelSelection({ value, change, models, profiles }: ModelSelectionProps) {
-  const tx = useTranslation();
-  const identities = (extra?: string) => [...new Set([...models, ...(extra ? [extra] : [])])];
+/** The remaining invocation settings after a named Agent chooses its model and preset. */
+export function AgentModelOptions({ value, change, models, profiles }: ModelSelectionProps) {
   return <>
-    <Choice label={tx('settings:models-page.model')} value={value.model ?? ''} options={[['', tx('settings:copy.select-model')], ...identities(value.model ?? undefined).map(id => [id, id] as const)]}
-      onChange={model => change({ ...value, model: model || null })} />
-    <ModelRequestFields value={value} change={change} profiles={profiles[value.model ?? ''] ?? []} />
+    <ModelRequestFields value={value} change={change} profiles={[]} showProfile={false} />
     <AuxiliaryModelSelections value={value} change={change} models={models} profiles={profiles}/>
   </>;
 }
@@ -334,19 +330,19 @@ const REQUEST_FIELD_LABELS = {
 /** A selection's Profile, output budget and explicit overrides. An omitted
  * Profile selects the Model's own default; an override may not repeat a key
  * the selected Profile declares, which native reports. */
-function ModelRequestFields<T extends RequestFields>({ value, change, profiles, variant = 'default' }: { value: T; change: (next: T) => void; profiles: readonly string[]; variant?: keyof typeof REQUEST_FIELD_LABELS }) {
+function ModelRequestFields<T extends RequestFields>({ value, change, profiles, variant = 'default', showProfile = true }: { value: T; change: (next: T) => void; profiles: readonly string[]; variant?: keyof typeof REQUEST_FIELD_LABELS; showProfile?: boolean }) {
   const tx = useTranslation();
   const labels = REQUEST_FIELD_LABELS[variant];
   return <>
-    <ModelProfileChoice label={tx(labels.profile)} profile={value.profile} profiles={profiles}
-      onChange={profile => { const { profile: _, ...rest } = value; change((profile ? { ...rest, profile } : rest) as T); }}/>
+    {showProfile && <ModelProfileChoice label={tx(labels.profile)} profile={value.profile} profiles={profiles}
+      onChange={profile => { const { profile: _, ...rest } = value; change((profile ? { ...rest, profile } : rest) as T); }}/>}
     <label>{tx(labels.limit)}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
       onChange={event => change({ ...value, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
     <JsonObjectEditor label={tx(labels.params)} value={value.request_params ?? undefined} change={request_params => change({ ...value, request_params })} />
   </>;
 }
 
-function ModelProfileChoice({ label, profile, profiles, onChange }: {
+export function ModelProfileChoice({ label, profile, profiles, onChange }: {
   label: string; profile?: string | null; profiles: readonly string[]; onChange: (profile: string) => void;
 }) {
   const tx = useTranslation();

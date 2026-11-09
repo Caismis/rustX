@@ -117,9 +117,9 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   await openResourceModule('subagents');
   expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
   await newSubagent('helper');
-  const agent = within(screen.getByRole('form', { name: 'Agent helper' }));
+  const agent = within(screen.getByRole('form', { name: 'New subagent' }));
   fireEvent.change(agent.getByLabelText('Description'), { target: { value: 'independent' } });
-  fireEvent.click(agent.getByRole('button', { name: 'Save Agent helper' }));
+  fireEvent.click(agent.getByRole('button', { name: 'Save New subagent' }));
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params).toMatchObject({ expected_revision: 'missing', mutation: { kind: 'agent', name: 'helper', authored: { description: 'independent' } } });
   // No structured rustx.toml mutation was ever submitted.
@@ -169,11 +169,10 @@ async function reachableModels() {
   open('Extensions');
   await openResourceModule('subagents');
   await newSubagent('helper');
-  const agent = screen.getByRole('form', { name: 'Agent helper' });
-  fireEvent.click(within(agent).getByLabelText('Use a specific model'));
+  const agent = screen.getByRole('form', { name: 'New subagent' });
   const named = options(agent, /Model$/);
-  fireEvent.click(screen.getByRole('button', { name: /^(← MCP servers|Back to list)$/ }));
-  const selectable = (list: string[]) => list.filter(option => option !== 'Select model');
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  const selectable = (list: string[]) => list.filter(option => option !== 'Select model' && option !== 'Inherit default');
   return { catalog, root: selectable(root), named: selectable(named) };
 }
 

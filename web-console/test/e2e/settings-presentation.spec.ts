@@ -363,9 +363,10 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   // Subagent details now belong to their independent resource module.
   const agents=await openResourceModule(page,'subagents','Workspace A');
   await agents.getByRole('listitem',{name:'reviewer',exact:true}).getByRole('button',{name:'reviewer',exact:true}).click();
-  await agents.getByRole('form',{name:'Agent reviewer',exact:true}).evaluate(el=>el.scrollIntoView({block:'start'}));
+  await expect(agents.getByRole('heading', { name: 'Edit subagent', exact: true })).toBeVisible();
   await expect(agents.getByLabel('Description',{exact:true})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await expectAccessible(page, '[data-resource-module="subagents"]');
   await expectStableScreenshot(page,'subagent-narrow-dark.png');
   await openSettingsPage(page,'Extensions');
 

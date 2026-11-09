@@ -158,12 +158,10 @@ export async function openSettingsPage(name: string) {
 }
 
 export function showSettings() { act(()=>resourceNavigation?.(undefined)); }
-export async function newSubagent(name:string) {
- fireEvent.click(screen.getByRole('button',{name:'New subagent'}));
- const dialog=screen.getByRole('dialog',{name:'New subagent'});
- fireEvent.change(within(dialog).getByLabelText('Name'),{target:{value:name}});
- fireEvent.click(within(dialog).getByRole('button',{name:'Continue'}));
- await screen.findByRole('form',{name:`Agent ${name}`});
+export async function newSubagent(name: string) {
+ fireEvent.click(screen.getByRole('button', { name: 'New subagent' }));
+ const form = await screen.findByRole('form', { name: 'New subagent' });
+ fireEvent.change(within(form).getByLabelText('Name'), { target: { value: name } });
 }
 
 /** Navigate to an independent module, using its real resource surface. */

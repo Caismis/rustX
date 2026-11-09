@@ -239,13 +239,14 @@ it('edits an independent named-Agent whole resource with inherited model and ext
   const subject = cfg3Client(); await open(subject, 'Extensions');
   await openResourceModule('subagents');
   await newSubagent('researcher');
-  fireEvent.click(screen.getByRole('button',{name:'Extensions and guidance',expanded:false}));
-  expect(screen.getByText(/Use the current conversation’s model/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced options', expanded: false }));
+  expect(screen.getByRole('button', { name: 'Inherit default Model' })).toBeTruthy();
   expect((screen.getByLabelText('todo') as HTMLInputElement).checked).toBe(false);
   fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Research a topic' } });
-  fireEvent.change(screen.getByLabelText('Instructions'), { target: { value: 'Read and report findings.' } });
+  fireEvent.change(screen.getByLabelText('System prompt'), { target: { value: 'Read and report findings.' } });
+  await chooseOption('Available tools', 'Choose tools');
   fireEvent.click(screen.getByLabelText('read')); fireEvent.click(screen.getByLabelText('read_image')); fireEvent.click(screen.getByLabelText('todo'));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Agent researcher' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save New subagent' }));
   await waitFor(() => expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'missing', mutation: { kind: 'agent', name: 'researcher', authored: { description: 'Research a topic', tools: { builtin: ['read', 'read_image'] }, plugins: { todo: { enabled: true } } } } } }));
 });
 

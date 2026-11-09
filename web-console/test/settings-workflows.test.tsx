@@ -538,6 +538,11 @@ it('S2-07 discarding a Workspace MCP override writes nothing and returns to insp
   expect(writes(s)).toHaveLength(0);
 });
 
+async function reopenReviewer() {
+  await screen.findByRole('listitem', { name: 'reviewer' });
+  await openResourceRow('reviewer');
+}
+
 it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Use global default are each one explicit Workspace mutation', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
@@ -556,9 +561,11 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   expect(retained(s)).toContain('User reviewer');
   expect(writes(s)).toHaveLength(0);
   fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
-  fireEvent.click(screen.getByRole('button', { name: /^(← (Extensions|MCP servers)|Back to list)$/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   await openResourceRow('reviewer');
-  expect(field('Description').value).toBe('Workspace reviewer');
+  expect(field('Description').value).toBe('User reviewer');
+  fireEvent.click(screen.getByRole('button', { name: 'Override Agent reviewer in this Workspace' }));
+  fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
 
   fireEvent.click(screen.getByRole('button', { name: 'Save Agent reviewer' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
@@ -566,7 +573,8 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'missing',
     mutation: { kind: 'agent', name: 'reviewer', authored: { description: 'Workspace reviewer', instructions: 'Review carefully.' } },
   });
-  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('authored'));
+  await reopenReviewer();
+  expect(definitionState('Agent reviewer')).toBe('authored');
   // The root delegation allowlist is a separate unit that nothing wrote.
   expect(writes(s).some(op => op.params.mutation.kind === 'config')).toBe(false);
 
@@ -574,7 +582,8 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   await confirmAction('Use global default Agent reviewer');
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'agent', name: 'reviewer', authored: null } });
-  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('inherited'));
+  await reopenReviewer();
+  expect(definitionState('Agent reviewer')).toBe('inherited');
   expect(s.source.agents.filter(agent => agent.scope === 'user').map(agent => agent.name)).toEqual(['reviewer']);
 });
 
@@ -681,7 +690,8 @@ it('S2-07 a User named-Agent file that does not parse is an existing invalid Use
     mutation: { kind: 'agent', name: 'reviewer', authored: { description: 'Repaired reviewer' } },
   });
   // The authoritative reread settles the same unit with the parsed value.
-  await waitFor(() => expect(authoredValue('Agent reviewer')).toBe('parsed'));
+  await reopenReviewer();
+  expect(authoredValue('Agent reviewer')).toBe('parsed');
   expect(definitionState('Agent reviewer')).toBe('authored');
   expect(field('Description').value).toBe('Repaired reviewer');
   expect(writes(s)).toHaveLength(1);
@@ -697,7 +707,8 @@ it('S2-07 removing a malformed User named Agent deletes exactly that file throug
     mutation: { kind: 'agent', name: 'reviewer', authored: null },
   });
   // After the authoritative reread the identity is absent in this source.
-  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('new'));
+  await waitFor(() => expect(screen.queryByRole('form', { name: 'Agent reviewer' })).toBeNull());
+  expect(screen.queryByRole('listitem', { name: 'reviewer' })).toBeNull();
   expect(s.source.agents).toEqual([]);
   expect(writes(s)).toHaveLength(1);
 });
@@ -737,7 +748,8 @@ it('S2-07 a malformed Workspace named Agent is the Workspace definition shadowin
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
     mutation: { kind: 'agent', name: 'reviewer', authored: { description: 'Workspace reviewer' } },
   });
-  await waitFor(() => expect(authoredValue('Agent reviewer')).toBe('parsed'));
+  await reopenReviewer();
+  expect(authoredValue('Agent reviewer')).toBe('parsed');
   expect(screen.queryByText('Invalid definition')).toBeNull();
   expect(writes(s).filter(op => op.params.target.kind === 'user')).toHaveLength(0);
   expect(writes(s)).toHaveLength(1);
@@ -754,7 +766,8 @@ it('S2-07 using the global default in place of a malformed Workspace named Agent
   });
   // The authoritative reread shows the User definition in effect again,
   // inspected read-only, with no Workspace draft created by the transition.
-  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('inherited'));
+  await reopenReviewer();
+  expect(definitionState('Agent reviewer')).toBe('inherited');
   expect(screen.getByText('Using global settings.')).toBeTruthy();
   expect(field('Description').value).toBe('User reviewer');
   expect(disabled(field('Description'))).toBe(true);
@@ -776,7 +789,8 @@ it('S2-07 a malformed Workspace-only named Agent is authored by the Workspace an
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
     mutation: { kind: 'agent', name: 'reviewer', authored: null },
   });
-  await waitFor(() => expect(definitionState('Agent reviewer')).toBe('new'));
+  await waitFor(() => expect(screen.queryByRole('form', { name: 'Agent reviewer' })).toBeNull());
+  expect(screen.queryByRole('listitem', { name: 'reviewer' })).toBeNull();
   expect(s.source.agents).toEqual([]);
 });
 

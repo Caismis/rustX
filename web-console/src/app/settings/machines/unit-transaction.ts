@@ -70,9 +70,9 @@ export interface UnitTransactionContext {
   /** Stable browser unit identity; a creation draft exists before its native
    * resource name is chosen, while an existing unit uses its mutation shape. */
   readonly identity: string;
-  /** The non-sensitive native descriptor naming which source revision settles
-   * this unit's mutations. Never the authored payload. */
-  readonly selector: RevisionSelector;
+  /** The native descriptor used to observe this unit. A creation draft binds
+   * its final resource identity when it submits. Never the authored payload. */
+  selector: RevisionSelector;
   /** The exact CAS revision the next mutation is fenced on. */
   base: string;
   /** The exact revision this unit's authoritative projection currently carries. */
@@ -96,7 +96,7 @@ export type UnitTransactionEvent =
   | { type: 'EDIT'; value: unknown }
   | { type: 'DISCARD' }
   | { type: 'REVIEW' }
-  | { type: 'SUBMIT'; token: number }
+  | { type: 'SUBMIT'; token: number; selector: RevisionSelector }
   | { type: 'COMMITTED'; token: number; revision: string }
   | { type: 'FAILED'; token: number }
   /** An authoritative projection carries `revision` for this unit.
@@ -151,6 +151,7 @@ export const unitTransactionMachine = setup({
     recordObservation: assign({ observed: ({ context, event }) => event.type === 'OBSERVED' ? event.revision : context.observed }),
     followObservation: assign({ base: ({ context, event }) => event.type === 'OBSERVED' ? event.revision : context.observed }),
     beginSubmission: assign({
+      selector: ({ context, event }) => event.type === 'SUBMIT' ? event.selector : context.selector,
       submitted: ({ context, event }) => event.type === 'SUBMIT'
         ? { token: event.token, generation: context.generation }
         : context.submitted,

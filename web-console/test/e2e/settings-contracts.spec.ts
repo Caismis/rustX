@@ -47,16 +47,18 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       if (owner === 'Root') { await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);surface=settings; }
       else {
         surface=await openResourceModule(page,'subagents','Workspace A');
-        await surface.getByRole('listitem',{name:'optional',exact:true}).getByRole('button',{name:'optional',exact:true}).click();
+        await surface.getByRole('button', { name: 'optional', exact: true }).click();
+        await surface.getByRole('button', { name: 'Advanced options', exact: true }).click();
       }
       const title = owner === 'Root' ? 'Default model' : 'Agent optional';
       const form = surface.getByRole('form', { name: title, exact: true });
       const save = async () => {
         await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
-        await expect(settledSave(surface, title)).toBeVisible();
+        if (owner === 'Root') await expect(settledSave(surface, title)).toBeVisible();
+        else await expect(surface.getByRole('button', { name: 'optional', exact: true })).toBeVisible();
       };
       if (owner === 'Root') {
-        await expect(form.getByLabel(`${auxiliary} model`, { exact: true })).toHaveCount(0);
+        await expect(form.getByRole('button', { name: new RegExp(`${auxiliary} model$`) })).toBeHidden();
         await choose(form, 'Model', 'summary-b');
         await choose(form, 'Profile', 'quick');
         await save();
@@ -69,7 +71,8 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       }
       await choose(form, `${auxiliary} model`, 'summary-b');
       await expect(form.getByLabel('Description', { exact: true })).toHaveValue('');
-      await expect(form.getByLabel('Instructions', { exact: true })).toHaveValue('');
+      await expect(form.getByLabel('System prompt', { exact: true })).toHaveValue('');
+      await choose(form, 'Available tools', 'Choose tools');
       await form.getByLabel('read', { exact: true }).check();
       await save();
       const sourceFile = join(fixture.workspaceA, '.agents/agents/optional.toml');
@@ -79,7 +82,11 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       // Native writes keep provider-native parameters as JSON strings.
       expect(preserved).toMatch(/request_params = '\{"temperature":0\.2\}'/);
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
-      await surface.getByRole('button', { name: 'Refresh', exact: true }).click();
+      const reopen = async () => {
+        await surface.getByRole('button', { name: 'optional', exact: true }).click();
+        await form.getByRole('button', { name: 'Advanced options', exact: true }).click();
+      };
+      await reopen();
       const nested = form.getByRole('group', { name: `Explicit ${auxiliary} Model settings`, exact: true });
       await expect(nested.getByRole('button', { name: new RegExp(`Profile \\(${auxiliary}\\)$`) })).toContainText('deep');
       await expect(nested.getByLabel(`Output limit (${auxiliary})`)).toHaveValue('2048');
@@ -92,7 +99,9 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       expect(authored).toContain('summary-b'); expect(authored).toContain('quick');
       expect(authored).toContain('1024');
       expect(authored).toMatch(/request_params = '\{"seed":7,"stop":\[null\]\}'/);
+      await reopen();
       await choose(form, `${auxiliary} model`, 'Follow selected model'); await save();
+      await reopen();
       await expect(nested).toHaveCount(0);
     }
     surface=await openResourceModule(page,'mcp','Workspace A');

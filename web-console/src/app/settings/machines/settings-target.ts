@@ -536,15 +536,16 @@ export const settingsTargetMachine = setup({
       const request = event as Extract<SettingsTargetEvent, { type: 'UNIT.SUBMIT' }>;
       const unit = context.units[request.identity]!;
       const token = context.nextToken;
+      const selector = revisionSelector(request.mutation);
       // A new submission is the one event that replaces the previous
       // mutation's outcome.
       enqueue.assign({
         nextToken: () => token + 1,
         rejection: () => undefined,
         outcomeUnit: () => request.identity,
-        submission: () => ({ identity: request.identity, token, selector: revisionSelector(request.mutation), expected: unit.getSnapshot().context.base }),
+        submission: () => ({ identity: request.identity, token, selector, expected: unit.getSnapshot().context.base }),
       });
-      enqueue.sendTo(unit, { type: 'SUBMIT', token });
+      enqueue.sendTo(unit, { type: 'SUBMIT', token, selector });
       enqueue.raise({ type: 'WRITE.STARTED' });
     }),
     /** The definitive commit point.

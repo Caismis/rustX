@@ -1,5 +1,5 @@
 import { formatArguments } from '../../src/app/resources/mcp/form-values';
-import {openResourceModule,newSubagent,settledSave} from './shell-actions';
+import {openResourceModule,newSubagent,choose} from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
@@ -79,18 +79,17 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
     settings=await openResourceModule(page,'subagents','Workspace A');
-    await newSubagent(page,settings,'reviewer');
+    await newSubagent(settings,'reviewer');
     await settings.getByLabel('Description', { exact: true }).fill('Independent review profile');
-    await settings.getByRole('button', { name: 'Extensions and guidance', exact: true }).click();
+    await settings.getByRole('button', { name: 'Advanced options', exact: true }).click();
     await expect(settings.getByLabel('todo', { exact: true })).not.toBeChecked();
-    await settings.getByLabel('Instructions', { exact: true }).fill('Review the requested change and report concrete findings.');
+    await settings.getByLabel('System prompt', { exact: true }).fill('Review the requested change and report concrete findings.');
+    await choose(settings, 'Available tools', 'Choose tools');
     await settings.getByLabel('read', { exact: true }).check();
-    await settings.getByRole('button', { name: 'Save Agent reviewer', exact: true }).click();
-    await expect(settledSave(settings, 'Agent reviewer')).toBeVisible();
-    await settings.getByRole('button', { name: 'Back to list', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save New subagent', exact: true }).click();
     await settings.getByRole('listitem',{name:'reviewer',exact:true}).getByRole('button',{name:'reviewer',exact:true}).click();
     await expect(settings.getByLabel('Description',{exact:true})).toHaveValue('Independent review profile');
-    await settings.getByRole('button',{name:'Back to list',exact:true}).click();
+    await settings.getByRole('button',{name:'Cancel',exact:true}).click();
     await settings.screenshot({ path: test.info().outputPath('cfg3-named-agent.png') });
     await openSettingsPage(page, 'Advanced');
     settings=page.getByRole('region',{name:'Settings',exact:true});

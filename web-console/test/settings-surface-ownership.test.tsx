@@ -607,12 +607,13 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   // The inherited profile is reported as inherited, from the native inventory
   // alone: even without its User document projected it is not "new", so the
   // Workspace editor is inert until an explicit override, which starts empty.
-  const reviewer = within(screen.getByRole('region', { name: 'Agent reviewer' }));
+  const reviewer = within(screen.getByRole('form', { name: 'Agent reviewer' }));
   expect(reviewer.getByText('Using global settings.')).toBeTruthy();
   expect(screen.getByRole('form', { name: 'Agent reviewer' }).getAttribute('data-definition')).toBe('inherited');
   expect((reviewer.getByLabelText('Description') as HTMLInputElement).value).toBe('');
   expect((reviewer.getByLabelText('Description') as HTMLInputElement).matches(':disabled')).toBe(true);
-  expect((reviewer.getByRole('button', { name: 'Save Agent reviewer' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(reviewer.queryByRole('button', { name: 'Save Agent reviewer' })).toBeNull();
+  expect(reviewer.getByRole('button', { name: 'Override Agent reviewer in this Workspace' })).toBeTruthy();
   expect(writes(s)).toHaveLength(0);
 });
 

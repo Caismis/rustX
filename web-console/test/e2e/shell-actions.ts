@@ -214,9 +214,9 @@ export async function openResourceModule(page:Page,module:'mcp'|'subagents'|'ski
  await page.locator(`[data-resource-module="${module}"][data-lifecycle="ready"]`).waitFor({state:'visible'});
  return surface;
 }
-export async function newSubagent(page:Page,surface:Locator,name:string) {
- await surface.getByRole('button',{name:'New subagent',exact:true}).click();
- const dialog=page.getByRole('dialog',{name:'New subagent',exact:true});
- await dialog.getByLabel('Name',{exact:true}).fill(name);
- await dialog.getByRole('button',{name:'Continue',exact:true}).click();
+export async function newSubagent(surface: Locator, name: string) {
+  await surface.getByRole('button', { name: 'New subagent', exact: true }).click();
+  const form = surface.getByRole('form', { name: 'New subagent', exact: true });
+  await form.getByLabel('Name', { exact: true }).fill(name);
+  return form;
 }

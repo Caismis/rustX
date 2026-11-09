@@ -1732,7 +1732,7 @@ it('R36 the retirement announcement is a terminal state of the transaction itsel
   parent.start();
   const unit = parent.getSnapshot().context.unit!;
   unit.send({ type: 'EDIT', value: ['read'] });
-  unit.send({ type: 'SUBMIT', token: 1 });
+  unit.send({ type: 'SUBMIT', token: 1, selector: revisionSelector(toolsMutation) });
   unit.send({ type: 'COMMITTED', token: 1, revision: 'r2' });
   // A post-commit observation of anything else is a divergence, not a
   // settlement: the commit's obligation still stands.
