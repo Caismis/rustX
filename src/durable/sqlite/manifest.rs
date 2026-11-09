@@ -31,7 +31,7 @@ pub(super) struct NodeRef {
 }
 #[derive(Debug, Clone)]
 pub(super) enum NodeKind {
-    Leaf,
+    Leaf { item_digest: [u8; 32] },
     Branch { left: NodeRef, right: NodeRef },
 }
 #[derive(Debug, Clone)]
@@ -171,10 +171,11 @@ pub(super) fn node(
     let (item, left, right, left_digest, right_digest) = shape;
     let kind = match (item, left, right, left_digest, right_digest) {
         (Some(item), None, None, None, None) if actual.count == 1 && actual.height == 1 => {
-            if digest_leaf(&bytes32(item)?) != actual.digest {
+            let item_digest = bytes32(item)?;
+            if digest_leaf(&item_digest) != actual.digest {
                 return Err(invalid("native selected leaf hash"));
             }
-            NodeKind::Leaf
+            NodeKind::Leaf { item_digest }
         }
         (None, Some(left), Some(right), Some(lh), Some(rh)) => {
             let left = header(connection, left)?;
@@ -194,19 +195,34 @@ pub(super) fn node(
     };
     Ok(Node { kind })
 }
-pub(super) fn leaf_input(
+// Use the item digest certified by the node shape to bind the exact body.
+// Keep the byte cap in SQL so a rejected leaf never allocates its body in Rust.
+fn read_leaf_bounded(
     connection: &Connection,
-    expected: &NodeRef,
-) -> Result<FrozenModelInput, ConversationStoreError> {
-    if !matches!(node(connection, expected)?.kind, NodeKind::Leaf) {
-        return Err(invalid("native selected input is not a leaf"));
+    id: u64,
+    item_digest: [u8; 32],
+    remaining: usize,
+) -> Result<(FrozenModelInput, usize), ConversationStoreError> {
+    let limit = remaining.min(64 * 1024 * 1024);
+    let (length, json): (u64, Option<String>) = connection
+        .query_row_cached(
+            "SELECT octet_length(item_json),
+                    CASE WHEN typeof(item_json)='text' AND octet_length(item_json)<=?2
+                         THEN item_json END
+             FROM native_input_nodes WHERE id=?1",
+            params![seq_to_i64(id)?, limit],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    let length = usize::try_from(length).map_err(|_| invalid("native input byte size"))?;
+    if length > remaining {
+        return Err(invalid("native selected input byte budget"));
     }
-    let (json,digest):(Option<String>,Vec<u8>)=connection.query_row("SELECT CASE WHEN typeof(item_json)='text' AND octet_length(item_json)<=67108864 THEN item_json END,item_digest FROM native_input_nodes WHERE id=?1",[seq_to_i64(expected.id)?],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|storage(e.to_string()))?;
     let json = json.ok_or_else(|| invalid("native selected input leaf byte bound"))?;
-    if <[u8; 32]>::from(Sha256::digest(json.as_bytes())) != bytes32(digest)? {
+    if <[u8; 32]>::from(Sha256::digest(json.as_bytes())) != item_digest {
         return Err(invalid("native selected input leaf bytes"));
     }
-    decode(&json, "native selected input leaf")
+    Ok((decode(&json, "native selected input leaf")?, length))
 }
 pub(super) fn persist(
     connection: &Connection,
@@ -301,22 +317,16 @@ pub(super) fn load_bounded(
     }
     while let Some(reference) = stack.pop() {
         match node(connection, &reference)?.kind {
-            NodeKind::Leaf => {
-                let length: u64 = connection
-                    .query_row(
-                        "SELECT octet_length(item_json) FROM native_input_nodes WHERE id=?1",
-                        [seq_to_i64(reference.id)?],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| storage(e.to_string()))?;
-                bytes = bytes
-                    .checked_add(
-                        usize::try_from(length).map_err(|_| invalid("native input byte size"))?,
-                    )
-                    .and_then(|n| n.checked_add(usize::from(!input.is_empty())))
-                    .filter(|n| *n <= max_bytes)
+            NodeKind::Leaf { item_digest } => {
+                let separator = usize::from(!input.is_empty());
+                let remaining = max_bytes
+                    .checked_sub(bytes)
+                    .and_then(|budget| budget.checked_sub(separator))
                     .ok_or_else(|| invalid("native selected input byte budget"))?;
-                input.push(leaf_input(connection, &reference)?);
+                let (leaf, length) =
+                    read_leaf_bounded(connection, reference.id, item_digest, remaining)?;
+                bytes += separator + length;
+                input.push(leaf);
             }
             NodeKind::Branch { left, right } => {
                 stack.push(right);

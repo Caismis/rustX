@@ -450,7 +450,7 @@ pub(super) fn shape_target() -> ShapeTarget {
             .unwrap();
         loop {
             match manifest::node(&connection, &node).unwrap().kind {
-                manifest::NodeKind::Leaf => break node.id,
+                manifest::NodeKind::Leaf { .. } => break node.id,
                 manifest::NodeKind::Branch { left, .. } => node = left,
             }
         }

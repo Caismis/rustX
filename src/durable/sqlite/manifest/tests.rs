@@ -131,7 +131,7 @@ fn native_shape_statement_reuses_preparation_and_rebinds_leaf_and_branch_ids() {
         super::take_node_read_work();
         assert!(matches!(
             super::node(&connection, &leaf).unwrap().kind,
-            super::NodeKind::Leaf
+            super::NodeKind::Leaf { .. }
         ));
         assert_eq!(super::take_node_read_work(), (0, 1));
         assert!(prepares.swap(0, Ordering::SeqCst) > 0);
@@ -155,7 +155,7 @@ fn native_shape_statement_reuses_preparation_and_rebinds_leaf_and_branch_ids() {
         }
         assert!(matches!(
             super::node(&connection, &leaf).unwrap().kind,
-            super::NodeKind::Leaf
+            super::NodeKind::Leaf { .. }
         ));
     }
 }
@@ -505,4 +505,27 @@ fn wal_external_invalidation_tracks_the_pinned_snapshot() {
             .unwrap(),
         2
     );
+}
+
+#[test]
+fn bounded_manifest_load_verifies_each_leaf_once_and_preserves_the_exact_budget() {
+    let (mut connection, leaf, _) = cached_shape_fixture(64);
+    let transaction = connection.transaction().unwrap();
+    let length: usize = transaction
+        .query_row(
+            "SELECT octet_length(item_json) FROM native_input_nodes WHERE id=?1",
+            [leaf.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    super::take_node_read_work();
+    assert_eq!(
+        load_bounded(&transaction, Some(leaf), length + 2)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(super::take_node_read_work(), (0, 1));
+    assert!(load_bounded(&transaction, Some(leaf), length + 1).is_err());
+    assert_eq!(super::take_node_read_work(), (0, 1));
 }
