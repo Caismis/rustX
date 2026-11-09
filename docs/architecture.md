@@ -236,7 +236,16 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 84, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Older schemas are refused without migration.
+Native publication progress is scoped to the writer connection's TEMP epoch.
+Committed evidence can leave pending event and transcript holes until the
+publication owner releases them. Release removes the exact holes after
+validating the durable cut. Direct delivery also records disjoint event ranges
+for replay suppression. Adjacent direct positions coalesce, and deletion of a
+native row splits its range within the same transaction. Reopen or epoch
+replacement establishes the committed baseline and retires process-local
+direct evidence.
+
+The current SQLite development schema is 99, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Schema 99 scopes the Agent request kind index to Agent-owned facts. Older schemas are refused without migration.
 
 Version 78 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -1968,7 +1977,7 @@ model/adapter/traits.rs    ModelAdapter runtime-owned interface, ModelStream,
 model/adapter/validation.rs    deterministic local capability validation
 model/adapter/block_index.rs   provider-key to ContentBlockIndex allocator
 model/adapter/openai/     OpenAI Chat Completions and Responses adapters
-                           (async-openai, custom no-retry HTTP service)
+                           (borrowed wire views, single-attempt HTTP transport)
 model/adapter/anthropic/  Anthropic Messages adapter (direct HTTP/SSE,
                            no Anthropic SDK)
 ```
@@ -2259,9 +2268,15 @@ deterministic scheduling phases (sequential barriers, parallel groups)
 The loop owns execution semantics, message assembly, tool execution,
 continuation state, cancellation observation, and runtime-event emission.
 The durable Event Journal owns historical execution facts; the observer is
-only the live projection seam. Adapters own provider protocol translation only; the validating
-[`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
-[`ToolExecutor`] implementations and never falls back id-first.
+only the live projection seam. Adapters own provider protocol translation.
+The validating [`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
+[`ToolExecutor`] implementations and resolves the frozen tool identity.
+Registration validates and retains one compiled business-argument validator
+for that immutable schema and tool identity. Policy-only selection shares the
+validator while checking the effective policy separately. Replacement schema
+owners compile independently. Frozen executors and capability catalogs retain
+their validator until the last registration owner is dropped.
+
 The Agent Loop transfers the frozen logical input to adapter preparation before
 the request-start commit. The adapter returns immutable transport bytes and
 validated tool identities owned by that input. Dispatch starts only after
@@ -3716,25 +3731,19 @@ before that commit preserves the pointer. Transient retries reuse the frozen
 snapshot semantics; overflow only moves the request-only value down its
 full → reduced → metadata-only → omitted ladder.
 
-#### OpenAI adapters (async-openai)
+#### OpenAI adapters
 
-Both OpenAI adapters use the `async-openai` crate for typed request types,
-the SDK client plumbing, and SSE stream consumption. Two properties are
-enforced by construction:
+Chat Completions and Responses serialize separate borrowed wire views. Plain
+text, tool schemas and ordinary opaque parameters are borrowed through final
+encoding. Responses also borrows validated native replay items and verifies
+their visible content and call identities without reconstructing them.
+Native structured output prepares the owned format overlay. Images and nested
+tool-argument strings still require their protocol encodings.
 
-- Automatic retry is bypassed. The SDK's default executor wraps the plain
-  transport in `OpenAIRetryLayer`; the adapters install a rustX-owned custom
-  HTTP service (`NoRetryService`) that executes exactly one `reqwest` request
-  per call and performs no retry. One adapter invocation is exactly one
-  provider request attempt.
-- The Chat Completions response stream and the entire Responses protocol use
-  the SDK's BYOT (bring-your-own-type) facility as raw JSON, so unknown
-  finish reasons, unknown event fields, and future item shapes are tolerated,
-  and preserved Responses continuation items round-trip losslessly.
-
-The no-retry service also captures the provider HTTP status, `Retry-After`
-header, and error payload at the transport boundary, because the SDK's typed
-error drops response headers.
+The transport sends one encoded body through the shared reqwest client. The
+Agent Loop owns retries. The transport preserves HTTP status, Retry-After and
+error payload before normalization, and polls SSE as raw JSON so additional
+fields and unknown finish reasons still reach the provider-specific adapter.
 
 Provider context-window failures are normalized through one shared semantic
 classifier across OpenAI and Anthropic HTTP/SSE paths. It accepts both the

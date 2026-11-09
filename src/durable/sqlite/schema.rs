@@ -467,7 +467,7 @@ pub(super) fn presentation_statements(
 pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
         "events_primary_request_kind_idx",
-        "(json_extract(event_json, '$.event.type'), json_extract(event_json, '$.event.owner.type'))",
+        "(json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.owner.type') = 'agent'",
     ),
     (
         "events_context_reading_idx",
