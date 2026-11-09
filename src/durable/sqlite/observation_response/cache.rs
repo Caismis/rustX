@@ -394,8 +394,9 @@ impl Owner {
             .map(|row| (row.header.descriptor(), row.prepared.clone())))
     }
     /// Exact current descriptor and Tool bytes authorize body reuse only.
-    /// Reusing the complete row additionally requires the authenticated response
-    /// owner. Running/delegated reads keep current decoration and a fresh row.
+    /// A proven response owner permits direct reuse. Otherwise current response
+    /// facts are computed first, and exact unchanged presentation may share its
+    /// prepared row without retaining the older response proof's authority.
     pub(in crate::durable::sqlite) fn transcript_row(
         &self,
         conversation: &crate::runtime::identity::ConversationId,
@@ -435,12 +436,12 @@ impl Owner {
             super::record_row_work(true);
             return Ok(row.prepared.clone());
         }
-        #[cfg(test)]
-        super::record_row_work(false);
         let prepared = prior.map_or_else(
             || PreparedTranscriptRow::new(conversation.clone(), value.clone()),
             |row| row.prepared.with_decoration(value),
         );
+        #[cfg(test)]
+        super::record_row_work(prior.is_some_and(|row| row.prepared.same_owner(&prepared)));
         let bytes = header.retained_bytes();
         if bytes > TRANSCRIPT_ROW_PROOF_BYTES {
             return Ok(prepared);
