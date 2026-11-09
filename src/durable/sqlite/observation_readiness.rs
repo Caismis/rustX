@@ -83,8 +83,6 @@ pub(super) fn prepare(
     if !crate::runtime::observation::trace_fact_requires_publication(&event.event) {
         return Ok(());
     }
-    #[cfg(test)]
-    let _probe = super::start_probe::for_event(event, super::AuxiliaryStartProbe::ReadinessInsert);
     connection
         .prepare_cached("INSERT INTO event_observation_readiness(sequence) VALUES(?1)")
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
