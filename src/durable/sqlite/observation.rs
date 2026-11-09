@@ -542,11 +542,6 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         "observation_headers",
         &["transcript_position"],
     )?;
-    crate::durable::sqlite::schema::shape::verify_unique_columns(
-        connection,
-        "observation_block_headers",
-        &["message_id", "block_index"],
-    )?;
     super::schema::shape::verify_unique_columns(
         connection,
         "observation_headers",
@@ -567,7 +562,18 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?; // Compact database pages keep medium BLOB headers local in rowid leaves.
     let clustered : bool = connection . query_row ( "SELECT wr FROM pragma_table_list WHERE schema='main' AND name='observation_block_headers' AND type='table'" , [ ] , | row | row . get ( 0 ) , ) . map_err ( | error | crate::durable::sqlite::sqlite_error(&error, error . to_string ( ) ) ) ? ;
-    if !blocks.contains("CHECK(length(header_json)<=16384)") || clustered {
+    let block_columns = connection
+        .prepare("PRAGMA table_info(observation_block_headers)")
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    if !blocks.contains("CHECK(length(header_json)<=16384)")
+        || clustered
+        || block_columns != ["ledger_position", "block_index", "header_json"]
+    {
         return Err(ConversationStoreError::IncompatibleSchema(
             "invalid finite native observation metadata layout".into(),
         ));
@@ -714,7 +720,7 @@ fn block(
     let value = bounded_bytes(body, 1024)
         .map(|bytes| serde_json::from_slice(&bytes).expect("native canonical block encoding"));
     let bytes = block_bytes(connection, message, index, kind, value, field)?;
-    connection.execute_cached("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),index,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    connection.execute_cached("INSERT INTO observation_block_headers(ledger_position,block_index,header_json) VALUES((SELECT position FROM message_ledger WHERE message_id=?1),?2,?3) ON CONFLICT(ledger_position,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),index,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 pub(super) fn blocks(
@@ -753,12 +759,36 @@ pub(super) fn blocks_by_locator(
             "canonical block source beyond captured cut".into(),
         ));
     }
-    let bytes:Vec<u8>=connection.query_row("SELECT h.header_json FROM observation_headers h WHERE h.reference_kind='message' AND h.ledger_position=?1",[position],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    // Numeric locators also cover identities larger than the header budget.
+    // Only inline identities require a text comparison or leave SQLite.
+    let (bytes, identity): (Vec<u8>, Option<String>) = connection.query_row(
+        "SELECT h.header_json,CASE WHEN octet_length(m.message_id)<=256 THEN m.message_id END FROM message_ledger m JOIN observation_headers h ON h.ledger_position=m.position AND h.reference_kind='message' WHERE m.position=?1 AND CASE WHEN octet_length(m.message_id)<=256 THEN h.reference_id=m.message_id ELSE typeof(h.reference_id)='text' END",
+        [position], |row| Ok((row.get(0)?,row.get(1)?)),
+    ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical observation header"));
     }
     let header: MessageHeader =
         serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
+    let expected_locator = identity.as_ref().map_or(
+        crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position },
+        |id| crate::observation::content::CanonicalContentLocator::ByMessageId {
+            message_id: crate::runtime::identity::MessageId::new(id),
+        },
+    );
+    if header.ledger_position != Some(position)
+        || header
+            .identity
+            .as_ref()
+            .map(crate::runtime::identity::MessageId::as_str)
+            != identity.as_deref()
+        || header.locator
+            != Some(
+                crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position },
+            )
+    {
+        return Err(storage("canonical block descriptor owner differs"));
+    }
     if offset > header.block_count {
         return Err(ConversationStoreError::InvalidReference(
             "canonical block offset beyond captured source".into(),
@@ -776,7 +806,20 @@ pub(super) fn blocks_by_locator(
         if bytes.len() > HEADER_ENCODED_MAX {
             return Err(storage("oversized canonical block header"));
         }
-        headers.push(serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?);
+        let block: crate::durable::observation::MessageBlockHeader =
+            serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
+        if u64::from(block.block_index.get()) != offset + headers.len() as u64
+            || block.content.iter().any(|binding| {
+                binding.content_ref.conversation_id != *conversation
+                    || !matches!(&binding.content_ref.source,
+                    crate::observation::content::ContentSource::CanonicalMessageBlock {
+                        locator, block_index, ..
+                    } if locator == &expected_locator && *block_index == block.block_index)
+            })
+        {
+            return Err(storage("canonical block descriptor owner differs"));
+        }
+        headers.push(block);
     }
     let next = offset
         .checked_add(headers.len() as u64)
