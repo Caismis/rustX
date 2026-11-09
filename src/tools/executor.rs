@@ -38,8 +38,8 @@ use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::schema::{
-    EXECUTION_MODE_FIELD, SchemaError, compile_model_definition, resolve_invocation_metadata,
-    validate_business_arguments, validate_canonical_schema, validate_execution_metadata_contract,
+    EXECUTION_MODE_FIELD, SchemaError, compile_canonical_schema, compile_model_definition,
+    resolve_invocation_metadata, validate_compiled_arguments, validate_execution_metadata_contract,
 };
 use crate::tools::todo::TodoWriter;
 use crate::tools::types::{
@@ -779,10 +779,39 @@ pub(crate) type BusinessArgumentNormalizer =
 /// derives the immutable active registry.
 #[derive(Clone)]
 pub(crate) struct ToolRegistration {
+    validator: Arc<RegistrationValidator>,
     foreground: crate::tools::deadline::ForegroundPolicy,
     pub(crate) definition: ToolDefinition,
     pub(crate) executor: Arc<dyn ToolExecutor>,
     pub(crate) normalizer: BusinessArgumentNormalizer,
+}
+
+/// A validator belongs to this immutable schema owner, even when selection
+/// copies the registration or changes the effective execution policy.
+struct RegistrationValidator {
+    tool_id: ToolId,
+    schema: Arc<serde_json::Value>,
+    compiled: std::sync::OnceLock<Result<jsonschema::Validator, SchemaError>>,
+}
+
+impl RegistrationValidator {
+    fn new(definition: &ToolDefinition) -> Self {
+        Self {
+            tool_id: definition.id.clone(),
+            schema: definition.input_schema.clone(),
+            compiled: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn matches(&self, definition: &ToolDefinition) -> bool {
+        self.tool_id == definition.id && Arc::ptr_eq(&self.schema, &definition.input_schema)
+    }
+
+    fn compiled(&self) -> Result<&jsonschema::Validator, &SchemaError> {
+        self.compiled
+            .get_or_init(|| compile_canonical_schema(&self.schema))
+            .as_ref()
+    }
 }
 
 impl std::fmt::Debug for ToolRegistration {
@@ -795,6 +824,14 @@ impl std::fmt::Debug for ToolRegistration {
 }
 
 impl ToolRegistration {
+    /// Candidate registrations can be edited before selection. A different
+    /// schema Arc must acquire its own validator before it is published.
+    pub(crate) fn bind_schema(&mut self) {
+        if !self.validator.matches(&self.definition) {
+            self.validator = Arc::new(RegistrationValidator::new(&self.definition));
+        }
+    }
+
     pub(crate) fn foreground(&self) -> crate::tools::deadline::ForegroundPolicy {
         self.foreground
     }
@@ -808,6 +845,7 @@ impl ToolRegistration {
     ) -> Result<PreflightOutcome, String> {
         let entry = self;
         if entry.definition != *expected
+            || !entry.validator.matches(&entry.definition)
             || entry.foreground != crate::tools::deadline::ForegroundPolicy::Leaf
         {
             return Err("frozen capability identity changed".into());
@@ -840,6 +878,7 @@ impl ToolRegistration {
     /// arguments use the canonical schema unchanged.
     pub(crate) fn plain(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
         Self {
+            validator: Arc::new(RegistrationValidator::new(&definition)),
             foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
             definition,
             executor,
@@ -927,6 +966,27 @@ impl ToolRegistry {
         normalizer: BusinessArgumentNormalizer,
         foreground: crate::tools::deadline::ForegroundPolicy,
     ) -> Result<(), ToolRegistryError> {
+        let mut registration = ToolRegistration::plain(definition, executor);
+        registration.normalizer = normalizer;
+        registration.foreground = foreground;
+        self.register_entry(registration)
+    }
+
+    pub(crate) fn register_extension(
+        &mut self,
+        mut registration: ToolRegistration,
+    ) -> Result<(), ToolRegistryError> {
+        registration.foreground = crate::tools::deadline::ForegroundPolicy::Leaf;
+        self.register_entry(registration)
+    }
+
+    fn register_entry(
+        &mut self,
+        mut registration: ToolRegistration,
+    ) -> Result<(), ToolRegistryError> {
+        registration.bind_schema();
+        let definition = &registration.definition;
+        let foreground = registration.foreground;
         #[cfg(test)]
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::AuthorityMutation,
@@ -955,15 +1015,18 @@ impl ToolRegistry {
         if self.by_name.contains_key(&definition.name) {
             return Err(ToolRegistryError::DuplicateName(definition.name.clone()));
         }
-        validate_canonical_schema(&definition.input_schema).map_err(|error| match error {
-            SchemaError::InvalidSchema(message) | SchemaError::NotRootObjectSchema(message) => {
-                ToolRegistryError::InvalidSchema(format!("{}: {message}", definition.name))
-            }
-            SchemaError::ReservedProperty(property) => {
-                ToolRegistryError::ReservedProperty(property)
-            }
-            other => ToolRegistryError::InvalidSchema(other.to_string()),
-        })?;
+        registration
+            .validator
+            .compiled()
+            .map_err(|error| match error {
+                SchemaError::InvalidSchema(message) | SchemaError::NotRootObjectSchema(message) => {
+                    ToolRegistryError::InvalidSchema(format!("{}: {message}", definition.name))
+                }
+                SchemaError::ReservedProperty(property) => {
+                    ToolRegistryError::ReservedProperty(property.clone())
+                }
+                other => ToolRegistryError::InvalidSchema(other.to_string()),
+            })?;
         // `execution_mode` is reserved, and the root schema must be
         // decoratable, only while the effective execution policy is
         // ModelSelectable. Both checks therefore belong here — the bounded
@@ -1009,12 +1072,7 @@ impl ToolRegistry {
         self.by_id.insert(definition.id.clone(), self.entries.len());
         self.by_name
             .insert(definition.name.clone(), self.entries.len());
-        self.entries.push(Arc::new(ToolRegistration {
-            foreground,
-            definition,
-            executor,
-            normalizer,
-        }));
+        self.entries.push(Arc::new(registration));
         Ok(())
     }
 
@@ -1076,12 +1134,7 @@ impl ToolRegistry {
     ) -> Result<Self, ToolRegistryError> {
         let mut registry = Self::new();
         for registration in registrations {
-            registry.register_with_execution_metadata(
-                registration.definition,
-                registration.executor,
-                registration.normalizer,
-                registration.foreground,
-            )?;
+            registry.register_entry(registration)?;
         }
         Ok(registry)
     }
@@ -1224,8 +1277,12 @@ impl ToolRegistry {
                 };
             }
         };
-        if let Err(error) = validate_business_arguments(&entry.definition.input_schema, &normalized)
-        {
+        let validation = entry
+            .validator
+            .compiled()
+            .map_err(Clone::clone)
+            .and_then(|validator| validate_compiled_arguments(validator, &normalized));
+        if let Err(error) = validation {
             return PreflightOutcome::Rejected {
                 tool_id: entry.definition.id.clone(),
                 origin: entry.definition.origin.clone(),
@@ -1491,6 +1548,67 @@ mod tests {
             )]),
             Err(ToolRegistryError::DuplicateToolId(_))
         ));
+    }
+
+    #[test]
+    fn validators_are_compiled_once_and_follow_frozen_registration_owners() {
+        use crate::tools::schema::take_validator_compilations;
+
+        take_validator_compilations();
+        let definition = definition(
+            "tool-a",
+            "alpha",
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+            object_schema(),
+        );
+        let mut registry = ToolRegistry::new();
+        register(&mut registry, definition.clone()).unwrap();
+        let frozen = ToolRegistry::from_registrations(registry.registrations()).unwrap();
+        let owner = Arc::downgrade(&registry.entries[0].validator);
+        assert!(Arc::ptr_eq(
+            &registry.entries[0].validator,
+            &frozen.entries[0].validator
+        ));
+        assert_eq!(take_validator_compilations(), 1);
+
+        let mut revision = registry.registrations().remove(0);
+        revision.definition.input_schema = json!({
+            "type":"object", "required":["value"], "properties":{"value":{"type":"integer"}}
+        })
+        .into();
+        let revised = ToolRegistry::from_registrations([revision]).unwrap();
+        assert_eq!(take_validator_compilations(), 1);
+
+        let mut replacement = registry.registrations().remove(0);
+        replacement.definition.id = ToolId::new("tool-other");
+        let other = ToolRegistry::from_registrations([replacement]).unwrap();
+        assert_eq!(take_validator_compilations(), 1);
+        assert!(!Arc::ptr_eq(
+            &registry.entries[0].validator,
+            &other.entries[0].validator
+        ));
+
+        let gate = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            for (registry, ready) in [(&frozen, true), (&revised, false)] {
+                let gate = &gate;
+                scope.spawn(move || {
+                    gate.wait();
+                    for _ in 0..8 {
+                        let result = registry
+                            .preflight(&call("tool-a", "alpha", json!({})))
+                            .unwrap();
+                        assert_eq!(matches!(result, super::PreflightOutcome::Ready(_)), ready);
+                    }
+                    assert_eq!(take_validator_compilations(), 0);
+                });
+            }
+        });
+        drop(registry);
+        assert!(owner.upgrade().is_some());
+        drop(frozen);
+        assert!(owner.upgrade().is_none());
     }
 
     /// Duplicate tool ids are rejected.
