@@ -57,6 +57,126 @@ fn partial_tool_scope_keeps_null_owners_order_and_historical_cut() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One shared fixture compares both layouts, cuts, plans and pages.
+fn agent_request_scope_keeps_bounded_seeks_and_excludes_unrelated_index_rows() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let connection = store.lock().unwrap();
+    connection
+        .execute_batch(
+            "CREATE INDEX full_reference ON events(
+            json_extract(event_json, '$.event.type'), json_extract(event_json, '$.event.owner.type')
+        );",
+        )
+        .unwrap();
+    {
+        let mut insert = connection.prepare(
+            "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json)
+             VALUES(?1,?2,?3,?4,'time',?5)"
+        ).unwrap();
+        for sequence in 1..=4096 {
+            let owner = match sequence % 16 {
+                0 => serde_json::json!({"type":"agent"}),
+                1..=7 => serde_json::json!({"type":"auxiliary"}),
+                _ => serde_json::Value::Null,
+            };
+            let kind = if sequence % 32 < 16 {
+                "model_request_started"
+            } else {
+                "model_request_completed"
+            };
+            let value =
+                serde_json::json!({"sequence":sequence,"event":{"type":kind,"owner":owner}});
+            insert
+                .execute(params![
+                    sequence,
+                    format!("event-{sequence}"),
+                    EVENT_SCHEMA_VERSION,
+                    store.conversation_id.as_str(),
+                    value.to_string(),
+                ])
+                .unwrap();
+        }
+    }
+
+    let mut measurements = Vec::new();
+    for ascending in [true, false] {
+        let query = FactQuery {
+            scope: FactScope::AgentRequest,
+            kinds: vec!["model_request_started", "model_request_completed"],
+            before: Some(2064),
+            after: 1951,
+            ascending,
+            through: 2079,
+            limit: 3,
+        };
+        let statements = presentation_statements(&query).unwrap();
+        for ((sql, values), kind) in statements.into_iter().zip(query.kinds) {
+            let read = |sql: &str| {
+                let mut statement = connection.prepare(sql).unwrap();
+                let results = statement.query_map(rusqlite::params_from_iter(&values), |row| {
+                    row.get::<_, String>(0)
+                }).unwrap().map(|row| {
+                    serde_json::from_str::<serde_json::Value>(&row.unwrap()).unwrap()["sequence"].as_u64().unwrap()
+                }).collect::<Vec<_>>();
+                assert_eq!(
+                    statement.get_status(rusqlite::StatementStatus::FullscanStep),
+                    0
+                );
+                assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
+                results
+            };
+            let old = sql.replace("events_primary_request_kind_idx", "full_reference");
+            let mut expected = (1952..2064)
+                .filter(|sequence| {
+                    sequence % 16 == 0 && (sequence % 32 == 0) == (kind == "model_request_started")
+                })
+                .collect::<Vec<_>>();
+            if !ascending {
+                expected.reverse();
+            }
+            expected.truncate(3);
+            assert_eq!(read(&sql), expected);
+            assert_eq!(read(&old), expected);
+            for (name, sql) in [
+                ("events_primary_request_kind_idx", sql),
+                ("full_reference", old),
+            ] {
+                let plan = connection
+                    .query_row(
+                        &format!("EXPLAIN QUERY PLAN {sql}"),
+                        rusqlite::params_from_iter(&values),
+                        |row| row.get::<_, String>(3),
+                    )
+                    .unwrap();
+                assert!(
+                    plan.contains("SEARCH events") && plan.contains(name),
+                    "{plan}"
+                );
+                assert!(plan.contains("rowid>? AND rowid<?"), "{plan}");
+                measurements.push(plan);
+            }
+        }
+    }
+    let index = |name| {
+        connection
+            .query_row(
+                "SELECT count(*), sum(ncell) FROM dbstat WHERE name=?1",
+                [name],
+                |row| Ok((row.get::<_, usize>(0)?, row.get::<_, usize>(1)?)),
+            )
+            .unwrap()
+    };
+    let (old_pages, old_cells) = index("full_reference");
+    let (new_pages, new_cells) = index("events_primary_request_kind_idx");
+    assert_eq!((old_cells, new_cells), (4096, 256));
+    assert!(new_pages < old_pages);
+    println!("Agent index pages {old_pages} -> {new_pages}, cells {old_cells} -> {new_cells}");
+    for plan in measurements {
+        println!("{plan}");
+    }
+}
+
+#[test]
 fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("scope.sqlite");
@@ -74,12 +194,7 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
                 .unwrap();
             assert_eq!(
                 partial,
-                !matches!(
-                    *name,
-                    "events_kind_idx"
-                        | "events_attempt_kind_idx"
-                        | "events_primary_request_kind_idx"
-                ),
+                !matches!(*name, "events_kind_idx" | "events_attempt_kind_idx"),
                 "{name}"
             );
         }
@@ -92,6 +207,7 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
             .unwrap();
         assert!(!duplicate);
         for name in [
+            "events_primary_request_kind_idx",
             "events_workflow_coordinates_idx",
             "events_observation_tool_idx",
         ] {
@@ -117,14 +233,14 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
                 .unwrap();
         }
         connection
-            .execute("UPDATE rustx_store SET schema_version=97", [])
+            .execute("UPDATE rustx_store SET schema_version=98", [])
             .unwrap();
     }
     drop(store);
     assert!(matches!(
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 97,
+            stored: 98,
             expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION
         })
     ));
