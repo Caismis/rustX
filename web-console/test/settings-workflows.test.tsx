@@ -392,7 +392,7 @@ it('S2-07 Workspace Settings offers only Workspace overrides, with inheritance r
   expect(screen.queryByRole('alertdialog')).toBeNull();
   fireEvent.click(within(restore).getByRole('button', { name: 'Use global default Provider transport' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
-  expect(writes(s)[0].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: null } } });
+  expect(writes(s)[0].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'config', mutation: { unit: 'restore_provider', id: 'transport' } } });
   // User-only process policy and the client-owned Connection are not here.
   await openSettingsPage('Advanced');
   expect(screen.queryByRole('form', { name: 'App Server policy' })).toBeNull();
@@ -583,7 +583,7 @@ it('S2-07 a new Workspace resource and a Workspace-only definition are worded as
   s.source.workspace_mcp!.authored = { local: { definition: { type: 'stdio', command: 'local-server', args: [] }, retained_env: [], retained_headers: [] } };
   await workspace(s, 'Extensions');
   await openResourceModule('mcp');
-  fireEvent.click(screen.getAllByRole('button', { name: /^(＋ )?New$/ })[0]);
+  fireEvent.click(screen.getByRole('button', { name: '＋ New MCP server' }));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'fresh' } });
   openMcpContractEditor();
   // Creation is its own explicit gesture: writable at once, no override action.

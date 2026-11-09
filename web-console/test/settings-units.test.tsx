@@ -296,10 +296,15 @@ it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection
 
 it('replaces default model intent on the Models page', async () => {
   const summary_model = { mode: 'explicit' as const, model: 'summary' };
-  const source = catalogSource('workspace', { agent: { model: {
-    model: 'main', profile: 'quick', request_params: { temperature: .4 },
-    max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model,
-  } } });
+  const main = cfg3Effective().document.models!.main;
+  const source = catalogSource('workspace', {
+    providers: cfg3Source().user.authored!.providers,
+    models: { main, other: { ...main, id: 'other' }, plain: { ...main, id: 'plain' } },
+    agent: { model: {
+      model: 'main', profile: 'quick', request_params: { temperature: .4 },
+      max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model,
+    } },
+  });
   const { writes: write } = await renderEditor(
     <ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="root-r1" models={['main', 'other', 'plain']}
       profiles={{ main: ['deep', 'quick'], other: ['quick', 'high'] }} onFocus={noop} onRefresh={noop} />,

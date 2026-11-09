@@ -173,10 +173,9 @@ it.each([
   ['an explicit empty list', { agent: { tools: { builtin: [] } } }, ['Tools & Permissions'], 'Built-in tools'],
   ['an explicit false', { agent: { plugins: { todo: { enabled: false } } } }, ['Extensions', 'Built-in'], 'Todo extension'],
   ['an explicit empty object', { agent: { plugins: { todo: {} } } }, ['Extensions', 'Built-in'], 'Todo extension'],
-  ['an explicit empty string', { agent: { description: '' } }, ['Agent'], 'Description'],
 ] as const)('S1-04 %s is an authored Workspace override, never an absent one', async (_label, authored, section, unit) => {
   const s = cfg3Client();
-  // `[]`, `false`, `{}` and `""` are authored values. Presence is the native
+  // `[]`, `false` and `{}` are authored values. Presence is the native
   // projection fact, never a truthiness test, so each is reported as an
   // override and each offers the removal that really applies to it.
   s.source.workspace!.authored = authored as never;
@@ -187,6 +186,19 @@ it.each([
   expect(form.getByRole('button', { name: /Save / }).closest('form')!.dataset.authored).toBe('present');
   expect(form.getByRole('button', { name: `Use global default ${unit}` })).toBeTruthy();
   expect(form.queryByRole('button', { name: `Override ${unit}` })).toBeNull();
+  expect(writes(s)).toHaveLength(0);
+});
+
+it('S1-04 an explicitly empty global instructions file is still authored', async () => {
+  const s = cfg3Client();
+  s.source.global_guidance = { path: '/home/user/rustx/.agents/AGENTS.md', revision: 'guidance-1', authored: '' };
+  render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
+  await waitForSettingsRevision('user-1');
+  fireEvent.click(screen.getByRole('tab', { name: 'Agent' }));
+  const form = screen.getByRole('form', { name: 'Global instructions' });
+  expect(form.dataset.authored).toBe('present');
+  expect(within(form).getByRole('textbox', { name: 'Global instructions' })).toHaveProperty('value', '');
+  expect(within(form).getByRole('button', { name: 'Save instructions' })).toHaveProperty('disabled', true);
   expect(writes(s)).toHaveLength(0);
 });
 

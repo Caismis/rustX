@@ -24,12 +24,12 @@ class Native {
   connections = 32;
   revision = 'user-1';
   /** Authored marker independent of application version, for equal-version races. */
-  description?: string;
+  guidanceFile?: string;
   application: ConfigurationApplication | null = null;
   projection(): SourceSettings {
     const source = cfg3Source();
     source.user.revision = this.revision;
-    if (this.description !== undefined) source.user.authored = { ...source.user.authored, agent: { description: this.description } };
+    if (this.guidanceFile !== undefined) source.user.authored = { ...source.user.authored, agent: { agents_md: { files: [this.guidanceFile] } } };
     source.process_policy_impacts = { max_connections: 'hot' };
     source.process_bindings = { max_resident_runtimes: 8, max_connections: this.connections };
     source.application = this.application ? structuredClone(this.application) : null;
@@ -159,14 +159,15 @@ it('S4 the acknowledgement-first order converges under the same observation mode
 
 it('S5 automatic convergence never replays the write or rewrites an unsaved draft', async () => {
   const native = new Native(); const s = await open(native);
-  fireEvent.change(agentPage().getByRole('textbox', { name: 'Description' }), { target: { value: 'unsaved draft' } });
+  const guidance = () => agentPage().getByRole('switch', { name: 'Automatically load project guidance' });
+  fireEvent.click(guidance());
   const write = await saveHeldWrite(s, native);
   await publish(s, native.applied('2', 'applied'));
   await deliver(s, write);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeGreaterThan(2));
   await settleReads(s);
   await expectApplied();
-  expect((agentPage().getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(guidance().getAttribute('aria-checked')).toBe('false');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   // Convergence is bounded by the versions actually published, never a poll.
   expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(3);
@@ -219,12 +220,12 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   // The acknowledgement captured revision B at application version 7.
-  native.revision = 'user-2'; native.description = 'revision B';
+  native.revision = 'user-2'; native.guidanceFile = 'revision-b.md';
   s.commit(write);
   // A causally later external edit advances the authored source to revision C;
   // native coordination has not republished, so the application version is
   // still 7 — equal application versions cannot order the two projections.
-  native.revision = 'user-3'; native.description = 'revision C';
+  native.revision = 'user-3'; native.guidanceFile = 'revision-c.md';
   s.commit(read); // The authoritative read observes C at the same version 7.
   await deliver(s, read);
   await waitForSettingsRevision('user-3');
@@ -238,7 +239,9 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   await settleReads(s, 2);
   await waitForSettingsSave();
   expect(observedRevision('user-3')).toBeTruthy();
-  expect((agentPage().getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('revision C');
+  const agent = agentPage();
+  fireEvent.click(agent.getByRole('button', { name: 'Advanced options' }));
+  expect(agent.getByRole('textbox', { name: 'Guidance files 1' })).toHaveProperty('value', 'revision-c.md');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
 });
@@ -662,7 +665,7 @@ it('MCP refresh is one read and an unrelated native source update never replays 
   fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3));
   native.revision = 'user-2';
-  native.description = 'unrelated guidance edit';
+  native.guidanceFile = 'unrelated-guidance-edit.md';
   native.application = native.applied('1', 'applied');
   await publish(s, native.application);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead')).toHaveLength(4));

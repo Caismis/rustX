@@ -604,8 +604,9 @@ it('opens the exact source owner at Advanced → Auto Repair', async () => {
   expect(navigation.getSnapshot().context.focus).toEqual({});
 });
 
-/** One User source whose native revision, receipt and description advance
- * independently, as the App Server owns them. */
+const automaticGuidance = () => screen.getByRole('switch', { name: 'Automatically load project guidance' });
+
+/** One User source whose native revision and repair receipt advance independently. */
 class Native {
   revision = 'user-1';
   repair: ConfigRepairReceipt | undefined;
@@ -632,7 +633,7 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   expect(screen.queryByRole('region', { name: 'Auto Repair' })).toBeNull();
   // An unsaved draft on another page.
   await openSettingsPage('Agent');
-  fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.click(automaticGuidance());
   // Native repairs the source: a new revision, a receipt, its notice, and the
   // separate application publication of the committed bytes.
   native.revision = 'user-2'; native.repair = receipt({ after_revision: 'user-2' }); native.version = 2;
@@ -641,7 +642,7 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeGreaterThan(1));
   // The draft is neither erased, submitted nor silently rebased: the moved
   // source requires the explicit review gesture.
-  expect((screen.getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   expect(await screen.findByRole('button', { name: 'Use latest setting' })).toBeTruthy();
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   await openSettingsPage('Advanced');
@@ -652,7 +653,7 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   expect(within(repaired).getByText('An exact private copy of the original file is kept in rustX storage.')).toBeTruthy();
   expect(within(repaired).queryByText(/sha256:/)).toBeNull();
   await openSettingsPage('Agent');
-  expect((screen.getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   s.client.disconnect();
 });
@@ -868,7 +869,7 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await settingsReady();
   await openSettingsPage('Agent');
-  fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.click(automaticGuidance());
   // An in-flight Save of another unit, held at native.
   await openSettingsPage('Advanced');
   s.held.add('configuration/sourceWrite');
@@ -891,7 +892,7 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
   expect((screen.getByLabelText('Reserved tokens') as HTMLInputElement).value).toBe('19');
   await openSettingsPage('Agent');
-  expect((screen.getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   s.client.disconnect();
 });
 
@@ -1080,7 +1081,7 @@ it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stay
   </>);
   await settingsReady();
   await openSettingsPage('Agent');
-  fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.click(automaticGuidance());
   // 1. W0's unresolved receipt R0, delivered at 1, warns.
   await deliverAt(s, w0, unresolvedAt(w0, 'w0-1'), 1);
   expect(shownNotice()!.textContent).toMatch(/Workspace configuration could not be repaired automatically/);
@@ -1114,7 +1115,7 @@ it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stay
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
   // The Settings draft and its CAS base are untouched.
-  expect((screen.getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   await openSettingsPage('Advanced');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
@@ -1145,7 +1146,7 @@ it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Wor
   </>);
   await settingsReady();
   await openSettingsPage('Agent');
-  fireEvent.change(screen.getByRole('textbox', { name: 'Description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.click(automaticGuidance());
   // 1. W0 is unresolved, and the notice warns.
   w0Receipt = unresolvedAt(w0, 'w0-1');
   await deliverAt(s, w0, w0Receipt, ++sequence);
@@ -1190,7 +1191,7 @@ it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Wor
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
   // The Settings draft and its CAS base are untouched.
-  expect((screen.getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   await openSettingsPage('Advanced');
   fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));

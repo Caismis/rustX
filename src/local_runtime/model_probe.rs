@@ -69,7 +69,7 @@ impl SessionRuntimeManager {
             let request = ModelRequest {
                 response_schema: None,
                 response_byte_limit: Some(256 * 1024),
-                images: Default::default(),
+                images: crate::model::images::ResolvedImages::new(),
                 invocation: config,
                 messages: vec![ModelInputMessage::Canonical(MessageBlock::User(
                     UserMessageBlock {

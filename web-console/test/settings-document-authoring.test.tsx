@@ -46,8 +46,12 @@ async function assertRepairIsTheOnlyConfigMutation(s: ReturnType<typeof cfg3Clie
   for (const page of configPages) {
     open(page);
     expect(screen.getByText(/Structured editing is unavailable because .*rustx\.toml violates the source contract/)).toBeTruthy();
-    expect(forms()).toEqual(['Repair invalid source']);
-    expect(screen.queryByRole('button', { name: /^(Add|Edit|Override|Author|Use global default|Remove) |^Save (?!Repair invalid source$)/ })).toBeNull();
+    const independentGuidance = s.source.target.kind === 'user' && page === 'Agent';
+    expect(forms()).toEqual(independentGuidance ? ['Global instructions', 'Repair invalid source'] : ['Repair invalid source']);
+    if (independentGuidance) {
+      expect(screen.getByRole('textbox', { name: 'Global instructions' })).toHaveProperty('disabled', false);
+    }
+    expect(screen.queryByRole('button', { name: /^(Add|Edit|Override|Author|Use global default|Remove) |^Save (?!Repair invalid source$|instructions$)/ })).toBeNull();
   }
   // Extensions: the native extensions and root availability are units of the
   // same document, and they are closed on the same terms.
@@ -175,8 +179,9 @@ async function reachableModels() {
 
 it('ID-03 Workspace-authored models stay reachable in every selector when a malformed User document leaves resolution unavailable', async () => {
   const s = cfg3Client();
+  const providers = s.source.user.authored!.providers;
   s.source.user = { path: '/bound/rustx.toml', revision: 'user-1', authored: null, diagnostic: MALFORMED };
-  s.source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: { models: { 'workspace-model': model('wire-w') } } };
+  s.source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: { providers, models: { 'workspace-model': model('wire-w') } } };
   s.source.resolved = null;
   s.source.prospective_diagnostic = 'Source cannot be resolved; repair the diagnosed authored document.';
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
@@ -199,9 +204,10 @@ it('ID-03 Workspace-authored models stay reachable in every selector when a malf
 
 it('ID-04 a resolved Workspace reaches inherited effective models in every selector; User reaches exactly its own', async () => {
   const s = cfg3Client();
-  s.source.user.authored = { models: { 'user-model': model('wire-u') } };
+  const providers = s.source.user.authored!.providers;
+  s.source.user.authored = { providers, models: { 'user-model': model('wire-u') } };
   s.source.workspace = { path: '/workspace/rustx.toml', revision: 'workspace-1', authored: { models: { 'workspace-model': model('wire-w') } } };
-  s.source.resolved = { models: { 'user-model': model('wire-u'), 'workspace-model': model('wire-w') } } as never;
+  s.source.resolved = { providers, models: { 'user-model': model('wire-u'), 'workspace-model': model('wire-w') } };
   const view = render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await waitForSettingsRevision('workspace-1');
   expect(await reachableModels()).toEqual({

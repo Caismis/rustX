@@ -254,7 +254,7 @@ it('an invalid skill shows the native read error without an editor or an invente
  subject.source.prospective_resources={...subject.effective.resources,definitions:[{family:'skill',name:'review',valid:false,location:{scope:'user',path:'/home/user/rustx/.agents/skills/review/SKILL.md'}}]};
  render(<SettingsSurface client={subject.client} target={userSettingsTarget} host={cfg3Host(subject)}/>);
  await openResourceModule('skills');
- expect(screen.getByRole('switch',{name:'Allow review for the agent'})).toHaveProperty('disabled',true);
+ expect(screen.queryByRole('switch',{name:'Allow review for the agent'})).toBeNull();
  await openResourceRow('review');
  expect((await screen.findByRole('alert')).textContent).toContain('Invalid SKILL.md');
  expect(screen.queryByRole('textbox')).toBeNull();
