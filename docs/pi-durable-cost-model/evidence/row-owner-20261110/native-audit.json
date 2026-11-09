@@ -1,0 +1,401 @@
+{
+  "scope": "Two balanced pairs per fixed/rotating four-concurrency group. Ordinary GNU allocator; server PID only; CPU includes native retirement status reads. Every backup authenticated and checked independently. Two pairs do not prove statistical significance.",
+  "rows": [
+    {
+      "family": "fixed",
+      "pair": 0,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "native-fixed-0-base",
+      "cpu_ms_per_turn": 13.828125,
+      "write_kib_per_turn": 785.015625,
+      "p50_ms": 32.351367,
+      "p95_ms": 44.632754999999996,
+      "active_compiler_samples": []
+    },
+    {
+      "family": "fixed",
+      "pair": 0,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "native-fixed-0-next",
+      "cpu_ms_per_turn": 17.34375,
+      "write_kib_per_turn": 785.015625,
+      "p50_ms": 39.128006500000005,
+      "p95_ms": 323.108653,
+      "active_compiler_samples": [
+        {
+          "monotonic_ns": 66867808522350,
+          "loadavg": "2.66 2.32 2.60 2/7146 3529048\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66868340108090,
+          "loadavg": "2.66 2.32 2.60 2/7152 3529064\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66868872548047,
+          "loadavg": "2.77 2.35 2.61 2/7185 3529123\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66869403822376,
+          "loadavg": "2.77 2.35 2.61 1/7147 3529138\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66869944712509,
+          "loadavg": "2.77 2.35 2.61 2/7144 3529150\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66870485448233,
+          "loadavg": "2.77 2.35 2.61 1/7144 3529161\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66871026460249,
+          "loadavg": "2.77 2.35 2.61 1/7143 3529171\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66871566461303,
+          "loadavg": "2.77 2.35 2.61 6/7145 3529180\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66872102134915,
+          "loadavg": "2.77 2.35 2.61 1/7145 3529192\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66872634117616,
+          "loadavg": "2.77 2.35 2.61 6/7145 3529218\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66873176638768,
+          "loadavg": "2.77 2.35 2.61 1/7145 3529226\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66873719174675,
+          "loadavg": "2.95 2.39 2.62 1/7146 3529237\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66874259296935,
+          "loadavg": "2.95 2.39 2.62 6/7152 3529273\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66874792014226,
+          "loadavg": "2.95 2.39 2.62 2/7153 3529289\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66875331438374,
+          "loadavg": "2.95 2.39 2.62 3/7190 3529360\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        },
+        {
+          "monotonic_ns": 66875863141660,
+          "loadavg": "2.95 2.39 2.62 9/7174 3529453\n",
+          "compiler_pids": [
+            "3529041"
+          ]
+        }
+      ]
+    },
+    {
+      "family": "fixed",
+      "pair": 1,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "native-fixed-1-next",
+      "cpu_ms_per_turn": 16.2109375,
+      "write_kib_per_turn": 784.71875,
+      "p50_ms": 34.440642499999996,
+      "p95_ms": 262.37579999999997,
+      "active_compiler_samples": []
+    },
+    {
+      "family": "fixed",
+      "pair": 1,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "native-fixed-1-base",
+      "cpu_ms_per_turn": 15.1171875,
+      "write_kib_per_turn": 785.6875,
+      "p50_ms": 32.5263575,
+      "p95_ms": 50.50486,
+      "active_compiler_samples": []
+    },
+    {
+      "family": "rotating",
+      "pair": 0,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "native-rotating-0-base",
+      "cpu_ms_per_turn": 13.1640625,
+      "write_kib_per_turn": 526.625,
+      "p50_ms": 29.3466825,
+      "p95_ms": 39.590563,
+      "active_compiler_samples": []
+    },
+    {
+      "family": "rotating",
+      "pair": 0,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "native-rotating-0-next",
+      "cpu_ms_per_turn": 16.171875,
+      "write_kib_per_turn": 526.8125,
+      "p50_ms": 32.008031,
+      "p95_ms": 234.777558,
+      "active_compiler_samples": [
+        {
+          "monotonic_ns": 67129275203887,
+          "loadavg": "4.15 3.25 2.90 3/7123 3544237\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67129808207861,
+          "loadavg": "4.15 3.25 2.90 8/7127 3544292\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67130345326333,
+          "loadavg": "4.15 3.25 2.90 4/7127 3544336\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67130877164037,
+          "loadavg": "4.15 3.25 2.90 2/7127 3544345\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67131408754967,
+          "loadavg": "4.15 3.25 2.90 2/7128 3544373\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67131940809242,
+          "loadavg": "4.15 3.25 2.90 2/7130 3544404\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67132478094803,
+          "loadavg": "4.15 3.25 2.90 2/7130 3544414\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67133013267233,
+          "loadavg": "4.15 3.25 2.90 2/7130 3544480\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67133548965523,
+          "loadavg": "4.15 3.25 2.90 3/7139 3544510\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67134088573242,
+          "loadavg": "4.13 3.26 2.91 4/7171 3544551\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67134622582667,
+          "loadavg": "4.13 3.26 2.91 2/7133 3544573\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67135161229203,
+          "loadavg": "4.13 3.26 2.91 2/7135 3544778\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67135694358973,
+          "loadavg": "4.13 3.26 2.91 2/7139 3544820\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67136226882197,
+          "loadavg": "4.13 3.26 2.91 2/7139 3544940\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67136767729294,
+          "loadavg": "4.13 3.26 2.91 2/7146 3544976\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67137299762700,
+          "loadavg": "4.13 3.26 2.91 2/7148 3544988\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67137832768947,
+          "loadavg": "4.13 3.26 2.91 2/7148 3545010\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67138368706060,
+          "loadavg": "4.13 3.26 2.91 2/7149 3545031\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67138903853058,
+          "loadavg": "4.60 3.37 2.94 1/7150 3545034\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        },
+        {
+          "monotonic_ns": 67139449095554,
+          "loadavg": "4.60 3.37 2.94 5/7150 3545060\n",
+          "compiler_pids": [
+            "3543481"
+          ]
+        }
+      ]
+    },
+    {
+      "family": "rotating",
+      "pair": 1,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "native-rotating-1-next",
+      "cpu_ms_per_turn": 15.9765625,
+      "write_kib_per_turn": 526.3125,
+      "p50_ms": 33.6641145,
+      "p95_ms": 49.361676,
+      "active_compiler_samples": []
+    },
+    {
+      "family": "rotating",
+      "pair": 1,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "native-rotating-1-base",
+      "cpu_ms_per_turn": 13.671875,
+      "write_kib_per_turn": 526.5,
+      "p50_ms": 30.0938845,
+      "p95_ms": 42.108097,
+      "active_compiler_samples": []
+    }
+  ],
+  "paired": {
+    "fixed": {
+      "values": [
+        {
+          "cpu_ms_per_turn": 25.423728813559322,
+          "write_kib_per_turn": 0.0,
+          "p50_ms": 20.946995841010363,
+          "p95_ms": 623.9271987579526
+        },
+        {
+          "cpu_ms_per_turn": 7.235142118863047,
+          "write_kib_per_turn": -0.123299657942888,
+          "p50_ms": 5.885334685877419,
+          "p95_ms": 419.5060435767963
+        }
+      ],
+      "median_percent": {
+        "cpu_ms_per_turn": 16.329435466211184,
+        "write_kib_per_turn": -0.061649828971444,
+        "p50_ms": 13.41616526344389,
+        "p95_ms": 521.7166211673745
+      }
+    },
+    "rotating": {
+      "values": [
+        {
+          "cpu_ms_per_turn": 22.8486646884273,
+          "write_kib_per_turn": 0.0356040826014814,
+          "p50_ms": 9.068651967730945,
+          "p95_ms": 493.0139412263473
+        },
+        {
+          "cpu_ms_per_turn": 16.85714285714286,
+          "write_kib_per_turn": -0.03561253561253919,
+          "p50_ms": 11.863639604252473,
+          "p95_ms": 17.22609074449506
+        }
+      ],
+      "median_percent": {
+        "cpu_ms_per_turn": 19.85290377278508,
+        "write_kib_per_turn": -4.226505528892588e-06,
+        "p50_ms": 10.46614578599171,
+        "p95_ms": 255.1200159854212
+      }
+    }
+  }
+}
