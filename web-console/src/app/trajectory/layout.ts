@@ -1,7 +1,6 @@
 import {traceAttemptKey,traceStepKey,traceOccurrenceKey,sameTraceStep} from '../../../../protocol/app-server/trace-identity';
 import {canonicalLocatorKey} from '../../../../protocol/app-server/content-identity';
 import { traceStateLabel } from '../../bindings/status-labels';
-import { configurationSummary } from '../../bindings/configuration-change';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
 import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v77';
@@ -126,7 +125,6 @@ export interface TrajectoryProjection {
 
 function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   if (record.kind === 'attempt' || record.kind === 'step') return [];
-  if (record.kind === 'configuration' && record.configuration) return [{ ...origin(record, 'record', recordLabel(tx, record), configurationSummary(tx, record.configuration), 'overview', record.id), type: 'RecordRow' }];
   if (record.kind !== 'request' || !record.request) return [{ ...origin(record, 'record', recordLabel(tx, record), record.preview?.text ?? '', 'overview', record.id), type: 'RecordRow' }];
   const request = record.request;
   const cells: InspectableDisplayItem[] = [];
@@ -152,6 +150,8 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
     // and delivered Context. Lifecycle audits stay out of rows, spans and Turns
     // even when the Tool or notice is on another page.
     if (record.kind === 'background' || record.kind === 'interaction' || record.kind === 'subagent' || record.kind === 'workflow' && record.originating_tool_call_id != null) continue;
+    // Harness shows model-visible changes from the request's prompt and tools.
+    if (record.kind === 'configuration') continue;
     const attempt = traceAttemptKey(record.location), step = traceStepKey(record.location);
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });

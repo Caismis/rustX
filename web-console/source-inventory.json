@@ -919,7 +919,6 @@
       "retained_dependencies": [
         "../../../../protocol/app-server/trace-identity",
         "../../../../protocol/app-server/v77",
-        "../../bindings/configuration-change",
         "../../bindings/jobs",
         "../../bindings/recorded-tool-details",
         "../../bindings/status-labels",
@@ -936,7 +935,6 @@
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
         "../../presentation/primitives/json",
-        "../agent/SourceContent",
         "../agent/workflow-state",
         "../components/Artifact",
         "./Trajectory.module.css",
@@ -988,7 +986,7 @@
           "treatment": "Share semantic between-Turn classification across ledger, Inspector and bilingual search. Preserve compaction/reused-history labels without treating unowned native Agent/Background/Workflow activities as between-Turn material or inventing nearby execution ownership."
         }
       ],
-      "local_sha256": "2d12855a9541760c369d4053fe2dced76c723288d3668dfb875f05ca664885b9"
+      "local_sha256": "0f6a0b07d29afbeb67c2d07abf833d84c0c629e19d2f2dbb2cb217ae11e9407d"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1066,7 +1064,6 @@
         "../../../../protocol/app-server/content-identity",
         "../../../../protocol/app-server/trace-identity",
         "../../../../protocol/app-server/v77",
-        "../../bindings/configuration-change",
         "../../bindings/status-labels",
         "../../locale/translation",
         "./workflow"
@@ -1081,7 +1078,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e5fcd7500620207f048fae0d497270591603f9f317e260a947c1556082379f06",
+      "local_sha256": "e2db735f22dfe8f9ab617cea905ce80150b5b81fd1b6e597ea0daf093eedeee3",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -1112,6 +1109,12 @@
           "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
           "upstream_sha256": "1a4eeb432d55820c36c50975ee37b052d2148818705941a9315a2ac0a5b78ea6",
           "treatment": "Harness presents Agent interaction and background jobs through actual Tool and Context messages. Exclude native lifecycle audits at the shared Web trajectory projection so ledger, search, Inspector targets and both timeline modes agree; retain canonical Trace facts and header controls."
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/trajectory-request-header-definition.ts",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "9b8032aa9d407411026937db2dab709f76b312a3ce33dc553fec663041bca220",
+          "treatment": "Use the model-visible prompt and tools captured for the request as the configuration change presentation. Keep settings commit audits in native Trace."
         }
       ]
     },
@@ -3337,7 +3340,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "22614ebe695007da20d2330b94afc1ab0a5ca6e2b420981d187febd65dd33bfa"
+      "local_sha256": "3e516ae15f48ec86b14163e069e933bf7cb04602b2ed8389abc3a1a6c715f922"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -4138,7 +4141,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "943528ceeaf13613c415030e8596521331e293db6a6491b67e3394ec2073fa4d"
+      "local_sha256": "e2c2e5555b0d73c43db2ff6eb5bd5c9a8a0f088a766f6acf720ee26baf3572be"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",

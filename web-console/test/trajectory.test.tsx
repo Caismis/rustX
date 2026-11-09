@@ -31,6 +31,27 @@ it('a page of background lifecycle records does not create standalone rows or em
   expect(projectTrajectory(translator('en'), records).sections).toEqual([]);
 });
 
+it('only the request using a configuration change introduces a System cell', () => {
+  const tx = translator('en');
+  const before = traceRecord(1);
+  const audit = traceRecord(2, { kind: 'configuration', request: null, location: {} });
+  const after = traceRecord(3, { location: { attempt_id: 'next-turn', step_id: '1' } });
+  after.request!.system_prompt.state = 'changed';
+  after.request!.tool_catalog = 'changed';
+
+  expect(projectTrajectory(tx, [before, audit])).toEqual(projectTrajectory(tx, [before]));
+  const projection = projectTrajectory(tx, [before, audit, after]);
+  expect(searchItems(projection, audit.id)?.size).toBe(0);
+  expect(flattenTrajectory(tx, projection).filter(item => item.type === 'SystemPromptCell')).toEqual([
+    expect.objectContaining({ owner_record_id: after.id, label: 'System Prompt and Tools Updated', facet: 'diff' }),
+  ]);
+  for (const mode of ['sequence', 'duration'] as const) {
+    const timeline = trajectoryTimeline(tx, projection, mode)!;
+    expect(timeline.spans.map(span => span.kind).sort()).toEqual(['request', 'request', 'system']);
+    expect(timeline.spans.find(span => span.kind === 'system')?.ownerId).toBe(after.id);
+  }
+});
+
 it('background launch Trace output describes acceptance without claiming the command finished', () => {
   const record = traceTool(1), detail = toolDetail(1);
   detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-background', state: 'starting', tool: 'bash', output_path: '/workspace/background.txt', note: 'Raw continuation guidance' }, truncated: false } }];

@@ -10,6 +10,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { returnHome, connectRemote, openSettingsPage } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { diagnosticCut } from './wire-diagnostics';
+import { captureEvidence } from './screenshot';
 import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v77';
 
 function immutable(request: TraceRequestDetail) {
@@ -134,10 +135,9 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     await page.screenshot({ path: '/tmp/rustx-configuration-chat-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
-    await page.locator(`[data-trace-id="${committed.id}"]`).first().click();
-    await expect(page.getByRole('complementary', { name: 'Event details' }).locator('[data-configuration-instructions]')).toContainText('TRACE_NEW_INSTRUCTIONS');
     const boundary = page.locator(`[data-display-type="SystemPromptCell"][data-owner="${current.id}"]`);
     await expect(boundary).toContainText('System Prompt and Tools Updated');
+    await expect(page.locator(`[data-owner="${committed.id}"], [data-timeline-span="configuration"]`)).toHaveCount(0);
     await boundary.click();
     await page.getByRole('tab', { name: 'Diff', exact: true }).click();
     const inspector = page.getByRole('complementary', { name: 'Event details' });
@@ -146,7 +146,13 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     await expect(page.getByRole('complementary', { name: 'Event details' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
     await expect(inspector.getByRole('heading', { name: 'Tools', exact: true })).toBeVisible();
     await expect(inspector.getByRole('tabpanel')).toContainText('-    "name": "read"');
-    await page.screenshot({ path: '/tmp/rustx-system-trajectory-desktop.png' });
+    await captureEvidence(page, 'request-configuration-diff-desktop');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(inspector.getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await captureEvidence(page, 'request-configuration-diff-mobile');
+    expect(wire.requests.some(request => request.method === 'session/traceDetail' && request.params.record_id === committed.id)).toBe(false);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(browserErrors).toEqual([]);
     passed = true;
   } catch (error) {
