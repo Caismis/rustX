@@ -17,6 +17,7 @@ async function observeLatency(page: Page) {
     const evidence: SessionLatency = { marks: [], rpc: [], http: [] };
     window.__sessionLatency = evidence;
     const NativeSocket = window.WebSocket;
+    const lineage = new Map<string, { sessionId: string; nodeId: string }>();
     const attachmentIdentity = (target?: Record<string, unknown>) => {
       if (!target) return undefined;
       const identity = [target.session_id, target.conversation_id, target.runtime_incarnation, target.attachment_id];
@@ -27,13 +28,29 @@ async function observeLatency(page: Page) {
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
         this.addEventListener('message', event => {
-          const reply = JSON.parse(event.data) as { id?: unknown; error?: { data?: { kind?: string } }; result?: { type?: string; target?: Record<string, unknown> } };
+          const reply = JSON.parse(event.data) as { id?: unknown; error?: { data?: { kind?: string } }; result?: {
+            type?: string; target?: Record<string, unknown>;
+            session?: { id: string; active_node: string; active_conversation_id: string };
+            node?: { id: string; conversation_id: string };
+          } };
           const row = this.calls.get(reply.id);
+          if (reply.result?.type === 'session' || reply.result?.type === 'session_transition') {
+            const session = reply.result.session;
+            if (session?.id && session.active_node && session.active_conversation_id) lineage.set(session.active_conversation_id, { sessionId: session.id, nodeId: session.active_node });
+          }
+          if (row?.method === 'session/node' && row.sessionId && reply.result?.type === 'node' && reply.result.node) {
+            lineage.set(reply.result.node.conversation_id, { sessionId: row.sessionId, nodeId: reply.result.node.id });
+          }
           if (row) {
             row.end = performance.now(); row.bytes = event.data.length;
             row.error = reply.error ? reply.error.data?.kind || 'untyped_rpc_error' : undefined;
             row.resultType = reply.result?.type;
-            if (row.method === 'thread/resume' && !row.error) row.target = attachmentIdentity(reply.result?.target);
+            if (row.method === 'thread/resume' && !row.error) {
+              const target = reply.result?.target;
+              const observed = typeof target?.conversation_id === 'string' ? lineage.get(target.conversation_id) : undefined;
+              row.target = attachmentIdentity(target);
+              if (observed && observed.sessionId === target?.session_id) { row.sessionId = observed.sessionId; row.nodeId = observed.nodeId; }
+            }
             this.calls.delete(reply.id);
           }
         });
@@ -72,6 +89,9 @@ async function report(page: Page, info: TestInfo) {
   const evidence = await page.evaluate(() => window.__sessionLatency);
   await info.attach('session-latency.json', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' });
   console.log('SESSION_LATENCY', JSON.stringify(evidence));
+  for (const attach of evidence.rpc.filter(row => row.method === 'thread/resume' && row.error === undefined && row.resultType === 'attached')) {
+    expect(attach).toMatchObject({ sessionId: expect.any(String), nodeId: expect.any(String), target: expect.any(String) });
+  }
   // Native rejects optional cold history while attach owns a Loading runtime.
   // Keep the rejection in the evidence and require its exact successful live
   // handoff; unrelated reads and every required operation must still succeed.

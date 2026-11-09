@@ -1,9 +1,10 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-09, Asia/Shanghai, through review comment 6742233989 and the
+Checked on 2026-11-09, Asia/Shanghai, through review comment 6744114729 and the
 requested first-image/navigation policy. Current repairs cover retained geometry
 visibility across primary pages, v3 browser fixtures, committed Session recovery,
-proxy retirement, narrow child titles and the Native closed-peer test precondition.
+proxy retirement, narrow child titles, the Native closed-peer test precondition,
+and exact-target browser restoration/latency evidence.
 Validation and screenshot evidence are in
 [the comment/CI repair report](comment-ci-repairs-20261109.md). The preceding
 upstream-main and v75 integration is recorded in
@@ -41,6 +42,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6744114729](https://github.com/Caismis/rustX/pull/517#issuecomment-6744114729) | Reload verification matches the selected Session's real resume, checkpoint and subscription to its exact target, retaining concurrent background restoration and all authority, membership, credentials and no-send checks. The v75 latency observer derives missing resume identity from observed Native Session/Node lineage and the returned target. Successful attachments require complete metadata; the strict superseded-history classifier and its error evidence remain unchanged. |
 | [6742233989](https://github.com/Caismis/rustX/pull/517#issuecomment-6742233989) | Home no longer renews eligibility from an old restore destination tag. Primary-page navigation carries only an already-current hint for the same previously admitted editor. Unadmitted startup hints and failed replacements retain their stale revision. Three-page failed-Fork/reload regressions and a previously admitted selection with pending Native recovery protect retirement, alongside the repeated-offline positive and cold-selection controls. |
 | [6738080037](https://github.com/Caismis/rustX/pull/517#issuecomment-6738080037) | Repeated primary-page visits retain a still-current restore hint for the previously admitted Home editor. Cold explicit selections remain ephemeral; replacement navigation and authority retirement retain their protections. Component and real-Native browser regressions cover two offline primary-page/Home returns followed by a fresh App or page reload. The closed-peer framing test creates and closes its peer in an isolated test process with both original error assertions; full Linux and macOS CI passed at `9f887269e`. Current validation is in [the repair report](comment-ci-repairs-20261109.md). |
 | [6736369065](https://github.com/Caismis/rustX/pull/517#issuecomment-6736369065) | Home activation reaches retained artifact geometry while preserving its canvas and fixed copy. The cold-MCP fixtures use explicit v3 Session routes with their original call-count assertions. Held Workspace reads assert the disabled preparation label, then the enabled Send action, with input and layout preservation. Real-App route and existing hidden surface/outline regressions cover visibility; the associated CI repairs and validation are recorded in [the repair report](comment-ci-repairs-20261109.md). |
