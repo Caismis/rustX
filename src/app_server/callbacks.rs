@@ -161,9 +161,7 @@ impl Publication {
             None => Acceptance::Discarded,
             Some(std::task::Poll::Pending) => Acceptance::Pending,
             Some(std::task::Poll::Ready(Err(error))) => Acceptance::Failed(error),
-            Some(std::task::Poll::Ready(Ok(value))) => {
-                Acceptance::Accepted(record.to_owned(), value)
-            }
+            Some(std::task::Poll::Ready(Ok(value))) => Acceptance::Accepted(None, value),
         }
     }
 }

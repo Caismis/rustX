@@ -308,9 +308,10 @@ impl Outbound {
         } = self;
         let outcome = if let Some(callback) = callback {
             match callback.hand_off(record, accept) {
-                super::registration::Acceptance::Accepted(record, value) => {
-                    Poll::Ready(Ok((record, Some(value))))
-                }
+                super::registration::Acceptance::Accepted(replacement, value) => Poll::Ready(Ok((
+                    replacement.unwrap_or_else(|| std::mem::take(record)),
+                    Some(value),
+                ))),
                 super::registration::Acceptance::Pending => Poll::Pending,
                 super::registration::Acceptance::Discarded => {
                     Poll::Ready(Ok((String::new(), None)))
@@ -319,9 +320,10 @@ impl Outbound {
             }
         } else if let Some(registration) = registration {
             match registration.hand_off(record, accept) {
-                super::registration::Acceptance::Accepted(record, value) => {
-                    Poll::Ready(Ok((record, Some(value))))
-                }
+                super::registration::Acceptance::Accepted(replacement, value) => Poll::Ready(Ok((
+                    replacement.unwrap_or_else(|| std::mem::take(record)),
+                    Some(value),
+                ))),
                 super::registration::Acceptance::Pending => Poll::Pending,
                 super::registration::Acceptance::Discarded => {
                     Poll::Ready(Ok((String::new(), None)))
