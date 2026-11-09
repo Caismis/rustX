@@ -66,6 +66,12 @@ impl PreparedTranscriptRow {
     /// Called only after a native reader proved the current body bytes again.
     /// Current response decoration never inherits the older owner's authority.
     pub(crate) fn with_decoration(&self, value: &Arc<RuntimeClientTranscriptEntry>) -> Self {
+        // The caller has already checked current body/Tool bytes and obtained
+        // current response facts. Equal presentation reuses computation only;
+        // it never substitutes an old read proof for those fresh checks.
+        if self.0.decoration.matches(value) {
+            return self.clone();
+        }
         Self(Arc::new(Row {
             body: self.0.body.clone(),
             decoration: body::Decoration::from_entry(value),

@@ -589,3 +589,113 @@ fn native_row_owner_is_shared_only_with_the_exact_proven_decoration() {
     assert!(updated.response_pending);
     assert_eq!(serde_json::to_vec(&first).unwrap(), frozen);
 }
+
+#[test]
+fn unchanged_decoration_reuses_row_admission_and_releases_the_fresh_read() {
+    for bytes in [512, CHECKPOINT_ITEM_BYTES * 3] {
+        let original = row(1, bytes);
+        let native = original.native_entry();
+        let frozen = serde_json::to_vec(&native).unwrap();
+        let first = PreparedTranscriptHead::new(vec![original.clone()]);
+        compare(
+            &first,
+            &values(std::slice::from_ref(&original)),
+            CHECKPOINT_TARGET_BYTES / 8,
+            1,
+        );
+        take_work();
+        body::take_body_work();
+        for revision in 2..=64 {
+            let reread = Arc::new(native.as_ref().clone());
+            let transient = Arc::downgrade(&reread);
+            let reused = original.with_decoration(&reread);
+            assert!(reused.same_owner(&original));
+            assert!(Arc::ptr_eq(&reused.native_entry(), &native));
+            drop(reread);
+            assert_eq!(
+                transient.strong_count(),
+                0,
+                "the redundant read is not retained"
+            );
+            compare(
+                &PreparedTranscriptHead::new(vec![reused]),
+                &values(std::slice::from_ref(&original)),
+                CHECKPOINT_TARGET_BYTES / 8,
+                revision,
+            );
+        }
+        assert_eq!(
+            take_work(),
+            0,
+            "unchanged rows retain their capture admission"
+        );
+        assert_eq!(body::take_body_work(), [0, 0]);
+        assert_eq!(serde_json::to_vec(&native).unwrap(), frozen);
+    }
+}
+
+#[test]
+fn decoration_reuse_preserves_signed_rate_and_old_cut_bytes() {
+    use crate::durable::response::CompletedResponseTiming;
+    use crate::observation::content::CanonicalContentLocator;
+    use crate::observation::turn::{CompletedResponseView, ObservedResponseOrigin};
+
+    let mut source = entry(1, 64);
+    source.completed_response = Some(CompletedResponseView {
+        closing_message_id: Some(MessageId::new("response")),
+        closing_locator: CanonicalContentLocator::ByLedgerPosition { position: 1 },
+        retry_locator: None,
+        deferred_fields: Vec::new(),
+        origin: ObservedResponseOrigin {
+            conversation_id: conversation(),
+            attempt_id: None,
+            attempt_id_source: None,
+            closing_message_id: Some(MessageId::new("response")),
+        },
+        completed_at: chrono::DateTime::from_timestamp(1, 0).unwrap(),
+        surface_revision: crate::conversation::SurfaceRevision::new(1),
+        retry_message_id: None,
+        usage: Some(crate::model::ModelUsage {
+            input_tokens: Some(u64::MAX),
+            output_tokens: Some(0),
+            total_tokens: None,
+            details: None,
+        }),
+        timing: Some(CompletedResponseTiming {
+            total_duration_ms: Some(1),
+            ttft_ms: None,
+            generation_ms: Some(0),
+            output_tokens_per_second: Some(0.0),
+        }),
+        models: vec!["fixture/model".into()],
+    });
+    let old = PreparedTranscriptRow::new(conversation(), Arc::new(source.clone()));
+    let frozen = serde_json::to_vec(&old.native_entry()).unwrap();
+    let mut current = source;
+    current
+        .completed_response
+        .as_mut()
+        .unwrap()
+        .timing
+        .as_mut()
+        .unwrap()
+        .output_tokens_per_second = Some(-0.0);
+    assert_eq!(current, old.value(), "PartialEq alone merges signed zeros");
+    let negative = old.with_decoration(&Arc::new(current.clone()));
+    assert!(!negative.same_owner(&old));
+    assert_ne!(
+        serde_json::to_vec(&negative.native_entry()).unwrap(),
+        frozen
+    );
+    let repeat = negative.with_decoration(&Arc::new(current.clone()));
+    assert!(repeat.same_owner(&negative));
+    for (row, value) in [(&old, old.value()), (&negative, current)] {
+        compare(
+            &PreparedTranscriptHead::new(vec![row.clone()]),
+            &[value],
+            CHECKPOINT_TARGET_BYTES / 8,
+            7,
+        );
+    }
+    assert_eq!(serde_json::to_vec(&old.native_entry()).unwrap(), frozen);
+}
