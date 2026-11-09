@@ -238,6 +238,10 @@ class Planning(unittest.TestCase):
         run = v.plan("pull_request", [], modified("src/lib.rs"))["run"]
         self.assertTrue(run["rust-fast"] and run["rust-platform-core"] and run["web-client"])
         self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"])
+        self.assertFalse(run["desktop-macos"])
+        for path in ("src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"):
+            with self.subTest(path=path):
+                self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["desktop-macos"])
         run = v.plan("pull_request", [], modified("README.md"))["run"]
         self.assertEqual({job for job, selected in run.items() if selected}, {"documentation-contracts"})
         run = v.plan("pull_request", [], modified("tests/README.md"))["run"]

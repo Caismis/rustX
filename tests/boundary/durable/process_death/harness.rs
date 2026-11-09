@@ -202,6 +202,7 @@ impl Lab {
             .args([
                 "--exact",
                 CHILD_TEST,
+                "--ignored",
                 "--quiet",
                 "--nocapture",
                 "--test-threads",

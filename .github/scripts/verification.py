@@ -71,7 +71,7 @@ SURFACES = {
     "rust": ("src/**", "tests/**", "examples/**", "benches/**", "build.rs", "Cargo.toml",
              "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**"),
     "protocol": ("protocol/**",),
-    "web": ("web-console/**",),
+    "web": ("web-console/**", "src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"),
     "tui": ("tui/**",),
     "dev": ("dev/**",),
 }

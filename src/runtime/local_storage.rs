@@ -814,10 +814,10 @@ mod tests {
     use std::process::{Command, Stdio};
 
     #[test]
+    #[ignore = "fixture subprocess, invoked by its parent test"]
     fn lifecycle_process_gate() {
-        let Some(root) = std::env::var_os("RUSTX_260_LOCK_ROOT") else {
-            return;
-        };
+        let root = std::env::var_os("RUSTX_260_LOCK_ROOT")
+            .expect("fixture parent must provide its environment");
         let root = ProductRoot::existing(Path::new(&root)).unwrap();
         let allocation = root.root().join("conversation-b");
         let _guard: Box<dyn std::any::Any> = match std::env::var("RUSTX_260_LOCK_MODE")
@@ -838,6 +838,7 @@ mod tests {
             .args([
                 "--exact",
                 "runtime::local_storage::tests::lifecycle_process_gate",
+                "--ignored",
                 "--nocapture",
                 "--format=terse",
             ])
@@ -909,10 +910,10 @@ mod tests {
     /// the owning test can SIGKILL a process that has provably completed the
     /// reservation's durability barrier and nothing else.
     #[test]
+    #[ignore = "fixture subprocess, invoked by its parent test"]
     fn reservation_process_gate() {
-        let Some(root) = std::env::var_os("RUSTX_387_RESERVE_ROOT") else {
-            return;
-        };
+        let root = std::env::var_os("RUSTX_387_RESERVE_ROOT")
+            .expect("fixture parent must provide its environment");
         let conversation = crate::runtime::identity::ConversationId::new(
             std::env::var("RUSTX_387_RESERVE_ID").unwrap(),
         );
@@ -936,6 +937,7 @@ mod tests {
             .args([
                 "--exact",
                 "runtime::local_storage::tests::reservation_process_gate",
+                "--ignored",
                 "--nocapture",
                 "--format=terse",
             ])

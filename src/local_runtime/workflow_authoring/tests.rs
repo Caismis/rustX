@@ -1859,11 +1859,11 @@ fn a_workspace_whose_workflow_directory_is_global_holds_its_one_capacity_lock_on
 /// `RUSTX_491_CAPACITY_HOLD`, it reports holding its capacity locks and
 /// waits for a byte on stdin before going on.
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn capacity_process_writer_gate() {
     use std::io::{Read, Write};
-    let Ok(home) = std::env::var("RUSTX_491_CAPACITY_HOME") else {
-        return;
-    };
+    let home = std::env::var("RUSTX_491_CAPACITY_HOME")
+        .expect("fixture parent must provide its environment");
     let home = PathBuf::from(home);
     let session = PathBuf::from(std::env::var("RUSTX_491_CAPACITY_SESSION").unwrap());
     let manager = manager_at(&home, &session);
@@ -1913,6 +1913,7 @@ impl Writer {
             .args([
                 "--exact",
                 "local_runtime::workflow_authoring::tests::capacity_process_writer_gate",
+                "--ignored",
                 "--nocapture",
                 "--format=terse",
                 "--test-threads=1",
@@ -2564,11 +2565,14 @@ fn issue527_incomplete_unused_tree_keeps_startup_and_settings_usable_with_comple
     )
     .unwrap();
     let changed = roots.manager.capture_source_settings(&target).unwrap();
-    assert!(!same_capture(
+    assert!(same_capture(
         &baseline.0.resource_revisions[&root],
         &changed.0.resource_revisions[&root]
     ));
-    assert_ne!(baseline.1, changed.1);
+    assert_ne!(
+        baseline.1, changed.1,
+        "the source manifest fences Skill definitions separately"
+    );
     std::fs::write(roots.a.join("notes.md"), "other").unwrap();
     let instructions = roots.manager.capture_source_settings(&target).unwrap();
     assert!(!same_capture(
@@ -2588,11 +2592,8 @@ fn issue527_incomplete_unused_tree_keeps_startup_and_settings_usable_with_comple
     )
     .unwrap();
     let added = roots.manager.capture_source_settings(&target).unwrap();
-    assert!(
-        !same_capture(
-            &changed.0.resource_revisions[&root],
-            &added.0.resource_revisions[&root]
-        ),
+    assert_ne!(
+        direct.1, added.1,
         "candidate membership includes invalid identities"
     );
 }

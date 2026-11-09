@@ -557,13 +557,7 @@ mod tests {
             "https://example.com/pkg.tgz",
             "file:../pkg",
             "workspace:*",
-            "1.0.0-beta.1",
         ] {
-            // 1.0.0-beta.1 is a valid prerelease exact version.
-            if bad_node == "1.0.0-beta.1" {
-                assert!(parse_node_dependencies(&format!(r#"{{"pkg":"{bad_node}"}}"#)).is_ok());
-                continue;
-            }
             let json = format!(r#"{{"pkg":"{bad_node}"}}"#);
             let result = parse_node_dependencies(&json);
             assert!(
@@ -571,6 +565,8 @@ mod tests {
                 "node {bad_node:?} must be rejected, got {result:?}"
             );
         }
+        assert!(parse_python_dependencies(r#"{"pkg":"1.0rc1"}"#).is_ok());
+        assert!(parse_node_dependencies(r#"{"pkg":"1.0.0-beta.1"}"#).is_ok());
     }
 
     /// Duplicate compatible declarations coalesce; incompatible ones

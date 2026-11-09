@@ -92,11 +92,11 @@ async fn resumed_delegate_without_acceptance_is_delivery_unknown() {
 /// Dedicated subprocess entry: the production `spawn_staged` command starts
 /// this through its shell trampoline, inheriting the real authority fd.
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn staged_rollback_wire_child() {
     use std::os::fd::AsFd as _;
-    if std::env::var_os("RUSTX_STAGED_ROLLBACK_FIXTURE").is_none() {
-        return;
-    }
+    std::env::var_os("RUSTX_STAGED_ROLLBACK_FIXTURE")
+        .expect("fixture parent must provide its environment");
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let stream = std::os::unix::net::UnixStream::from(
             std::io::stdin().as_fd().try_clone_to_owned().unwrap(),
@@ -153,7 +153,7 @@ async fn staged_rollback_uncertainty_survives_prepare_and_durable_admission_roll
         .replace('\'', "'\\''");
     let script = plane.dir.path().join("unproven-child.sh");
     std::fs::write(&script, format!(
-        "#!/bin/sh\nRUSTX_STAGED_ROLLBACK_FIXTURE=1 exec '{executable}' --exact runtime::subagent::registry::tests::resume::staged_rollback_wire_child --nocapture\n"
+        "#!/bin/sh\nRUSTX_STAGED_ROLLBACK_FIXTURE=1 exec '{executable}' --exact runtime::subagent::registry::tests::resume::staged_rollback_wire_child --ignored --nocapture\n"
     )).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     plane.registry.config.spawn.program = script;

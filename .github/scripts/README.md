@@ -11,7 +11,7 @@ No application code, server, or additional Python packages are involved.
 - Non-draft PR head updated: a reminder to review again.
 - PR merged: target branch and PR link. Unmerged closures are quiet.
 - Issue assigned: assignee and issue link.
-- `CI` or `Workspace Host platform conformance` failed or timed out: branch,
+- `CI` failed or timed out: branch,
   failing jobs, job links, and workflow run link. Reruns report the current
   attempt only. Successful and cancelled runs are quiet.
 

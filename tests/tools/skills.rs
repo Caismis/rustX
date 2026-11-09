@@ -9,7 +9,7 @@ use std::path::Path;
 
 use rustx::runtime::identity::SkillVersionId;
 use rustx::skills::{
-    DependencyError, SkillDiagnostic, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError,
+    SkillDiagnostic, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError,
     merge_dependency_manifests, node_environment_digest, python_environment_digest,
     render_skill_catalog,
 };
@@ -782,14 +782,6 @@ fn dependency_change_changes_the_version_identity() {
 // Dependency declarations
 // ---------------------------------------------------------------------------
 
-fn parse_python(value: &str) -> BTreeMap<String, String> {
-    rustx::skills::parse_python_dependencies(value).expect("parse")
-}
-
-fn parse_node(value: &str) -> BTreeMap<String, String> {
-    rustx::skills::parse_node_dependencies(value).expect("parse")
-}
-
 /// An absent metadata key means an empty dependency map.
 #[test]
 fn absent_metadata_key_is_an_empty_dependency_map() {
@@ -798,71 +790,6 @@ fn absent_metadata_key_is_an_empty_dependency_map() {
     let packages = discover(&workspace);
     assert!(packages[0].dependencies().python.is_empty());
     assert!(packages[0].dependencies().node.is_empty());
-}
-
-/// Exact dependency JSON objects parse deterministically; different JSON
-/// key ordering produces the same canonical set.
-#[test]
-fn exact_dependency_objects_parse_deterministically() {
-    let first = parse_python(r#"{"pypdf":"5.9.0","Pillow":"11.3.0"}"#);
-    let second = parse_python(r#"{"Pillow":"11.3.0","pypdf":"5.9.0"}"#);
-    assert_eq!(first, second);
-    assert_eq!(
-        first,
-        [
-            ("pillow".to_owned(), "11.3.0".to_owned()),
-            ("pypdf".to_owned(), "5.9.0".to_owned()),
-        ]
-        .into_iter()
-        .collect(),
-        "python names normalize deterministically"
-    );
-    let node = parse_node(r#"{"pdf-lib":"1.17.1","@scope/pkg":"2.0.0"}"#);
-    assert_eq!(node.get("@scope/pkg").expect("scoped"), "2.0.0");
-}
-
-/// Ranges, URLs, local paths, tags, and other unsupported declarations are
-/// rejected for both ecosystems.
-#[test]
-fn unsupported_declarations_are_rejected() {
-    for bad in [
-        ">=1.0",
-        "~=1.0",
-        "==1.0",
-        "1.0.*",
-        "1.0[extra]",
-        "1.0; python_version<'3.9'",
-        "https://example.com/pkg.tar.gz",
-        "git+https://example.com/repo.git",
-        "../local",
-    ] {
-        let result = rustx::skills::parse_python_dependencies(&format!(r#"{{"pkg":"{bad}"}}"#));
-        assert!(
-            matches!(result, Err(DependencyError::InvalidVersion { .. })),
-            "python {bad:?} must be rejected"
-        );
-    }
-    for bad in [
-        "^1.0.0",
-        "~1.0.0",
-        ">=1.0.0",
-        "1.0.x",
-        "*",
-        "latest",
-        "1.0.0 || 2.0.0",
-        "git+https://example.com/repo.git",
-        "workspace:*",
-        "file:../pkg",
-    ] {
-        let result = rustx::skills::parse_node_dependencies(&format!(r#"{{"pkg":"{bad}"}}"#));
-        assert!(
-            matches!(result, Err(DependencyError::InvalidVersion { .. })),
-            "node {bad:?} must be rejected"
-        );
-    }
-    // A valid prerelease exact version is accepted.
-    assert!(rustx::skills::parse_node_dependencies(r#"{"pkg":"1.0.0-beta.1"}"#).is_ok());
-    assert!(rustx::skills::parse_python_dependencies(r#"{"pkg":"1.0rc1"}"#).is_ok());
 }
 
 /// Duplicate compatible declarations coalesce across Skills; incompatible
