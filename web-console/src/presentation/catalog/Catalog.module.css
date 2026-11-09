@@ -325,5 +325,5 @@
   .controlsRight { flex: 1; }
   .globalControls .context, .globalControls .controlsRight { flex-basis: 100%; }
   .chooser { min-width: 0; }
-  .table th:nth-child(3), .table td:nth-child(3) { display: none; }
+  .table .optionalColumn { display: none; }
 }

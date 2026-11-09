@@ -141,7 +141,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             </div> : <p className={catalogCss.context}>{scopeLabel}</p>}
             <div className={clsx(catalogCss.controlsRight, css.tools)}>
               {!detail && <><CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
-                {module !== 'subagents' && <CatalogViewSwitch view={view} onChange={setView} />}</>}
+                <CatalogViewSwitch view={view} onChange={setView} /></>}
               <Button size="sm" variant="outline" className={css.refresh} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
                 disabled={!available || busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}><IconRefreshOutline16 /></Button>
             </div>
@@ -153,7 +153,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
                 <fieldset className={css.editor} disabled={!editable}>
                   {module === 'mcp' ? <McpPage source={source} scope={scope} revision={revision} focus={mcpFocus} onFocus={setMcpFocus}
                     scopeControl={<span>{scopeLabel}</span>} query={query} view={view} probeStates={probes.states} testConnection={probes.testConnection} probeAvailable={probes.available} />
-                    : module === 'subagents' ? <SubagentList source={source} scope={scope} revision={revision} query={query} onOpen={setResourceFocus} />
+                    : module === 'subagents' ? <SubagentList source={source} scope={scope} revision={revision} query={query} view={view} onOpen={setResourceFocus} />
                     : <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
                       query={query} view={view} focus={resourceFocus} onFocus={setResourceFocus} />}
                 </fieldset>

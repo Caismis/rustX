@@ -143,60 +143,18 @@
 .group { margin-bottom: 24px; }
 .group h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
 .group h2 span { margin-inline-start: 6px; font-size: 12px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
-.list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
+.table { table-layout: fixed; overflow-wrap: anywhere; }
+.enabledColumn { width: 96px; }
+.rowOpen { max-width: 100%; text-align: start; }
+.rowOpen svg { flex: none; }
+.narrowDescription { display: none; }
+
+@media (max-width: 760px) {
+  .table .enabledColumn { width: 72px; }
+  .narrowDescription { display: block; margin-top: 4px; }
 }
-.row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-inline-end: 12px;
-}
-.row + .row { border-top: 1px solid var(--dsw-alias-border-l2); }
-.row:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.row:first-child { border-start-start-radius: 12px; border-start-end-radius: 12px; }
-.row:last-child { border-end-start-radius: 12px; border-end-end-radius: 12px; }
-.rowOpen {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  min-width: 0;
-  min-height: 60px;
-  border: 0;
-  border-radius: 8px;
-  color: inherit;
-  background: none;
-  text-align: start;
-  cursor: pointer;
-}
-.icon {
-  display: grid;
-  flex: none;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border-radius: 10px;
-  background: var(--dsw-alias-bg-module-platform);
-  color: var(--dsw-alias-label-secondary);
-}
-.rowBody { display: grid; flex: 1; min-width: 0; gap: 1px; }
-.rowName, .rowDescription, .badge { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rowName { font-size: 14px; font-weight: 500; }
-.rowDescription, .badge, .rowChevron { color: var(--dsw-alias-label-secondary); }
-.rowDescription, .badge { font-size: 12px; }
-.badge { max-width: 38%; padding: 1px 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; }
-.rowChevron { flex: none; }
-.empty { color: var(--dsw-alias-label-secondary); text-align: center; margin: 32px 0; font-size: 13px; }
 
 @media (max-width: 660px) {
   .breadcrumb { margin-bottom: 18px; }
   .identity { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .rowOpen { flex-wrap: wrap; gap: 6px; }
-  .rowChevron { display: none; }
 }

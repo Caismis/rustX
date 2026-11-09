@@ -147,7 +147,22 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect.poll(workspaceDocument).toContain('global-reviewer');
   expect(readFileSync(f.settings,'utf8')).toContain('agents = ["auditor"]');
   await expect(agents.getByRole('listitem',{name:'global-reviewer',exact:true}).getByRole('switch')).toBeEnabled();
-  await expect(agents.getByRole('listitem', { name: 'global-reviewer', exact: true })).toBeVisible();
+  const listView = agents.getByRole('button', { name: 'List view', exact: true });
+  await listView.click();
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+  const inheritedRow = agents.getByRole('row', { name: /global-reviewer/ });
+  await expect(inheritedRow.getByRole('switch')).toBeChecked();
+  await expect(inheritedRow.getByText('Inherit default', { exact: true })).toBeVisible();
+  expect(await agents.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await captureEvidence(agents, `workspace-subagents-list-${width}`);
+  await inheritedRow.getByRole('button', { name: 'global-reviewer', exact: true }).click();
+  await expect(agents.getByRole('form', { name: 'Agent global-reviewer' })).toBeVisible();
+  await agents.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+  const cardView = agents.getByRole('button', { name: 'Card view', exact: true });
+  await cardView.click();
+  await expect(cardView).toHaveAttribute('aria-pressed', 'true');
+  await expect(agents.getByRole('listitem', { name: 'global-reviewer', exact: true }).getByRole('switch')).toBeChecked();
   expect(await agents.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
   await captureEvidence(agents,`workspace-subagents-${width}`);
 
