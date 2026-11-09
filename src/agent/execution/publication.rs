@@ -39,18 +39,18 @@ impl AgentExecution<'_> {
     pub(super) fn commit_assistant_message(
         &mut self,
         message_id: &MessageId,
-        content: &[crate::message::types::AssistantContentBlock],
+        content: Vec<crate::message::types::AssistantContentBlock>,
     ) -> Result<Option<bool>, CanonicalCommitError> {
         let block = MessageBlock::Assistant(AssistantMessageBlock {
             id: message_id.clone(),
-            content: content.to_vec(),
+            content,
         });
         if self
             .publication
             .as_ref()
             .is_some_and(|publication| publication.provider_completion.is_some())
         {
-            return self.commit_model_output(&block);
+            return self.commit_model_output(block);
         }
         if self.workflow_output.is_none() {
             return Err(CanonicalCommitError::Durable(
@@ -67,8 +67,9 @@ impl AgentExecution<'_> {
             ));
         };
         let stream_id = publication.start.stream_id.clone();
-        let prepared = self.conversation.prepare_commit(&block)?;
-        let event = Self::canonical_event(&block).expect("an Assistant commit has its event");
+        let prepared = self.conversation.prepare_owned_commit(block)?;
+        let event =
+            Self::canonical_event(prepared.message()).expect("an Assistant commit has its event");
         let (persisted, receipt) = self
             .store
             .commit_canonical_publication(
@@ -80,12 +81,25 @@ impl AgentExecution<'_> {
         // The stream settled canonically: the Ledger is the long-term
         // authority and no audit may ever be created for it.
         self.publication = None;
-        self.conversation.install_prepared(prepared);
-        if let Some(observer) = self.observer {
-            observer.observe_committed(&self.request.attempt_id, &block, &receipt);
-        }
+        self.install_observed_canonical(prepared, &receipt);
         self.record_persisted_event(persisted);
         Ok(None)
+    }
+
+    pub(super) fn install_observed_canonical(
+        &mut self,
+        prepared: crate::conversation::PreparedCanonicalCommit,
+        receipt: &crate::durable::TranscriptCommitReceipt,
+    ) {
+        let id = self.conversation.install_prepared(prepared);
+        if let Some(observer) = self.observer {
+            let installed = self
+                .conversation
+                .ledger()
+                .get(&id)
+                .expect("installed canonical fact");
+            observer.observe_committed(&self.request.attempt_id, installed, receipt);
+        }
     }
 
     /// Commits one complete `ToolResult` batch atomically.

@@ -7,9 +7,10 @@ impl AgentExecution<'_> {
     #[allow(clippy::too_many_lines)] // One native commit and its ordered publication.
     pub(super) fn commit_model_output(
         &mut self,
-        block: &MessageBlock,
+        block: MessageBlock,
     ) -> Result<Option<bool>, CanonicalCommitError> {
-        let prepared = self.conversation.prepare_commit(block)?;
+        let prepared = self.conversation.prepare_owned_commit(block)?;
+        let block = prepared.message();
         let publication = self
             .publication
             .as_ref()
@@ -92,14 +93,7 @@ impl AgentExecution<'_> {
         // The complete final output is published through its canonical receipt.
         // Live-prefix backing was consumed by the same commit; publishing those
         // transient frame receipts now would expose unreadable ContentRefs.
-        self.conversation.install_prepared(prepared);
-        if let Some(observer) = self.observer {
-            observer.observe_committed(
-                &self.request.attempt_id,
-                block,
-                &committed.canonical_receipt,
-            );
-        }
+        self.install_observed_canonical(prepared, &committed.canonical_receipt);
         self.record_persisted_event(committed.canonical);
         self.publication = None;
         let Some(boundary) = committed.boundary else {
