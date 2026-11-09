@@ -1,0 +1,134 @@
+{
+  "scope": "Four balanced same-ELF diagnostic pairs. Both use identical startup helper and no continuing trace hook. Not ordinary timing, not proof of significance. Includes all negative pairs.",
+  "rows": [
+    {
+      "pair": 0,
+      "frames": 1000,
+      "p50_ms": 7.5175,
+      "p95_ms": 12.17,
+      "cpu_ms_per_turn": 10.625,
+      "write_kib_per_turn": 695.375,
+      "reads_per_turn": 101.5625
+    },
+    {
+      "pair": 0,
+      "frames": 2000,
+      "p50_ms": 9.751999999999999,
+      "p95_ms": 15.199,
+      "cpu_ms_per_turn": 13.4375,
+      "write_kib_per_turn": 642.5,
+      "reads_per_turn": 87.09375
+    },
+    {
+      "pair": 1,
+      "frames": 1000,
+      "p50_ms": 13.2045,
+      "p95_ms": 21.13,
+      "cpu_ms_per_turn": 16.25,
+      "write_kib_per_turn": 696.875,
+      "reads_per_turn": 101.625
+    },
+    {
+      "pair": 1,
+      "frames": 2000,
+      "p50_ms": 12.131,
+      "p95_ms": 22.384,
+      "cpu_ms_per_turn": 14.6875,
+      "write_kib_per_turn": 641.0,
+      "reads_per_turn": 87.125
+    },
+    {
+      "pair": 2,
+      "frames": 1000,
+      "p50_ms": 14.745000000000001,
+      "p95_ms": 20.403,
+      "cpu_ms_per_turn": 19.0625,
+      "write_kib_per_turn": 697.625,
+      "reads_per_turn": 101.34375
+    },
+    {
+      "pair": 2,
+      "frames": 2000,
+      "p50_ms": 14.383,
+      "p95_ms": 23.985,
+      "cpu_ms_per_turn": 18.75,
+      "write_kib_per_turn": 642.0,
+      "reads_per_turn": 87.09375
+    },
+    {
+      "pair": 3,
+      "frames": 1000,
+      "p50_ms": 14.442499999999999,
+      "p95_ms": 22.464,
+      "cpu_ms_per_turn": 18.75,
+      "write_kib_per_turn": 698.75,
+      "reads_per_turn": 101.5625
+    },
+    {
+      "pair": 3,
+      "frames": 2000,
+      "p50_ms": 11.0085,
+      "p95_ms": 19.807,
+      "cpu_ms_per_turn": 15.3125,
+      "write_kib_per_turn": 641.5,
+      "reads_per_turn": 87.09375
+    }
+  ],
+  "summary": {
+    "p50_ms": {
+      "before": 13.8235,
+      "after": 11.569749999999999,
+      "paired_percent": [
+        29.723977386099087,
+        -8.129804233405274,
+        -2.4550695150898734,
+        -23.77704691016098
+      ],
+      "median_paired_percent": -5.292436874247573
+    },
+    "p95_ms": {
+      "before": 20.7665,
+      "after": 21.0955,
+      "paired_percent": [
+        24.889071487263763,
+        5.93469001419783,
+        17.55624172915748,
+        -11.827813390313391
+      ],
+      "median_paired_percent": 11.745465871677656
+    },
+    "cpu_ms_per_turn": {
+      "before": 17.5,
+      "after": 15.0,
+      "paired_percent": [
+        26.47058823529412,
+        -9.615384615384617,
+        -1.639344262295082,
+        -18.333333333333332
+      ],
+      "median_paired_percent": -5.62736443883985
+    },
+    "write_kib_per_turn": {
+      "before": 697.25,
+      "after": 641.75,
+      "paired_percent": [
+        -7.603810893402841,
+        -8.017937219730943,
+        -7.973481454936391,
+        -8.193202146690519
+      ],
+      "median_paired_percent": -7.9957093373336665
+    },
+    "reads_per_turn": {
+      "before": 101.5625,
+      "after": 87.09375,
+      "paired_percent": [
+        -14.246153846153847,
+        -14.268142681426815,
+        -14.061054579093431,
+        -14.246153846153847
+      ],
+      "median_paired_percent": -14.246153846153847
+    }
+  }
+}

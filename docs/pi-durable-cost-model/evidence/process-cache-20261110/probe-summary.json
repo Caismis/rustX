@@ -1,0 +1,536 @@
+{
+  "scope": "One diagnostic GNU-allocator product per workload/policy. Same verified baseline ELF, startup-only soft-limit injection, phase counter reads and unchanged hard limit. Source fixture exact-content and reopen checks passed. Unbalanced one-per-cell diagnostics are not headline timing or statistical claims. Original 256-session product hit inherited 1024 soft NOFILE limit; v2 wrappers set 4096 for all 256-session policies, without changing the host limit.",
+  "rows": [
+    {
+      "sessions": 128,
+      "history": 32,
+      "soft_limit_mib": 0,
+      "directory": "probe-128-032-000",
+      "phase_stats": {
+        "empty_server": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_subscribed_empty": {
+          "diagnostic": true,
+          "sqlite_memory_used": 86720512,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_1": {
+          "diagnostic": true,
+          "sqlite_memory_used": 218607616,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_8": {
+          "diagnostic": true,
+          "sqlite_memory_used": 268249712,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_16": {
+          "diagnostic": true,
+          "sqlite_memory_used": 329214408,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_32": {
+          "diagnostic": true,
+          "sqlite_memory_used": 436646184,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "active_finished_4": {
+          "diagnostic": true,
+          "sqlite_memory_used": 436854984,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_unloaded": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        }
+      },
+      "anon_pss_mib": {
+        "all_subscribed_empty": 342.44140625,
+        "seeded_history_1": 502.98828125,
+        "seeded_history_8": 690.70703125,
+        "seeded_history_16": 875.2109375,
+        "seeded_history_32": 1203.8984375
+      },
+      "diagnostic_cpu_ms_per_turn": 16.3671875,
+      "diagnostic_p50_ms": 34.362418000000005,
+      "write_kib_per_turn": 977.65625,
+      "rchar_kib_per_turn": 745.6689491271973,
+      "read_bytes_kib_per_turn": 0.0,
+      "read_calls_per_turn": 315.5,
+      "active_compiler_samples": []
+    },
+    {
+      "sessions": 128,
+      "history": 32,
+      "soft_limit_mib": 192,
+      "directory": "probe-128-032-192",
+      "phase_stats": {
+        "empty_server": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_subscribed_empty": {
+          "diagnostic": true,
+          "sqlite_memory_used": 86720512,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_1": {
+          "diagnostic": true,
+          "sqlite_memory_used": 201226176,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_8": {
+          "diagnostic": true,
+          "sqlite_memory_used": 201178296,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_16": {
+          "diagnostic": true,
+          "sqlite_memory_used": 201193824,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_32": {
+          "diagnostic": true,
+          "sqlite_memory_used": 201202176,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "active_finished_4": {
+          "diagnostic": true,
+          "sqlite_memory_used": 201164824,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_unloaded": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        }
+      },
+      "anon_pss_mib": {
+        "all_subscribed_empty": 333.40234375,
+        "seeded_history_1": 480.359375,
+        "seeded_history_8": 733.3515625,
+        "seeded_history_16": 930.51171875,
+        "seeded_history_32": 1244.21484375
+      },
+      "diagnostic_cpu_ms_per_turn": 16.3671875,
+      "diagnostic_p50_ms": 37.1400465,
+      "write_kib_per_turn": 979.078125,
+      "rchar_kib_per_turn": 1048.875473022461,
+      "read_bytes_kib_per_turn": 0.0,
+      "read_calls_per_turn": 467.48046875,
+      "active_compiler_samples": []
+    },
+    {
+      "sessions": 128,
+      "history": 32,
+      "soft_limit_mib": 256,
+      "directory": "probe-128-032-256",
+      "phase_stats": {
+        "empty_server": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_subscribed_empty": {
+          "diagnostic": true,
+          "sqlite_memory_used": 86720512,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_1": {
+          "diagnostic": true,
+          "sqlite_memory_used": 218607616,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_8": {
+          "diagnostic": true,
+          "sqlite_memory_used": 268231384,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_16": {
+          "diagnostic": true,
+          "sqlite_memory_used": 268283816,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_32": {
+          "diagnostic": true,
+          "sqlite_memory_used": 268050656,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "active_finished_4": {
+          "diagnostic": true,
+          "sqlite_memory_used": 268252264,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_unloaded": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        }
+      },
+      "anon_pss_mib": {
+        "all_subscribed_empty": 342.359375,
+        "seeded_history_1": 489.75390625,
+        "seeded_history_8": 656.68359375,
+        "seeded_history_16": 814.15234375,
+        "seeded_history_32": 1028.48828125
+      },
+      "diagnostic_cpu_ms_per_turn": 16.796875,
+      "diagnostic_p50_ms": 34.800562,
+      "write_kib_per_turn": 977.828125,
+      "rchar_kib_per_turn": 432.93603897094727,
+      "read_bytes_kib_per_turn": 0.046875,
+      "read_calls_per_turn": 159.15234375,
+      "active_compiler_samples": []
+    },
+    {
+      "sessions": 256,
+      "history": 8,
+      "soft_limit_mib": 0,
+      "directory": "probe-v2-256-008-000",
+      "phase_stats": {
+        "empty_server": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_subscribed_empty": {
+          "diagnostic": true,
+          "sqlite_memory_used": 173443072,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_1": {
+          "diagnostic": true,
+          "sqlite_memory_used": 437217280,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_8": {
+          "diagnostic": true,
+          "sqlite_memory_used": 536492656,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "active_finished_4": {
+          "diagnostic": true,
+          "sqlite_memory_used": 548521392,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_unloaded": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 0,
+          "sqlite_hard_heap_limit": 0
+        }
+      },
+      "anon_pss_mib": {
+        "all_subscribed_empty": 756.34375,
+        "seeded_history_1": 1021.32421875,
+        "seeded_history_8": 1370.28515625
+      },
+      "diagnostic_cpu_ms_per_turn": 18.59375,
+      "diagnostic_p50_ms": 38.940433999999996,
+      "write_kib_per_turn": 651.4375,
+      "rchar_kib_per_turn": 284.9855079650879,
+      "read_bytes_kib_per_turn": 0.0,
+      "read_calls_per_turn": 19.12890625,
+      "active_compiler_samples": []
+    },
+    {
+      "sessions": 256,
+      "history": 8,
+      "soft_limit_mib": 192,
+      "directory": "probe-v2-256-008-192",
+      "phase_stats": {
+        "empty_server": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_subscribed_empty": {
+          "diagnostic": true,
+          "sqlite_memory_used": 173443072,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_1": {
+          "diagnostic": true,
+          "sqlite_memory_used": 314883680,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_8": {
+          "diagnostic": true,
+          "sqlite_memory_used": 315628688,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "active_finished_4": {
+          "diagnostic": true,
+          "sqlite_memory_used": 315633328,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_unloaded": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 201326592,
+          "sqlite_hard_heap_limit": 0
+        }
+      },
+      "anon_pss_mib": {
+        "all_subscribed_empty": 746.8203125,
+        "seeded_history_1": 972.125,
+        "seeded_history_8": 1222.8671875
+      },
+      "diagnostic_cpu_ms_per_turn": 22.265625,
+      "diagnostic_p50_ms": 42.752132,
+      "write_kib_per_turn": 661.390625,
+      "rchar_kib_per_turn": 3738.393955230713,
+      "read_bytes_kib_per_turn": 0.0,
+      "read_calls_per_turn": 1752.203125,
+      "active_compiler_samples": []
+    },
+    {
+      "sessions": 256,
+      "history": 8,
+      "soft_limit_mib": 256,
+      "directory": "probe-v2-256-008-256",
+      "phase_stats": {
+        "empty_server": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_subscribed_empty": {
+          "diagnostic": true,
+          "sqlite_memory_used": 173443072,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_1": {
+          "diagnostic": true,
+          "sqlite_memory_used": 314883680,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_8": {
+          "diagnostic": true,
+          "sqlite_memory_used": 315629152,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "active_finished_4": {
+          "diagnostic": true,
+          "sqlite_memory_used": 315621960,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_unloaded": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 268435456,
+          "sqlite_hard_heap_limit": 0
+        }
+      },
+      "anon_pss_mib": {
+        "all_subscribed_empty": 759.2109375,
+        "seeded_history_1": 999.140625,
+        "seeded_history_8": 1222.3359375
+      },
+      "diagnostic_cpu_ms_per_turn": 22.34375,
+      "diagnostic_p50_ms": 42.652894,
+      "write_kib_per_turn": 647.296875,
+      "rchar_kib_per_turn": 3742.475383758545,
+      "read_bytes_kib_per_turn": 0.0,
+      "read_calls_per_turn": 1754.234375,
+      "active_compiler_samples": []
+    },
+    {
+      "sessions": 128,
+      "history": 32,
+      "soft_limit_mib": 320,
+      "directory": "probe-v3-128-032-320",
+      "phase_stats": {
+        "empty_server": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_subscribed_empty": {
+          "diagnostic": true,
+          "sqlite_memory_used": 86721536,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_1": {
+          "diagnostic": true,
+          "sqlite_memory_used": 218608640,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_8": {
+          "diagnostic": true,
+          "sqlite_memory_used": 268263960,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_16": {
+          "diagnostic": true,
+          "sqlite_memory_used": 329224016,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_32": {
+          "diagnostic": true,
+          "sqlite_memory_used": 335292440,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "active_finished_4": {
+          "diagnostic": true,
+          "sqlite_memory_used": 335364128,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_unloaded": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        }
+      },
+      "anon_pss_mib": {
+        "all_subscribed_empty": 336.796875,
+        "seeded_history_1": 495.046875,
+        "seeded_history_8": 668.41015625,
+        "seeded_history_16": 848.32421875,
+        "seeded_history_32": 1103.91796875
+      },
+      "diagnostic_cpu_ms_per_turn": 15.3125,
+      "diagnostic_p50_ms": 33.8799375,
+      "write_kib_per_turn": 978.71875,
+      "rchar_kib_per_turn": 427.44787979125977,
+      "read_bytes_kib_per_turn": 0.0,
+      "read_calls_per_turn": 156.18359375,
+      "active_compiler_samples": []
+    },
+    {
+      "sessions": 256,
+      "history": 8,
+      "soft_limit_mib": 320,
+      "directory": "probe-v3-256-008-320",
+      "phase_stats": {
+        "empty_server": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_subscribed_empty": {
+          "diagnostic": true,
+          "sqlite_memory_used": 173443072,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_1": {
+          "diagnostic": true,
+          "sqlite_memory_used": 335441200,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "seeded_history_8": {
+          "diagnostic": true,
+          "sqlite_memory_used": 335422928,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "active_finished_4": {
+          "diagnostic": true,
+          "sqlite_memory_used": 335422928,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        },
+        "all_unloaded": {
+          "diagnostic": true,
+          "sqlite_memory_used": 0,
+          "sqlite_soft_heap_limit": 335544320,
+          "sqlite_hard_heap_limit": 0
+        }
+      },
+      "anon_pss_mib": {
+        "all_subscribed_empty": 749.65625,
+        "seeded_history_1": 1010.29296875,
+        "seeded_history_8": 1500.5
+      },
+      "diagnostic_cpu_ms_per_turn": 21.09375,
+      "diagnostic_p50_ms": 41.014932,
+      "write_kib_per_turn": 650.765625,
+      "rchar_kib_per_turn": 638.9517555236816,
+      "read_bytes_kib_per_turn": 0.0,
+      "read_calls_per_turn": 196.3359375,
+      "active_compiler_samples": []
+    }
+  ],
+  "failed_products": [
+    {
+      "sessions": 256,
+      "history": 8,
+      "soft_limit_mib": 0,
+      "command": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-process-cache-20261110/probe-capacity.py",
+        "--binary",
+        "/home/capi/.cache/rustx-pr485-process-cache-20261110/probe-256-008-000.sh",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-process-cache-20261110/probe-256-008-000",
+        "--sessions",
+        "256",
+        "--history",
+        "8",
+        "--widths",
+        "4",
+        "--rounds",
+        "64",
+        "--rotate-active"
+      ],
+      "start": "2026-11-09T19:45:06.685198+00:00",
+      "exit": 1,
+      "end": "2026-11-09T19:45:27.612713+00:00"
+    }
+  ]
+}

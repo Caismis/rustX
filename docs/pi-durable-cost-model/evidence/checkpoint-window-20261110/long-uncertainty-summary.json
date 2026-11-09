@@ -1,0 +1,1074 @@
+{
+  "scope": "Four initial 64-history pairs and a fixed four-pair extension, declared before execution to investigate the initial same-direction P50 increase. Keep both groups and their combined result; no statistical significance claim. Extension uses the same binaries, affinity, input and live subscriber. The initial whole-window host monitor saw no compiler; no complete monitor was collected for the extension.",
+  "summary": {
+    "initial": {
+      "before": {
+        "p50_ms": {
+          "median": 7.992999999999999,
+          "range": [
+            7.344,
+            9.883
+          ]
+        },
+        "p95_ms": {
+          "median": 15.3875,
+          "range": [
+            12.03,
+            17.369
+          ]
+        },
+        "cpu_ms_per_turn": {
+          "median": 11.25,
+          "range": [
+            10.625,
+            13.4375
+          ]
+        },
+        "write_kib_per_turn": {
+          "median": 697.0,
+          "range": [
+            695.625,
+            698.25
+          ]
+        },
+        "write_mib_through_close": {
+          "median": 62.201171875,
+          "range": [
+            62.10546875,
+            62.26953125
+          ]
+        },
+        "final_writer_close_ms": {
+          "median": 11.982500000000002,
+          "range": [
+            11.556,
+            12.676
+          ]
+        },
+        "max_sampled_wal_mib": {
+          "median": 2.1281967163085938,
+          "range": [
+            2.126220703125,
+            2.1301727294921875
+          ]
+        },
+        "rchar_per_turn": {
+          "median": 167211.640625,
+          "range": [
+            166576.84375,
+            167915.625
+          ]
+        },
+        "syscr_per_turn": {
+          "median": 101.28125,
+          "range": [
+            100.96875,
+            101.625
+          ]
+        },
+        "wchar_per_turn": {
+          "median": 673187.625,
+          "range": [
+            672296.5,
+            673667.0
+          ]
+        },
+        "syscw_per_turn": {
+          "median": 571.5625,
+          "range": [
+            569.75,
+            572.53125
+          ]
+        }
+      },
+      "after": {
+        "p50_ms": {
+          "median": 10.061,
+          "range": [
+            7.592499999999999,
+            12.9525
+          ]
+        },
+        "p95_ms": {
+          "median": 16.1645,
+          "range": [
+            13.249,
+            17.288
+          ]
+        },
+        "cpu_ms_per_turn": {
+          "median": 13.75,
+          "range": [
+            10.3125,
+            14.375
+          ]
+        },
+        "write_kib_per_turn": {
+          "median": 642.9375,
+          "range": [
+            642.75,
+            643.375
+          ]
+        },
+        "write_mib_through_close": {
+          "median": 57.486328125,
+          "range": [
+            57.453125,
+            57.52734375
+          ]
+        },
+        "final_writer_close_ms": {
+          "median": 14.774000000000001,
+          "range": [
+            13.417,
+            17.017
+          ]
+        },
+        "max_sampled_wal_mib": {
+          "median": 4.10223388671875,
+          "range": [
+            4.094329833984375,
+            4.108161926269531
+          ]
+        },
+        "rchar_per_turn": {
+          "median": 138219.109375,
+          "range": [
+            138214.5,
+            138278.78125
+          ]
+        },
+        "syscr_per_turn": {
+          "median": 87.125,
+          "range": [
+            87.09375,
+            87.125
+          ]
+        },
+        "wchar_per_turn": {
+          "median": 643771.25,
+          "range": [
+            643512.0,
+            644816.75
+          ]
+        },
+        "syscw_per_turn": {
+          "median": 557.5,
+          "range": [
+            557.25,
+            559.71875
+          ]
+        }
+      },
+      "paired_percent": {
+        "p50_ms": {
+          "values": [
+            3.383714596949878,
+            39.21782686873878,
+            31.05838308206012,
+            13.201219512195117
+          ],
+          "median": 22.12980129712762
+        },
+        "p95_ms": {
+          "values": [
+            -13.512631372805014,
+            -0.4663480914272527,
+            -2.1868530020703885,
+            43.06733167082294
+          ],
+          "median": -1.3266005467488207
+        },
+        "cpu_ms_per_turn": {
+          "values": [
+            -2.941176470588235,
+            21.62162162162162,
+            6.976744186046512,
+            22.857142857142858
+          ],
+          "median": 14.299182903834065
+        },
+        "write_kib_per_turn": {
+          "values": [
+            -7.64399784676117,
+            -7.832944972217243,
+            -7.912638739706408,
+            -7.583108715184187
+          ],
+          "median": -7.738471409489207
+        },
+        "write_mib_through_close": {
+          "values": [
+            -7.540180813661476,
+            -7.607261762673535,
+            -7.646948121196914,
+            -7.472168060884332
+          ],
+          "median": -7.573721288167506
+        },
+        "final_writer_close_ms": {
+          "values": [
+            38.49597135183526,
+            17.00852003786684,
+            16.10418830044999,
+            26.01472854940913
+          ],
+          "median": 21.511624293637986
+        },
+        "max_sampled_wal_mib": {
+          "values": [
+            92.9420284139998,
+            92.56372717878058,
+            93.03487759323455,
+            92.39199730664814
+          ],
+          "median": 92.75287779639018
+        },
+        "rchar_per_turn": {
+          "values": [
+            -17.053223400255234,
+            -17.649842740959933,
+            -17.026582513813537,
+            -17.622462149925223
+          ],
+          "median": -17.33784277509023
+        },
+        "syscr_per_turn": {
+          "values": [
+            -13.737623762376238,
+            -14.268142681426815,
+            -13.741875580315691,
+            -14.215384615384616
+          ],
+          "median": -13.978630097850154
+        },
+        "wchar_per_turn": {
+          "values": [
+            -4.385482019679731,
+            -4.282568390614354,
+            -4.3924183306471285,
+            -4.242993976615972
+          ],
+          "median": -4.334025205147043
+        },
+        "syscw_per_turn": {
+          "values": [
+            -2.520089651779369,
+            -2.2378691119480374,
+            -2.4334226499699243,
+            -2.161035541904344
+          ],
+          "median": -2.335645880958981
+        }
+      }
+    },
+    "extension": {
+      "before": {
+        "p50_ms": {
+          "median": 11.680499999999999,
+          "range": [
+            8.437999999999999,
+            14.0015
+          ]
+        },
+        "p95_ms": {
+          "median": 19.536,
+          "range": [
+            12.065,
+            20.659
+          ]
+        },
+        "cpu_ms_per_turn": {
+          "median": 15.15625,
+          "range": [
+            11.5625,
+            18.4375
+          ]
+        },
+        "write_kib_per_turn": {
+          "median": 696.6875,
+          "range": [
+            694.0,
+            696.875
+          ]
+        },
+        "write_mib_through_close": {
+          "median": 62.14453125,
+          "range": [
+            62.015625,
+            62.20703125
+          ]
+        },
+        "final_writer_close_ms": {
+          "median": 12.0045,
+          "range": [
+            11.139,
+            13.836
+          ]
+        },
+        "max_sampled_wal_mib": {
+          "median": 2.133136749267578,
+          "range": [
+            2.1222686767578125,
+            2.1361007690429688
+          ]
+        },
+        "rchar_per_turn": {
+          "median": 167792.84375,
+          "range": [
+            167249.4375,
+            167825.46875
+          ]
+        },
+        "syscr_per_turn": {
+          "median": 101.5625,
+          "range": [
+            101.28125,
+            101.59375
+          ]
+        },
+        "wchar_per_turn": {
+          "median": 672923.875,
+          "range": [
+            672120.75,
+            673927.0
+          ]
+        },
+        "syscw_per_turn": {
+          "median": 570.84375,
+          "range": [
+            570.3125,
+            571.78125
+          ]
+        }
+      },
+      "after": {
+        "p50_ms": {
+          "median": 13.68075,
+          "range": [
+            7.2989999999999995,
+            14.241
+          ]
+        },
+        "p95_ms": {
+          "median": 20.9125,
+          "range": [
+            13.288,
+            22.129
+          ]
+        },
+        "cpu_ms_per_turn": {
+          "median": 17.34375,
+          "range": [
+            10.3125,
+            17.5
+          ]
+        },
+        "write_kib_per_turn": {
+          "median": 642.625,
+          "range": [
+            607.375,
+            644.125
+          ]
+        },
+        "write_mib_through_close": {
+          "median": 57.486328125,
+          "range": [
+            56.33203125,
+            57.53125
+          ]
+        },
+        "final_writer_close_ms": {
+          "median": 13.7395,
+          "range": [
+            12.629,
+            14.69
+          ]
+        },
+        "max_sampled_wal_mib": {
+          "median": 4.092353820800781,
+          "range": [
+            4.0903778076171875,
+            4.127922058105469
+          ]
+        },
+        "rchar_per_turn": {
+          "median": 138377.140625,
+          "range": [
+            110731.53125,
+            138443.71875
+          ]
+        },
+        "syscr_per_turn": {
+          "median": 87.171875,
+          "range": [
+            73.65625,
+            87.1875
+          ]
+        },
+        "wchar_per_turn": {
+          "median": 643870.25,
+          "range": [
+            617871.5,
+            644358.75
+          ]
+        },
+        "syscw_per_turn": {
+          "median": 557.015625,
+          "range": [
+            544.78125,
+            557.8125
+          ]
+        }
+      },
+      "paired_percent": {
+        "p50_ms": {
+          "values": [
+            60.16236074899267,
+            -47.869871085240874,
+            22.713576745834835,
+            17.91835720791587
+          ],
+          "median": 20.31596697687535
+        },
+        "p95_ms": {
+          "values": [
+            67.76626605884792,
+            -35.67936492569824,
+            13.394824493978993,
+            10.364575343866653
+          ],
+          "median": 11.879699918922823
+        },
+        "cpu_ms_per_turn": {
+          "values": [
+            51.35135135135135,
+            -44.06779661016949,
+            17.02127659574468,
+            12.0
+          ],
+          "median": 14.51063829787234
+        },
+        "write_kib_per_turn": {
+          "values": [
+            -7.5915290739411345,
+            -7.5695067264574,
+            -12.481988472622477,
+            -7.928251121076234
+          ],
+          "median": -7.759890097508684
+        },
+        "write_mib_through_close": {
+          "values": [
+            -7.429756741467094,
+            -7.423470991262807,
+            -9.164777021919878,
+            -7.654631083202512
+          ],
+          "median": -7.5421939123348025
+        },
+        "final_writer_close_ms": {
+          "values": [
+            2.4862677074298887,
+            20.360507988529285,
+            19.39132776730407,
+            6.989156218231102
+          ],
+          "median": 13.190241992767586
+        },
+        "max_sampled_wal_mib": {
+          "values": [
+            92.73609663155624,
+            91.58056024830078,
+            93.24566134372444,
+            92.11370815813413
+          ],
+          "median": 92.42490239484519
+        },
+        "rchar_per_turn": {
+          "values": [
+            -17.513620607950024,
+            -17.50718660749299,
+            -34.0198290076279,
+            -17.264463893936863
+          ],
+          "median": -17.510403607721507
+        },
+        "syscr_per_turn": {
+          "values": [
+            -14.158202523853495,
+            -14.18025223008305,
+            -27.499231005844354,
+            -13.915458191916075
+          ],
+          "median": -14.169227376968273
+        },
+        "wchar_per_turn": {
+          "values": [
+            -4.231459913492168,
+            -4.446253080823294,
+            -8.193979808875982,
+            -4.216913404325042
+          ],
+          "median": -4.338856497157732
+        },
+        "syscw_per_turn": {
+          "values": [
+            -2.314890822525037,
+            -2.667103896813685,
+            -4.534253326761951,
+            -2.246575342465753
+          ],
+          "median": -2.490997359669361
+        }
+      }
+    },
+    "combined": {
+      "before": {
+        "p50_ms": {
+          "median": 9.160499999999999,
+          "range": [
+            7.344,
+            14.0015
+          ]
+        },
+        "p95_ms": {
+          "median": 16.4125,
+          "range": [
+            12.03,
+            20.659
+          ]
+        },
+        "cpu_ms_per_turn": {
+          "median": 12.5,
+          "range": [
+            10.625,
+            18.4375
+          ]
+        },
+        "write_kib_per_turn": {
+          "median": 696.75,
+          "range": [
+            694.0,
+            698.25
+          ]
+        },
+        "write_mib_through_close": {
+          "median": 62.1640625,
+          "range": [
+            62.015625,
+            62.26953125
+          ]
+        },
+        "final_writer_close_ms": {
+          "median": 12.0045,
+          "range": [
+            11.139,
+            13.836
+          ]
+        },
+        "max_sampled_wal_mib": {
+          "median": 2.1291847229003906,
+          "range": [
+            2.1222686767578125,
+            2.1361007690429688
+          ]
+        },
+        "rchar_per_turn": {
+          "median": 167774.15625,
+          "range": [
+            166576.84375,
+            167915.625
+          ]
+        },
+        "syscr_per_turn": {
+          "median": 101.546875,
+          "range": [
+            100.96875,
+            101.625
+          ]
+        },
+        "wchar_per_turn": {
+          "median": 673023.0,
+          "range": [
+            672120.75,
+            673927.0
+          ]
+        },
+        "syscw_per_turn": {
+          "median": 571.25,
+          "range": [
+            569.75,
+            572.53125
+          ]
+        }
+      },
+      "after": {
+        "p50_ms": {
+          "median": 11.896,
+          "range": [
+            7.2989999999999995,
+            14.241
+          ]
+        },
+        "p95_ms": {
+          "median": 17.249499999999998,
+          "range": [
+            13.249,
+            22.129
+          ]
+        },
+        "cpu_ms_per_turn": {
+          "median": 14.21875,
+          "range": [
+            10.3125,
+            17.5
+          ]
+        },
+        "write_kib_per_turn": {
+          "median": 642.9375,
+          "range": [
+            607.375,
+            644.125
+          ]
+        },
+        "write_mib_through_close": {
+          "median": 57.486328125,
+          "range": [
+            56.33203125,
+            57.53125
+          ]
+        },
+        "final_writer_close_ms": {
+          "median": 14.434999999999999,
+          "range": [
+            12.629,
+            17.017
+          ]
+        },
+        "max_sampled_wal_mib": {
+          "median": 4.096305847167969,
+          "range": [
+            4.0903778076171875,
+            4.127922058105469
+          ]
+        },
+        "rchar_per_turn": {
+          "median": 138249.125,
+          "range": [
+            110731.53125,
+            138443.71875
+          ]
+        },
+        "syscr_per_turn": {
+          "median": 87.125,
+          "range": [
+            73.65625,
+            87.1875
+          ]
+        },
+        "wchar_per_turn": {
+          "median": 643774.75,
+          "range": [
+            617871.5,
+            644816.75
+          ]
+        },
+        "syscw_per_turn": {
+          "median": 557.46875,
+          "range": [
+            544.78125,
+            559.71875
+          ]
+        }
+      },
+      "paired_percent": {
+        "p50_ms": {
+          "values": [
+            3.383714596949878,
+            39.21782686873878,
+            31.05838308206012,
+            13.201219512195117,
+            60.16236074899267,
+            -47.869871085240874,
+            22.713576745834835,
+            17.91835720791587
+          ],
+          "median": 20.31596697687535
+        },
+        "p95_ms": {
+          "values": [
+            -13.512631372805014,
+            -0.4663480914272527,
+            -2.1868530020703885,
+            43.06733167082294,
+            67.76626605884792,
+            -35.67936492569824,
+            13.394824493978993,
+            10.364575343866653
+          ],
+          "median": 4.9491136262197
+        },
+        "cpu_ms_per_turn": {
+          "values": [
+            -2.941176470588235,
+            21.62162162162162,
+            6.976744186046512,
+            22.857142857142858,
+            51.35135135135135,
+            -44.06779661016949,
+            17.02127659574468,
+            12.0
+          ],
+          "median": 14.51063829787234
+        },
+        "write_kib_per_turn": {
+          "values": [
+            -7.64399784676117,
+            -7.832944972217243,
+            -7.912638739706408,
+            -7.583108715184187,
+            -7.5915290739411345,
+            -7.5695067264574,
+            -12.481988472622477,
+            -7.928251121076234
+          ],
+          "median": -7.738471409489207
+        },
+        "write_mib_through_close": {
+          "values": [
+            -7.540180813661476,
+            -7.607261762673535,
+            -7.646948121196914,
+            -7.472168060884332,
+            -7.429756741467094,
+            -7.423470991262807,
+            -9.164777021919878,
+            -7.654631083202512
+          ],
+          "median": -7.573721288167506
+        },
+        "final_writer_close_ms": {
+          "values": [
+            38.49597135183526,
+            17.00852003786684,
+            16.10418830044999,
+            26.01472854940913,
+            2.4862677074298887,
+            20.360507988529285,
+            19.39132776730407,
+            6.989156218231102
+          ],
+          "median": 18.199923902585454
+        },
+        "max_sampled_wal_mib": {
+          "values": [
+            92.9420284139998,
+            92.56372717878058,
+            93.03487759323455,
+            92.39199730664814,
+            92.73609663155624,
+            91.58056024830078,
+            93.24566134372444,
+            92.11370815813413
+          ],
+          "median": 92.64991190516841
+        },
+        "rchar_per_turn": {
+          "values": [
+            -17.053223400255234,
+            -17.649842740959933,
+            -17.026582513813537,
+            -17.622462149925223,
+            -17.513620607950024,
+            -17.50718660749299,
+            -34.0198290076279,
+            -17.264463893936863
+          ],
+          "median": -17.510403607721507
+        },
+        "syscr_per_turn": {
+          "values": [
+            -13.737623762376238,
+            -14.268142681426815,
+            -13.741875580315691,
+            -14.215384615384616,
+            -14.158202523853495,
+            -14.18025223008305,
+            -27.499231005844354,
+            -13.915458191916075
+          ],
+          "median": -14.169227376968273
+        },
+        "wchar_per_turn": {
+          "values": [
+            -4.385482019679731,
+            -4.282568390614354,
+            -4.3924183306471285,
+            -4.242993976615972,
+            -4.231459913492168,
+            -4.446253080823294,
+            -8.193979808875982,
+            -4.216913404325042
+          ],
+          "median": -4.334025205147043
+        },
+        "syscw_per_turn": {
+          "values": [
+            -2.520089651779369,
+            -2.2378691119480374,
+            -2.4334226499699243,
+            -2.161035541904344,
+            -2.314890822525037,
+            -2.667103896813685,
+            -4.534253326761951,
+            -2.246575342465753
+          ],
+          "median": -2.374156736247481
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "pair": 0,
+      "side": "before",
+      "p50_ms": 7.344,
+      "p95_ms": 15.319,
+      "cpu_ms_per_turn": 10.625,
+      "write_kib_per_turn": 696.625,
+      "write_mib_through_close": 62.21875,
+      "final_writer_close_ms": 12.287,
+      "max_sampled_wal_mib": 2.1281967163085938,
+      "rchar_per_turn": 166635.46875,
+      "syscr_per_turn": 101.0,
+      "wchar_per_turn": 673027.5,
+      "syscw_per_turn": 571.65625
+    },
+    {
+      "pair": 0,
+      "side": "after",
+      "p50_ms": 7.592499999999999,
+      "p95_ms": 13.249,
+      "cpu_ms_per_turn": 10.3125,
+      "write_kib_per_turn": 643.375,
+      "write_mib_through_close": 57.52734375,
+      "final_writer_close_ms": 17.017,
+      "max_sampled_wal_mib": 4.1061859130859375,
+      "rchar_per_turn": 138218.75,
+      "syscr_per_turn": 87.125,
+      "wchar_per_turn": 643512.0,
+      "syscw_per_turn": 557.25
+    },
+    {
+      "pair": 1,
+      "side": "before",
+      "p50_ms": 7.786,
+      "p95_ms": 17.369,
+      "cpu_ms_per_turn": 11.5625,
+      "write_kib_per_turn": 697.375,
+      "write_mib_through_close": 62.18359375,
+      "final_writer_close_ms": 12.676,
+      "max_sampled_wal_mib": 2.126220703125,
+      "rchar_per_turn": 167915.625,
+      "syscr_per_turn": 101.625,
+      "wchar_per_turn": 673667.0,
+      "syscw_per_turn": 572.53125
+    },
+    {
+      "pair": 1,
+      "side": "after",
+      "p50_ms": 10.839500000000001,
+      "p95_ms": 17.288,
+      "cpu_ms_per_turn": 14.0625,
+      "write_kib_per_turn": 642.75,
+      "write_mib_through_close": 57.453125,
+      "final_writer_close_ms": 14.832,
+      "max_sampled_wal_mib": 4.094329833984375,
+      "rchar_per_turn": 138278.78125,
+      "syscr_per_turn": 87.125,
+      "wchar_per_turn": 644816.75,
+      "syscw_per_turn": 559.71875
+    },
+    {
+      "pair": 2,
+      "side": "before",
+      "p50_ms": 9.883,
+      "p95_ms": 15.456,
+      "cpu_ms_per_turn": 13.4375,
+      "write_kib_per_turn": 698.25,
+      "write_mib_through_close": 62.26953125,
+      "final_writer_close_ms": 11.556,
+      "max_sampled_wal_mib": 2.1281967163085938,
+      "rchar_per_turn": 166576.84375,
+      "syscr_per_turn": 100.96875,
+      "wchar_per_turn": 673347.75,
+      "syscw_per_turn": 571.46875
+    },
+    {
+      "pair": 2,
+      "side": "after",
+      "p50_ms": 12.9525,
+      "p95_ms": 15.118,
+      "cpu_ms_per_turn": 14.375,
+      "write_kib_per_turn": 643.0,
+      "write_mib_through_close": 57.5078125,
+      "final_writer_close_ms": 13.417,
+      "max_sampled_wal_mib": 4.108161926269531,
+      "rchar_per_turn": 138214.5,
+      "syscr_per_turn": 87.09375,
+      "wchar_per_turn": 643771.5,
+      "syscw_per_turn": 557.5625
+    },
+    {
+      "pair": 3,
+      "side": "before",
+      "p50_ms": 8.2,
+      "p95_ms": 12.03,
+      "cpu_ms_per_turn": 10.9375,
+      "write_kib_per_turn": 695.625,
+      "write_mib_through_close": 62.10546875,
+      "final_writer_close_ms": 11.678,
+      "max_sampled_wal_mib": 2.1301727294921875,
+      "rchar_per_turn": 167787.8125,
+      "syscr_per_turn": 101.5625,
+      "wchar_per_turn": 672296.5,
+      "syscw_per_turn": 569.75
+    },
+    {
+      "pair": 3,
+      "side": "after",
+      "p50_ms": 9.282499999999999,
+      "p95_ms": 17.211,
+      "cpu_ms_per_turn": 13.4375,
+      "write_kib_per_turn": 642.875,
+      "write_mib_through_close": 57.46484375,
+      "final_writer_close_ms": 14.716,
+      "max_sampled_wal_mib": 4.0982818603515625,
+      "rchar_per_turn": 138219.46875,
+      "syscr_per_turn": 87.125,
+      "wchar_per_turn": 643771.0,
+      "syscw_per_turn": 557.4375
+    },
+    {
+      "pair": 4,
+      "side": "before",
+      "p50_ms": 8.437999999999999,
+      "p95_ms": 12.065,
+      "cpu_ms_per_turn": 11.5625,
+      "write_kib_per_turn": 696.5,
+      "write_mib_through_close": 62.14453125,
+      "final_writer_close_ms": 13.836,
+      "max_sampled_wal_mib": 2.1222686767578125,
+      "rchar_per_turn": 167760.5,
+      "syscr_per_turn": 101.53125,
+      "wchar_per_turn": 672829.25,
+      "syscw_per_turn": 571.03125
+    },
+    {
+      "pair": 4,
+      "side": "after",
+      "p50_ms": 13.5145,
+      "p95_ms": 20.241,
+      "cpu_ms_per_turn": 17.5,
+      "write_kib_per_turn": 643.625,
+      "write_mib_through_close": 57.52734375,
+      "final_writer_close_ms": 14.18,
+      "max_sampled_wal_mib": 4.0903778076171875,
+      "rchar_per_turn": 138379.5625,
+      "syscr_per_turn": 87.15625,
+      "wchar_per_turn": 644358.75,
+      "syscw_per_turn": 557.8125
+    },
+    {
+      "pair": 5,
+      "side": "before",
+      "p50_ms": 14.0015,
+      "p95_ms": 20.659,
+      "cpu_ms_per_turn": 18.4375,
+      "write_kib_per_turn": 696.875,
+      "write_mib_through_close": 62.14453125,
+      "final_writer_close_ms": 12.205,
+      "max_sampled_wal_mib": 2.1361007690429688,
+      "rchar_per_turn": 167825.1875,
+      "syscr_per_turn": 101.59375,
+      "wchar_per_turn": 673927.0,
+      "syscw_per_turn": 571.78125
+    },
+    {
+      "pair": 5,
+      "side": "after",
+      "p50_ms": 7.2989999999999995,
+      "p95_ms": 13.288,
+      "cpu_ms_per_turn": 10.3125,
+      "write_kib_per_turn": 644.125,
+      "write_mib_through_close": 57.53125,
+      "final_writer_close_ms": 14.69,
+      "max_sampled_wal_mib": 4.092353820800781,
+      "rchar_per_turn": 138443.71875,
+      "syscr_per_turn": 87.1875,
+      "wchar_per_turn": 643962.5,
+      "syscw_per_turn": 556.53125
+    },
+    {
+      "pair": 6,
+      "side": "before",
+      "p50_ms": 11.283999999999999,
+      "p95_ms": 19.515,
+      "cpu_ms_per_turn": 14.6875,
+      "write_kib_per_turn": 694.0,
+      "write_mib_through_close": 62.015625,
+      "final_writer_close_ms": 11.139,
+      "max_sampled_wal_mib": 2.1361007690429688,
+      "rchar_per_turn": 167825.46875,
+      "syscr_per_turn": 101.59375,
+      "wchar_per_turn": 673018.5,
+      "syscw_per_turn": 570.65625
+    },
+    {
+      "pair": 6,
+      "side": "after",
+      "p50_ms": 13.847000000000001,
+      "p95_ms": 22.129,
+      "cpu_ms_per_turn": 17.1875,
+      "write_kib_per_turn": 607.375,
+      "write_mib_through_close": 56.33203125,
+      "final_writer_close_ms": 13.299,
+      "max_sampled_wal_mib": 4.127922058105469,
+      "rchar_per_turn": 110731.53125,
+      "syscr_per_turn": 73.65625,
+      "wchar_per_turn": 617871.5,
+      "syscw_per_turn": 544.78125
+    },
+    {
+      "pair": 7,
+      "side": "before",
+      "p50_ms": 12.077,
+      "p95_ms": 19.557,
+      "cpu_ms_per_turn": 15.625,
+      "write_kib_per_turn": 696.875,
+      "write_mib_through_close": 62.20703125,
+      "final_writer_close_ms": 11.804,
+      "max_sampled_wal_mib": 2.1301727294921875,
+      "rchar_per_turn": 167249.4375,
+      "syscr_per_turn": 101.28125,
+      "wchar_per_turn": 672120.75,
+      "syscw_per_turn": 570.3125
+    },
+    {
+      "pair": 7,
+      "side": "after",
+      "p50_ms": 14.241,
+      "p95_ms": 21.584,
+      "cpu_ms_per_turn": 17.5,
+      "write_kib_per_turn": 641.625,
+      "write_mib_through_close": 57.4453125,
+      "final_writer_close_ms": 12.629,
+      "max_sampled_wal_mib": 4.092353820800781,
+      "rchar_per_turn": 138374.71875,
+      "syscr_per_turn": 87.1875,
+      "wchar_per_turn": 643778.0,
+      "syscw_per_turn": 557.5
+    }
+  ]
+}
