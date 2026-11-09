@@ -122,8 +122,8 @@ impl PublicationDraft {
                     snapshot: snapshot.take().expect("capture materialized once")(),
                     cursor,
                     read_cut: metadata.read_cut.clone(),
-                    content: Default::default(),
-                    collections: Default::default(),
+                    content: Arc::default(),
+                    collections: Arc::default(),
                 });
                 event = RuntimeClientEvent::ProjectionTransition {
                     events: vec![RuntimeClientEvent::CheckpointAdvanced {
@@ -575,8 +575,8 @@ impl RuntimeClientProjection {
         if self.staged_publication.is_some() {
             return super::super::checkpoint::ProjectionMetadata {
                 read_cut: self.working_read_cut(),
-                collections: Default::default(),
-                content: Default::default(),
+                collections: Arc::default(),
+                content: Arc::default(),
             };
         }
         if let Ok(checkpoint) = self.checkpoint_candidate() {
@@ -590,8 +590,8 @@ impl RuntimeClientProjection {
             read_cut.source_cut = None;
             super::super::checkpoint::ProjectionMetadata {
                 read_cut,
-                collections: Default::default(),
-                content: Default::default(),
+                collections: Arc::default(),
+                content: Arc::default(),
             }
         }
     }
@@ -764,8 +764,8 @@ impl RuntimeClientProjection {
             let mut metadata = self.projection_metadata();
             metadata.read_cut.revision = next_value;
             // The complete transition carries this evidence once, in its metadata.
-            checkpoint.content = Default::default();
-            checkpoint.collections = Default::default();
+            checkpoint.content = Arc::default();
+            checkpoint.collections = Arc::default();
             RuntimeClientEvent::ProjectionTransition {
                 events: vec![RuntimeClientEvent::CheckpointAdvanced {
                     transition,

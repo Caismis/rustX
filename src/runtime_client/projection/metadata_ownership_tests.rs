@@ -65,8 +65,8 @@ fn baseline_encode(
     if encoded.is_none() {
         let transition = event_kind(&event).to_owned();
         let mut replacement = checkpoint;
-        replacement.content = Default::default();
-        replacement.collections = Default::default();
+        replacement.content = Arc::default();
+        replacement.collections = Arc::default();
         event = RuntimeClientEvent::ProjectionTransition {
             events: vec![RuntimeClientEvent::CheckpointAdvanced {
                 transition,
@@ -522,8 +522,8 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
             content: owned.content.clone(),
         };
         let mut inner = owned;
-        inner.content = Default::default();
-        inner.collections = Default::default();
+        inner.content = Arc::default();
+        inner.collections = Arc::default();
         for replacement in [false, true] {
             let events = if replacement {
                 vec![RuntimeClientEvent::CheckpointAdvanced {
