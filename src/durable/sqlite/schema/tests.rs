@@ -492,7 +492,10 @@ fn checkpoint_window_preserves_a_slow_reader_and_closes_cleanly() {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
             .unwrap();
-        assert!(frames > 2000, "a reader can retain WAL beyond the threshold");
+        assert!(
+            frames > 2000,
+            "a reader can retain WAL beyond the threshold"
+        );
         assert!(checkpointed < frames);
     }
     reader.execute_batch("ROLLBACK").unwrap();
