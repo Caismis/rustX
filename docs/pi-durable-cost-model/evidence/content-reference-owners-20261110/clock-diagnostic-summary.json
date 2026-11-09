@@ -1,0 +1,203 @@
+{
+  "scope": "Diagnostic only. Four balanced pairs over the existing phase socket. Same ordinary executables, one added control thread, no signal sampler and no allocator replacement. Precise process CPU includes runtime plus driver and phase handshakes; wall is not a headline timing. This asks whether the adverse cold burst is additional CPU work or elapsed wait. No production checkpoint/durability setting changes.",
+  "rows": [
+    {
+      "pair": 0,
+      "side": "before",
+      "cpu_ns": 48912941,
+      "wall_ns": 46232610,
+      "minor_faults": 2881,
+      "major_faults": 0,
+      "voluntary_switches": 128,
+      "involuntary_switches": 3,
+      "settled_us": 43648,
+      "accepted_us": 8344,
+      "notifications": 10,
+      "binary_sha256": "a682bdcf9cff9c049b150565ae0c83c701993d1f2f7bea920e5cb0702dbfaa80"
+    },
+    {
+      "pair": 0,
+      "side": "after",
+      "cpu_ns": 38765734,
+      "wall_ns": 37863606,
+      "minor_faults": 2622,
+      "major_faults": 0,
+      "voluntary_switches": 100,
+      "involuntary_switches": 1,
+      "settled_us": 36448,
+      "accepted_us": 9970,
+      "notifications": 8,
+      "binary_sha256": "421c0e52fbd61797ff46f53e607441d7414acba49ad31e140ec6a3f33b73b462"
+    },
+    {
+      "pair": 1,
+      "side": "after",
+      "cpu_ns": 39475078,
+      "wall_ns": 37859576,
+      "minor_faults": 2856,
+      "major_faults": 0,
+      "voluntary_switches": 146,
+      "involuntary_switches": 3,
+      "settled_us": 35620,
+      "accepted_us": 9520,
+      "notifications": 9,
+      "binary_sha256": "421c0e52fbd61797ff46f53e607441d7414acba49ad31e140ec6a3f33b73b462"
+    },
+    {
+      "pair": 1,
+      "side": "before",
+      "cpu_ns": 46069487,
+      "wall_ns": 44023331,
+      "minor_faults": 2643,
+      "major_faults": 0,
+      "voluntary_switches": 115,
+      "involuntary_switches": 2,
+      "settled_us": 41664,
+      "accepted_us": 9484,
+      "notifications": 8,
+      "binary_sha256": "a682bdcf9cff9c049b150565ae0c83c701993d1f2f7bea920e5cb0702dbfaa80"
+    },
+    {
+      "pair": 2,
+      "side": "before",
+      "cpu_ns": 46914238,
+      "wall_ns": 44459466,
+      "minor_faults": 2818,
+      "major_faults": 0,
+      "voluntary_switches": 109,
+      "involuntary_switches": 2,
+      "settled_us": 41949,
+      "accepted_us": 9740,
+      "notifications": 10,
+      "binary_sha256": "a682bdcf9cff9c049b150565ae0c83c701993d1f2f7bea920e5cb0702dbfaa80"
+    },
+    {
+      "pair": 2,
+      "side": "after",
+      "cpu_ns": 43747674,
+      "wall_ns": 43016669,
+      "minor_faults": 2772,
+      "major_faults": 0,
+      "voluntary_switches": 120,
+      "involuntary_switches": 1,
+      "settled_us": 41450,
+      "accepted_us": 9574,
+      "notifications": 10,
+      "binary_sha256": "421c0e52fbd61797ff46f53e607441d7414acba49ad31e140ec6a3f33b73b462"
+    },
+    {
+      "pair": 3,
+      "side": "after",
+      "cpu_ns": 37993584,
+      "wall_ns": 37112198,
+      "minor_faults": 2566,
+      "major_faults": 0,
+      "voluntary_switches": 111,
+      "involuntary_switches": 1,
+      "settled_us": 35458,
+      "accepted_us": 9440,
+      "notifications": 9,
+      "binary_sha256": "421c0e52fbd61797ff46f53e607441d7414acba49ad31e140ec6a3f33b73b462"
+    },
+    {
+      "pair": 3,
+      "side": "before",
+      "cpu_ns": 59950897,
+      "wall_ns": 57495952,
+      "minor_faults": 2727,
+      "major_faults": 0,
+      "voluntary_switches": 137,
+      "involuntary_switches": 5,
+      "settled_us": 55712,
+      "accepted_us": 13585,
+      "notifications": 10,
+      "binary_sha256": "a682bdcf9cff9c049b150565ae0c83c701993d1f2f7bea920e5cb0702dbfaa80"
+    }
+  ],
+  "summary": {
+    "cpu_ns": {
+      "before_median": 47913589.5,
+      "after_median": 39120406.0,
+      "paired_percent": [
+        -20.745444441788933,
+        -14.314049123229871,
+        -6.749686523737207,
+        -36.62549536164572
+      ],
+      "median_paired_percent": -17.529746782509402
+    },
+    "wall_ns": {
+      "before_median": 45346038.0,
+      "after_median": 37861591.0,
+      "paired_percent": [
+        -18.101950117027787,
+        -14.001110002330355,
+        -3.245196422287213,
+        -35.45250281271976
+      ],
+      "median_paired_percent": -16.05153005967907
+    },
+    "accepted_us": {
+      "before_median": 9612.0,
+      "after_median": 9547.0,
+      "paired_percent": [
+        19.48705656759348,
+        0.3795866722901729,
+        -1.7043121149897331,
+        -30.511593669488406
+      ],
+      "median_paired_percent": -0.6623627213497801
+    },
+    "settled_us": {
+      "before_median": 42798.5,
+      "after_median": 36034.0,
+      "paired_percent": [
+        -16.49560117302053,
+        -14.506528417818739,
+        -1.1895396791341868,
+        -36.35482481332568
+      ],
+      "median_paired_percent": -15.501064795419634
+    },
+    "minor_faults": {
+      "before_median": 2772.5,
+      "after_median": 2697.0,
+      "paired_percent": [
+        -8.989934050676847,
+        8.059023836549375,
+        -1.6323633782824698,
+        -5.903923725705904
+      ],
+      "median_paired_percent": -3.768143551994187
+    },
+    "voluntary_switches": {
+      "before_median": 121.5,
+      "after_median": 115.5,
+      "paired_percent": [
+        -21.875,
+        26.956521739130434,
+        10.091743119266056,
+        -18.97810218978102
+      ],
+      "median_paired_percent": -4.443179535257482
+    },
+    "involuntary_switches": {
+      "before_median": 2.5,
+      "after_median": 1.0,
+      "paired_percent": [
+        -66.66666666666666,
+        50.0,
+        -50.0,
+        -80.0
+      ],
+      "median_paired_percent": -58.33333333333333
+    }
+  },
+  "inputs": {
+    "/home/capi/.cache/rustx-pr485-cut-owners-20261110/run-clock-diagnostic.py": "2c15b47760a4af4e6cbf2c1f3afba04bd212d0a3380a4d5e67d74fb6cc16ff83",
+    "/home/capi/.cache/rustx-pr485-cut-owners-20261110/clock-window.c": "f10b1cb875d3f78e77b74ba44aff25ebdeedf5bc252d9dcbe01eb8340338a63d",
+    "/home/capi/.cache/rustx-pr485-cut-owners-20261110/clock-window.so": "bee42bef69289aa9b979a89a81d53bbc41c85e978b3b4f971667c901a16bb246",
+    "/home/capi/.cache/rustx-pr485-cut-owners-20261110/clock-bridge.so": "573a92d01228dc35eb1045b0bfdcfbecbc2990864576e0914915eecb64cac1ee",
+    "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/profiling/bridge.c": "6ebc0727e42f90d750ddd0531fb12de391db356814197c84cb8038ad10a4670f"
+  }
+}
