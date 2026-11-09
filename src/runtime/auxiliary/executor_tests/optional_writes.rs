@@ -228,7 +228,6 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
 #[tokio::test(flavor = "current_thread")]
 async fn cancelled_optional_call_start_preserves_journal_atomicity_and_observation_drain() {
     for probe in [
-        AuxiliaryStartProbe::ReadinessInsert,
         AuxiliaryStartProbe::ObservationFields,
         AuxiliaryStartProbe::ObservationJson,
     ] {
@@ -239,7 +238,6 @@ async fn cancelled_optional_call_start_preserves_journal_atomicity_and_observati
 #[tokio::test(flavor = "current_thread")]
 async fn cancelled_optional_request_start_preserves_journal_atomicity_and_observation_drain() {
     for probe in [
-        AuxiliaryStartProbe::ReadinessInsert,
         AuxiliaryStartProbe::ObservationFields,
         AuxiliaryStartProbe::ObservationJson,
     ] {

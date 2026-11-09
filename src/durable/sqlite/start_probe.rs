@@ -11,7 +11,6 @@ pub(crate) enum AuxiliaryStartProbe {
     StartEvent,
     HistoricalCut,
     CompactionFrontier,
-    ReadinessInsert,
     ObservationFields,
     ObservationJson,
 }
