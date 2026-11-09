@@ -50,7 +50,7 @@ pub(super) struct PreparedModelTurn {
     /// The frozen snapshot of this actual request.
     pub(super) snapshot: RequestSnapshot,
     /// The exact provider-neutral request of the staged projection.
-    pub(super) request: ModelRequest,
+    pub(super) request: crate::model::adapter::validation::PreparedModelRequest,
     /// The staged projection's structural anchor, used to reuse a later
     /// provider-observed measurement for every request context this one is a
     /// prefix of.
@@ -73,7 +73,7 @@ pub(super) struct FrozenLogicalInput {
     #[cfg(feature = "issue-387-profile")]
     pub(super) adapter_input_profile: crate::model::adapter::profile::InputLayout,
     pub(super) snapshot: RequestSnapshot,
-    pub(super) request: ModelRequest,
+    pub(super) request: crate::model::adapter::validation::PreparedModelRequest,
     pub(super) anchor: ObservedAnchor,
     pub(super) request_identity: Arc<RequestObservationIdentity>,
     pub(super) estimated_input: u64,
@@ -819,15 +819,15 @@ impl AgentExecution<'_> {
             staged.snapshot.request_id.as_str(),
             staged.adapter_input_profile,
         );
-        crate::model::adapter::validation::validate_prepared_request(&staged.request).map_err(
-            |error| Terminal::Failed {
+        let protocol = staged.request.protocol();
+        let request = crate::model::adapter::validation::prepare_request(staged.request, protocol)
+            .map_err(|error| Terminal::Failed {
                 failure: AttemptFailure::Runtime {
                     error: RuntimeError::Unsupported {
                         message: format!("native model input compatibility: {}", error.message),
                     },
                 },
-            },
-        )?;
+            })?;
         #[cfg(feature = "issue-387-profile")]
         drop(adapter_preflight_profile);
         let associations = std::mem::take(&mut staged.snapshot.tool_associations);
@@ -835,7 +835,7 @@ impl AgentExecution<'_> {
             .snapshot
             .freeze_selected_input(
                 &self.request.conversation_id,
-                &staged.request,
+                request.input(),
                 &staged.input_manifest,
             )
             .map_err(|error| {
@@ -863,15 +863,14 @@ impl AgentExecution<'_> {
         }
         let anchor = ObservedAnchor::of_selected(
             staged.projection.surface_revision,
-            &staged.request.messages,
-            &staged.request.effective_system_prompt,
-            &staged.request.tools,
+            &request.input().messages,
+            &request.input().effective_system_prompt,
+            &request.input().tools,
         );
         let request_identity = Arc::new(RequestObservationIdentity {
-            invocation: staged.request.invocation.clone(),
-            continuation: staged.request.continuation.clone(),
+            invocation: request.input().invocation.clone(),
+            continuation: request.input().continuation.clone(),
         });
-        let request = staged.request;
         Ok(PreparedModelTurn {
             #[cfg(feature = "issue-387-profile")]
             adapter_input_profile: staged.adapter_input_profile,

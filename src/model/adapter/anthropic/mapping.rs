@@ -386,18 +386,6 @@ pub(crate) fn translate_request(
     })
 }
 
-pub(super) fn encode_request(request: &crate::model::ModelRequest) -> Result<Vec<u8>, ModelError> {
-    let wire = translate_request(request)?;
-    #[cfg(feature = "issue-387-profile")]
-    let _profile =
-        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::HttpEncode);
-    serde_json::to_vec(&wire).map_err(|error| {
-        invalid_request(&format!(
-            "failed to serialize the Anthropic request: {error}"
-        ))
-    })
-}
-
 fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<WireTool<'_>> {
     tools
         .iter()
@@ -698,7 +686,7 @@ fn flush_tool_results<'a>(
     });
 }
 
-fn invalid_request(message: &str) -> ModelError {
+pub(super) fn invalid_request(message: &str) -> ModelError {
     ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: message.to_owned(),

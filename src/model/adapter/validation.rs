@@ -129,8 +129,52 @@ thread_local! { static PREFLIGHTS: std::cell::Cell<usize> = const { std::cell::C
 pub(crate) fn take_preflights() -> usize {
     PREFLIGHTS.with(|v| v.replace(0))
 }
+/// One immutable request and its transport bytes. Only the adapter boundary
+/// constructs this value; cloning a logical retry shares both allocations.
+#[derive(Clone)]
+pub struct PreparedModelRequest {
+    pub(super) input: std::sync::Arc<ModelRequest>,
+    pub(super) body: bytes::Bytes,
+    pub(super) tools: std::sync::Arc<ValidatedTools>,
+}
+
+impl PreparedModelRequest {
+    pub(crate) fn input(&self) -> &ModelRequest {
+        &self.input
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static PREPARATION_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+pub(crate) fn prepare_request(
+    request: ModelRequest,
+    protocol: ModelProtocol,
+) -> Result<PreparedModelRequest, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _request = super::profile::RequestScope::new(protocol, "prepare");
+    #[cfg(test)]
+    PREFLIGHTS.with(|v| v.set(v.get() + 1));
+    let tools = validate_request(&request, protocol)?;
+    let wire = translate_prepared(&request, &tools)?;
+    #[cfg(feature = "issue-387-profile")]
+    let _encoding = super::profile::phase(super::profile::Phase::HttpEncode);
+    #[cfg(test)]
+    PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated, encoded + 1)));
+    let body = serde_json::to_vec(&wire)
+        .map_err(|error| invalid_request(format!("failed to encode provider request: {error}")))?;
+    Ok(PreparedModelRequest {
+        input: std::sync::Arc::new(request),
+        body: body.into(),
+        tools: std::sync::Arc::new(tools),
+    })
+}
+
 /// Adapter-owned preflight, including opaque native replay, without dispatch.
 /// No SDK or wire values escape the adapter boundary.
+#[cfg(test)]
 pub(crate) fn validate_prepared_request(request: &ModelRequest) -> Result<(), ModelError> {
     prepared_wire_request(request).map(|_| ())
 }
@@ -163,6 +207,15 @@ fn prepared_wire_request(request: &ModelRequest) -> Result<PreparedWireRequest<'
     #[cfg(feature = "issue-387-profile")]
     let _request = super::profile::RequestScope::new(request.protocol(), "preflight");
     let tools = validate_request(request, request.protocol())?;
+    translate_prepared(request, &tools)
+}
+
+fn translate_prepared<'a>(
+    request: &'a ModelRequest,
+    tools: &ValidatedTools,
+) -> Result<PreparedWireRequest<'a>, ModelError> {
+    #[cfg(test)]
+    PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated + 1, encoded)));
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => {
             super::openai::chat_completions::translate_request(request)
@@ -170,7 +223,7 @@ fn prepared_wire_request(request: &ModelRequest) -> Result<PreparedWireRequest<'
         }
         ModelProtocol::OpenAiResponses => super::openai::responses::translate_request(
             request,
-            &tools,
+            tools,
             request.invocation.compat.responses_storage,
         )
         .map(PreparedWireRequest::Json),
@@ -327,6 +380,28 @@ mod tests {
                     ),
                 }
             }
+        }
+    }
+
+    #[test]
+    fn prepared_retry_shares_input_and_one_encoded_body() {
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            super::PREPARATION_WORK.with(|work| work.set((0, 0)));
+            let request = crate::scripted_suites::common::simple_request(protocol, "test", "input");
+            let prepared = super::prepare_request(request, protocol).unwrap();
+            let retry = prepared.clone();
+            assert!(std::sync::Arc::ptr_eq(&prepared.input, &retry.input));
+            assert_eq!(prepared.body.as_ptr(), retry.body.as_ptr());
+            let input = std::sync::Arc::downgrade(&prepared.input);
+            drop(prepared);
+            assert!(input.upgrade().is_some());
+            drop(retry);
+            assert!(input.upgrade().is_none());
+            super::PREPARATION_WORK.with(|work| assert_eq!(work.get(), (1, 1)));
         }
     }
 

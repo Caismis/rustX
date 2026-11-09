@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use serde::{Serialize, Serializer};
+use serde::Serialize;
 
 use crate::model::ModelProtocol;
 
@@ -239,42 +239,9 @@ fn update(update: impl FnOnce(&mut Work)) {
     });
 }
 
-/// The actual HTTP serializer receives precisely the same owned JSON value.
-pub(crate) struct Payload {
-    value: serde_json::Value,
-    context: Option<Context>,
-}
-impl From<serde_json::Value> for Payload {
-    fn from(value: serde_json::Value) -> Self {
-        Self {
-            value,
-            context: CONTEXT.with(|slot| slot.borrow().clone()),
-        }
-    }
-}
-impl Serialize for Payload {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let _phase = phase_in(Phase::HttpEncode, self.context.clone());
-        self.value.serialize(serializer)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn real_serializer_receives_byte_identical_json() {
-        let _request = RequestScope::new(ModelProtocol::OpenAiChatCompletions, "dispatch");
-        let value = serde_json::json!({
-            "messages": [{"role":"user", "content":"é\"\\\n"}],
-            "n": 9_007_199_254_740_993_u64,
-            "opaque": {"array":[null,true,1.25]},
-        });
-        let expected = serde_json::to_vec(&value).unwrap();
-        let payload = Payload::from(value);
-        assert_eq!(serde_json::to_vec(&payload).unwrap(), expected);
-    }
 
     #[test]
     fn bounded_records_and_exact_nested_visit_classification() {

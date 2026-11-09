@@ -622,6 +622,7 @@ impl<'a> AgentExecution<'a> {
                     crate::runtime::workflow::WorkflowOutputSubmission::Committed => {
                         self.retire_continuation();
                         self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
+                        self.logical_step.current_input = None;
                         if let Err(error) = self.state.tools_finished() {
                             return Some(Terminal::Failed {
                                 failure: AttemptFailure::Runtime { error },
@@ -689,12 +690,9 @@ impl<'a> AgentExecution<'a> {
         // C succeeded: the logical model step is no longer unresolved, even
         // if a later tool/result phase causes the attempt itself to fail.
         self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
+        let input = self.logical_step.current_input.take();
         self.continuation_source = if self.pending_continuation.is_some() {
-            let input = self
-                .logical_step
-                .current_input
-                .as_ref()
-                .expect("accepted output has frozen actual request");
+            let input = input.expect("accepted output has frozen actual request");
             let output = self
                 .conversation
                 .ledger()
@@ -702,7 +700,7 @@ impl<'a> AgentExecution<'a> {
                 .expect("accepted Assistant is committed");
             Some(crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
                 input.snapshot.request_id.clone(), &self.request.conversation_id,
-                &input.request.messages, output,
+                &input.request.input().messages, output,
             ).expect("canonical accepted output is Assistant"))
         } else {
             None
@@ -794,6 +792,7 @@ impl<'a> AgentExecution<'a> {
         ));
         self.retire_continuation();
         self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
+        self.logical_step.current_input = None;
         if had_tool_calls {
             let _ = self.state.tools_finished();
         }

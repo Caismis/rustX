@@ -67,6 +67,17 @@ pub trait ModelAdapter: Send + Sync {
     /// The returned stream is the only channel of information about the
     /// invocation; the adapter retains no hidden state afterwards.
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream;
+
+    /// Dispatch an adapter-prepared immutable request after the execution
+    /// owner's admission boundary. In-process adapters consume only the
+    /// canonical input; native HTTP adapters use the prepared body.
+    fn stream_prepared(
+        &self,
+        request: super::validation::PreparedModelRequest,
+        cancellation: CancellationSignal,
+    ) -> ModelStream {
+        self.stream(std::sync::Arc::unwrap_or_clone(request.input), cancellation)
+    }
 }
 
 /// A single-item stream that fails with the given normalized error, without
