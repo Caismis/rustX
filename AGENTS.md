@@ -9,5 +9,3 @@
 - Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later.
 - Study how established products solve the problem before designing a solution. Adopt their proven patterns and conventions rather than inventing an approach from scratch.
 - After completing changes and passing the relevant checks, commit and push them to the corresponding remote branch.
-- Before finishing development, have an independent review subagent review the entire pull request. Fix actionable findings and repeat independent review until no actionable findings remain.
-- Monitor CI for the exact pull-request head after pushing. Fix failures and repeat verification, independent review, and CI monitoring until all required checks pass.
