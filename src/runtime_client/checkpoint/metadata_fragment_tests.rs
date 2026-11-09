@@ -240,7 +240,7 @@ fn owner_counts(value: &ProjectionMetadata) -> Vec<usize> {
 }
 
 #[test]
-fn metadata_sort_permutation_preserves_long_cycles_and_stable_duplicates_without_owner_clones() {
+fn metadata_sort_shares_one_ordered_result_and_preserves_stable_duplicates() {
     let mut long_cycle: Vec<_> = (0..97).collect();
     long_cycle.rotate_right(1);
     for keys in [long_cycle, vec![4, 2, 2, 0, 1, 4, 3]] {
@@ -251,19 +251,24 @@ fn metadata_sort_permutation_preserves_long_cycles_and_stable_duplicates_without
         Arc::make_mut(&mut expected.content).sort_by(|a, b| a.path.cmp(&b.path));
         Arc::make_mut(&mut expected.collections).sort_by(|a, b| a.domain.cmp(&b.domain));
         let expected_bytes = encoded(&expected).unwrap();
+        let mut first: Option<ProjectionMetadata> = None;
         for replay in 0..3 {
             let mut value = original.clone();
             metadata_fragment::take_array_work();
             let prepared = cache.prepare(&value);
-            let counts = owner_counts(&original);
-            let content_buffer = value.content.as_ptr();
-            let collection_buffer = value.collections.as_ptr();
             crate::observation::metadata::take_clone_work();
             prepared.sort_into(&mut value);
-            assert_eq!(crate::observation::metadata::take_clone_work(), 0);
-            assert_eq!(owner_counts(&original), counts);
-            assert_eq!(value.content.as_ptr(), content_buffer);
-            assert_eq!(value.collections.as_ptr(), collection_buffer);
+            let clones = crate::observation::metadata::take_clone_work();
+            if let Some(first) = &first {
+                assert_eq!(clones, 0, "warm sort shares the prepared result");
+                assert!(Arc::ptr_eq(&first.content, &value.content));
+                assert!(Arc::ptr_eq(&first.collections, &value.collections));
+            } else {
+                assert_eq!(clones, original.content.len() + original.collections.len());
+                assert!(!Arc::ptr_eq(&original.content, &value.content));
+                assert!(!Arc::ptr_eq(&original.collections, &value.collections));
+                first = Some(value.clone());
+            }
             assert_eq!(encoded(&value).unwrap(), expected_bytes);
             assert_eq!(prepared.fragment_budget(), value.fragment_budget());
             assert_eq!(
@@ -276,34 +281,50 @@ fn metadata_sort_permutation_preserves_long_cycles_and_stable_duplicates_without
 }
 
 #[test]
-fn metadata_sort_identity_and_cache_hits_leave_owners_and_output_buffers_unchanged() {
+fn sorted_capture_transfers_the_input_buffers_and_reuses_them_at_new_cuts() {
     for count in [0, 1, 64] {
         let cache = metadata_fragment::MetadataArrays::default();
-        let mut value = array_metadata(&(0..count).collect::<Vec<_>>());
-        let bytes = encoded(&value).unwrap();
-        let content_buffer = value.content.as_ptr();
-        let collection_buffer = value.collections.as_ptr();
-        for replay in 0..3 {
-            metadata_fragment::take_array_work();
-            let prepared = cache.prepare(&value);
-            assert!(owner_counts(&value).iter().all(|count| *count == 2));
+        let original = array_metadata(&(0..count).collect::<Vec<_>>());
+        let bytes = encoded(&original).unwrap();
+        let ProjectionMetadata {
+            read_cut,
+            content,
+            collections,
+        } = original;
+        let mut content = Arc::try_unwrap(content).unwrap();
+        let mut collections = Arc::try_unwrap(collections).unwrap();
+        content.shrink_to_fit();
+        collections.shrink_to_fit();
+        let content_buffer = content.as_ptr();
+        let collection_buffer = collections.as_ptr();
+        metadata_fragment::take_array_work();
+        crate::observation::metadata::take_clone_work();
+        let first = cache
+            .prepare_capture(&read_cut, content, collections)
+            .metadata(read_cut);
+        assert_eq!(crate::observation::metadata::take_clone_work(), 0);
+        assert!(owner_counts(&first).iter().all(|count| *count == 1));
+        assert_eq!(first.content.as_ptr(), content_buffer);
+        assert_eq!(first.collections.as_ptr(), collection_buffer);
+        assert_eq!(encoded(&first).unwrap(), bytes);
+        assert_eq!(metadata_fragment::take_array_work(), [2, 2, 0]);
+        for revision in [100, u64::MAX] {
+            let mut repeated = first.clone();
+            repeated.read_cut.revision = revision;
+            let prepared = cache.prepare(&repeated);
             crate::observation::metadata::take_clone_work();
-            prepared.sort_into(&mut value);
+            prepared.sort_into(&mut repeated);
             assert_eq!(crate::observation::metadata::take_clone_work(), 0);
-            assert!(owner_counts(&value).iter().all(|count| *count == 2));
-            assert_eq!(value.content.as_ptr(), content_buffer);
-            assert_eq!(value.collections.as_ptr(), collection_buffer);
-            assert_eq!(encoded(&value).unwrap(), bytes);
-            assert_eq!(
-                metadata_fragment::take_array_work(),
-                if replay == 0 { [2, 2, 0] } else { [0, 0, 2] }
-            );
+            assert!(Arc::ptr_eq(&first.content, &repeated.content));
+            assert!(Arc::ptr_eq(&first.collections, &repeated.collections));
+            assert_eq!(repeated.read_cut.revision, revision);
+            assert_eq!(metadata_fragment::take_array_work(), [0, 0, 2]);
         }
     }
 }
 
 #[test]
-fn metadata_sort_live_binding_misses_keep_only_one_cached_owner_array() {
+fn metadata_sort_live_binding_misses_release_the_previous_prepared_owner() {
     use crate::runtime::identity::{PublicationStreamId, RequestId, TurnId};
 
     let cache = metadata_fragment::MetadataArrays::default();
@@ -336,7 +357,10 @@ fn metadata_sort_live_binding_misses_keep_only_one_cached_owner_array() {
         assert!(owner_counts(&value).iter().all(|count| *count == 2));
         crate::observation::metadata::take_clone_work();
         prepared.sort_into(&mut value);
-        assert_eq!(crate::observation::metadata::take_clone_work(), 0);
+        assert_eq!(
+            crate::observation::metadata::take_clone_work(),
+            value.content.len() + value.collections.len()
+        );
         assert!(owner_counts(&value).iter().all(|count| *count == 2));
         assert_eq!(metadata_fragment::take_array_work(), [2, 2, 0]);
         assert_eq!(
