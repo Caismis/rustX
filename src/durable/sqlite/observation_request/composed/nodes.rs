@@ -243,7 +243,7 @@ impl Capture<'_> {
         }
         let node = manifest::node(connection, &native)?;
         let (content, widths, max_path, max_key_path) = match node.kind {
-            manifest::NodeKind::Leaf => {
+            manifest::NodeKind::Leaf { .. } => {
                 #[cfg(test)]
                 let _measurement = super::measurement::Measurement::new(
                     crate::agent::execution::attribution::SourceScope::Leaf,

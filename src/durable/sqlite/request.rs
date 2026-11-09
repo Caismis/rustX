@@ -312,33 +312,33 @@ impl RequestStore for SqliteConversationStore {
         #[cfg(test)]
         self.request_snapshot_body_reads
             .fetch_add(1, Ordering::SeqCst);
-        {
-            let connection = self.lock()?;
-            load_request_snapshot(&connection, &self.conversation_id, request_id)
-        }
+        self.read_transaction(|transaction| {
+            load_request_snapshot(transaction, &self.conversation_id, request_id)
+        })
     }
     fn reconstruct_model_request(
         &self,
         request_id: &crate::runtime::identity::RequestId,
     ) -> Result<crate::model::types::ModelRequest, ConversationStoreError> {
-        let connection = self.lock()?;
-        let snapshot = load_request_snapshot(&connection, &self.conversation_id, request_id)?;
-        snapshot
-            .reconstruct_with(|reference| {
-                if reference.conversation_id != self.conversation_id {
-                    return Err(
+        self.read_transaction(|transaction| {
+            let snapshot = load_request_snapshot(transaction, &self.conversation_id, request_id)?;
+            snapshot
+                .reconstruct_with(|reference| {
+                    if reference.conversation_id != self.conversation_id {
+                        return Err(
+                            crate::model::snapshot::RequestReconstructionError::Conversation(
+                                "foreign frozen Original scope".to_owned(),
+                            ),
+                        );
+                    }
+                    load_message(transaction, &reference.message_id).map_err(|error| {
                         crate::model::snapshot::RequestReconstructionError::Conversation(
-                            "foreign frozen Original scope".to_owned(),
-                        ),
-                    );
-                }
-                load_message(&connection, &reference.message_id).map_err(|error| {
-                    crate::model::snapshot::RequestReconstructionError::Conversation(
-                        error.to_string(),
-                    )
+                            error.to_string(),
+                        )
+                    })
                 })
-            })
-            .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))
+                .map_err(|error| ConversationStoreError::InvalidReference(error.to_string()))
+        })
     }
     fn read_request_snapshots(
         &self,
