@@ -6,6 +6,7 @@ use super::{
     TranscriptFieldSource,
 };
 use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
+use std::sync::Arc;
 
 impl ClientInner {
     pub(crate) fn checkpoint_page(
@@ -692,18 +693,20 @@ impl ClientInner {
             }
         }
         let mut checkpoint = seed.checkpoint_with_read_domains(self.store.as_ref())?;
-        for binding in &mut checkpoint.content {
-            if let Some(reference) = self.materialize_content_binding(binding)? {
-                *binding = binding.resolve(&reference);
+        for index in 0..checkpoint.content.len() {
+            let binding = &checkpoint.content[index];
+            if let Some(reference) = self.materialize_content_binding(binding)?
+                && reference != binding.content_ref
+            {
+                Arc::make_mut(&mut checkpoint.content)[index] = binding.resolve(&reference);
             }
         }
         self.materialize_trace(&mut checkpoint.snapshot, &checkpoint.read_cut, records)?;
         self.materialize_auxiliary_audit_frontier(&mut checkpoint, deadline)?;
         if !records.is_empty() {
-            checkpoint
-                .collections
-                .retain(|frontier| frontier.domain != "trace_updates");
-            checkpoint.collections.push(
+            let collections = Arc::make_mut(&mut checkpoint.collections);
+            collections.retain(|frontier| frontier.domain != "trace_updates");
+            collections.push(
                 crate::observation::cut::CollectionFrontier {
                     domain: "trace_updates".into(),
                     revision: checkpoint.read_cut.through,
@@ -754,10 +757,9 @@ impl ClientInner {
                 message: "checkpoint auxiliary audit deadline exhausted".into(),
             });
         }
-        checkpoint
-            .collections
-            .retain(|frontier| frontier.domain != crate::runtime_client::auxiliary::DOMAIN);
-        checkpoint.collections.push(
+        let collections = Arc::make_mut(&mut checkpoint.collections);
+        collections.retain(|frontier| frontier.domain != crate::runtime_client::auxiliary::DOMAIN);
+        collections.push(
             crate::observation::cut::CollectionFrontier {
                 domain: crate::runtime_client::auxiliary::DOMAIN.into(),
                 revision: checkpoint

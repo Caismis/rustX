@@ -48,8 +48,8 @@ fn baseline_encode(
     path.forced = draft.replacement;
     let metadata = ProjectionMetadata {
         read_cut: checkpoint.read_cut.clone(),
-        collections: checkpoint.collections.clone(),
-        content: checkpoint.content.clone(),
+        collections: Arc::new(checkpoint.collections.as_ref().clone()),
+        content: Arc::new(checkpoint.content.as_ref().clone()),
     };
     let mut event = RuntimeClientEvent::ProjectionTransition {
         events: draft.events,
@@ -65,8 +65,8 @@ fn baseline_encode(
     if encoded.is_none() {
         let transition = event_kind(&event).to_owned();
         let mut replacement = checkpoint;
-        replacement.content.clear();
-        replacement.collections.clear();
+        replacement.content = Default::default();
+        replacement.collections = Default::default();
         event = RuntimeClientEvent::ProjectionTransition {
             events: vec![RuntimeClientEvent::CheckpointAdvanced {
                 transition,
@@ -522,8 +522,8 @@ fn assembled_publication_budget_is_conservative_at_all_admission_boundaries() {
             content: owned.content.clone(),
         };
         let mut inner = owned;
-        inner.content.clear();
-        inner.collections.clear();
+        inner.content = Default::default();
+        inner.collections = Default::default();
         for replacement in [false, true] {
             let events = if replacement {
                 vec![RuntimeClientEvent::CheckpointAdvanced {
@@ -975,7 +975,68 @@ fn repeated_publication_metadata_owner_census() {
     );
     assert!(transitions.iter().all(|m| m.content == read.content && m.collections == read.collections));
     assert!(transitions.windows(2).all(|pair| pair[0].read_cut != pair[1].read_cut));
-    assert_eq!(content.0, 9);
-    assert_eq!(collections.0, 9);
+    assert_eq!(content.0, 1);
+    assert_eq!(collections.0, 1);
+    assert!(transitions.iter().all(|m| Arc::ptr_eq(&m.content, &read.content) && Arc::ptr_eq(&m.collections, &read.collections)));
     eprintln!("8 retained transitions + read, (owners, slots, reserved slot bytes): content={content:?}, collections={collections:?}, encoded replay charge={encoded_charge}");
+}
+
+#[test]
+fn subscriber_delivery_and_eviction_preserve_held_metadata_owners() {
+    use super::super::SubscriberPoll;
+
+    let (mut projection, _store) = initialized_source_projection();
+    projection.replay_limit = 2;
+    let mut draft = empty_draft();
+    add_owned_metadata(&mut draft);
+
+    let first = copy_draft(&draft).encode().unwrap();
+    draft.seed = (*first.seed).clone();
+    projection.cursor = first.seed.cursor;
+    projection.retain_replay(first.event, first.bytes);
+    drop(first.seed);
+    let (caught_up, _) = projection.subscribe(projection.earliest_serviceable()).unwrap();
+    let (slow, _) = projection.subscribe(projection.earliest_serviceable()).unwrap();
+    let SubscriberPoll::Event(held) = projection.poll_subscriber(caught_up) else {
+        panic!("retained first transition");
+    };
+    let RuntimeClientEvent::ProjectionTransition { metadata: old, .. } = &held.event else {
+        unreachable!()
+    };
+    let old_bytes = encoded_event_bytes(&held.event, CHECKPOINT_TARGET_BYTES).unwrap();
+    let released = Arc::downgrade(&old.content);
+    let payload = old.content[0].owner_probe();
+    let second = copy_draft(&draft).encode().unwrap();
+    draft.seed = (*second.seed).clone();
+    projection.cursor = second.seed.cursor;
+    projection.retain_replay(second.event, second.bytes);
+    drop(second.seed);
+    let SubscriberPoll::Event(second) = projection.poll_subscriber(caught_up) else {
+        panic!("caught-up subscriber receives the next transition");
+    };
+    let RuntimeClientEvent::ProjectionTransition { metadata: current, .. } = &second.event else {
+        unreachable!()
+    };
+    assert!(Arc::ptr_eq(&old.content, &current.content));
+    assert!(Arc::ptr_eq(&old.collections, &current.collections));
+    assert_ne!(old.read_cut, current.read_cut);
+
+    draft.seed.snapshot.messages.clear();
+    draft.seed.head_bindings.clear();
+    draft.seed.prepared = super::super::prepared_capture::PreparedCaptures::default();
+    for _ in 0..2 {
+        let next = copy_draft(&draft).encode().unwrap();
+        draft.seed = (*next.seed).clone();
+        projection.cursor = next.seed.cursor;
+        projection.retain_replay(next.event, next.bytes);
+        assert!(matches!(projection.poll_subscriber(caught_up), SubscriberPoll::Event(_)));
+    }
+    assert!(matches!(projection.poll_subscriber(slow), SubscriberPoll::Lagged { .. }));
+    assert_eq!(projection.replay_len(), 2);
+    assert_eq!(encoded_event_bytes(&held.event, CHECKPOINT_TARGET_BYTES).unwrap(), old_bytes);
+    assert_ne!(released.strong_count(), 0);
+    drop((held, second));
+    assert_eq!(released.strong_count(), 0);
+    drop(draft);
+    assert_eq!(payload(), 0, "the independent raw evidence cache has also been released");
 }

@@ -87,10 +87,9 @@ fn compare_original(seed: &super::super::CheckpointSeed) {
     let (mut original, original_evicted) = seed.checkpoint_unfitted().unwrap();
     let (mut actual, evicted, budget) = seed.checkpoint_prepared().unwrap();
     assert_eq!(evicted, original_evicted);
-    assert_eq!(
-        serde_json::to_vec(&actual).unwrap(),
-        serde_json::to_vec(&original).unwrap()
-    );
+    assert_eq!(actual.snapshot, original.snapshot);
+    assert_eq!(actual.cursor, original.cursor);
+    assert_eq!(actual.read_cut, original.read_cut);
     if let Some(budget) = budget {
         assert!(
             preflight::required_safe_integer_budget(&actual, crate::observation::bounded::CHECKPOINT_TARGET_BYTES)

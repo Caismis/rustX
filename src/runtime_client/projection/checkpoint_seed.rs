@@ -275,7 +275,6 @@ impl CheckpointSeed {
         RuntimeClientError,
     > {
         use crate::observation::capture::Capture;
-        use crate::runtime_client::checkpoint::ProjectionMetadata;
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
@@ -432,12 +431,13 @@ impl CheckpointSeed {
             }
         }));
         self.capture_evidence(&messages, &mut capture);
-        let metadata = ProjectionMetadata {
-            read_cut: self.checkpoint_read_cut(),
-            content: capture.content,
-            collections: self.metadata_frontiers.prepare(capture.collections),
-        };
-        let prepared_metadata = self.metadata_arrays.prepare(&metadata);
+        let read_cut = self.checkpoint_read_cut();
+        let prepared_metadata = self.metadata_arrays.prepare_capture(
+            &read_cut,
+            capture.content,
+            self.metadata_frontiers.prepare(capture.collections),
+        );
+        let metadata = prepared_metadata.metadata(read_cut);
         let metadata_budget = prepared_metadata.fragment_budget();
         let mut complete_budget = prepared_capture::FitBudget::from_budget(metadata_budget);
         complete_budget.field("snapshot", budget.finish());
@@ -606,8 +606,8 @@ impl CheckpointSeed {
                 snapshot,
                 cursor: self.cursor,
                 read_cut: self.checkpoint_read_cut(),
-                content: capture.content,
-                collections: capture.collections.into_iter().map(Into::into).collect(),
+                content: capture.content.into(),
+                collections: Arc::new(capture.collections.into_iter().map(Into::into).collect()),
             },
             capture.evicted,
         ))

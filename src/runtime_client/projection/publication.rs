@@ -61,10 +61,6 @@ impl PublicationDraft {
             });
             let mut checkpoint = None;
             let fitted = if certified_checkpoint_fit(fit_budget) {
-                prepared_metadata
-                    .as_ref()
-                    .expect("captured metadata")
-                    .sort_into(&mut metadata);
                 false
             } else {
                 let mut owned = RuntimeClientCheckpoint {
@@ -126,8 +122,8 @@ impl PublicationDraft {
                     snapshot: snapshot.take().expect("capture materialized once")(),
                     cursor,
                     read_cut: metadata.read_cut.clone(),
-                    content: Vec::new(),
-                    collections: Vec::new(),
+                    content: Default::default(),
+                    collections: Default::default(),
                 });
                 event = RuntimeClientEvent::ProjectionTransition {
                     events: vec![RuntimeClientEvent::CheckpointAdvanced {
@@ -184,12 +180,20 @@ pub(super) fn compact_replay_storage(event: &mut RuntimeClientEvent) {
                 compact_replay_storage(event);
             }
             events.shrink_to_fit();
-            metadata.content.shrink_to_fit();
-            metadata.collections.shrink_to_fit();
+            if let Some(values) = Arc::get_mut(&mut metadata.content) {
+                values.shrink_to_fit();
+            }
+            if let Some(values) = Arc::get_mut(&mut metadata.collections) {
+                values.shrink_to_fit();
+            }
         }
         RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
-            checkpoint.content.shrink_to_fit();
-            checkpoint.collections.shrink_to_fit();
+            if let Some(values) = Arc::get_mut(&mut checkpoint.content) {
+                values.shrink_to_fit();
+            }
+            if let Some(values) = Arc::get_mut(&mut checkpoint.collections) {
+                values.shrink_to_fit();
+            }
         }
         _ => {}
     }
@@ -571,8 +575,8 @@ impl RuntimeClientProjection {
         if self.staged_publication.is_some() {
             return super::super::checkpoint::ProjectionMetadata {
                 read_cut: self.working_read_cut(),
-                collections: Vec::new(),
-                content: Vec::new(),
+                collections: Default::default(),
+                content: Default::default(),
             };
         }
         if let Ok(checkpoint) = self.checkpoint_candidate() {
@@ -586,8 +590,8 @@ impl RuntimeClientProjection {
             read_cut.source_cut = None;
             super::super::checkpoint::ProjectionMetadata {
                 read_cut,
-                collections: Vec::new(),
-                content: Vec::new(),
+                collections: Default::default(),
+                content: Default::default(),
             }
         }
     }
@@ -760,8 +764,8 @@ impl RuntimeClientProjection {
             let mut metadata = self.projection_metadata();
             metadata.read_cut.revision = next_value;
             // The complete transition carries this evidence once, in its metadata.
-            checkpoint.content.clear();
-            checkpoint.collections.clear();
+            checkpoint.content = Default::default();
+            checkpoint.collections = Default::default();
             RuntimeClientEvent::ProjectionTransition {
                 events: vec![RuntimeClientEvent::CheckpointAdvanced {
                     transition,

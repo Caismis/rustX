@@ -13,6 +13,7 @@ use crate::observation::cut::{
     CheckpointPageItem, CheckpointReadCut, CollectionFrontier, ContentBinding,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 mod prepared_trace;
 pub(super) use prepared_trace::PreparedTraceHead;
@@ -27,8 +28,8 @@ pub const CHECKPOINT_MATERIALIZATION_SECONDS: u64 = 5;
 #[serde(deny_unknown_fields)]
 pub struct ProjectionMetadata {
     pub read_cut: CheckpointReadCut,
-    pub collections: Vec<MetadataFragment<CollectionFrontier>>,
-    pub content: Vec<MetadataFragment<ContentBinding>>,
+    pub collections: Arc<Vec<MetadataFragment<CollectionFrontier>>>,
+    pub content: Arc<Vec<MetadataFragment<ContentBinding>>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -36,17 +37,9 @@ pub struct RuntimeClientCheckpoint {
     pub snapshot: RuntimeClientSnapshot,
     pub cursor: RuntimeClientCursor,
     pub read_cut: CheckpointReadCut,
-    pub content: Vec<MetadataFragment<ContentBinding>>,
-    pub collections: Vec<MetadataFragment<CollectionFrontier>>,
+    pub content: Arc<Vec<MetadataFragment<ContentBinding>>>,
+    pub collections: Arc<Vec<MetadataFragment<CollectionFrontier>>>,
 }
-pub(super) fn sort_metadata(
-    collections: &mut [MetadataFragment<CollectionFrontier>],
-    content: &mut [MetadataFragment<ContentBinding>],
-) {
-    collections.sort_by(|left, right| left.domain.cmp(&right.domain));
-    content.sort_by(|left, right| left.path.cmp(&right.path));
-}
-
 pub(super) fn certified_checkpoint_fit(budget: Option<usize>) -> bool {
     budget.is_some_and(|budget| budget <= CHECKPOINT_TARGET_BYTES - CHECKPOINT_ITEM_BYTES)
 }
@@ -82,16 +75,25 @@ pub(super) fn fit_checkpoint_with_budget(
         count: u64,
         next: Option<u64>,
     ) {
-        if let Some(frontier) = checkpoint
+        if let Some(index) = checkpoint
             .collections
-            .iter_mut()
-            .find(|frontier| frontier.domain == domain)
+            .iter()
+            .position(|frontier| frontier.domain == domain)
         {
+            let frontier = &mut Arc::make_mut(&mut checkpoint.collections)[index];
             frontier.loaded = count;
             frontier.next_offset = next;
         }
     }
-    sort_metadata(&mut checkpoint.collections, &mut checkpoint.content);
+    if !checkpoint
+        .collections
+        .is_sorted_by(|a, b| a.domain <= b.domain)
+    {
+        Arc::make_mut(&mut checkpoint.collections).sort_by(|a, b| a.domain.cmp(&b.domain));
+    }
+    if !checkpoint.content.is_sorted_by(|a, b| a.path <= b.path) {
+        Arc::make_mut(&mut checkpoint.content).sort_by(|a, b| a.path.cmp(&b.path));
+    }
     if certified_checkpoint_fit(prepared_budget) || fits(checkpoint) {
         return Ok(false);
     }
@@ -108,7 +110,7 @@ pub(super) fn fit_checkpoint_with_budget(
         return Ok(true);
     }
     checkpoint.snapshot.messages.clear();
-    checkpoint.content.retain(|binding| {
+    Arc::make_mut(&mut checkpoint.content).retain(|binding| {
         binding
             .path
             .first()
@@ -130,7 +132,7 @@ pub(super) fn fit_checkpoint_with_budget(
         .transcript
         .collections
         .retain(|frontier| !frontier.domain.starts_with("transcript.entries."));
-    checkpoint.content.retain(|binding| {
+    Arc::make_mut(&mut checkpoint.content).retain(|binding| {
         binding
             .path
             .first()
@@ -176,15 +178,15 @@ fn defer_pending_bodies(checkpoint: &mut RuntimeClientCheckpoint) {
         }
     }
     for domain in deferred {
-        if let Some(frontier) = checkpoint
-            .collections
+        let collections = Arc::make_mut(&mut checkpoint.collections);
+        if let Some(frontier) = collections
             .iter_mut()
             .find(|frontier| frontier.domain == domain)
         {
             frontier.loaded = 0;
             frontier.next_offset = Some(0);
         } else {
-            checkpoint.collections.push(
+            collections.push(
                 CollectionFrontier {
                     domain,
                     revision: checkpoint
@@ -201,17 +203,22 @@ fn defer_pending_bodies(checkpoint: &mut RuntimeClientCheckpoint) {
             );
         }
     }
-    checkpoint
+    if !checkpoint
         .collections
-        .sort_by(|left, right| left.domain.cmp(&right.domain));
-    for binding in &mut checkpoint.content {
-        if binding
-            .path
-            .first()
-            .is_some_and(|domain| domain == "pending_interactions")
+        .is_sorted_by(|a, b| a.domain <= b.domain)
+    {
+        Arc::make_mut(&mut checkpoint.collections).sort_by(|a, b| a.domain.cmp(&b.domain));
+    }
+    for index in 0..checkpoint.content.len() {
+        let binding = &checkpoint.content[index];
+        if !binding.deferred
+            && binding
+                .path
+                .first()
+                .is_some_and(|domain| domain == "pending_interactions")
             && binding.path.get(2).is_some_and(|field| field == "body")
         {
-            binding.deferred = true;
+            Arc::make_mut(&mut checkpoint.content)[index].deferred = true;
         }
     }
 }
@@ -748,7 +755,7 @@ mod budget_tests {
                         .read_cut
                         .domain_revisions
                         .insert("wide".into(), u64::MAX);
-                    original.collections[0].total = u64::MAX;
+                    Arc::make_mut(&mut original.collections)[0].total = u64::MAX;
                 }
                 let empty_budget = crate::observation::preflight::required_budget(
                     &crate::observation::structural_json::Encoded {
@@ -855,7 +862,7 @@ mod budget_tests {
                     },
                 ));
         }
-        checkpoint.collections.push(
+        Arc::make_mut(&mut checkpoint.collections).push(
             CollectionFrontier {
                 domain: "pending_interactions".into(),
                 revision: 0,
