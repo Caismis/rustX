@@ -1,5 +1,5 @@
 import type {
-  RuntimeClientSnapshot, ResourceDiagnostic, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
+  RuntimeClientSnapshot, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
 } from '../../../../../protocol/app-server/v77';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { resourceCapability, toolSourceId, type ResourceCapability } from '../../settings/capability';
@@ -67,14 +67,6 @@ function diagnosticsOf(resources: CapabilityInspection, family: ResourceFamily, 
   return resources.resource_diagnostics
     .filter(item => item.subject.kind === 'resource' && item.subject.family === family && item.subject.name === name)
     .map(item => item.reason);
-}
-
-/** The diagnostics of one family's source documents or collections as a whole.
- * Native attributes them to no identity, so they are presented for the family
- * and never copied onto the resources that family's documents hold. */
-export function collectionDiagnostics(source: SourceSettings | undefined, families: readonly ResourceFamily[]): readonly ResourceDiagnostic[] {
-  return (source?.prospective_resources?.resource_diagnostics ?? [])
-    .filter(item => item.subject.kind === 'collection' && families.includes(item.subject.family));
 }
 
 function selectedOf(resources: CapabilityInspection, family: ResourceFamily, name: string): boolean | undefined {

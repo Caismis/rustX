@@ -5,7 +5,6 @@ import {Button} from '../../../presentation/primitives/Button';
 import {FilterTabs,Search} from '../primitives/aria';
 import type {PageFocus} from '../machines/navigation';
 import {extensionEntries} from '../../resources/shared/inventory';
-import {CollectionDiagnostics} from '../../resources/shared/CollectionDiagnostics';
 import {ExtensionDetail} from './ExtensionDetail';
 import {NativeExtensions} from './NativeExtensions';
 import css from '../../resources/shared/ResourceCatalog.module.css';
@@ -27,7 +26,7 @@ export function ExtensionsPage({source,scope,revision,focus,onFocus,filter,onFil
   ]}>
    {filter!=='managed_python'&&<NativeExtensions source={source} scope={scope} revision={revision}/>}
    {filter!=='native'&&<><div role="list" className={css.list}>{entries.map(entry=><div role="listitem" aria-label={entry.name} key={entry.name}><button type="button" className={css.card} onClick={()=>onFocus({kind:'extension',family:'managed_python',name:entry.name})}>{entry.name}</button></div>)}</div>
-    {!entries.length&&<p className={css.empty}>{tx('settings:catalog.empty')}</p>}<CollectionDiagnostics source={source} families={['managed_python']}/></>}
+    {!entries.length&&<p className={css.empty}>{tx('settings:catalog.empty')}</p>}</>}
   </FilterTabs>
  </section>;
 }

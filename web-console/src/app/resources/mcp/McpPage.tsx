@@ -8,7 +8,6 @@ import { Search } from '../../settings/primitives/aria';
 import { documentAuthoring } from '../../settings/projection';
 import type {McpFocus} from '../types';
 import { extensionEntries } from '../shared/inventory';
-import { CollectionDiagnostics } from '../shared/CollectionDiagnostics';
 import { ResourceAvailability } from '../shared/ResourceAvailability';
 import type { ProbeState } from './useMcpProbes';
 import { McpStatusIcon } from './McpStatusIcon';
@@ -67,6 +66,6 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
   return <div className={css.page} data-mcp-page="">
     <div className={css.toolbar}>{scopeControl}<span className={css.total}>MCP <small>{filtered.length}</small></span><div className={css.search}><IconSearchOutline16/><Search label={tx('settings:mcp.search')} placeholder={tx('settings:mcp.search')} value={query} onChange={setQuery}/></div></div>
     {document.state !== 'structured' && <p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p>}
-    {group(filtered.filter(entry=>owned(entry)))}{filtered.some(entry=>!owned(entry))&&group(filtered.filter(entry=>!owned(entry)),true)}<CollectionDiagnostics source={source} families={['mcp']}/>
+    {group(filtered.filter(entry=>owned(entry)))}{filtered.some(entry=>!owned(entry))&&group(filtered.filter(entry=>!owned(entry)),true)}
   </div>;
 }

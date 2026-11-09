@@ -13,7 +13,6 @@ import {SkillDetail} from '../skills/SkillDetail';
 import {useSkillCatalog} from '../skills/useSkillCatalog';
 import {extensionEntries} from './inventory';
 import {ResourceAvailability} from './ResourceAvailability';
-import {CollectionDiagnostics} from './CollectionDiagnostics';
 import css from '../ResourceSurface.module.css';
 import cards from './ResourceCatalog.module.css';
 
@@ -46,7 +45,6 @@ export function ResourceBrowser({family,client,source,scope,revision,models,prof
    {owned.length?list(owned):<p className={cards.empty}>{tx(query?'resources:no-results':'resources:empty')}</p>}
   </div>
   {!!inherited.length&&<div role="group" aria-label={tx('resources:scope.inherited')} className={cards.group}><div className={cards.groupHeader}><h3 className={cards.groupTitle}>{tx('resources:scope.inherited')}</h3><span className={cards.count}>{inherited.length}</span></div>{list(inherited)}</div>}
-  <CollectionDiagnostics source={source} families={[family]}/>
   {family==='skill'&&focus&&<SkillDetail key={focus} client={client} source={source} name={focus} close={()=>setFocus(undefined)}/>}
   <DialogSurface open={creating} onClose={()=>setCreating(false)} title={tx('resources:subagents.new')} overlayClassName={`${modal.root} ${modal.scrim}`} className={modal.dialog}>
    <div className={modal.header}><h2>{tx('resources:subagents.new')}</h2><Button aria-label={tx('resources:close')} onClick={()=>setCreating(false)}>×</Button></div>

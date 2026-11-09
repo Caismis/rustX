@@ -224,13 +224,9 @@ it('S2-05 a resource diagnostic stays on the identity native attributes it to, n
   const row = (name: string) => within(screen.getByRole('listitem', { name }));
   expect(row('broken').getByText('broken: missing command')).toBeTruthy();
   expect(row('search').queryByText('broken: missing command')).toBeNull();
-  // The document's own diagnostic is the MCP family's, listed once, and on
-  // neither of the identities the document holds.
-  expect(row('broken').queryByText(/MCP catalog exceeds/)).toBeNull();
-  expect(row('search').queryByText(/MCP catalog exceeds/)).toBeNull();
-  const sources = within(screen.getByRole('region', { name: 'Source diagnostics' }));
-  expect(sources.getAllByText(/MCP catalog exceeds 128 definitions/)).toHaveLength(1);
-  expect(sources.queryByText(/missing command/)).toBeNull();
+  // Collection diagnostics are omitted; the actual server error stays on its identity.
+  expect(screen.queryByRole('region', { name: 'Source diagnostics' })).toBeNull();
+  expect(screen.queryByText(/MCP catalog exceeds/)).toBeNull();
   // The detail of each identity agrees with its row.
   await openResourceRow('search');
   const search = within(screen.getByRole('region', { name: 'MCP search' }));
@@ -292,21 +288,28 @@ it('S2-05 an identity native published no preparation or admission for is unobse
 
 });
 
-it('S2-05 Skill discovery diagnostics are the Skills family\'s, never shown on another Skill\'s detail', async () => {
+it('S2-05 collection and Skill discovery diagnostics stay out of resource pages', async () => {
   const s = cfg3Client();
-  s.source.prospective_resources = inventory();
-  // A package that failed validation. It is not `docs`, and nothing in the
-  // diagnostic names a Skill identity at all.
-  s.source.prospective_resources!.skill_diagnostics = [
-    { kind: 'package_invalid', source: 'user', package: '/home/user/rustx/.agents/skills/broken', cause: { cause: 'io', path: '/home/user/rustx/.agents/skills/broken/SKILL.md' } },
-  ] as never;
+  const resources = inventory();
+  resources.resource_diagnostics.push(
+    { subject: { kind: 'collection', family: 'agent' }, field: 'agents', reason: 'Agent source collection diagnostic' },
+    { subject: { kind: 'collection', family: 'managed_python' }, field: 'tools', reason: 'Python source collection diagnostic' },
+  );
+  resources.skill_diagnostics = [
+    { kind: 'source_root_missing', source: 'workspace', root: '/workspace/.agents/skills' },
+  ];
+  s.source.prospective_resources = resources;
   await user(s, 'Extensions');
+  fireEvent.click(screen.getByRole('tab', { name: 'Python' }));
+  expect(screen.getByRole('listitem', { name: 'analysis' })).toBeTruthy();
+  expect(screen.queryByText(/Python source collection diagnostic/)).toBeNull();
+  await openResourceModule('subagents');
+  expect(screen.getByRole('region', { name: 'Subagents' })).toBeTruthy();
+  expect(screen.queryByText(/Agent source collection diagnostic/)).toBeNull();
   await openResourceModule('skills');
-  const sources = within(screen.getByRole('region', { name: 'Source diagnostics' }));
-  expect(sources.getByRole('button', { name: 'Skill discovery diagnostics (1)' })).toBeTruthy();
-  await openResourceRow('docs');
+  expect(screen.getByRole('listitem', { name: 'docs' })).toBeTruthy();
   expect(screen.queryByRole('region', { name: 'Source diagnostics' })).toBeNull();
-  expect(screen.queryByRole('button', { name: /Skill (package|discovery) diagnostics/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Skill discovery diagnostics/ })).toBeNull();
 });
 
 // ── S2-06 Definition and selection stay independent mutations ───────────────

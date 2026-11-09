@@ -23,18 +23,8 @@ export function settingsTargetLabel(tx: Translate, target: SettingsTarget): stri
   return target.kind === 'user' ? tx('settings:copy.user-settings') : tx('settings:copy.workspace-settings-value', { p0: target.displayName });
 }
 
-/** Every resource kind the one Extensions surface manages. `native` is the
- * closed set of native extensions configured through `rustx.toml` semantic
- * units rather than through a resource document of their own. */
+/** Resource kinds managed by the app, including built-in extensions. */
 export type ExtensionFamily = ResourceFamily | 'native';
-export const extensionFamilies: readonly ExtensionFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python', 'native'];
-export function extensionFamilyLabel(tx: Translate, family: ExtensionFamily): string {
-  return family === 'mcp' ? 'MCP'
-    : family === 'skill' ? tx('settings:copy.skill')
-      : family === 'agent' ? tx('settings:agent-page.agent')
-        : family === 'workflow' ? tx('settings:extension-detail.workflow')
-          : family === 'managed_python' ? tx('settings:copy.managed-python') : tx('settings:copy.native');
-}
 
 /** The native application scope this source target publishes under, exactly as
  * `SourceTarget::application_scope` names it. Application versions are u64
