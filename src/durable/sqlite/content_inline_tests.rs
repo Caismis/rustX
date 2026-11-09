@@ -126,6 +126,116 @@ fn sqlite_tail_append_rejects_missing_or_wrong_length_without_publishing_frontie
 }
 
 #[test]
+fn append_prior_rejects_regressed_missing_and_inflated_frontiers_after_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("frontier.sqlite");
+    let key = ("live", "guarded-frontier", 0, Rep::Utf8Text);
+    let other = (key.0, key.1, 1, key.3);
+    let bytes = vec![b'x'; STREAM_SEGMENT_BYTES];
+    {
+        let mut connection = Connection::open(&path).unwrap();
+        crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
+        let transaction = connection.transaction().unwrap();
+        put(&transaction, key, 1, &bytes, true).unwrap();
+        put(&transaction, other, 3, b"other block", true).unwrap();
+        put(&transaction, key, 5, b"", true).unwrap();
+        transaction.commit().unwrap();
+    }
+    let connection = Connection::open(&path).unwrap();
+    register_tail_function(&connection).unwrap();
+    assert!(put(&connection, key, 4, b"out of order", true).is_err());
+    for damage in [
+        "UPDATE content_frontiers SET readable_end=100 WHERE block_index=0 AND revision=5",
+        "UPDATE content_frontiers SET readable_end=16384 WHERE block_index=0 AND revision=5",
+        "DELETE FROM content_frontiers WHERE block_index=0",
+        "DELETE FROM content_segments WHERE block_index=0",
+    ] {
+        connection.execute_batch("SAVEPOINT damage").unwrap();
+        connection.execute_batch(damage).unwrap();
+        for suffix in [b"".as_slice(), b"new"] {
+            assert!(put(&connection, key, 6, suffix, true).is_err(), "{damage}");
+        }
+        connection
+            .execute_batch("ROLLBACK TO damage; RELEASE damage")
+            .unwrap();
+    }
+    put(&connection, key, 6, b"next", true).unwrap();
+    assert_eq!(stored_rows(&connection, key.1), (4, 3));
+    for revision in [1, 5, 6] {
+        assert_eq!(
+            range_bytes_at(&connection, key, revision, 0, bytes.len() as u64).unwrap(),
+            bytes
+        );
+    }
+    assert_eq!(
+        range_bytes_at(
+            &connection,
+            key,
+            6,
+            bytes.len() as u64,
+            bytes.len() as u64 + 4
+        )
+        .unwrap(),
+        b"next"
+    );
+    assert_eq!(
+        range_bytes_at(&connection, other, 3, 0, 11).unwrap(),
+        b"other block"
+    );
+}
+
+#[test]
+fn append_prior_vm_work_is_independent_of_frontier_history() {
+    use rusqlite::StatementStatus::VmStep;
+    const OLD_MAX: &str = "SELECT COALESCE(MAX(readable_end),0) FROM content_frontiers
+        WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4";
+    let mut counts = Vec::new();
+    for count in [1u64, 16, 256, 4_096, 16_384] {
+        let connection = connection();
+        let key = ("live", "selected", 0, Rep::Utf8Text);
+        let bindings = params![key.0, key.1, key.2, key.3.key()];
+        connection
+            .execute(
+                "WITH RECURSIVE frames(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM frames WHERE n<?1)
+             INSERT INTO content_frontiers
+             SELECT 'live','unrelated',0,'t',1,1,NULL
+             UNION ALL SELECT 'live','selected',0,'t',n*3,(n+1)/2,NULL FROM frames",
+                [count],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO content_segments VALUES('live','selected',0,'t',0,zeroblob(?1))",
+                [count.div_ceil(2)],
+            )
+            .unwrap();
+        let mut old = connection.prepare(OLD_MAX).unwrap();
+        let expected: u64 = old.query_row(bindings, |row| row.get(0)).unwrap();
+        let old_steps = old.get_status(VmStep);
+        connection
+            .prepare_cached(APPEND_PRIOR_SQL)
+            .unwrap()
+            .reset_status(VmStep);
+        assert_eq!(
+            append_prior(&connection, key, 3 * count + 1, STREAM_SEGMENT_BYTES as u64).unwrap(),
+            expected
+        );
+        let steps = connection
+            .prepare_cached(APPEND_PRIOR_SQL)
+            .unwrap()
+            .get_status(VmStep);
+        counts.push((count, old_steps, steps));
+    }
+    eprintln!(
+        "SQLite {} frontier/old/new VM steps: {counts:?}",
+        rusqlite::version()
+    );
+    assert!(counts.windows(2).all(|pair| pair[0].2 == pair[1].2));
+    let (_, old, current) = counts.last().unwrap();
+    assert!(*old > 100 * current);
+}
+
+#[test]
 fn compact_content_representation_keys_keep_original_public_wire_names() {
     let connection = connection();
     for (index, (rep, wire)) in [

@@ -6645,7 +6645,10 @@ idempotent only after this validation succeeds.
 In-flight frames are transient lifecycle staging. Canonical acceptance deletes
 them; audit terminalization consolidates them into one bounded immutable
 audit and removes them. No settled stream leaves O(number-of-frames)
-permanent history.
+permanent history. Appending a content suffix extends the latest revision for
+that source, block and representation. The writer verifies its end against the
+current physical tail before advancing the frontier. Historical reads still
+verify their exact selected revision and stay within its end.
 
 ### Audit semantics
 

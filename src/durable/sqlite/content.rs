@@ -770,8 +770,8 @@ fn put_segmented(
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         return Ok(());
     }
-    let prior: u64 = if append {
-        connection.query_row_cached("SELECT COALESCE(MAX(readable_end),0) FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4",params![kind,id,block,representation.key()],|r|r.get(0)).map_err(|e|storage(e.to_string()))?
+    let prior = if append {
+        append_prior(connection, key, revision, segment_size as u64)?
     } else {
         0
     };
@@ -783,6 +783,64 @@ fn put_segmented(
         )
         .map_err(|e| storage(e.to_string()))?;
     Ok(())
+}
+
+// The two ordered lookups each stop at the last row of their compound key.
+const APPEND_PRIOR_SQL: &str = "
+    SELECT frontier.revision, frontier.readable_end, tail.segment, tail.byte_count
+    FROM (SELECT 1)
+    LEFT JOIN (
+        SELECT revision, readable_end FROM content_frontiers
+        WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4
+        ORDER BY revision DESC LIMIT 1
+    ) AS frontier ON TRUE
+    LEFT JOIN (
+        SELECT segment, CASE WHEN typeof(bytes)='blob' THEN length(bytes) END AS byte_count
+        FROM content_segments
+        WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4
+        ORDER BY segment DESC LIMIT 1
+    ) AS tail ON TRUE";
+
+fn append_prior(
+    connection: &Connection,
+    (kind, id, block, representation): (&str, &str, u32, Rep),
+    revision: u64,
+    segment_size: u64,
+) -> Result<u64, ConversationStoreError> {
+    let (previous, end, segment, length) = connection
+        .query_row_cached(
+            APPEND_PRIOR_SQL,
+            params![kind, id, block, representation.key()],
+            |row| {
+                Ok((
+                    row.get::<_, Option<u64>>(0)?,
+                    row.get::<_, Option<u64>>(1)?,
+                    row.get::<_, Option<u64>>(2)?,
+                    row.get::<_, Option<u64>>(3)?,
+                ))
+            },
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    let prior = match (previous, end) {
+        (None, None) => 0,
+        (Some(previous), Some(end)) if previous < revision => end,
+        _ => return Err(invalid()),
+    };
+    // A missing, regressed or inflated frontier must never start a second
+    // prefix or authorize a hole, including at a segment boundary or on an
+    // empty suffix. Check current storage within the append transaction.
+    let actual = match (segment, length) {
+        (None, None) => 0,
+        (Some(segment), Some(length)) if (1..=segment_size).contains(&length) => segment
+            .checked_mul(segment_size)
+            .and_then(|offset| offset.checked_add(length))
+            .ok_or_else(invalid)?,
+        _ => return Err(invalid()),
+    };
+    if prior != actual {
+        return Err(invalid());
+    }
+    Ok(prior)
 }
 
 /// Write one contiguous suffix without allocating a second whole payload.
