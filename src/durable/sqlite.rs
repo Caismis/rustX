@@ -345,7 +345,8 @@ fn count_conversation_store_open() {
 /// Version 91 binds shared Request Source preparation to frozen native configuration.
 /// Version 95 stores one fact-bound complete Statistics record per relevant event.
 /// Version 96 stores bounded full-key binary Request Source navigation pages.
-pub const SQLITE_SCHEMA_VERSION: i64 = 97;
+/// Version 98 indexes Workflow coordinates and nodes only for matching facts.
+pub const SQLITE_SCHEMA_VERSION: i64 = 98;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

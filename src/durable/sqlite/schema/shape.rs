@@ -798,7 +798,6 @@ fn verify_required_index_sql(connection: &Connection) -> Result<(), Conversation
     let mut expected = [
         ("projection_ledger_idx", ("CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)".to_owned(), false)),
         ("projection_checkpoint_idx", ("CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)".to_owned(), false)),
-        ("events_workflow_coordinates_idx", ("CREATE INDEX events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.origin.type'),coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id')),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'))".to_owned(), true)),
         ("events_observation_tool_idx", ("CREATE INDEX events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL".to_owned(), true)),
         ("inherited_turn_identity_idx", ("CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))".to_owned(), false)),
         ("inherited_response_closing_idx", ("CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))".to_owned(), false)),
