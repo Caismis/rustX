@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { AttachmentTarget, CheckpointPage, RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v77';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
@@ -52,11 +52,27 @@ export function SubagentScope({ client, sessionId, children, openAside, onMode }
   const currentOwner = useRef(owner); currentOwner.current = owner;
   if(headerReads.current.owner !== owner) { headerReads.current.owner=owner; headerReads.current.seen.clear(); }
   const [selection, setSelection] = useState<{ owner: string; id?: string; opened: RuntimeClientAgent[]; leases?:Map<string,object>; oneShot?: Set<string>; full?: boolean }>();
+  // Visible sidebar inspections demand meters without opening or selecting a
+  // main-chat view. Their leases expire on hide, unmount, or scope replacement.
+  const [observations, setObservations] = useState<{ owner: string; leases: Map<object, RuntimeClientAgent> }>();
+  const observeWorkflow = useCallback((agent: RuntimeClientAgent) => {
+    if (currentOwner.current !== owner || !scope.current()) return;
+    const lease = {};
+    setObservations(previous => ({ owner, leases: new Map([...(previous?.owner === owner ? previous.leases : []), [lease, agent]]) }));
+    return () => setObservations(previous => {
+      if (previous?.owner !== owner || !previous.leases.has(lease)) return previous;
+      const leases = new Map(previous.leases);
+      leases.delete(lease);
+      return { owner, leases };
+    });
+  }, [owner, scope]);
   const id = selection?.owner === owner ? selection.id : undefined;
   const residents = selection?.owner === owner ? selection.opened : NO_AGENTS;
   const residentLeases = useRef(selection); residentLeases.current=selection;
   const inventory = [...agents, ...residents.filter(value => !agents.some(agent => agent.agent_id === value.agent_id))];
-  inventoryRef.current = inventory;
+  const observedAgents = observations?.owner === owner ? [...observations.leases.values()] : NO_AGENTS;
+  const meterInventory = [...new Map([...observedAgents, ...inventory].map(agent => [agent.agent_id, agent])).values()];
+  inventoryRef.current = meterInventory;
   const navigation = useRef(0);
   const open = (id?: string, source?: RuntimeClientAgent, inspection = false) => { navigation.current++; setSelection(previous => {
     const opened = previous?.owner === owner ? previous.opened : [];
@@ -106,17 +122,17 @@ export function SubagentScope({ client, sessionId, children, openAside, onMode }
   const attached = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachment : undefined);
   const deleting = useClientSelector(client, state => sessionId ? state.views[sessionId]?.deleting : undefined);
   useLayoutEffect(() => () => client.agentMeters.retire(scope), [client, scope]);
-  useLayoutEffect(() => { client.agentMeters.update(scope, id); }, [client, scope, agents, residents, attached, intent, deleting, id]);
+  useLayoutEffect(() => { client.agentMeters.update(scope, id); }, [client, scope, agents, residents, observations, attached, intent, deleting, id]);
   const readings = useSyncExternalStore(client.agentMeters.subscribe, client.agentMeters.getSnapshot);
   const metrics: Record<string, AgentStatistics> = {}, metricErrors: Record<string, string> = {};
-  if (readings.scope === scope && scope.current()) for (const agent of inventory) {
+  if (readings.scope === scope && scope.current()) for (const agent of meterInventory) {
     const reading = readings.readings.get(agent.agent_id);
     if (reading?.demand === meterDemand(agent)) {
       if (reading.metrics) metrics[agent.agent_id] = reading.metrics;
       if (reading.error) metricErrors[agent.agent_id] = reading.error;
     } else if (readings.blocked) metricErrors[agent.agent_id] = tx('agent:usage.reads-unresolved');
   }
-  return <Context value={{ client, sessionId, onMode, agents: inventory, workflows, workflowChildren: workflowCatalog, metrics, metricErrors, full: selection?.owner === owner && selection.full, headerError: headerError?.owner===owner&&selection?.leases?.get(headerError.id)===headerError.lease?headerError.message:undefined, oneShot: selection?.owner === owner ? selection.oneShot : undefined, openWorkflow: target && scope.current() ? openWorkflow : undefined,
+  return <Context value={{ client, sessionId, onMode, agents: inventory, workflows, workflowChildren: workflowCatalog, metrics, metricErrors, observeWorkflow, full: selection?.owner === owner && selection.full, headerError: headerError?.owner===owner&&selection?.leases?.get(headerError.id)===headerError.lease?headerError.message:undefined, oneShot: selection?.owner === owner ? selection.oneShot : undefined, openWorkflow: target && scope.current() ? openWorkflow : undefined,
     openWorkflowAside: openAside && target && scope.current() ? child => {
       openAside(WORKFLOW_ASIDE + JSON.stringify([child.agentId, child.activationId]), child.title);
     } : undefined,
@@ -173,6 +189,7 @@ export function SubagentAside({ id, visible }: { id: string; visible: boolean })
 
 function WorkflowSubagentAside({ client, sessionId, id, activation, visible }: { client: AppServerClient; sessionId?: string; id: string; activation: string; visible: boolean }) {
   const tx = useTranslation();
+  const observe = useSubagents()?.observeWorkflow;
   const admission = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachmentObservation : undefined);
   const revision = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.workflows.revision : undefined);
   const [read, setRead] = useState<{ owner: NonNullable<typeof admission>; agent?: RuntimeClientAgent; error?: unknown }>();
@@ -189,6 +206,10 @@ function WorkflowSubagentAside({ client, sessionId, id, activation, visible }: {
     return () => controller.abort();
   }, [client, sessionId, admission, revision, id, activation, visible, retry]);
   const current = read?.owner === admission ? read : undefined;
+  const agent = current?.agent;
+  useLayoutEffect(() => {
+    if (visible && agent) return observe?.(agent);
+  }, [observe, visible, agent]);
   if (current?.agent) return <SubagentAsideView agent={current.agent} visible={visible} oneShot/>;
   if (current) return <SubagentObservationNotice error={current.error} loading={false} disabled={!visible} retry={() => { setRead(undefined); setRetry(value => value + 1); }}/>;
   return <p role="status">{tx(admission ? 'common:activity.loading' : 'common:activity.unavailable')}</p>;

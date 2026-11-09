@@ -21,6 +21,24 @@ for (const width of [1440, 390]) test(`workflow catalog counts three children be
   await expect(tree.getByRole('treeitem', { name: 'explore completed' })).toBeFocused();
   const screenshot = testInfo.outputPath(`workflow-catalog-${width}.png`);
   await page.screenshot({ path: screenshot }); await testInfo.attach('complete unvisited catalog', { path: screenshot, contentType: 'image/png' });
+  // A first visit in the sidebar must load meters independently of any
+  // main-chat child selection or retained view.
+  expect(await page.evaluate(() => window.workflowCatalogFixture.meterReads())).toBe(0);
+  await tree.getByRole('button', { name: 'Open explore in sidebar', exact: true }).click();
+  const sidebar = page.locator('[data-workbench]');
+  const aside = sidebar.locator('section[data-agent-id="workflow-agent-0"]');
+  await expect(aside.getByRole('heading', { name: 'explore report' })).toBeVisible();
+  await expect(aside.getByText('One-shot subagent record')).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: /12K tok/ })).toBeVisible();
+  await expect(sidebar.getByRole('button', { name: '10% of context used' })).toBeVisible();
+  expect(await page.evaluate(() => window.workflowCatalogFixture.meterReads())).toBe(1);
+  await expect(aside.getByRole('textbox')).toHaveCount(0);
+  await expect(aside.locator('[data-composer-card]')).toHaveCount(0);
+  await expect(aside.getByRole('button', { name: 'Reload turns', exact: true })).toHaveCount(0);
+  await expect(page.locator('#conversation-view section[data-agent-id]:visible')).toHaveCount(0);
+  await captureEvidence(page, `workflow-one-shot-sidebar-${width}`);
+  await sidebar.getByRole('button', { name: 'Collapse right sidebar', exact: true }).click();
+  await list.click();
   await tree.getByRole('treeitem', { name: 'explore completed' }).press('Enter');
   const child = page.locator('[data-agent-id][data-view="chat"]:visible');
   await expect(child.getByRole('heading', { name: 'explore report' })).toBeVisible();
@@ -36,18 +54,6 @@ for (const width of [1440, 390]) test(`workflow catalog counts three children be
   await expect(child.getByRole('heading', { name: 'test report' })).toBeVisible();
   await page.getByRole('button', { name: parent, exact: true }).click();
   await expect(list).toHaveText('3 subagents');
-  await list.click();
-  await tree.getByRole('button', { name: 'Open explore in sidebar', exact: true }).click();
-  const sidebar = page.locator('[data-workbench]');
-  const aside = sidebar.locator('section[data-agent-id="workflow-agent-0"]');
-  await expect(aside.getByRole('heading', { name: 'explore report' })).toBeVisible();
-  await expect(aside.getByText('One-shot subagent record')).toBeVisible();
-  await expect(aside.getByRole('textbox')).toHaveCount(0);
-  await expect(aside.locator('[data-composer-card]')).toHaveCount(0);
-  await expect(aside.getByRole('button', { name: 'Reload turns', exact: true })).toHaveCount(0);
-  await expect(page.locator('#conversation-view section[data-agent-id]:visible')).toHaveCount(0);
-  await captureEvidence(page, `workflow-one-shot-sidebar-${width}`);
-  await sidebar.getByRole('button', { name: 'Collapse right sidebar', exact: true }).click();
   await page.evaluate(() => window.workflowCatalogFixture.refresh()); await expect(list).toHaveText('3 subagents');
   await page.reload(); await expect(list).toHaveText('3 subagents');
   expect(await page.evaluate(() => window.workflowCatalogFixture.statusReads())).toBe(0);

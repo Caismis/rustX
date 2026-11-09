@@ -122,6 +122,10 @@ export interface UnitEditing<T> {
   readonly overriding: boolean;
   readonly inheritance: boolean;
   readonly committed: boolean;
+  /** This unit's commit was observed at its exact revision. A definitive
+   * commit whose first read diverged is still unresolved and is never saved
+   * completion, even though the target has finished its post-write read. */
+  readonly settled: boolean;
   readonly busy: boolean;
   readonly admitted: boolean;
   readonly reviewNeeded: boolean;
@@ -220,6 +224,10 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   // The target reports one outcome at a time; this reads only the one that is
   // about this unit, so two independent sections never borrow each other's.
   const outcome = useSelector(actor, target => unitOutcome(target, identity), (left, right) => left.kind === right.kind && JSON.stringify(left) === JSON.stringify(right));
+  // A settled transaction may already have retired. An unresolved commit
+  // cannot retire, so only the absence of a live transaction allows the
+  // target's observed outcome to stand for completed settlement.
+  const settled = snapshot ? snapshot.matches({ mutation: 'settled' }) : outcome.kind === 'saved' && outcome.observed;
   const resets = useSelector(actor, target => target.context.resets[identity] ?? 0);
   const draft = transaction?.draft as { value: T } | undefined;
   const unparsed = authoredPresent && authored === undefined;
@@ -249,7 +257,7 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   const begin = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
   return {
     identity, displayed, outcome, resets, draft: draft !== undefined, authoredPresent, unparsed,
-    overriding: draft !== undefined || authoredPresent, inheritance, committed, busy, admitted,
+    overriding: draft !== undefined || authoredPresent, inheritance, committed, settled, busy, admitted,
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
     definition, shadowed, awaitingObservation, writable,
     // For a value-inherited unit an edit is an unambiguous override
@@ -347,8 +355,8 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           same fields, and none of them is writable until the explicit
           override transition. */}
       <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
-      <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx('settings:forms.changed-elsewhere') : undefined}
-        fallback={<div className={css.review}><p role="status">{tx('settings:forms.changed-elsewhere')}</p></div>}/>
+      <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}
+        fallback={<div className={css.review}><p role="status">{tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere')}</p></div>}/>
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       </div>
       <div className={css.actions}>
@@ -472,11 +480,11 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
     },
   }) as TypedUnitForm<T>;
   useEffect(() => {
-    if (submitted.current && unit.committed && !unit.awaitingObservation) {
+    if (submitted.current && unit.settled) {
       submitted.current = false;
       onSaved?.();
     }
-  }, [unit.committed, unit.awaitingObservation, onSaved]);
+  }, [unit.settled, onSaved]);
   useEffect(() => {
     if (sameValue(reflected.current, unit.displayed)) return;
     // The actor's value moved for a reason that is not this form's editing:

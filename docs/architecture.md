@@ -7311,6 +7311,13 @@ includes connection generation, exact Session/attachment target, Agent and child
 Conversation, activation, state and observation revision. Both the transport's
 existing pre-send admission proof and response publication verify this identity.
 
+A visible Workflow-child sidebar registers an independent observation lease
+with this same meter inventory after validating its finite native header. It
+does not open or select a main-chat child view, and the child stays one-shot and
+read-only. Hiding or unmounting the sidebar releases the lease; attachment or
+scope replacement invalidates it. This uses the existing meter concurrency and
+retirement accounting, including for late replies.
+
 At most two current-scope reads run. A round-robin cursor serves all valid
 inventory demands; selected unread demand can take at most every other admission,
 so selection and a busy Agent cannot starve independent Agents. Presentation-only

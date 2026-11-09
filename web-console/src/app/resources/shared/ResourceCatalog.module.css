@@ -27,6 +27,7 @@
 .resourceCard .description { display: block; min-height: 0; padding: 0; }
 .cardActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; position: relative; z-index: 1; margin-block-start: auto; }
 .availability { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.skillPolicy { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 20px; }
 
 .group .list { display: block; border-block: .5px solid var(--dsw-alias-border-l2); }
 .group .list > .resourceCard {

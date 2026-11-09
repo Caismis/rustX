@@ -575,7 +575,7 @@ it('T17 a post-commit read that observes the exact pre-save revision asks for re
   fireEvent.click(screen.getByRole('button', { name: 'Save MCP rollback' }));
   // The commit is definitive; the source no longer carries it.
   await screen.findByRole('button', { name: 'Use latest setting' });
-  expect(screen.getByText(/This setting changed elsewhere/)).toBeTruthy();
+  expect(screen.getByText(/The saved setting changed elsewhere/)).toBeTruthy();
   expect(Object.values(actor.getSnapshot().context.units).some(unit => unit.getSnapshot().context.base === 'r2')).toBe(true);
   expect(actor.getSnapshot().context.observation?.user.revision).toBe('r1');
 });

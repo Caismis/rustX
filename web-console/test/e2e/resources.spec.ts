@@ -112,6 +112,37 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await skills.getByRole('tab',{name:'Global',exact:true}).click();
   await expect(globalSkill.getByRole('switch')).toBeChecked();
 
+  const chooseSkillAccess = async (option: string) => {
+    const policy = skills.getByRole('button', { name: /Skill access$/ });
+    await expect(policy).toBeEnabled();
+    await policy.click();
+    await page.getByRole('option', { name: option, exact: true }).click();
+    await expect(policy).toBeEnabled();
+  };
+  await skills.getByRole('tab', { name: 'Workspace', exact: true }).click();
+  await chooseSkillAccess('Use global settings');
+  await expect.poll(workspaceDocument).not.toContain('skills =');
+  await expect(inheritedSkill.getByRole('switch')).toBeChecked();
+  await skills.getByRole('tab', { name: 'Global', exact: true }).click();
+  await chooseSkillAccess('None');
+  await expect.poll(() => readFileSync(f.settings, 'utf8')).toContain('skills = []');
+  await skills.getByRole('tab', { name: 'Workspace', exact: true }).click();
+  await expect(skills.getByRole('button', { name: /Skill access$/ })).toContainText('Use global settings');
+  await expect(inheritedSkill.getByRole('switch')).not.toBeChecked();
+  await chooseSkillAccess('None');
+  await expect.poll(workspaceDocument).toContain('skills = []');
+  await chooseSkillAccess('Use global settings');
+  await expect.poll(workspaceDocument).not.toContain('skills =');
+  await skills.getByRole('tab', { name: 'Global', exact: true }).click();
+  await chooseSkillAccess('All skills, including newly discovered');
+  await expect.poll(() => readFileSync(f.settings, 'utf8')).toContain('skills = "all"');
+  const newSkill = join(userRoot, 'skills', 'new-guide');
+  mkdirSync(newSkill);
+  writeFileSync(join(newSkill, 'SKILL.md'), '---\nname: new-guide\ndescription: Newly discovered skill.\n---\nUse this new skill.\n');
+  await skills.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(skills.getByRole('listitem', { name: 'new-guide', exact: true }).getByRole('switch')).toBeChecked();
+  await captureEvidence(skills, `skill-selection-policy-${width}`);
+
   await page.getByRole('button',{name:'Manage subagents',exact:true}).click();
   const agents=page.getByRole('region',{name:'Subagents',exact:true});
   await agents.getByRole('tab',{name:'Global',exact:true}).click();

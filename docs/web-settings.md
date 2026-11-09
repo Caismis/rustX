@@ -151,6 +151,12 @@ files are authored in the **Workflows** destination of the primary rail (see
 Settings keeps their inventory and root selection only. Skill-package and
 Python-source editing are outside this Settings scope.
 
+The Skills module exposes root-agent access separately from read-only skill
+definitions. Its policy distinguishes dynamic `all` (including future discovery),
+an exact list, explicit none (`[]`), and Workspace inheritance. Card toggles
+author exact lists. Choosing the global policy in a Workspace removes its
+authored override with `authored: null`; selecting all writes `all` explicitly.
+
 A resource's definition and its root availability are two native mutations with
 two outcomes. The resource detail edits the root selection through the same
 semantic unit — one draft, one CAS base — as Tools & Permissions, and saves it
@@ -247,6 +253,13 @@ the next save fenced on the committed revision until the user explicitly adopts
 the reviewed one. A read already in flight when the commit is acknowledged is
 still adopted, but it never classifies that commit; only one that already
 carries the committed revision observes it.
+
+Resource editors consume the shared unit's exact settlement fact before
+automatically closing. Completing a post-commit read alone cannot close an
+editor whose transaction diverged. That editor keeps its source-change notice
+and review action visible, including when another writer restored the original
+source bytes. Reviewing adopts the observed CAS base without replaying the
+write or claiming that the committed draft still exists.
 
 A semantic unit whose definitive commit still awaits authoritative observation
 is not a valid source for a new same-unit draft: until that observation, its

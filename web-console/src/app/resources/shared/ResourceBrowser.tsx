@@ -6,7 +6,7 @@ import { IconSkillOutline16 } from '../../../presentation/primitives/icons';
 import { SkillDetail } from '../skills/SkillDetail';
 import { useSkillCatalog } from '../skills/useSkillCatalog';
 import { extensionEntries } from './inventory';
-import { ResourceAvailability } from './ResourceAvailability';
+import { ResourceAvailability, SkillSelectionPolicy } from './ResourceAvailability';
 import { ResourceCard, ResourceGroup } from './ResourceCards';
 
 export function ResourceBrowser({ client, source, scope, revision, query, view, focus, onFocus }: {
@@ -43,6 +43,7 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
       source={source} scope={scope} revision={revision} skillNames={skillNames} />} />;
 
   return <>
+    {revision !== undefined && <SkillSelectionPolicy source={source} scope={scope} revision={revision} skillNames={skillNames} />}
     {skills?.error && <p role="alert">{skills.error}</p>}
     <ResourceGroup label={tx('resources:scope.owned')} count={owned.length} view={view}
       empty={<p role="status">{tx(needle ? 'resources:no-results' : !skills ? 'resources:loading' : 'resources:empty')}</p>}>

@@ -51,11 +51,11 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
   const submitted = useRef(false);
   useEffect(() => {
-    if (submitted.current && unit.committed && !unit.awaitingObservation) {
+    if (submitted.current && unit.settled) {
       submitted.current = false;
       onClose();
     }
-  }, [unit.committed, unit.awaitingObservation, onClose]);
+  }, [unit.settled, onClose]);
 
   const close = () => { unit.discard(); onClose(); };
   const value = unit.displayed;
@@ -176,7 +176,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
           </fieldset>
         </fieldset>
         <UnitOutcomeNotice title={formName} outcome={unit.outcome} />
-        <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx('settings:forms.changed-elsewhere') : undefined}/>
+        <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx(unit.committed && !unit.draft ? 'settings:forms.committed-changed-elsewhere' : 'settings:forms.changed-elsewhere') : undefined}/>
         <footer className={css.actions}>
           {unit.authoredPresent && <span data-removal={restoring ? 'override-removal' : 'authored-removal'}><ConfirmAction
             label={tx(restoring ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: formName })}

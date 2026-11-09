@@ -4152,7 +4152,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "f346245a86f3c9b6f5e6097c71be276a78408266da79aded5aadccb86d74e6d3"
+      "local_sha256": "b174a2e23394586d90cf3e740b7f7d93094efdab9ad0490bd8ffb978c64f5723"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6578,7 +6578,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "817f81cfbd48251a0ab6d544599ff113b1445533791e561cb08796c94dfeb514"
+      "local_sha256": "b32c10b1397bd13dde003029aa9a058e4d204d08799093d655cdd494596cca03"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -8415,7 +8415,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c5931a16afab5c0f0991a07dd81ed4283f79f5d2bcee6a0f13fc4d51f5177330"
+      "local_sha256": "044461ba4433353460ef4e14859f67f623904a0e192ae9073067ccb74c700571"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

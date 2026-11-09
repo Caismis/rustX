@@ -68,11 +68,12 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
     ? !!definition.url && /^https?:\/\//.test(definition.url) : !!definition.command?.trim());
   useEffect(() => {
     if (unit.outcome.kind === 'submitting' || unit.outcome.kind === 'committed') submitted.current = true;
-    if (submitted.current && unit.outcome.kind === 'saved' && unit.outcome.observed) {
+    if (submitted.current && unit.settled) {
+      submitted.current = false;
       onEditorDraftChange(undefined);
       close();
     }
-  }, [unit.outcome, close, onEditorDraftChange]);
+  }, [unit.outcome, unit.settled, close, onEditorDraftChange]);
   const chooseMode = (next: 'form'|'json') => {
     if (next === mode) return;
     if (next === 'form') {
@@ -197,7 +198,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
               disabled={!!focus.name || reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label>}/>
         </fieldset>}
         {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button type="button" onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
-        {reviewNeeded && <div className={css.notice}><p role="status">{tx('settings:mcp.review')}</p><Button onClick={review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
+        {reviewNeeded && <div className={css.notice}><p role="status">{tx(unit.committed && !unit.draft && !pendingImport && !jsonEdit ? 'settings:forms.committed-changed-elsewhere' : 'settings:mcp.review')}</p><Button onClick={review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
         <UnitOutcomeNotice title={identityTitle} outcome={unit.outcome}/>
         {error && mode !== 'json' && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
       </fieldset>

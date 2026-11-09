@@ -1,10 +1,12 @@
 import { childConversation, type Server } from '../fixture';
 import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v77';
 import { installWorkflowChildStatus, workflowCatalogSnapshot, workflowChildHeader } from '../workflow-catalog-data';
+import { agentMetrics } from '../agent-statistics-fixture';
 
 export function workflowCatalogFixture(server: Server, current: RuntimeClientSnapshot) {
   current.attempt = null; current.agents = []; current.workflows = workflowCatalogSnapshot().workflows;
   installWorkflowChildStatus(server);
+  server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
   server.handlers.set('agent/observe', request => {
     if (request.method !== 'agent/observe') throw new Error('Unexpected request');
     const index = Number(request.params.agent_id.split('-').at(-1)), header = workflowChildHeader(index);
@@ -19,7 +21,8 @@ export function workflowCatalogFixture(server: Server, current: RuntimeClientSna
     return { type: 'conversation_turns', page: { cut, offset: 0, total: '0', turns: [] } };
   });
   window.workflowCatalogFixture = { refresh: () => server.client.refresh('A'),
-    statusReads: () => server.requests.filter(row => row.request.method === 'agent/status').length };
+    statusReads: () => server.requests.filter(row => row.request.method === 'agent/status').length,
+    meterReads: () => server.requests.filter(row => row.request.method === 'agent/statistics').length };
 }
 
-declare global { interface Window { workflowCatalogFixture: { refresh(): Promise<void>; statusReads(): number } } }
+declare global { interface Window { workflowCatalogFixture: { refresh(): Promise<void>; statusReads(): number; meterReads(): number } } }
