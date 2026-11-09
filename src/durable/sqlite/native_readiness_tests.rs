@@ -335,3 +335,34 @@ fn completed_history_keeps_only_direct_runs_and_pending_holes() {
     drop(connection);
     assert_eq!(readiness(&store, 32), (32, 32, true));
 }
+
+#[test]
+fn completed_readiness_ranges_follow_direct_fragmentation_across_history_sizes() {
+    for alternating in [false, true] {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        for sequence in 1..=256 {
+            let batch = canonical_batch(&store, &format!("fragment-{sequence}"));
+            if alternating && sequence % 2 == 0 {
+                store.mark_observation_ready(sequence, sequence).unwrap();
+                store.mark_observation_transcript_ready(sequence).unwrap();
+            } else {
+                store.mark_native_observation_ready(&batch).unwrap();
+            }
+            if ![8, 64, 256].contains(&sequence) {
+                continue;
+            }
+            let counts: (u64, u64, u64) = store.lock().unwrap().query_row(
+                "SELECT (SELECT count(*) FROM event_observation_readiness),
+                        (SELECT count(*) FROM transcript_observation_readiness),
+                        (SELECT count(*) FROM event_observation_direct)",
+                [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap();
+            assert_eq!(counts, (0, 0, if alternating { sequence / 2 } else { 1 }));
+            assert_eq!(readiness(&store, sequence), (sequence, sequence, !alternating));
+            assert!(store.observation_event_witness(1, 8).unwrap().unwrap().native_direct);
+            assert_eq!(store.observation_event_witness(2, 8).unwrap().unwrap().native_direct, !alternating);
+            eprintln!("readiness: history={sequence}, alternating={alternating}, pending/direct={counts:?}");
+        }
+    }
+}
