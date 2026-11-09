@@ -1,0 +1,429 @@
+{
+  "scope": "Ordinary GNU allocator. Four immediate 128x8 pairs, one 16x64 pair, one unchanged strict-idle 128x8 pair. Current storage integrity/FK/schema and exact canonical bytes independently verified in every backup. Immediate matrix uses frozen fixture v1; depth/idle use v2 metadata-lane correction. Failed v1 depth baseline is retained and excluded.",
+  "rows": [
+    {
+      "family": "memory",
+      "pair": 0,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "memory-0-base",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.28515625,
+          "pss_mib": 53.5712890625
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 339.49609375,
+          "pss_mib": 405.220703125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 662.4296875,
+          "pss_mib": 736.654296875
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 665.55078125,
+          "pss_mib": 736.025390625
+        }
+      }
+    },
+    {
+      "family": "memory",
+      "pair": 0,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "memory-0-next",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.30078125,
+          "pss_mib": 53.6484375
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 336.9140625,
+          "pss_mib": 402.1142578125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 663.23828125,
+          "pss_mib": 736.2744140625
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 665.84765625,
+          "pss_mib": 735.1337890625
+        }
+      }
+    },
+    {
+      "family": "memory",
+      "pair": 1,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "memory-1-next",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.2734375,
+          "pss_mib": 53.68359375
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 341.375,
+          "pss_mib": 406.5986328125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 666.28515625,
+          "pss_mib": 739.4462890625
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 675.19921875,
+          "pss_mib": 744.6103515625
+        }
+      }
+    },
+    {
+      "family": "memory",
+      "pair": 1,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "memory-1-base",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.26953125,
+          "pss_mib": 54.1806640625
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 339.23046875,
+          "pss_mib": 404.455078125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 662.4453125,
+          "pss_mib": 736.107421875
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 665.21875,
+          "pss_mib": 735.193359375
+        }
+      }
+    },
+    {
+      "family": "memory",
+      "pair": 2,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "memory-2-base",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.296875,
+          "pss_mib": 53.64453125
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 335.2734375,
+          "pss_mib": 400.4267578125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 664.4453125,
+          "pss_mib": 738.1689453125
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 666.9453125,
+          "pss_mib": 736.9189453125
+        }
+      }
+    },
+    {
+      "family": "memory",
+      "pair": 2,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "memory-2-next",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.3125,
+          "pss_mib": 54.6103515625
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 336.86328125,
+          "pss_mib": 402.8486328125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 661.01171875,
+          "pss_mib": 735.3095703125
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 664.06640625,
+          "pss_mib": 734.6142578125
+        }
+      }
+    },
+    {
+      "family": "memory",
+      "pair": 3,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "memory-3-next",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.30078125,
+          "pss_mib": 54.6484375
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 335.07421875,
+          "pss_mib": 401.1103515625
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 653.94140625,
+          "pss_mib": 728.1650390625
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 656.90234375,
+          "pss_mib": 727.4384765625
+        }
+      }
+    },
+    {
+      "family": "memory",
+      "pair": 3,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "memory-3-base",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.28515625,
+          "pss_mib": 54.5712890625
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 335.80859375,
+          "pss_mib": 402.033203125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 660.80078125,
+          "pss_mib": 735.650390625
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 664.11328125,
+          "pss_mib": 735.212890625
+        }
+      }
+    },
+    {
+      "family": "deep",
+      "pair": 0,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "deep-v2-0-base",
+      "sessions": 16,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.30859375,
+          "pss_mib": 54.15625
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 55.47265625,
+          "pss_mib": 117.6962890625
+        },
+        "seeded_history_64": {
+          "anon_pss_mib": 214.8828125,
+          "pss_mib": 285.4814453125
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 214.84375,
+          "pss_mib": 285.1298828125
+        }
+      }
+    },
+    {
+      "family": "deep",
+      "pair": 0,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "deep-v2-0-next",
+      "sessions": 16,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.28125,
+          "pss_mib": 54.25390625
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 54.66015625,
+          "pss_mib": 116.3212890625
+        },
+        "seeded_history_64": {
+          "anon_pss_mib": 216.3515625,
+          "pss_mib": 286.7626953125
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 216.05078125,
+          "pss_mib": 286.2119140625
+        }
+      }
+    },
+    {
+      "family": "idle",
+      "pair": 0,
+      "side": "before",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "directory": "idle-v2-0-base",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.27734375,
+          "pss_mib": 54.0634765625
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 338.44921875,
+          "pss_mib": 404.173828125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 660.48046875,
+          "pss_mib": 734.330078125
+        },
+        "idle_32s": {
+          "anon_pss_mib": 600.9296875,
+          "pss_mib": 674.9677734375
+        },
+        "idle_130s": {
+          "anon_pss_mib": 557.7109375,
+          "pss_mib": 631.8115234375
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 545.734375,
+          "pss_mib": 616.0224609375
+        }
+      }
+    },
+    {
+      "family": "idle",
+      "pair": 0,
+      "side": "after",
+      "sha256": "89e6b95e3b66b71a36bdf7573f878c025b655d7f86fb5de9059f65a12b208c67",
+      "directory": "idle-v2-0-next",
+      "sessions": 128,
+      "endpoints": {
+        "empty_server": {
+          "anon_pss_mib": 16.30078125,
+          "pss_mib": 54.3359375
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 333.2109375,
+          "pss_mib": 398.4970703125
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 644.2421875,
+          "pss_mib": 718.2158203125
+        },
+        "idle_32s": {
+          "anon_pss_mib": 597.46484375,
+          "pss_mib": 671.501953125
+        },
+        "idle_130s": {
+          "anon_pss_mib": 555.2890625,
+          "pss_mib": 629.326171875
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 546.66015625,
+          "pss_mib": 617.009765625
+        }
+      }
+    }
+  ],
+  "paired": {
+    "memory": {
+      "values": [
+        {
+          "empty_server": 0.09594627008875367,
+          "all_subscribed_empty": -0.7605481469549313,
+          "seeded_history_8": 0.12206484178745036,
+          "all_unloaded": 0.04460591263111269
+        },
+        {
+          "empty_server": 0.024009603841546046,
+          "all_subscribed_empty": 0.632175304860505,
+          "seeded_history_8": 0.5796469048152453,
+          "all_unloaded": 1.50032883919764
+        },
+        {
+          "empty_server": 0.09587727708533222,
+          "all_subscribed_empty": 0.4741931725503967,
+          "seeded_history_8": -0.5167609260543937,
+          "all_unloaded": -0.43165551898229904
+        },
+        {
+          "empty_server": 0.09594627008875367,
+          "all_subscribed_empty": -0.2186885665429794,
+          "seeded_history_8": -1.0380397836431854,
+          "all_unloaded": -1.0857993212283756
+        }
+      ],
+      "median_percent": {
+        "empty_server": 0.09591177358704295,
+        "all_subscribed_empty": 0.12775230300370866,
+        "seeded_history_8": -0.19734804213347168,
+        "all_unloaded": -0.19352480317559317
+      }
+    },
+    "deep": {
+      "values": [
+        {
+          "empty_server": -0.16766467065868484,
+          "all_subscribed_empty": -1.4646855855221408,
+          "seeded_history_64": 0.6835120887111357,
+          "all_unloaded": 0.5618181818181744
+        }
+      ],
+      "median_percent": {
+        "empty_server": -0.16766467065868484,
+        "all_subscribed_empty": -1.4646855855221408,
+        "seeded_history_64": 0.6835120887111357,
+        "all_unloaded": 0.5618181818181744
+      }
+    },
+    "idle": {
+      "values": [
+        {
+          "empty_server": 0.14398848092151972,
+          "all_subscribed_empty": -1.5477303417471666,
+          "seeded_history_8": -2.458555857182565,
+          "idle_32s": -0.5765805587696127,
+          "idle_130s": -0.4342527350918224,
+          "all_unloaded": 0.16963953388495767
+        }
+      ],
+      "median_percent": {
+        "empty_server": 0.14398848092151972,
+        "all_subscribed_empty": -1.5477303417471666,
+        "seeded_history_8": -2.458555857182565,
+        "idle_32s": -0.5765805587696127,
+        "idle_130s": -0.4342527350918224,
+        "all_unloaded": 0.16963953388495767
+      }
+    }
+  },
+  "failed_products": [
+    {
+      "family": "deep",
+      "pair": 0,
+      "side": "before",
+      "command": [
+        "/usr/bin/python3",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/app-server-capacity.py",
+        "--binary",
+        "/home/capi/.cache/rustx-pr485-history-growth-20261109/kind-build/rustx",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-row-owner-20261110/deep-0-base",
+        "--sessions",
+        "16",
+        "--history",
+        "64",
+        "--memory-only"
+      ],
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "start": "2026-11-09T18:34:53.046990+00:00",
+      "exit": 1,
+      "end": "2026-11-09T18:34:54.280054+00:00"
+    }
+  ]
+}
