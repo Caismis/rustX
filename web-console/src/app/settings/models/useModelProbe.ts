@@ -1,14 +1,15 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { ModelProbeOutcome, ModelProbeSource, SourceSettings } from '../../../../../protocol/app-server/v77';
 import type { AppServerClient } from '../../../client/app-server';
+import { RpcFailure } from '../../../client/errors';
 import { sameValue, transportSelection, useClientSelector } from '../../../client/selectors';
 import { useTranslation } from '../../../locale/react';
 import { useOverlayActive } from '../../../presentation/primitives/DialogSurface';
-import type { ProductHostWorkspaces } from '../../../workspaces/host';
+import { WorkspaceHostError, type ProductHostWorkspaces } from '../../../workspaces/host';
 import { settingsTargetKey, type SettingsTarget } from '../projection';
 import { useSettingsNotification } from '../SettingsFeedback';
 
-type ProbeState = ModelProbeOutcome | 'checking';
+type ProbeState = ModelProbeOutcome | 'checking' | 'unsupported';
 type ProbeObservation = { key: string; states: Record<string, ProbeState> };
 
 export function useModelProbe(client: AppServerClient, host: ProductHostWorkspaces | undefined, target: SettingsTarget, source: SourceSettings) {
@@ -55,8 +56,10 @@ export function useModelProbe(client: AppServerClient, host: ProductHostWorkspac
         const response = await client.request({ method: 'model/probe', params: { target: { kind: 'user' }, model, source: revisions } }, 'model_probe', undefined, current);
         publish(response.outcome);
       }
-    } catch {
-      publish('unavailable');
+    } catch (error) {
+      const unsupported = error instanceof RpcFailure && error.error.code === -32601
+        || error instanceof WorkspaceHostError && error.kind === 'model_probe_unsupported';
+      publish(unsupported ? 'unsupported' : 'unavailable');
     }
   };
   return { available, states, test };

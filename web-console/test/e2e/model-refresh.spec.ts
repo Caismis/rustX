@@ -136,6 +136,27 @@ test('provider rename saves the display name without changing its models', async
   } finally { await fixture.stop(false); }
 });
 
+test('model connection tests identify an App Server without the probe method', async ({page}) => {
+  const fixture = await startDogfood();
+  try {
+    await page.routeWebSocket(new URL(fixture.endpoint).href, socket => {
+      const server = socket.connectToServer();
+      socket.onMessage(message => {
+        const request = JSON.parse(String(message));
+        if (request.method === 'model/probe') {
+          socket.send(JSON.stringify({jsonrpc:'2.0', id:request.id, error:{code:-32601, message:'Method not found'}}));
+        } else server.send(message);
+      });
+    });
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openSettingsPage(page, 'Models');
+    await page.getByRole('button', {name:'Test connection for console-model', exact:true}).click();
+    await expect(page.locator('[data-toast]')).toHaveText('The connected App Server does not support model connection tests. Update or restart it and try again.');
+  } finally { await fixture.stop(false); }
+});
+
 test('model probe feedback follows explicit tests across provider switches and model edits', async ({page}) => {
   const fixture = await startDogfood('web_model_probe');
   const wire = await wireProbe(page);

@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
-import { AppServerClient } from '../../tui/src/app-server/client.ts';
+import { AppServerClient, AppServerRequestError } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
 import { DesktopAdapter } from './desktop.ts';
 import { readDesktopSession } from './desktop-session.ts';
@@ -494,7 +494,12 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         return readSourceSettings(async()=>(await client.call('configuration/sourcesRead', {target}, 'source_settings')).projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
       };
       if (operation.kind === 'model_probe') {
-        const { outcome } = await client.call('model/probe', { target, model: operation.model, source: operation.source }, 'model_probe');
+        const { outcome } = await client.call('model/probe', { target, model: operation.model, source: operation.source }, 'model_probe').catch(error => {
+          if (error instanceof AppServerRequestError && error.error.code === -32601) {
+            throw new WorkspaceHostError('App Server does not support model connection tests', 'model_probe_unsupported');
+          }
+          throw error;
+        });
         if (!await current()) throw new Error('Workspace authority changed');
         return { kind: 'model_probe', outcome };
       }

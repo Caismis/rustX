@@ -142,6 +142,17 @@ it('a queued metadata removal checks Host scope only when its registration lane 
   expect(readFileSync(config.metadataFile, 'utf8')).toContain(alpha.id);
 });
 
+it('relays that the App Server lacks model connection testing for the Workspace', async () => {
+  const { host, endpoint } = fixture();
+  const [workspace] = (await host.listWorkspaces()).workspaces;
+  const operation = host.configureWorkspace(workspace.id, endpoint, {
+    kind: 'model_probe', model: 'fixture/native', source: { user_revision: 'user-1', workspace_revision: 'workspace-1' },
+  });
+  const [request] = await awaitMethod('model/probe');
+  native.state.transport!.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } });
+  await expect(operation).rejects.toMatchObject({ kind: 'model_probe_unsupported', uncertain: false });
+});
+
 it('MCP probes hold the authorized registration lane until native cleanup acknowledges',async()=>{
   const {host,config,endpoint}=fixture();
   const [alpha]=(await host.listWorkspaces()).workspaces;
