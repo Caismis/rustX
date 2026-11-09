@@ -1,41 +1,4 @@
 // Cross-refresh proofs must match fresh reads, including malformed source error ordering.
-#[test]
-fn fresh_response_revalidation_reuses_equal_presentation_without_hiding_corruption() {
-    let store = store();
-    store.initialize(&[]).unwrap();
-    let attempt = response_start(&store, "equal-presentation");
-    response_message(&store, &attempt, "equal-message");
-    response_complete(&store, &attempt);
-    let cut = store.observation_read_cut().unwrap();
-    let old = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
-    let native = old.transcript_rows[0].native_entry();
-    let frozen = serde_json::to_vec(&old.transcript).unwrap();
-    // Lose response proof authority, retaining only disposable presentation.
-    // A new cut and the same cut must both obtain fresh native response facts.
-    response_start(&store, "equal-new-cut");
-    let current_cut = store.observation_read_cut().unwrap();
-    for read_cut in [&cut, &current_cut] {
-        store.conn.response.invalidate();
-        super::super::observation_response::cache_work();
-        super::super::observation_response::row_work();
-        let current = store.observation_checkpoint_head(read_cut, read_cut.read.journal, 32).unwrap();
-        let (_, queries, _) = super::super::observation_response::cache_work();
-        assert!(queries > 0, "old presentation does not authorize a response-cache hit");
-        assert!(old.transcript_rows[0].same_owner(&current.transcript_rows[0]));
-        assert!(std::sync::Arc::ptr_eq(&native, &current.transcript.entries[0]));
-        assert_eq!(super::super::observation_response::row_work(), (0, 1));
-    }
-    {
-        let connection = store.lock().unwrap();
-        connection.execute_batch("SAVEPOINT changed_source; UPDATE observation_headers SET header_json=x'7b'").unwrap();
-    }
-    assert!(store.observation_checkpoint_head(&current_cut, current_cut.read.journal, 32).is_err());
-    store.lock().unwrap().execute_batch("ROLLBACK TO changed_source; RELEASE changed_source").unwrap();
-    let restored = store.observation_checkpoint_head(&current_cut, current_cut.read.journal, 32).unwrap();
-    assert!(old.transcript_rows[0].same_owner(&restored.transcript_rows[0]));
-    assert_eq!(serde_json::to_vec(&old.transcript).unwrap(), frozen);
-}
-
 fn response_cache_prime(
     store: &SqliteConversationStore,
     cut: &ObservationReadCut,

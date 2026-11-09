@@ -40,22 +40,6 @@ pub(super) struct Decoration {
     completed_response: Option<crate::observation::turn::CompletedResponseView>,
 }
 impl Decoration {
-    pub(super) fn matches(&self, value: &RuntimeClientTranscriptEntry) -> bool {
-        let rate_bits = |response: &Option<crate::observation::turn::CompletedResponseView>| {
-            response
-                .as_ref()
-                .and_then(|response| response.timing.as_ref())
-                .and_then(|timing| timing.output_tokens_per_second)
-                .map(f64::to_bits)
-        };
-        // Other decoration fields contain only discrete native values. The
-        // rate additionally needs exact bits: PartialEq merges signed zeros.
-        self.response_pending == value.response_pending
-            && self.turn_process == value.turn_process
-            && self.completed_response == value.completed_response
-            && rate_bits(&self.completed_response) == rate_bits(&value.completed_response)
-    }
-
     pub(super) fn from_entry(value: &RuntimeClientTranscriptEntry) -> Self {
         Self {
             turn_process: value.turn_process.clone(),
