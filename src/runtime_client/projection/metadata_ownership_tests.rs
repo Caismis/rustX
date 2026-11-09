@@ -918,3 +918,64 @@ fn content_resolution_keeps_argument_precedence_and_missing_representation_seman
         }
     }
 }
+
+#[test]
+fn repeated_publication_metadata_owner_census() {
+    use crate::observation::metadata::MetadataFragment;
+    use std::collections::BTreeMap;
+
+    fn inventory<T>(arrays: impl IntoIterator<Item = (usize, usize, usize)>) -> (usize, usize, usize) {
+        let owners: BTreeMap<_, _> = arrays
+            .into_iter()
+            .filter(|(_, len, _)| *len != 0)
+            .map(|(ptr, len, capacity)| (ptr, (len, capacity)))
+            .collect();
+        let used = owners.values().map(|(len, _)| len).sum();
+        let reserved = owners.values().map(|(_, capacity)| capacity).sum::<usize>();
+        (
+            owners.len(),
+            used,
+            reserved * std::mem::size_of::<MetadataFragment<T>>(),
+        )
+    }
+
+    let mut draft = empty_draft();
+    add_owned_metadata(&mut draft);
+    let mut held = Vec::new();
+    let mut encoded_charge = 0;
+    for _ in 0..8 {
+        let publication = copy_draft(&draft).encode().unwrap();
+        draft.seed = (*publication.seed).clone();
+        encoded_charge += publication.bytes;
+        held.push(publication.event);
+    }
+    let read = draft.seed.checkpoint_candidate().unwrap();
+    let transitions: Vec<_> = held
+        .iter()
+        .map(|event| match event {
+            RuntimeClientEvent::ProjectionTransition { metadata, .. } => metadata,
+            _ => panic!("one metadata transition per publication"),
+        })
+        .collect();
+    let content = inventory::<ContentBinding>(
+        transitions
+            .iter()
+            .map(|m| (m.content.as_ptr() as usize, m.content.len(), m.content.capacity()))
+            .chain([(read.content.as_ptr() as usize, read.content.len(), read.content.capacity())]),
+    );
+    let collections = inventory::<crate::observation::cut::CollectionFrontier>(
+        transitions
+            .iter()
+            .map(|m| (m.collections.as_ptr() as usize, m.collections.len(), m.collections.capacity()))
+            .chain([(
+                read.collections.as_ptr() as usize,
+                read.collections.len(),
+                read.collections.capacity(),
+            )]),
+    );
+    assert!(transitions.iter().all(|m| m.content == read.content && m.collections == read.collections));
+    assert!(transitions.windows(2).all(|pair| pair[0].read_cut != pair[1].read_cut));
+    assert_eq!(content.0, 9);
+    assert_eq!(collections.0, 9);
+    eprintln!("8 retained transitions + read, (owners, slots, reserved slot bytes): content={content:?}, collections={collections:?}, encoded replay charge={encoded_charge}");
+}
