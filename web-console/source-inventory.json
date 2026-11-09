@@ -8414,7 +8414,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "eae067099497e736d7087dd601906d0ac4469e82606aa5e7c074ca874e5319b8"
+      "local_sha256": "41c8260d671e463c829965c73ae363328bd2d332bda76391216868e60f0c9193"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

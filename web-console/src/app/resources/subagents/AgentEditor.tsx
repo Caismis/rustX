@@ -16,18 +16,19 @@ import type { SettingsTarget } from '../../settings/projection';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
 import { extensionEntries } from '../shared/inventory';
 import css from './Subagents.module.css';
-import { AgentToolFields } from './AgentToolFields';
+import { AgentToolFields, ManagedToolSelections, type LoadMcpTools } from './AgentToolFields';
 
 export type AgentDraft = AgentProfileDocument & { name?: string };
 
 interface Props {
   source: SourceSettings; target: SettingsTarget; host?: ProductHostWorkspaces; name?: string;
   models: string[]; profiles: ModelProfiles; initialDraft?: AgentDraft;
+  loadMcpTools?: LoadMcpTools;
   onScopeChange?: (target: SettingsTarget, draft: AgentDraft) => void;
   onClose: () => void;
 }
 
-export function AgentEditor({ source, target, host, name, models, profiles, initialDraft, onScopeChange, onClose }: Props) {
+export function AgentEditor({ source, target, host, name, models, profiles, initialDraft, loadMcpTools, onScopeChange, onClose }: Props) {
   const tx = useTranslation();
   const scope = target.kind;
   const creating = name === undefined;
@@ -130,7 +131,8 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
             <label>{tx('settings:extension-detail.description')}
               <input value={value.description ?? ''} onChange={event => update({ description: event.target.value })} />
             </label>
-            <AgentToolFields key={unit.resets} value={value.tools} change={tools => update({ tools })} />
+            <AgentToolFields key={unit.resets} source={source} scope={unit.definition === 'inherited' ? 'user' : scope}
+              value={value} change={update} loadMcpTools={loadMcpTools} />
             <div className={css.prompt}>
               <label htmlFor={promptId}>{tx('resources:subagents.prompt')}</label>
               <textarea id={promptId} rows={3} value={value.instructions ?? ''} onChange={event => update({ instructions: event.target.value })} />
@@ -143,7 +145,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
             <Advanced title={tx('settings:agent-page.advanced-options')}>
               {model && <AgentModelOptions value={model} change={next => update({ model: next })} models={models} profiles={profiles} />}
               <Names label={tx('settings:extension-detail.delegated-agents')} value={value.agents ?? []} change={agents => update({ agents })} />
-              <Names label={tx('settings:extension-detail.delegated-workflows')} value={value.workflows ?? []} change={workflows => update({ workflows })} />
+              <ManagedToolSelections tools={value.tools} change={tools => update({ tools })} />
               <Selection label={tx('settings:extension-detail.skill-prompt-visibility')} value={value.skills ?? []} change={skills => update({ skills })} />
               <Names label={tx('settings:extension-detail.project-guidance-files')} value={guidance.files ?? []}
                 change={files => update({ agents_md: { ...guidance, files } })} />

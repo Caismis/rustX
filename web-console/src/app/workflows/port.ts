@@ -1,5 +1,5 @@
 import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, withWorkflowOperation, type WorkflowRequest } from '../../../../protocol/app-server/workflow-documents.ts';
-import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../../protocol/app-server/v77';
+import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor, WorkflowToolSource } from '../../../../protocol/app-server/v77';
 import type { WorkflowEdit, WorkflowSource } from '../../../../protocol/app-server/workflow-documents.ts';
 import { analysisMatches } from '../../../../protocol/app-server/workflow-analysis';
 import type { AppServerClient } from '../../client/app-server';
@@ -104,6 +104,25 @@ export interface WorkflowScopePort {
   /** Enable or disable one file for this scope's Sessions, against the
    * revision of the scope's `rustx.toml` its listing was read at. */
   enable(id: string, expectedRevision: string, enabled: boolean): Promise<void>;
+}
+
+/** Each page belongs to one unchanged catalog. A source becomes listed only
+ * after every page has arrived through the same captured authority. */
+export async function readToolCatalog(port: Pick<WorkflowScopePort, 'toolCatalog'>, source?: string) {
+  const sources: WorkflowToolSource[] = [];
+  let cursor: WorkflowToolCatalogCursor | undefined;
+  do {
+    const catalog = await port.toolCatalog(source, cursor);
+    for (const item of catalog.sources) {
+      const prior = source && sources.find(prior => prior.source_id === item.source_id);
+      if (prior) prior.tools.push(...item.tools);
+      else sources.push({ ...item, tools: [...item.tools] });
+    }
+    const next = catalog.next ?? undefined;
+    if (next && cursor && (next.offset <= cursor.offset || next.digest !== cursor.digest)) throw new Error('Invalid Tool catalog continuation');
+    cursor = next;
+  } while (cursor);
+  return { sources };
 }
 
 const replaced = (write: boolean) => new WorkflowOperationError(write ? { kind: 'uncertain', message: 'server_replaced' } : { kind: 'unavailable', message: 'server_replaced' });

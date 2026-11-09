@@ -17,6 +17,7 @@ import { SettingsActorContext, useSettingsTarget } from '../settings/machines/re
 import { SourceContext } from '../settings/source-context';
 import { catalogIdentities, catalogProfiles, configAuthoring, settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from '../settings/projection';
 import { SettingsFeedback, SettingsNotice } from '../settings/SettingsFeedback';
+import { createWorkflowPort, readToolCatalog, USER_SCOPE } from '../workflows/port';
 import { McpActions, McpPage } from './mcp/McpPage';
 import { useMcpProbes } from './mcp/useMcpProbes';
 import { ResourceBrowser } from './shared/ResourceBrowser';
@@ -88,10 +89,17 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     resetScope();
   }
   const changeCreationScope = (next: SettingsTarget, draft: AgentDraft) => {
-    setNewAgent(draft);
+    const { tools, workflows: _workflows, ...fields } = draft;
+    setNewAgent(tools?.builtin?.length ? { ...fields, tools: { builtin: tools.builtin } } : fields);
     setQuery('');
     setTab(next.kind === 'user' ? 'global' : 'workspace');
     if (next.kind === 'workspace') { chosen.current = true; setWorkspace(next.id); }
+  };
+  const loadMcpTools = async (server: string) => {
+    const port = createWorkflowPort({ client, host: () => host, hostAuthority: authority.capture(),
+      scope: target.kind === 'workspace' ? { kind: 'workspace', workspaceId: target.id } : USER_SCOPE });
+    const catalog = await readToolCatalog(port, server);
+    return catalog.sources.find(entry => entry.source_id === server);
   };
   const listTitle = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef(false);
@@ -110,7 +118,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
       {available && source ? <SettingsActorContext value={actor}><SourceContext value={source}>
         <fieldset className={css.editor} disabled={!editable}>
           <AgentEditor source={source} target={target} host={host} name={resourceFocus} initialDraft={newAgent}
-            onScopeChange={changeCreationScope} onClose={closeAgent}
+            onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
             models={catalogIdentities(source, scope, 'models')} profiles={catalogProfiles(source, scope)} />
         </fieldset>
       </SourceContext></SettingsActorContext> : <>

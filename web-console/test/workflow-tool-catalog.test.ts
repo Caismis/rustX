@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { WorkflowToolCatalogCursor, WorkflowToolSource } from '../../protocol/app-server/v77';
-import { readToolCatalog } from '../src/app/workflows/ui/editor/toolCatalog';
+import { readToolCatalog } from '../src/app/workflows/port';
 
 it('collects every page of one source before exposing the complete catalog', async () => {
   const source: WorkflowToolSource = { source_id: 'large', kind: 'mcp', scope: 'user', state: 'listed', tools: Array.from({ length: 128 }, (_, index) => ({ name: `tool_${index}`, description: '', input_schema: { type: 'object' }, result: { type: 'text' } })) };

@@ -103,9 +103,6 @@
   display: grid;
   gap: 10px;
   margin-top: 8px;
-  padding: 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
 }
 .form fieldset:not(.body, .fields) {
   min-width: 0;
@@ -114,17 +111,44 @@
   margin: 8px 0;
   padding: 10px;
 }
-.form .builtins > fieldset {
+.form :is(.nativeTools, .toolOptions) > fieldset {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 116px), 1fr));
   gap: 4px 12px;
   margin: 0;
+}
+.form .toolOptions > fieldset {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 142px), 1fr));
   padding: 0;
   border: 0;
 }
-.builtins legend { margin-bottom: 6px; }
-.builtins label { overflow-wrap: anywhere; }
-.builtins input { flex: none; }
+.toolChoices legend { margin-bottom: 6px; }
+.toolChoices label { overflow-wrap: anywhere; }
+.toolChoices input { flex: none; }
+.form fieldset.scopedTools { display: grid; gap: 10px; margin: 0; }
+.toolScope { min-width: 0; }
+.toolScope h4, .toolScope > fieldset > legend {
+  margin: 0 0 4px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.scopedTools p {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+.toolServer {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 0;
+}
+.toolServer + .toolServer { border-top: 1px solid var(--dsw-alias-border-l2); }
+.toolServerHead, .toolSwitch { display: flex; align-items: center; gap: 8px; }
+.toolServerHead { flex-wrap: wrap; }
+.toolServerHead strong { margin-inline-end: auto; overflow-wrap: anywhere; }
+.toolSwitch { font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .form .guidance {
   display: flex;
   align-items: center;
@@ -157,4 +181,5 @@
 @media (max-width: 660px) {
   .breadcrumb { margin-bottom: 18px; }
   .identity { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .form .nativeTools > fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 8px; }
 }
