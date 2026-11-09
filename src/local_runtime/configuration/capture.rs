@@ -494,15 +494,15 @@ impl UserConfigManager {
         let effective = merged.clone();
         let mut config = merged.resolve()?;
         if allow_unselected
-            && config
-                .agent
-                .model
-                .as_ref()
-                .is_none_or(|selection| models.model(&selection.model).is_err())
+            && config.agent.model.as_ref().is_none_or(|selection| {
+                !models
+                    .selectable_model_refs()
+                    .any(|reference| reference == &selection.model)
+            })
         {
-            // An authored preference can outlive its model. Project a new
-            // default from visible choices without rewriting that preference
-            // or the selection carried by an existing Session.
+            // An authored preference can outlive its model's eligibility for
+            // new choices. Project a visible default without rewriting that
+            // preference or the selection carried by an existing Session.
             let resolved = credentials
                 .map(|credentials| models.resolve(credentials))
                 .transpose()

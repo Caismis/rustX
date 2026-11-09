@@ -363,6 +363,166 @@ async fn deleting_a_model_releases_creation_when_a_named_agent_depends_on_it() {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hidden_default_models_and_providers_recover_creation_without_reselecting_existing_sessions()
+ {
+    use crate::local_runtime::configuration::settings::{
+        CredentialEdit, ProviderWrite, SessionModelsView, SourceTarget,
+    };
+    Box::pin(bounded(async {
+        for hide_provider in [false, true] {
+            let fixture = Fixture::with_session_count(None, 0).await;
+            let directory = fixture.workspaces[0].clone();
+            let target = SourceTarget::Workspace {
+                directory: directory.clone(),
+            };
+            let path = fixture
+                .manager
+                .configuration
+                .source_bindings()
+                .config_path
+                .clone();
+            let mut document: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let other = document["providers"]["local"].clone();
+            document["providers"]
+                .as_table_mut()
+                .unwrap()
+                .insert("other".into(), other);
+            document["models"]["local/b"]["provider"] = "other".into();
+            std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+            let create = || {
+                fixture.manager.create_session(SessionPersistentState {
+                    cwd: directory.clone(),
+                    model: None,
+                })
+            };
+            let old = create().await.unwrap().session.id;
+            fixture.manager.load(&old, None).await.unwrap();
+            let runtime = fixture.manager.configuration_runtime(&old).unwrap();
+            assert_eq!(runtime.model_view().configured.model.as_str(), "local/a");
+            let authored = fixture
+                .manager
+                .source_settings(&SourceTarget::User)
+                .await
+                .unwrap()
+                .user
+                .authored
+                .unwrap();
+            let model_a = authored.models.as_ref().unwrap()["local/a"].clone();
+            let model_b = authored.models.as_ref().unwrap()["local/b"].clone();
+            let provider = authored.providers.as_ref().unwrap()["local"].clone();
+            let toggle = |hidden| {
+                if hide_provider {
+                    ConfigMutation::Provider {
+                        id: "local".into(),
+                        authored: Some(ProviderWrite {
+                            display_name: provider.display_name.clone(),
+                            hidden,
+                            icon: provider.icon.clone(),
+                            protocol: provider.protocol,
+                            base_url: provider.base_url.clone(),
+                            credential: CredentialEdit::Retain,
+                        }),
+                    }
+                } else {
+                    let mut model = model_a.clone();
+                    model.hidden = hidden;
+                    ConfigMutation::Model {
+                        id: "local/a".into(),
+                        authored: Some(model),
+                    }
+                }
+            };
+            let mut changes = fixture.manager.configuration_changes();
+            write(&fixture, 0, toggle(true)).await;
+            let source = fixture.manager.source_settings(&target).await.unwrap();
+            let Some(SessionModelsView::Available {
+                catalog,
+                default_model,
+            }) = source.session_models
+            else {
+                panic!(
+                    "a visible replacement must keep creation available: {:?}",
+                    source.session_models
+                );
+            };
+            assert_eq!(default_model.model.as_str(), "local/b");
+            assert_eq!(
+                catalog
+                    .models
+                    .iter()
+                    .map(|model| model.model.as_str())
+                    .collect::<Vec<_>>(),
+                ["local/b"]
+            );
+            while runtime.model_catalog() != catalog {
+                changes.changed().await.unwrap();
+            }
+            let retained = runtime.model_view();
+            assert_eq!(retained.configured.model.as_str(), "local/a");
+            assert!(retained.unavailable.is_none());
+            assert_eq!(retained.effective.unwrap().model.as_str(), "local/a");
+            let created = create().await.unwrap().session.id;
+            fixture.manager.load(&created, None).await.unwrap();
+            let created = fixture.manager.configuration_runtime(&created).unwrap();
+            assert_eq!(created.model_view().configured.model.as_str(), "local/b");
+            assert_eq!(created.model_catalog(), catalog);
+
+            let mut hidden_b = model_b;
+            hidden_b.hidden = true;
+            write(
+                &fixture,
+                0,
+                ConfigMutation::Model {
+                    id: "local/b".into(),
+                    authored: Some(hidden_b),
+                },
+            )
+            .await;
+            let empty = fixture.manager.source_settings(&target).await.unwrap();
+            assert!(matches!(
+                empty.session_models,
+                Some(SessionModelsView::Unavailable { .. })
+            ));
+            assert!(
+                create().await.is_err(),
+                "all hidden is unavailable, never a hidden default"
+            );
+
+            write(&fixture, 0, toggle(false)).await;
+            let restored = fixture.manager.source_settings(&target).await.unwrap();
+            let Some(SessionModelsView::Available {
+                catalog,
+                default_model,
+            }) = restored.session_models
+            else {
+                panic!("reenabling the authored default must restore creation");
+            };
+            assert_eq!(default_model.model.as_str(), "local/a");
+            assert_eq!(catalog.models.len(), 1);
+            let source: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(source["agent"]["model"]["model"].as_str(), Some("local/a"));
+            let restored = create().await.unwrap().session.id;
+            fixture.manager.load(&restored, None).await.unwrap();
+            assert_eq!(
+                fixture
+                    .manager
+                    .configuration_runtime(&restored)
+                    .unwrap()
+                    .model_view()
+                    .configured
+                    .model
+                    .as_str(),
+                "local/a"
+            );
+            fixture.close().await;
+        }
+    }))
+    .await;
+}
+
 /// #419: creation is the only initial-model owner. Validate/persist before ACK,
 /// without composing a runtime, then freeze that selection at first admission.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
