@@ -119,11 +119,14 @@ impl AgentProfile {
     /// Rejects malformed selections, invalid deadlines and native text bounds.
     pub fn from_document(
         document: &crate::local_runtime::config::AgentProfileDocument,
-        _kind: AgentProfileKind,
+        kind: AgentProfileKind,
         files: Vec<ProjectContextFile>,
     ) -> Result<Self, String> {
         document.tools.validate_spelling()?;
-        let skills = document.skills.clone().unwrap_or_default();
+        let skills = document.skills.clone().unwrap_or_else(|| match kind {
+            AgentProfileKind::Root => AgentSkillSelection::All,
+            AgentProfileKind::Named => AgentSkillSelection::default(),
+        });
         for name in skills.names() {
             crate::skills::package::validate_skill_name(name)?;
         }
@@ -972,7 +975,7 @@ mod composition_tests {
     #[allow(clippy::too_many_lines)] // one contract, proven end to end in order
     fn cfg332_root_visibility_and_named_visibility_are_independent() {
         let directory = tempfile::tempdir().unwrap();
-        let global = directory.path().join("home/rustx/.agents/skills");
+        let global = directory.path().join("home/.agents/skills");
         let workspace_root = directory.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).unwrap();
         let project = workspace_root.join(".agents/skills");
@@ -1102,8 +1105,10 @@ mod composition_tests {
         // (10)(21): selection is not loading. Nothing a resolver produced —
         // for the root or for a named child — contains a `SKILL.md` body, and
         // the rendered catalog is metadata plus a host location only.
-        let rendered =
-            crate::skills::render_skill_catalog(skills.catalog_entries(), skills.roots());
+        let rendered = crate::skills::render_skill_catalog(
+            skills.catalog_entries(),
+            crate::skills::SkillReadTool::Read,
+        );
         for projection in [
             rendered.clone(),
             format!("{root:?}"),
@@ -1115,8 +1120,7 @@ mod composition_tests {
                 "a Skill body must never be injected by selection: {projection}"
             );
         }
-        assert!(rendered.contains("Skill root"));
-        assert!(!rendered.contains("<location>"));
+        assert!(rendered.contains("<location>"));
     }
 
     /// #280 (16): the resolved selection and its diagnostics are canonical

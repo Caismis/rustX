@@ -23,10 +23,12 @@ export function ResourceBrowser({ family, client, source, scope, revision, model
 }) {
   const tx = useTranslation();
   const skills = useSkillCatalog(client, source, family === 'skill');
+  const skillsByName = new Map(skills?.skills.map(skill => [skill.catalog.name, skill]));
+  const skillNames = skills?.skills.filter(skill => !skill.disable_model_invocation).map(skill => skill.catalog.name);
   const entries = extensionEntries(source, scope, family).map(entry => ({
     ...entry,
     description: family === 'skill'
-      ? skills?.skills.find(skill => skill.catalog.name === entry.name)?.catalog.description ?? ''
+      ? skillsByName.get(entry.name)?.catalog.description ?? ''
       : source.agents.find(agent => agent.name === entry.name && agent.scope === entry.owner)?.source.authored?.description ?? '',
   }));
   // Skills discovery remains available even when rustx.toml cannot be resolved.
@@ -51,8 +53,8 @@ export function ResourceBrowser({ family, client, source, scope, revision, model
   const renderCard = (row: typeof entries[number]) => <ResourceCard key={row.name} name={row.name}
     icon={family === 'agent' ? <IconAgentPresetOutline16 /> : <IconCodeOutline16 />}
     description={row.description} diagnostic={row.diagnostics[0]} path={row.path} onOpen={() => onFocus(row.name)}
-    availability={revision !== undefined && <ResourceAvailability family={family} name={row.name} valid={row.valid}
-      source={source} scope={scope} revision={revision} />} />;
+    availability={revision !== undefined && (family === 'agent' || skillsByName.get(row.name)?.disable_model_invocation === false) && <ResourceAvailability family={family} name={row.name} valid={row.valid}
+      source={source} scope={scope} revision={revision} skillNames={skillNames} />} />;
 
   return <>
     {skills?.error && <p role="alert">{skills.error}</p>}

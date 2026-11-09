@@ -20,7 +20,7 @@
 //! Shadowed               a higher-precedence source won the same identity
 //! ```
 //!
-//! Severity is deliberately separate from cause: a missing `~/rustx/.agents/skills`
+//! Severity is deliberately separate from cause: a missing `~/.agents/skills`
 //! and an intentional Workspace-over-User shadow are ordinary
 //! [`SkillDiagnosticSeverity::Fact`]s, while an excluded package is a
 //! [`SkillDiagnosticSeverity::Warning`]. Nothing here is a launch failure.
@@ -58,9 +58,7 @@ pub enum SkillDiagnostic {
         root: String,
     },
     /// A fixed User or Workspace source root exists but cannot be used as a
-    /// Skill collection directory. It contributes no packages. An unreadable
-    /// Workspace collection also withholds lower User candidates because their
-    /// shadow status cannot be established.
+    /// Skill collection directory. It contributes no packages.
     SourceRootInvalid {
         /// The source whose root is unusable.
         source: SkillSource,
@@ -72,8 +70,7 @@ pub enum SkillDiagnostic {
     },
     /// One fixed User or Workspace collection exceeded its candidate budget.
     /// Enumeration is bounded before package validation. The collection contributes
-    /// nothing; an over-budget Workspace collection also withholds lower candidates
-    /// whose shadow status cannot be established.
+    /// nothing; other sources remain available.
     SourceBudgetExceeded {
         /// The source whose cumulative budget was exhausted.
         source: SkillSource,
@@ -106,8 +103,7 @@ pub enum SkillDiagnostic {
         root: String,
     },
     /// Two or more distinct packages in the **same** scope resolve to one
-    /// logical Skill identity. Every conflicting definition is excluded;
-    /// discovery never picks a winner by enumeration order.
+    /// logical Skill identity. The first path wins in discovery precedence.
     DuplicateIdentity {
         /// The scope that defines the identity more than once.
         source: SkillSource,
@@ -221,8 +217,7 @@ impl core::fmt::Display for SkillDiagnostic {
                 packages,
             } => write!(
                 formatter,
-                "the {source} Skill scope defines {name:?} more than once ({}); every \
-                 conflicting definition is excluded",
+                "the {source} Skill scope defines {name:?} more than once ({}); the first path wins",
                 packages.join(", ")
             ),
             Self::Shadowed {

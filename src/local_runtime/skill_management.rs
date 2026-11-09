@@ -13,6 +13,7 @@ pub struct SkillDescriptor {
     pub catalog: SkillCatalogEntry,
     pub provenance: SkillProvenance,
     pub metadata_revision: String,
+    pub disable_model_invocation: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +44,7 @@ fn descriptor(
             location: package.location().into(),
         },
         provenance: provenance.clone(),
+        disable_model_invocation: package.disable_model_invocation(),
         metadata_revision: digest(&package.definition()).map_err(|_| SettingsError::Io)?,
     })
 }
@@ -171,7 +173,7 @@ impl SessionRuntimeManager {
                     .map_err(|_| SettingsError::Invalid)?;
                     let chunk = super::environment::files::read_range(
                         &directory,
-                        Path::new("SKILL.md"),
+                        Path::new(path.file_name().ok_or(SettingsError::Invalid)?),
                         offset,
                         max_bytes,
                         None,

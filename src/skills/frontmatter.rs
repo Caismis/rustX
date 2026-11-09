@@ -15,10 +15,12 @@ thread_local! {
     pub(crate) static READ_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) fn read(root: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
-    let directory = crate::package_io::PackageDirectory::open(root).map_err(|e| e.to_string())?;
+pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
+    let parent = path.parent().ok_or("Skill file has no parent directory")?;
+    let name = path.file_name().ok_or("Skill file has no name")?;
+    let directory = crate::package_io::PackageDirectory::open(parent).map_err(|e| e.to_string())?;
     let prefix = || {
-        let file = directory.file(Path::new(super::package::SKILL_MARKDOWN_FILE))?;
+        let file = directory.file(Path::new(name))?;
         // Bounded read-ahead, independent of the body size. Never validate body UTF-8.
         let mut reader = BufReader::with_capacity(BUFFER_BYTES, file);
         let mut header = Vec::new();

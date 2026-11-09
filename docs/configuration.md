@@ -16,7 +16,6 @@ facts and keep unsaved drafts.
 ├── rustx.toml
 ├── .agents/
 │   ├── mcp.toml
-│   ├── skills/<name>/SKILL.md
 │   ├── tools/<package>/server.py
 │   │                  /requirements.txt
 │   ├── agents/<name>.toml
@@ -50,8 +49,7 @@ facts and keep unsaved drafts.
 ```
 
 There are exactly two ordinary scopes: User and Workspace. The Workspace is the
-selected directory; ancestor configuration and resource directories do not
-accumulate. Runtime files can also contain ownership locks, SQLite sidecars and
+selected directory. Skill discovery also reads ancestor Skill collections. Runtime files can also contain ownership locks, SQLite sidecars and
 physical execution scratch beneath their native owner directories.
 
 `--config /absolute/file.toml` replaces the User document binding for this
@@ -630,22 +628,21 @@ explicitly supplied members.
 
 ## Resources and admission
 
-For every Skill, Agent, Workflow, Python package and MCP identity, the Workspace
+For every Agent, Workflow, Python package and MCP identity, the Workspace
 definition shadows the complete User definition. Shadow selection occurs before
 validation. An invalid Workspace duplicate never restores a valid User duplicate.
 Unused invalid resources yield bounded ordered diagnostics; selecting an invalid
 resource fails the typed resolution or admission operation. A malformed collection
 whose identities cannot be read cannot expose lower definitions through fallback.
 
-Skills use standard Agent Skills packages at `skills/<name>/SKILL.md`. `skills`
-selection is prompt visibility, not a filesystem ACL. The system prompt provides
-the resolved absolute User and Workspace Skill collection roots without listing
-every absolute Skill path. Metadata supports progressive disclosure; bodies are
-read through ordinary model-independent Tool behavior. Discovery and source
-revisions read only normalized frontmatter definitions; bodies and assets never
-affect configuration identity. A child inherits frozen definitions, effective
-source roots and actual SKILL.md locations, without discovery or package copying.
-Tools read current runtime files. See [Skill discovery](skill-discovery.md).
+Skills are discovered from pi and shared User and Workspace collections. The
+first valid definition of a name wins. The root Agent advertises eligible Skills
+by default, with exact selections and `[]` available in `agent.skills`.
+The system prompt includes names, descriptions, and real instruction paths
+when Read or Bash is available. Skill bodies and supporting files are read on
+demand. `disable-model-invocation: true` keeps a Skill in the management catalog
+and out of the automatic prompt. Child Agents receive frozen Skill metadata.
+See [Skill discovery](skill-discovery.md).
 
 Named Agents use complete TOML profiles at `agents/<name>.toml` with description,
 instructions, optional model selection, Native/source Tools, Skills, Plugins,
@@ -1038,8 +1035,8 @@ A bounded native watcher (the `notify` crate) feeds external edits into the same
 path as a native write. Coverage is the User document's directory, for that one
 file; the User resource root `~/rustx/.agents` for `mcp.toml`, with its
 `agents`, `tools` and `workflows` directories recursively (its parent
-until it exists), plus the Skill collection and each direct candidate directory
-non-recursively for candidate changes and `SKILL.md` replacement; each Workspace that holds source authority or a Session's
+until it exists), plus Skill collections and grouping directories non-recursively
+for discovery changes and instruction replacement; each Workspace that holds source authority or a Session's
 configuration, for `rustx.toml`, root `*.md` and the guidance files; and that
 Workspace's `.agents` in the same way. The guidance files are exactly the
 loader's (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`,

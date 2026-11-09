@@ -634,11 +634,6 @@ impl UserConfigManager {
             crate::runtime::resources::validate_project_resource_path(&locations.workspace, path)
                 .map_err(LaunchFailure::resource)?;
         }
-        // Both resource roots are fixed process/Workspace bindings; profiles select visibility.
-        let skill_sources = crate::skills::automatic_skill_roots(
-            Some(host.home_directory.as_path()),
-            &locations.workspace,
-        );
         // Capture authority once, including host path aliases and missing leaves.
         // Configuration preparation retains this physical identity; validators must not rebind it.
         let user_resource_root = normalize_missing(&host.home_directory.join("rustx/.agents"))?;
@@ -677,18 +672,13 @@ impl UserConfigManager {
                 scoped_workflows[usize::from(location.scope == SourceScope::Workspace)].contains(id)
             })
         });
-        let workspace = crate::tools::workspace::Workspace::new(&locations.workspace)
-            .map_err(|e| e.to_string())?;
-        let skill_discovery = {
-            crate::skills::SkillDiscovery::with_config(
-                &workspace,
-                crate::skills::SkillDiscoveryConfig {
-                    automatic: skill_sources.clone(),
-                },
-            )
-            .with_cancellation(self.resource_io.clone())
-            .discover()
+        let discover_skills = || {
+            self.discover_skills(Some(&locations.workspace))
+                .ok_or_else(|| LaunchFailure::from("cannot open Workspace for Skill discovery"))
         };
+        let skill_discovery = discover_skills()?;
+        let skill_sources =
+            crate::skills::automatic_skill_roots(Some(&host.home_directory), &locations.workspace);
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
             &config.agent.skills
         {
@@ -920,6 +910,15 @@ impl UserConfigManager {
                 "project instruction discovery changed during capture; rescan to retry".into(),
             );
         }
+        if discover_skills()? != skill_discovery {
+            return Err("Skill definitions changed during capture; rescan to retry".into());
+        }
+        // The project Skill collection is the revision key of the complete
+        // ordered inventory, including shared and ancestor collections.
+        revisions.insert(
+            locations.workspace.join(".pi/skills"),
+            skill_discovery.revision(),
+        );
         diagnostics.sort();
         diagnostics.dedup();
         diagnostics.truncate(256);

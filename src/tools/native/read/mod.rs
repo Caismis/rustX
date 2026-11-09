@@ -402,8 +402,10 @@ mod tests {
         .discover();
         let snapshot = SkillSnapshot::from_discovery(discovered);
         let location = snapshot.catalog_entries()[0].location.clone();
-        let frozen_catalog =
-            crate::skills::render_skill_catalog(snapshot.catalog_entries(), snapshot.roots());
+        let frozen_catalog = crate::skills::render_skill_catalog(
+            snapshot.catalog_entries(),
+            crate::skills::SkillReadTool::Read,
+        );
         assert_eq!(
             Path::new(&location),
             // Canonical, so this holds on platforms whose temporary root is
@@ -494,7 +496,10 @@ mod tests {
             "the earlier ToolResult value is not rewritten"
         );
         assert_eq!(
-            crate::skills::render_skill_catalog(snapshot.catalog_entries(), snapshot.roots()),
+            crate::skills::render_skill_catalog(
+                snapshot.catalog_entries(),
+                crate::skills::SkillReadTool::Read
+            ),
             frozen_catalog,
             "editing a known body cannot mutate the frozen catalog"
         );

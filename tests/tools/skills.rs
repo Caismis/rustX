@@ -127,10 +127,9 @@ fn hidden_entries_and_unrelated_files_are_ignored() {
     assert_eq!(names, ["visible"]);
 }
 
-/// A frontmatter `name` that does not match the parent directory is
-/// rejected.
+/// The declared name is authoritative even if its folder has another name.
 #[test]
-fn name_must_match_the_parent_directory() {
+fn declared_name_can_differ_from_the_parent_directory() {
     let (dir, workspace) = fixture();
     let root = dir.path().join(".agents/skills/pdf");
     std::fs::create_dir_all(&root).expect("dir");
@@ -139,10 +138,7 @@ fn name_must_match_the_parent_directory() {
         "---\nname: documents\ndescription: A skill.\n---\nbody\n",
     )
     .expect("SKILL.md");
-    assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::NameDirectoryMismatch { .. }
-    ));
+    assert_eq!(discover(&workspace)[0].name(), "documents");
 }
 
 /// Invalid standard names are rejected: uppercase, leading hyphen,
@@ -239,16 +235,14 @@ fn malformed_metadata_is_rejected() {
     ));
 }
 
-/// A direct candidate without `SKILL.md` is rejected by the discovery
-/// contract.
+/// A grouping directory without any definitions is an empty branch.
 #[test]
-fn candidate_without_skill_markdown_is_rejected() {
+fn empty_grouping_directory_is_ignored() {
     let (dir, workspace) = fixture();
     std::fs::create_dir_all(dir.path().join(".agents/skills/empty")).expect("dir");
-    assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::MissingSkillMarkdown { .. }
-    ));
+    let outcome = project_discovery(&workspace).discover();
+    assert!(outcome.packages.is_empty());
+    assert!(outcome.diagnostics.is_empty());
 }
 
 /// Nested packages are never discovered recursively: a subdirectory of a
@@ -274,9 +268,9 @@ fn nested_packages_are_not_recursively_discovered() {
     assert_eq!(names, ["outer"], "nested packages are never discovered");
 }
 
-/// Discovery rejects symlinked package roots; internal resources belong to Tools.
+/// Contained package aliases are deduplicated; internal resources belong to Tools.
 #[test]
-fn package_symlinks_are_rejected() {
+fn package_symlinks_are_deduplicated() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "real", "Real skill.", &[], "body\n");
     std::os::unix::fs::symlink(
@@ -285,7 +279,7 @@ fn package_symlinks_are_rejected() {
     )
     .expect("symlink root");
     let outcome = project_discovery(&workspace).discover();
-    // The valid sibling still publishes; only the symlinked root is excluded.
+    // Both spellings name the same physical file.
     assert_eq!(
         outcome
             .packages
@@ -294,13 +288,7 @@ fn package_symlinks_are_rejected() {
             .collect::<Vec<_>>(),
         ["real"]
     );
-    assert!(matches!(
-        outcome.diagnostics.as_slice(),
-        [SkillDiagnostic::PackageInvalid {
-            cause: SkillPackageError::UnsupportedSymlink { .. },
-            ..
-        }]
-    ));
+    assert!(outcome.diagnostics.is_empty());
 
     let (dir2, workspace2) = fixture();
     write_skill(dir2.path(), "skill", "A skill.", &[], "body\n");
@@ -989,17 +977,17 @@ fn catalog_rendering_is_exact_and_publishes_host_skill_locations() {
         rustx::skills::SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
     let rendered = render_skill_catalog(
         snapshot.catalog_entries(),
-        &rustx::skills::automatic_skill_roots(None, workspace.root()),
+        rustx::skills::SkillReadTool::Read,
     );
     let skills_root = workspace.root().join(".agents/skills");
     let pdf = skills_root.join("pdf/SKILL.md").display().to_string();
     let slides = skills_root.join("slides/SKILL.md").display().to_string();
     assert!(rendered.contains(&skills_root.display().to_string()));
     assert!(rendered.contains("<name>pdf</name>") && rendered.contains("<name>slides</name>"));
-    assert!(rendered.contains("prompt visibility, not filesystem access"));
+    assert!(rendered.contains("Use the read tool to load"));
     assert!(
-        !rendered.contains(&pdf) && !rendered.contains(&slides),
-        "only root paths enter the prompt"
+        rendered.contains(&pdf) && rendered.contains(&slides),
+        "each instruction path enters the prompt"
     );
     assert!(!rendered.contains("body"), "SKILL.md bodies never appear");
     assert!(

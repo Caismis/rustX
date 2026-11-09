@@ -441,8 +441,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         })
         .expect("the child request body");
     assert!(
-        first_child_request.contains("Workspace Skill root")
-            && first_child_request.contains("workspace/.agents/skills")
+        first_child_request.contains("workspace/.agents/skills/conformance/SKILL.md")
             && first_child_request.contains("<name>conformance</name>"),
         "the named child request uses the captured roots and progressive disclosure metadata: {first_child_request}"
     );

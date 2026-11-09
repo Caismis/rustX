@@ -37,14 +37,18 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   const workspaceRoot=join(f.workspaceA,'.agents');
   const mcpScript=fileURLToPath(new URL('./image-mcp.py',import.meta.url));
   for(const [root,prefix] of [[userRoot,'global'],[workspaceRoot,'local']]) {
-   mkdirSync(join(root,'agents'),{recursive:true});mkdirSync(join(root,'skills',`${prefix}-guide`),{recursive:true});
+   const skill = join(prefix === 'global' ? join(f.directory,'home/.agents') : root,'skills','team',`${prefix}-guide`);
+   mkdirSync(join(root,'agents'),{recursive:true});mkdirSync(skill,{recursive:true});
    writeFileSync(join(root,'agents',`${prefix}-reviewer.toml`),`description = "${prefix} reviewer"\ninstructions = "Review carefully."\n`);
-   writeFileSync(join(root,'skills',`${prefix}-guide`,'SKILL.md'),`---\nname: ${prefix}-guide\ndescription: A ${prefix} skill for reviewing changes.\n---\n# ${prefix} guide\n${prefix} guide instructions.\n`);
+   writeFileSync(join(skill,'SKILL.md'),`---\nname: ${prefix}-guide\ndescription: A ${prefix} skill for reviewing changes.\n---\n# ${prefix} guide\n${prefix} guide instructions.\n`);
    writeFileSync(join(root,'mcp.toml'),`[mcp_servers.${prefix}-server]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(mcpScript)}]\n`);
   }
+  const projectSkills=join(f.workspaceA,'.pi/skills');
+  mkdirSync(projectSkills,{recursive:true});
+  writeFileSync(join(projectSkills,'manual.md'),'---\nname: manual-guide\ndescription: Manual skill.\ndisable-model-invocation: true\n---\n# Manual\nInstructions in a standalone file.');
   // Descriptions beyond the native 32-item page must remain discoverable.
   for(let index=0;index<34;index++) {
-   const name=`catalog-${String(index).padStart(2,'0')}`,directory=join(userRoot,'skills',name);
+   const name=`catalog-${String(index).padStart(2,'0')}`,directory=join(f.directory,'home/.agents/skills',name);
    mkdirSync(directory,{recursive:true});
    writeFileSync(join(directory,'SKILL.md'),`---\nname: ${name}\ndescription: Catalog entry ${index}.\n---\n# ${name}\nInstructions.\n`);
   }
@@ -70,6 +74,13 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await captureEvidence(detail,`skill-read-only-${width}`);
   await detail.getByRole('button',{name:'Close',exact:true}).click();
   await workspace(page,skills);
+  const manual=skills.getByRole('listitem',{name:'manual-guide',exact:true});
+  await expect(manual).toContainText('Manual skill.');
+  await expect(manual.getByRole('switch')).toHaveCount(0);
+  await manual.getByRole('button',{name:'manual-guide',exact:true}).click();
+  const manualDetail=page.getByRole('dialog',{name:'manual-guide',exact:true});
+  await expect(manualDetail).toContainText('Instructions in a standalone file.');
+  await manualDetail.getByRole('button',{name:'Close',exact:true}).click();
   const inheritedSkill=skills.getByRole('listitem',{name:'global-guide',exact:true});
   await expect(inheritedSkill.getByRole('switch')).toBeChecked();
   await inheritedSkill.getByRole('switch').click();

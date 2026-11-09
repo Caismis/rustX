@@ -2329,12 +2329,11 @@ async fn selected_workspace_guidance_cannot_escape_its_resource_root() {
     product.shutdown().await.unwrap();
 }
 
-/// CFG3 binds exactly the captured User home and Workspace Skill roots;
-/// Workspace reserves a complete same-name shadow before package validation.
+/// Admitted configuration freezes the discovered project and User definitions.
 #[tokio::test]
-async fn cfg3_launch_freezes_two_skill_roots_with_whole_workspace_shadowing() {
+async fn launch_freezes_discovered_skills_with_workspace_precedence() {
     let f = Fixture::new();
-    let user = f.host.home_directory.join("rustx/.agents/skills");
+    let user = f.host.home_directory.join(".agents/skills");
     let workspace = f.host.launch_directory.join(".agents/skills");
     for (root, name, description) in [
         (&user, "user-only", "User only"),
@@ -2349,7 +2348,8 @@ async fn cfg3_launch_freezes_two_skill_roots_with_whole_workspace_shadowing() {
         )
         .unwrap();
     }
-    f.project(json!({"agent":{"skills":"all"}}));
+    // No explicit Skill selection: pi-style automatic advertisement.
+    f.project(json!({"agent":{"tools":{"builtin":["read"]}}}));
     let launch = f.resolve();
     let shared = launch
         .inspection

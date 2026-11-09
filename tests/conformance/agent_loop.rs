@@ -1415,16 +1415,8 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
         "the catalog publishes the package's host SKILL.md path: {published}"
     );
     assert!(
-        first.contains(
-            std::path::Path::new(&published)
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .to_str()
-                .unwrap()
-        ) && !first.contains(&published),
-        "the provider receives the absolute Skill root and package name, without path enumeration"
+        first.contains(&published),
+        "the provider receives the absolute path of the Skill instruction file"
     );
     assert!(
         !first.contains(SKILL_BODY_MARKER),

@@ -846,10 +846,18 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
             expected,
             "{selection:?}"
         );
-        assert!(
+        let advertises_skills = expected.contains(&"read") || expected.contains(&"bash");
+        assert_eq!(
             requests[0]
                 .effective_system_prompt
-                .contains("file-reading Tool")
+                .contains("<available_skills>"),
+            advertises_skills
+        );
+        assert_eq!(
+            requests[0]
+                .effective_system_prompt
+                .contains("lazy/SKILL.md"),
+            advertises_skills
         );
         assert!(
             !requests[0]

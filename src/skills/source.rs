@@ -1,4 +1,4 @@
-//! Fixed User and Workspace Skill roots and whole-package precedence.
+//! Automatic Skill roots in pi discovery order.
 
 use std::path::{Path, PathBuf};
 
@@ -9,8 +9,7 @@ pub const SKILLS_ROOT: &str = "skills";
 
 /// One Skill source authority.
 ///
-/// The declaration order **is** the precedence order: a later variant wins
-/// the same logical Skill identity against an earlier one.
+/// A valid Workspace definition takes precedence over a User definition.
 #[derive(
     Debug,
     Clone,
@@ -26,9 +25,9 @@ pub const SKILLS_ROOT: &str = "skills";
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SkillSource {
-    /// `<home>/rustx/.agents/skills`.
+    /// User-wide collections under the process-bound home.
     User,
-    /// `<workspace>/.agents/skills`.
+    /// Project collections at the working directory and its ancestors.
     Workspace,
 }
 
@@ -69,19 +68,52 @@ pub struct AutomaticSkillRoot {
     pub root: PathBuf,
 }
 
-/// Resolve the two ordinary Skill collection roots from process bindings.
+impl AutomaticSkillRoot {
+    pub(crate) fn workspace_boundary<'a>(&self, workspace: Option<&'a Path>) -> Option<&'a Path> {
+        workspace
+            .filter(|_| self.source.is_workspace_owned())
+            .map(|workspace| {
+                workspace
+                    .ancestors()
+                    .find(|ancestor| self.root == ancestor.join(".agents/skills"))
+                    .unwrap_or(workspace)
+            })
+    }
+}
+
+/// Resolve the user-specific and shared Skill collections.
+#[must_use]
+pub fn user_skill_roots(home: &Path) -> Vec<AutomaticSkillRoot> {
+    [".pi/agent/skills", ".agents/skills"]
+        .into_iter()
+        .map(|directory| AutomaticSkillRoot {
+            source: SkillSource::User,
+            root: home.join(directory),
+        })
+        .collect()
+}
+
+/// Project collections take precedence, in working-directory order.
+/// The shared user directory is never classified as a project collection.
 #[must_use]
 pub fn automatic_skill_roots(home: Option<&Path>, workspace: &Path) -> Vec<AutomaticSkillRoot> {
-    let mut roots = Vec::new();
-    if let Some(home) = home {
-        roots.push(AutomaticSkillRoot {
-            source: SkillSource::User,
-            root: home.join("rustx/.agents/skills"),
-        });
-    }
-    roots.push(AutomaticSkillRoot {
+    let mut roots = vec![AutomaticSkillRoot {
         source: SkillSource::Workspace,
-        root: workspace.join(".agents/skills"),
-    });
+        root: workspace.join(".pi/skills"),
+    }];
+    for directory in workspace.ancestors() {
+        if home != Some(directory) {
+            roots.push(AutomaticSkillRoot {
+                source: SkillSource::Workspace,
+                root: directory.join(".agents/skills"),
+            });
+        }
+        if directory.join(".git").exists() {
+            break;
+        }
+    }
+    if let Some(home) = home {
+        roots.extend(user_skill_roots(home));
+    }
     roots
 }

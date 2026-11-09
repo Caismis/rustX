@@ -72,7 +72,7 @@ impl AgentActivation {
                 .profile
                 .skills
                 .as_ref()
-                .is_some_and(|selection| match selection {
+                .is_none_or(|selection| match selection {
                     crate::runtime::agent_profile::AgentSkillSelection::All => true,
                     crate::runtime::agent_profile::AgentSkillSelection::Exact(names) => {
                         names.iter().any(|name| name == package.name())

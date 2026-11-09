@@ -765,7 +765,7 @@ impl LocalConversationCore {
             crate::tools::host::register(&mut base_registry, host_tools, &dependencies.host_tools)
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
 
-            // Launch resolution froze the fixed User and Workspace Skill roots.
+            // Launch resolution froze the ordered Skill collections.
             // Package discovery reserves Workspace shadows before validation;
             // Agent profiles independently select prompt visibility.
             let skill_discovery = SkillDiscoveryConfig {

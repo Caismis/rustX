@@ -43,11 +43,11 @@ source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A nativ
 effective.document.providers = source.user.authored!.providers;
 effective.provenance = { 'models.main': { kind: 'workspace', base: '/workspace', document: '/workspace/rustx.toml' }, 'providers.transport': { kind: 'user', base: '/bound', document: '/bound/rustx.toml' } };
 effective.resources.definitions = [
- { family: 'skill', name: 'review', valid: true, location: { scope: 'workspace', path: '/workspace/.agents/skills/review/SKILL.md', shadowed: '/home/user/rustx/.agents/skills/review/SKILL.md' } },
+ { family: 'skill', name: 'review', valid: true, location: { scope: 'workspace', path: '/workspace/.agents/skills/review/SKILL.md', shadowed: '/home/user/.agents/skills/review/SKILL.md' } },
  { family: 'skill', name: 'incomplete', valid: false, location: { scope: 'workspace', path: '/workspace/.agents/skills/incomplete/SKILL.md' } },
  { family: 'managed_python', name: 'analysis', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/python/analysis' } },
 ];
-effective.resources.definitions.push({ family: 'skill', name: 'repository-wide-architecture-review-with-a-long-package-identity', valid: true, location: { scope: 'user', path: '/home/user/rustx/.agents/skills/repository-wide-architecture-review-with-a-long-package-identity/SKILL.md' } });
+effective.resources.definitions.push({ family: 'skill', name: 'repository-wide-architecture-review-with-a-long-package-identity', valid: true, location: { scope: 'user', path: '/home/user/.agents/skills/repository-wide-architecture-review-with-a-long-package-identity/SKILL.md' } });
 effective.resources.resource_diagnostics = [{ subject: { kind: 'resource', family: 'skill', name: 'incomplete' }, file: '/workspace/.agents/skills/incomplete/SKILL.md', field: 'description', reason: 'Missing package description: the SKILL.md front matter must declare a non-empty description before this package can be advertised in the prompt (/workspace/.agents/skills/incomplete/SKILL.md:1:1)' }];
 effective.resources.sources = { 'python:analysis': { status: 'unprepared' } };
 source.prospective_resources = effective.resources;

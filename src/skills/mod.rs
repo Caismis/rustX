@@ -38,13 +38,14 @@
 mod catalog;
 pub(crate) mod dependencies;
 mod diagnostics;
+pub(crate) mod discovery;
 pub mod environments;
 mod frontmatter;
 pub(crate) mod identity;
 pub(crate) mod package;
 pub mod source;
 
-pub use catalog::{SkillCatalogEntry, SkillSnapshot, render_skill_catalog};
+pub use catalog::{SkillCatalogEntry, SkillReadTool, SkillSnapshot, render_skill_catalog};
 pub use dependencies::{
     DependencyConflict, DependencyError, DependencyManifest, Ecosystem, merge_dependency_manifests,
     parse_node_dependencies, parse_python_dependencies,
@@ -60,6 +61,7 @@ pub use package::{
 };
 pub use source::{
     AutomaticSkillRoot, SKILLS_DIRECTORY, SKILLS_ROOT, SkillSource, automatic_skill_roots,
+    user_skill_roots,
 };
 
 #[cfg(test)]

@@ -2432,11 +2432,10 @@ Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-and-automatic-application).
 
-The two Skill roots are `~/rustx/.agents/skills` and
-`<workspace>/.agents/skills`. Whole-package shadowing occurs before validation.
-Selection is prompt visibility (`"all"`, exact names, or `[]`), not filesystem
-access control. Guidance prints absolute root paths and selected names and
-descriptions, never every absolute package path. Bodies remain progressively read.
+Skills use the ordered pi and shared collections described in
+[Skill discovery](skill-discovery.md). The first valid name wins. The prompt
+advertises selected names, descriptions, and instruction paths. Instructions
+are read through an available file-reading tool when a task matches.
 
 MCP and Python discovery is inert. Root-selected demand prepares at composition;
 child demand prepares at child admission. Workflow demand is owned by Workflow

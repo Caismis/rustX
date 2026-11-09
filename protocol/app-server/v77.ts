@@ -7901,8 +7901,7 @@ export type ServerOutput = Response | Notification | ServerMessage;
 /**
  * One Skill source authority.
  *
- * The declaration order **is** the precedence order: a later variant wins
- * the same logical Skill identity against an earlier one.
+ * A valid Workspace definition takes precedence over a User definition.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SkillSource".
@@ -10483,6 +10482,7 @@ export interface SkillDescriptor {
   catalog: SkillCatalogEntry;
   provenance: SkillProvenance;
   metadata_revision: string;
+  disable_model_invocation: boolean;
 }
 /**
  * One model-visible Skill catalog entry: standard metadata plus the host
@@ -10501,7 +10501,7 @@ export interface SkillCatalogEntry {
    */
   description: string;
   /**
-   * The canonical absolute host path of the package's `SKILL.md`. The
+   * The canonical absolute host path of the Skill instruction file. The
    * model passes it to Read, and resolves the Skill's own relative
    * references against its parent directory.
    */

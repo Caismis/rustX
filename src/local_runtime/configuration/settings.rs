@@ -817,6 +817,7 @@ impl UserConfigManager {
     fn authoring_inventory(
         &self,
         target: &SourceTarget,
+        skills: Option<crate::skills::SkillDiscoveryOutcome>,
     ) -> crate::runtime::capability_inspection::CapabilityInspection {
         use crate::runtime::capability_inspection::{
             CapabilityInspection, ResourceDefinition, ResourceDiagnostic, ResourceFamily,
@@ -937,7 +938,6 @@ impl UserConfigManager {
                     &error,
                 )),
         }
-        let skills = self.discover_skills(workspace);
         if let Some(skills) = skills {
             inventory.definitions.extend(
                 skills
@@ -976,7 +976,6 @@ impl UserConfigManager {
         &self,
         workspace: Option<&Path>,
     ) -> Option<crate::skills::SkillDiscoveryOutcome> {
-        let user = self.resource_root(&SourceTarget::User);
         if let Some(workspace) = workspace {
             crate::tools::workspace::Workspace::new(workspace)
                 .ok()
@@ -995,7 +994,7 @@ impl UserConfigManager {
                 })
         } else {
             Some(
-                crate::skills::SkillDiscovery::user_root(user.join("skills"))
+                crate::skills::SkillDiscovery::user(&self.sources.home_directory)
                     .with_cancellation(self.resource_io.clone())
                     .discover(),
             )
@@ -1225,6 +1224,17 @@ impl UserConfigManager {
         if let Some(path) = &workspace {
             manifest.insert(path.clone(), revision(workspace_bytes.as_deref()));
         }
+        let skills = self.discover_skills(target.workspace());
+        let skill_revision = skills
+            .as_ref()
+            .map(crate::skills::SkillDiscoveryOutcome::revision);
+        if let Some(revision) = &skill_revision {
+            let root = target.workspace().map_or_else(
+                || self.sources.home_directory.join(".pi/agent/skills"),
+                |workspace| workspace.join(".pi/skills"),
+            );
+            manifest.insert(root, revision.clone());
+        }
         let input_revision = super::capture::source_manifest_revision(&manifest);
         let mut provenance = BTreeMap::new();
         let resolved = compose_authored_layers(
@@ -1245,7 +1255,7 @@ impl UserConfigManager {
             }
             Ok(document) => source_resolution_diagnostic(document),
         };
-        let prospective_resources = Some(self.authoring_inventory(target));
+        let prospective_resources = Some(self.authoring_inventory(target, skills));
         let (repair_sequence, user_repair, workspace_repair) = self.repairs().snapshot(target);
         let result = SourceSettings {
             target: target.clone(),
@@ -1324,6 +1334,17 @@ impl UserConfigManager {
                     actual,
                 });
             }
+        }
+        let actual = self
+            .discover_skills(target.workspace())
+            .as_ref()
+            .map(crate::skills::SkillDiscoveryOutcome::revision);
+        if skill_revision != actual {
+            return Err(SettingsError::Conflict {
+                scope: target.scope(),
+                expected: skill_revision.unwrap_or_default(),
+                actual: actual.unwrap_or_default(),
+            });
         }
         Ok((result, input_revision))
     }

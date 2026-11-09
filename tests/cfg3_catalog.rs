@@ -739,10 +739,10 @@ fn session_persistence_refuses_obsolete_effective_configuration_fields() {
 }
 
 #[test]
-fn malformed_workspace_skill_reserves_identity_and_selected_invalid_fails() {
+fn malformed_workspace_skill_leaves_the_valid_user_definition_available() {
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
-    let user = host.home_directory.join("rustx/.agents/skills/review");
+    let user = host.home_directory.join(".agents/skills/review");
     let workspace = request
         .workspace
         .as_ref()
@@ -774,9 +774,10 @@ fn malformed_workspace_skill_reserves_identity_and_selected_invalid_fails() {
         },
     )
     .discover();
-    assert!(
-        outcome.packages.is_empty(),
-        "invalid Workspace identity cannot fall back"
+    assert_eq!(outcome.packages.len(), 1);
+    assert_eq!(
+        outcome.packages[0].source(),
+        rustx::skills::SkillSource::User
     );
     assert!(!outcome.diagnostics.is_empty());
     assert!(
@@ -788,39 +789,26 @@ fn malformed_workspace_skill_reserves_identity_and_selected_invalid_fails() {
         "[agent]\nskills = ['review']\n",
     )
     .unwrap();
-    assert!(
-        analyze(&request, &host).is_err(),
-        "selected invalid package fails resolution"
-    );
+    assert!(analyze(&request, &host).is_ok());
 }
 
 #[test]
-fn skill_prompt_exposes_collection_roots_without_enumerating_absolute_package_paths() {
-    use rustx::skills::{AutomaticSkillRoot, SkillCatalogEntry, SkillSource, render_skill_catalog};
-    let roots = vec![
-        AutomaticSkillRoot {
-            source: SkillSource::User,
-            root: "/home/example/rustx/.agents/skills".into(),
-        },
-        AutomaticSkillRoot {
-            source: SkillSource::Workspace,
-            root: "/work/project/.agents/skills".into(),
-        },
-    ];
-    let location = "/work/project/.agents/skills/review/SKILL.md";
+fn skill_prompt_exposes_escaped_instruction_paths() {
+    use rustx::skills::{SkillCatalogEntry, SkillReadTool, render_skill_catalog};
     let prompt = render_skill_catalog(
         &[SkillCatalogEntry {
             name: "review".into(),
-            description: "Review code".into(),
-            location: location.into(),
+            description: "Review <code> & tests".into(),
+            location: "/work/a&b/.agents/skills/team/review/SKILL.md".into(),
         }],
-        &roots,
+        SkillReadTool::Bash,
     );
-    assert!(prompt.contains("User Skill root (root0): /home/example/rustx/.agents/skills"));
-    assert!(prompt.contains("Workspace Skill root (root1): /work/project/.agents/skills"));
-    assert!(prompt.contains("<root>root1</root>"));
-    assert!(!prompt.contains(location));
-    assert!(prompt.contains("not filesystem access"));
+    assert!(
+        prompt.contains("<location>/work/a&amp;b/.agents/skills/team/review/SKILL.md</location>")
+    );
+    assert!(prompt.contains("Review &lt;code&gt; &amp; tests"));
+    assert!(prompt.contains("Use bash to load"));
+    assert!(render_skill_catalog(&[], SkillReadTool::Read).is_empty());
 }
 
 #[test]
@@ -835,7 +823,7 @@ fn config_and_runtime_root_are_absolute_process_bindings() {
 }
 
 #[tokio::test]
-async fn selected_skill_visibility_is_independent_of_native_tool_selection() {
+async fn skill_prompt_requires_an_available_reader() {
     use rustx::local_runtime::composition::{LocalConversationCore, LocalRuntimeDependencies};
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(
@@ -844,7 +832,7 @@ async fn selected_skill_visibility_is_independent_of_native_tool_selection() {
             "{}{MODEL}{ROOT}",
             PROVIDER.replace("$USER_KEY", "fixture-key")
         ),
-        "[agent]\nskills = ['review']\n[agent.tools]\nbuiltin = []\n",
+        "[agent]\n[agent.tools]\nbuiltin = []\n",
     );
     let package = host.launch_directory.join(".agents/skills/review");
     std::fs::create_dir_all(&package).unwrap();
@@ -868,25 +856,7 @@ async fn selected_skill_visibility_is_independent_of_native_tool_selection() {
         generation.capability().model_skill_entries()[0].name,
         "review"
     );
-    let prompt = generation.skill_catalog().unwrap();
-    assert!(prompt.contains("Review code"));
-    assert!(!prompt.contains("PRIVATE_BODY_SENTINEL"));
-    assert!(
-        prompt.contains(
-            host.home_directory
-                .join("rustx/.agents/skills")
-                .to_str()
-                .unwrap()
-        )
-    );
-    assert!(
-        prompt.contains(
-            host.launch_directory
-                .join(".agents/skills")
-                .to_str()
-                .unwrap()
-        )
-    );
+    assert!(generation.skill_catalog().is_none());
     runtime.shutdown().await.unwrap();
 }
 

@@ -2462,7 +2462,7 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
 #[test]
 fn issue527_model_choice_pages_do_not_rescan_unrelated_large_package_assets() {
     let roots = Roots::new();
-    let skill = roots.home.join("rustx/.agents/skills/large");
+    let skill = roots.home.join(".agents/skills/large");
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(
         skill.join("SKILL.md"),

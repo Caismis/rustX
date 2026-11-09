@@ -8,9 +8,9 @@ import css from './ResourceCatalog.module.css';
 
 type Selection = 'all' | string[];
 /** Quick selection edits the same semantic unit as the full permission editor. */
-export function ResourceAvailability({ family, name, valid, source, scope, revision }: {
+export function ResourceAvailability({ family, name, valid, source, scope, revision, skillNames }: {
   family: 'mcp' | 'skill' | 'agent'; name: string; valid: boolean | undefined;
-  source: SourceSettings; scope: SourceScope; revision: string;
+  source: SourceSettings; scope: SourceScope; revision: string; skillNames?: string[];
 }) {
   const tx = useTranslation();
   const agent = (scope === 'user' ? source.user : source.workspace)?.authored?.agent;
@@ -24,11 +24,11 @@ export function ResourceAvailability({ family, name, valid, source, scope, revis
   const main = source.prospective_resources?.main;
   const sourceTools = main?.tool_selection.filter(tool => tool.origin !== 'builtin' && tool.source_id === sourceId) ?? [];
   const sourceSelection: Selection = sourceTools.some(tool => tool.origin === 'all') ? 'all' : sourceTools.flatMap(tool => tool.origin === 'source' ? [tool.name] : []);
-  const effective = family === 'skill' ? source.resolved?.agent?.skills ?? main?.skills.map(skill => skill.name)
+  const effective = family === 'skill' ? source.resolved?.agent?.skills ?? 'all'
     : family === 'agent' ? source.resolved?.agent?.agents ?? main?.agents
       : source.resolved?.agent?.tools?.sources?.[sourceId] ?? sourceSelection;
   const selection = unit.draft ? unit.displayed : authored ?? effective ?? [];
-  const names = Array.isArray(selection) ? selection : (source.prospective_resources?.definitions ?? []).filter(row => row.family === family && row.valid).map(row => row.name);
+  const names = Array.isArray(selection) ? selection : skillNames ?? (source.prospective_resources?.definitions ?? []).filter(row => row.family === family && row.valid).map(row => row.name);
   const selected = selection === 'all' || (family === 'mcp' ? names.length > 0 : names.includes(name));
   const review = !!unit.draft || unit.reviewNeeded;
   return <div className={css.availability} aria-busy={unit.busy || unit.awaitingObservation}>

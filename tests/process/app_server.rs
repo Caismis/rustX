@@ -1395,7 +1395,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let mut clients = Vec::new();
         let mut targets = Vec::new();
         for (identity, user, provider) in &users {
-            let skill = user.root.path().join(format!("home/rustx/.agents/skills/host-{identity}"));
+            let skill = user.root.path().join(format!("home/.agents/skills/host-{identity}"));
             std::fs::create_dir_all(&skill).unwrap();
             std::fs::write(skill.join("SKILL.md"), format!("---\nname: host-{identity}\ndescription: host-{identity}-only resource\n---\nUse this user's supplied workspace.\n")).unwrap();
             let config = user.root.path().join("home/rustx");

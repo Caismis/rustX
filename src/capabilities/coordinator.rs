@@ -3313,6 +3313,16 @@ body
     #[tokio::test]
     async fn unselected_skills_do_not_merge_conflicts_or_prepare_environments() {
         let (dir, coordinator) = coordinator();
+        coordinator
+            .inner
+            .resource_inputs
+            .lock()
+            .unwrap()
+            .agent_activation
+            .profile
+            .skills = Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(
+            Vec::new(),
+        ));
         let collection = dir.path().join("workspace/.agents/skills");
         for (name, version) in [("pdf", "1.0"), ("unused", "2.0")] {
             std::fs::create_dir_all(collection.join(name)).unwrap();

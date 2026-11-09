@@ -2612,7 +2612,7 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
         let home = fixture.workspaces[0].parent().unwrap().join("home");
-        let guide = home.join("rustx/.agents/skills/guide");
+        let guide = home.join(".agents/skills/guide");
         let skill = |description: &str| {
             std::fs::create_dir_all(&guide).unwrap();
             std::fs::write(
@@ -2639,9 +2639,9 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
             tokio::task::yield_now().await;
         }
         // The Skill's directory is also a known Workspace, whose canonical
-        // path on a case-folding volume keeps `RustX`.
+        // path on a case-folding volume keeps `.Agents`.
         fixture.manager.applications.lock().record_source(
-            &home.join("RustX/.agents/skills/guide"),
+            &home.join(".Agents/skills/guide"),
             &Err("not a Session's workspace".into()),
         );
         injected_only(&fixture);
@@ -2667,7 +2667,7 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
             skill("Version B");
             let edit =
                 notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
-                    .add_path(home.join("RustX/.agents/skills/guide/SKILL.md"));
+                    .add_path(home.join(".Agents/skills/guide/SKILL.md"));
             while !fixture.manager.notify_source_watch(edit.clone()) {
                 tokio::task::yield_now().await;
             }

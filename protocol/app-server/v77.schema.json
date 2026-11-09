@@ -10215,13 +10215,17 @@
         },
         "metadata_revision": {
           "type": "string"
+        },
+        "disable_model_invocation": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,
       "required": [
         "catalog",
         "provenance",
-        "metadata_revision"
+        "metadata_revision",
+        "disable_model_invocation"
       ]
     },
     "SkillCatalogEntry": {
@@ -10237,7 +10241,7 @@
           "type": "string"
         },
         "location": {
-          "description": "The canonical absolute host path of the package's `SKILL.md`. The\nmodel passes it to Read, and resolves the Skill's own relative\nreferences against its parent directory.",
+          "description": "The canonical absolute host path of the Skill instruction file. The\nmodel passes it to Read, and resolves the Skill's own relative\nreferences against its parent directory.",
           "type": "string"
         }
       },
@@ -10279,15 +10283,15 @@
       ]
     },
     "SkillSource": {
-      "description": "One Skill source authority.\n\nThe declaration order **is** the precedence order: a later variant wins\nthe same logical Skill identity against an earlier one.",
+      "description": "One Skill source authority.\n\nA valid Workspace definition takes precedence over a User definition.",
       "oneOf": [
         {
-          "description": "`<home>/rustx/.agents/skills`.",
+          "description": "User-wide collections under the process-bound home.",
           "type": "string",
           "const": "user"
         },
         {
-          "description": "`<workspace>/.agents/skills`.",
+          "description": "Project collections at the working directory and its ancestors.",
           "type": "string",
           "const": "workspace"
         }
@@ -10338,7 +10342,7 @@
           ]
         },
         {
-          "description": "A fixed User or Workspace source root exists but cannot be used as a\nSkill collection directory. It contributes no packages. An unreadable\nWorkspace collection also withholds lower User candidates because their\nshadow status cannot be established.",
+          "description": "A fixed User or Workspace source root exists but cannot be used as a\nSkill collection directory. It contributes no packages.",
           "type": "object",
           "properties": {
             "source": {
@@ -10361,7 +10365,7 @@
           ]
         },
         {
-          "description": "One fixed User or Workspace collection exceeded its candidate budget.\nEnumeration is bounded before package validation. The collection contributes\nnothing; an over-budget Workspace collection also withholds lower candidates\nwhose shadow status cannot be established.",
+          "description": "One fixed User or Workspace collection exceeded its candidate budget.\nEnumeration is bounded before package validation. The collection contributes\nnothing; other sources remain available.",
           "type": "object",
           "properties": {
             "source": {
@@ -10459,7 +10463,7 @@
           ]
         },
         {
-          "description": "Two or more distinct packages in the **same** scope resolve to one\nlogical Skill identity. Every conflicting definition is excluded;\ndiscovery never picks a winner by enumeration order.",
+          "description": "Two or more distinct packages in the **same** scope resolve to one\nlogical Skill identity. The first path wins in discovery precedence.",
           "type": "object",
           "properties": {
             "source": {
