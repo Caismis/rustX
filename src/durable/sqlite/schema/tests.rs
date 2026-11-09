@@ -42,9 +42,9 @@ fn wal_management_head_is_one_snapshot_while_another_writer_commits() {
 }
 
 #[test]
-fn a_version_32_profile_store_is_refused_without_migration() {
+fn a_version_100_stream_layout_is_refused_without_migration() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("profile-v33.sqlite");
+    let path = directory.path().join("stream-layout-v100.sqlite");
     let id = ConversationId::new("conv_bb2149cf-1f8d-7c3c-8c60-73f4acb0a518");
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
@@ -53,7 +53,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
             .lock()
             .unwrap()
             .execute(
-                "UPDATE rustx_store SET schema_version = 32 WHERE id = 1",
+                "UPDATE rustx_store SET schema_version = 100 WHERE id = 1",
                 [],
             )
             .unwrap();
@@ -65,7 +65,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
         assert!(matches!(
             result,
             Err(ConversationStoreError::SchemaVersionMismatch {
-                stored: 32,
+                stored: 100,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
@@ -79,7 +79,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
         )
         .unwrap();
     assert_eq!(
-        stored, 32,
+        stored, 100,
         "neither runtime nor management opening migrates"
     );
 }
@@ -278,7 +278,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 100);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -343,7 +343,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 100);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -523,7 +523,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 100);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -580,7 +580,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 100);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");

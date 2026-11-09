@@ -1,6 +1,6 @@
-//! Transaction-owned byte indexes. Each row holds at most 64 KiB; a range
-//! read touches at most two rows, never a message/audit JSON body or frame scan.
-//! Binary artifacts instead authenticate at most two complete 64 KiB file chunks.
+//! Transaction-owned byte indexes. A 64 KiB range touches at most nine 8 KiB
+//! stream rows or two 64 KiB immutable rows. Binary artifacts authenticate
+//! at most two complete 64 KiB file chunks.
 use super::content_metadata::{
     AssistantMetadata, AuditMetadata, MessageMetadata, PublicationMetadata,
 };
@@ -18,6 +18,18 @@ use crate::observation::content::{
 use base64::Engine;
 const SEGMENT: u64 = 65_536;
 const SEGMENT_BYTES: usize = 65_536;
+const STREAM_SEGMENT_BYTES: usize = 8_192;
+
+// Copy-through settlement preserves segment ordinals for audit text and raw
+// Tool arguments. Keep their geometry aligned with the live suffixes.
+fn segment_bytes(kind: &str, representation: Rep) -> usize {
+    match (kind, representation) {
+        ("live" | "audit", Rep::Utf8Text | Rep::RawJsonUtf8) | ("canonical", Rep::RawJsonUtf8) => {
+            STREAM_SEGMENT_BYTES
+        }
+        _ => SEGMENT_BYTES,
+    }
+}
 
 pub(super) fn register_tail_function(
     connection: &Connection,
@@ -48,6 +60,8 @@ pub(super) fn register_tail_function(
                             std::io::Error::other("content segment exceeds 64 KiB").into(),
                         )
                     })?;
+                #[cfg(test)]
+                inline_tests::record_tail_copy(length);
                 let mut bytes = Vec::with_capacity(length);
                 bytes.extend_from_slice(prefix);
                 bytes.extend_from_slice(suffix);
@@ -535,6 +549,24 @@ fn range_bytes_at(
     offset: u64,
     end: u64,
 ) -> Result<Vec<u8>, ConversationStoreError> {
+    range_bytes_segmented(
+        connection,
+        key,
+        revision,
+        offset,
+        end,
+        segment_bytes(key.0, key.3) as u64,
+    )
+}
+
+fn range_bytes_segmented(
+    connection: &Connection,
+    key: (&str, &str, u32, Rep),
+    revision: u64,
+    offset: u64,
+    end: u64,
+    segment_size: u64,
+) -> Result<Vec<u8>, ConversationStoreError> {
     #[cfg(test)]
     LAST_READ_WORK.with(|work| work.set((0, 0)));
     if offset > end || end - offset > u64::from(CONTENT_READ_MAX_BYTES) {
@@ -544,10 +576,10 @@ fn range_bytes_at(
     let mut bytes = Vec::with_capacity(usize::try_from(end - offset).map_err(|_| invalid())?);
     let mut offset = offset;
     if super::content_encoding::inline_first(kind, representation)
-        && offset < SEGMENT
+        && offset < segment_size
         && offset < end
     {
-        let first_end = end.min(SEGMENT);
+        let first_end = end.min(segment_size);
         range_bytes_query(
             connection,
             "SELECT 0,substr(bytes,?5+1,?6-?5) FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?7",
@@ -562,25 +594,28 @@ fn range_bytes_at(
             ],
             offset,
             first_end,
+            segment_size,
             &mut bytes,
         )?;
         offset = first_end;
     }
     range_bytes_query(
         connection,
-        "SELECT segment,substr(bytes,MAX(0,?7-segment*65536)+1,MIN(65536,?8-segment*65536)-MAX(0,?7-segment*65536)) FROM content_segments WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND segment>=?5 AND segment<=?6 ORDER BY segment LIMIT 2",
+        "SELECT segment,substr(bytes,MAX(0,?7-segment*?9)+1,MIN(?9,?8-segment*?9)-MAX(0,?7-segment*?9)) FROM content_segments WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND segment>=?5 AND segment<=?6 ORDER BY segment LIMIT (?6-?5+1)",
         &[
             &kind,
             &id,
             &block,
             &representation.key(),
-            &(offset / SEGMENT),
-            &((end.saturating_sub(1)) / SEGMENT),
+            &(offset / segment_size),
+            &((end.saturating_sub(1)) / segment_size),
             &offset,
             &end,
+            &segment_size,
         ],
         offset,
         end,
+        segment_size,
         &mut bytes,
     )?;
     Ok(bytes)
@@ -607,6 +642,7 @@ fn range_bytes_query(
     bindings: &[&dyn rusqlite::ToSql],
     offset: u64,
     end: u64,
+    segment_size: u64,
     bytes: &mut Vec<u8>,
 ) -> Result<(), ConversationStoreError> {
     let before = bytes.len();
@@ -614,9 +650,10 @@ fn range_bytes_query(
         // Both physical stores append selected slices into one bounded output.
         // Borrow the current SQLite cell instead of allocating a temporary Vec.
         let mut stmt = connection
-            .prepare(sql)
+            .prepare_cached(sql)
             .map_err(|e| storage(e.to_string()))?;
         let mut rows = stmt.query(bindings).map_err(|e| storage(e.to_string()))?;
+        let mut expected_segment = offset / segment_size;
         while let Some(row) = rows.next().map_err(|e| storage(e.to_string()))? {
             let segment: u64 = row.get(0).map_err(|e| storage(e.to_string()))?;
             let data = row
@@ -629,9 +666,13 @@ fn range_bytes_query(
                 let (rows, bytes) = work.get();
                 work.set((rows + 1, bytes + data.len()));
             });
-            let start = segment.checked_mul(SEGMENT).ok_or_else(invalid)?;
+            if segment != expected_segment {
+                return Err(invalid());
+            }
+            expected_segment += 1;
+            let start = segment.checked_mul(segment_size).ok_or_else(invalid)?;
             let expected =
-                end.min(start.checked_add(SEGMENT).ok_or_else(invalid)?) - offset.max(start);
+                end.min(start.checked_add(segment_size).ok_or_else(invalid)?) - offset.max(start);
             if data.len() as u64 != expected {
                 return Err(invalid());
             }
@@ -683,6 +724,24 @@ fn put(
     bytes: &[u8],
     append: bool,
 ) -> Result<(), ConversationStoreError> {
+    put_segmented(
+        connection,
+        key,
+        revision,
+        bytes,
+        append,
+        segment_bytes(key.0, key.3),
+    )
+}
+
+fn put_segmented(
+    connection: &Connection,
+    key: (&str, &str, u32, Rep),
+    revision: u64,
+    bytes: &[u8],
+    append: bool,
+    segment_size: usize,
+) -> Result<(), ConversationStoreError> {
     let (kind, id, block, representation) = key;
     if revision > CONTENT_SAFE_INTEGER_MAX {
         return Err(invalid());
@@ -694,13 +753,19 @@ fn put(
             .ok_or_else(invalid)?;
         // These bytes already exist in the native value. Bind borrowed slices
         // directly, keeping overflow inserts before the authoritative frontier.
-        if bytes.len() > SEGMENT_BYTES {
-            append_segments(connection, key, SEGMENT, &bytes[SEGMENT_BYTES..])?;
+        if bytes.len() > segment_size {
+            append_segments(
+                connection,
+                key,
+                segment_size as u64,
+                &bytes[segment_size..],
+                segment_size,
+            )?;
         }
         connection
             .execute_cached(
                 "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-                params![kind, id, block, representation.key(), revision, end, &bytes[..bytes.len().min(SEGMENT_BYTES)]],
+                params![kind, id, block, representation.key(), revision, end, &bytes[..bytes.len().min(segment_size)]],
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         return Ok(());
@@ -710,7 +775,7 @@ fn put(
     } else {
         0
     };
-    let end = append_segments(connection, key, prior, bytes)?;
+    let end = append_segments(connection, key, prior, bytes, segment_size)?;
     connection
         .execute_cached(
             "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES(?1,?2,?3,?4,?5,?6)",
@@ -726,18 +791,20 @@ fn append_segments(
     (kind, id, block, representation): (&str, &str, u32, Rep),
     prior: u64,
     bytes: &[u8],
+    segment_size: usize,
 ) -> Result<u64, ConversationStoreError> {
     let end = prior
         .checked_add(bytes.len() as u64)
         .filter(|v| *v <= CONTENT_SAFE_INTEGER_MAX)
         .ok_or_else(invalid)?;
     let mut consumed = 0usize;
-    if !prior.is_multiple_of(SEGMENT) && !bytes.is_empty() {
-        let segment = prior / SEGMENT;
-        let tail_length = prior % SEGMENT;
+    let width = segment_size as u64;
+    if !prior.is_multiple_of(width) && !bytes.is_empty() {
+        let segment = prior / width;
+        let tail_length = prior % width;
         consumed = bytes
             .len()
-            .min(SEGMENT_BYTES - usize::try_from(tail_length).map_err(|_| invalid())?);
+            .min(segment_size - usize::try_from(tail_length).map_err(|_| invalid())?);
         // One lookup/update: borrow the SQLite cells inside the bounded BLOB
         // function, without returning a separate old-tail Vec to the caller.
         // SQL text concatenation cannot preserve all database encodings.
@@ -752,7 +819,9 @@ fn append_segments(
     }
     while consumed < bytes.len() {
         let start = consumed;
-        consumed = consumed.saturating_add(SEGMENT_BYTES).min(bytes.len());
+        consumed = consumed.saturating_add(segment_size).min(bytes.len());
+        #[cfg(test)]
+        inline_tests::record_segment_insert();
         connection
             .execute_cached(
                 "INSERT INTO content_segments VALUES(?1,?2,?3,?4,?5,?6)",
@@ -761,7 +830,7 @@ fn append_segments(
                     id,
                     block,
                     representation.key(),
-                    (prior + start as u64) / SEGMENT,
+                    (prior + start as u64) / width,
                     &bytes[start..consumed]
                 ],
             )
@@ -787,6 +856,7 @@ fn append_canonical_raw(
         ("canonical", id, block, Rep::RawJsonUtf8),
         prior,
         bytes,
+        STREAM_SEGMENT_BYTES,
     )?;
     connection.execute(
         "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'r',1,?3) ON CONFLICT(source_kind,source_id,block_index,representation,revision) DO UPDATE SET readable_end=excluded.readable_end",
