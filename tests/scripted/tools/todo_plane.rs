@@ -480,7 +480,7 @@ async fn a_new_tool_runtime_rebuilds_the_list_from_conversation_history() {
             id: MessageId::new("message-todo"),
             tool_call_id: ToolCallId::new("call-todo"),
             tool_id: ToolId::new(rustx::tools::todo::TODO_TOOL_ID),
-            result: committed.clone(),
+            result: committed.clone().into(),
         }),
     ];
 

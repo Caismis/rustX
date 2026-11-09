@@ -631,7 +631,7 @@ mod tests {
                         MessageId::new("assistant"),
                         ContentBlockIndex::new(0),
                     ),
-                    result: crate::scripted_suites::support::fake::success_result(&hostile),
+                    result: crate::scripted_suites::support::fake::success_result(&hostile).into(),
                 })
                 .into(),
             );
@@ -695,7 +695,8 @@ mod tests {
                             MessageId::new("assistant"),
                             ContentBlockIndex::new(block),
                         ),
-                        result: crate::scripted_suites::support::fake::success_result("result"),
+                        result: crate::scripted_suites::support::fake::success_result("result")
+                            .into(),
                     })
                     .into(),
                 );

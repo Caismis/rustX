@@ -290,7 +290,8 @@ fn source_history() -> Vec<MessageBlock> {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }),
         user("source-user-c", "C"),
     ]

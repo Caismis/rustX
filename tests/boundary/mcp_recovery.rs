@@ -614,7 +614,7 @@ fn tool_results(
         .messages()
         .into_iter()
         .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool.result),
+            MessageBlock::Tool(tool) => Some(std::sync::Arc::unwrap_or_clone(tool.result)),
             _ => None,
         })
         .collect()

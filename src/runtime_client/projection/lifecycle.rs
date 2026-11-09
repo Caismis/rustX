@@ -391,7 +391,7 @@ impl RuntimeClientProjection {
                         && slot.block_index == tool.occurrence.block_index
                 })
             {
-                slot.committed_result = Some(tool.result.clone());
+                slot.committed_result = Some(tool.result.as_ref().clone());
             }
             return;
         };

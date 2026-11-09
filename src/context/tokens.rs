@@ -557,7 +557,7 @@ mod tests {
     fn tool_accounting_ignores_runtime_metadata_and_truncated_tail() {
         use crate::message::types::{ContentBlockIndex, ToolCallOccurrenceRef, ToolMessageBlock};
         use crate::runtime::identity::ToolCallId;
-        let body = |result| {
+        let body = |result: crate::tools::types::ToolExecutionResult| {
             ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new("result"),
                 tool_call_id: ToolCallId::new("call"),
@@ -566,7 +566,7 @@ mod tests {
                     ContentBlockIndex::new(0),
                 ),
                 tool_id: ToolId::new("tool"),
-                result,
+                result: result.into(),
             }))
         };
         let original = crate::scripted_suites::support::fake::success_result(&"x".repeat(100_000));
@@ -659,7 +659,7 @@ mod tests {
         use crate::model::types::semantic_messages_fingerprint;
         use crate::runtime::identity::{ArtifactId, ToolCallId};
 
-        let input = |result| {
+        let input = |result: crate::tools::types::ToolExecutionResult| {
             canonical_input(&[MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new("result"),
                 tool_call_id: ToolCallId::new("call"),
@@ -668,7 +668,7 @@ mod tests {
                     ContentBlockIndex::new(0),
                 ),
                 tool_id: ToolId::new("tool"),
-                result,
+                result: result.into(),
             })])
         };
         let mut result = crate::scripted_suites::support::fake::success_result("resource read");

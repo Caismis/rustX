@@ -333,7 +333,8 @@ fn all_four_projection_tool_pairings_start_exact_requests_without_recovery_execu
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     });
     for derived_call in [false, true] {
         for derived_result in [false, true] {

@@ -280,7 +280,8 @@ pub(super) fn selected_delivery_fixture(
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 #[test]
@@ -464,7 +465,7 @@ fn t08_t12_t14_t19_escaped_delivery_metadata_advances_beyond_inline_budget() {
     let MessageBlock::Tool(tool) = &mut message else {
         unreachable!()
     };
-    tool.result.deliveries = vec![original_file.clone()];
+    std::sync::Arc::make_mut(&mut tool.result).deliveries = vec![original_file.clone()];
     store.append_canonical(&message).unwrap();
     let cut = occupancy_origin_cut(&store);
     let source = cut.source_cut.as_ref().unwrap();
@@ -555,7 +556,9 @@ fn t08_t12_t14_t19_original_nine_deliveries_advance_and_select_last_index() {
     let MessageBlock::Tool(tool) = &mut message else {
         unreachable!()
     };
-    tool.result.deliveries.clone_from(&files);
+    std::sync::Arc::make_mut(&mut tool.result)
+        .deliveries
+        .clone_from(&files);
     store.append_canonical(&message).unwrap();
     let cut = occupancy_origin_cut(&store);
     let source = cut.source_cut.as_ref().unwrap();

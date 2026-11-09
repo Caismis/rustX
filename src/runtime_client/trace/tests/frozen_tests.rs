@@ -190,7 +190,7 @@ fn t08_t14_t19_trace_c_without_j_keeps_both_frozen_native_cuts() {
         ),
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
-        result: result.clone(),
+        result: result.clone().into(),
     });
     store.append_canonical(&tool).unwrap();
     let after = store.observation_read_cut().unwrap();
@@ -223,7 +223,7 @@ fn t08_t14_t19_trace_c_without_j_keeps_both_frozen_native_cuts() {
         E::ToolExecutionCompleted {
             tool_call_id: call.id,
             tool_id: call.tool_id,
-            result,
+            result: result.into(),
         },
         4,
     );

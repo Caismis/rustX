@@ -218,7 +218,7 @@ impl RuntimeClientProjection {
                         attempt_id,
                         &tool.tool_call_id,
                         Some(&tool.occurrence),
-                        tool.result.clone(),
+                        &tool.result,
                     ) == ForegroundSettlement::Applied
                 {
                     events.push(RuntimeClientEvent::ToolExecutionSettled {
@@ -231,7 +231,7 @@ impl RuntimeClientProjection {
                         metadata_ref: settled_witness.and_then(|(_, reference)| reference),
                         tool_call_id: crate::observation::tool::inline_call_id(&tool.tool_call_id),
                         tool_id: crate::observation::tool::inline_tool_id(&tool.tool_id),
-                        result: tool.result.clone(),
+                        result: tool.result.as_ref().clone(),
                     });
                 }
                 if matches!(block, MessageBlock::Assistant(_))

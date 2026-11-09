@@ -90,7 +90,8 @@ fn tool_result(id: &str, owner: &MessageId, index: usize, call: &ToolCall) -> Me
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 

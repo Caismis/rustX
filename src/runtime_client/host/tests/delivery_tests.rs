@@ -47,7 +47,8 @@ fn commit_delivery_result(
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     });
     assert!(serde_json::to_vec(&tool).unwrap().len() > 1_048_576);
     store.append_canonical(&tool).unwrap();

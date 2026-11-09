@@ -1840,7 +1840,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         });
         let turn = FreshInboundTurn::new(vec![MessageId::new("tool-1")]).expect("valid ids");
         assert_eq!(

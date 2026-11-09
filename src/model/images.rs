@@ -200,19 +200,21 @@ pub(crate) fn project_with_changes(
     };
     let mut remaining = if image_input { 16 } else { 0 };
     for (index, message) in messages.iter_mut().enumerate().rev() {
-        let requires_projection = needs_projection(message, image_input, remaining);
-        if requires_projection {
-            changed(index, message);
+        let (count, requires_projection) =
+            image_projection_requirement(message, image_input, remaining);
+        if !requires_projection {
+            remaining -= count;
+            continue;
         }
+        changed(index, message);
         let Some(message) = (match message {
             crate::model::input::ModelInputMessage::Canonical(message) => Some(message),
             crate::model::input::ModelInputMessage::RequestOnly(_) => None,
             crate::model::input::ModelInputMessage::Derived(derived) => {
                 project_derived_images(&mut derived.message, image_input, &mut remaining);
-                if requires_projection
-                    && !derived
-                        .transformations
-                        .contains(&crate::model::projected::SemanticTransformation::ImageDowngrade)
+                if !derived
+                    .transformations
+                    .contains(&crate::model::projected::SemanticTransformation::ImageDowngrade)
                 {
                     derived
                         .transformations
@@ -225,7 +227,7 @@ pub(crate) fn project_with_changes(
         };
         match message {
             MessageBlock::Tool(tool) => {
-                for block in tool.result.content.iter_mut().rev() {
+                for block in Arc::make_mut(&mut tool.result).content.iter_mut().rev() {
                     if let ToolResultContent::Image(image) = block {
                         if remaining > 0 {
                             remaining -= 1;
@@ -259,40 +261,38 @@ pub(crate) fn project_with_changes(
     }
 }
 
-fn needs_projection(
+fn image_projection_requirement(
     message: &crate::model::input::ModelInputMessage,
     enabled: bool,
     remaining: usize,
-) -> bool {
+) -> (usize, bool) {
     use crate::message::types::{AssistantContentBlock, UserContentBlock};
     use crate::model::projected::ModelMessageView;
     use crate::tools::types::ToolResultContent;
-    match message.view() {
-        ModelMessageView::User(content) => {
-            content
-                .iter()
-                .filter(|block| matches!(block, UserContentBlock::Image(_)))
-                .take(remaining + 1)
-                .count()
-                > remaining
-        }
-        ModelMessageView::Tool(_, result) => {
-            result
-                .content
-                .iter()
-                .filter(|block| matches!(block, ToolResultContent::Image(_)))
-                .take(remaining + 1)
-                .count()
-                > remaining
-        }
+    let count = match message.view() {
+        ModelMessageView::User(content) => content
+            .iter()
+            .filter(|block| matches!(block, UserContentBlock::Image(_)))
+            .take(remaining + 1)
+            .count(),
+        ModelMessageView::Tool(_, result) => result
+            .content
+            .iter()
+            .filter(|block| matches!(block, ToolResultContent::Image(_)))
+            .take(remaining + 1)
+            .count(),
         ModelMessageView::Assistant(content) => {
-            !enabled
-                && content
-                    .iter()
-                    .any(|block| matches!(block, AssistantContentBlock::Image(_)))
+            return (
+                0,
+                !enabled
+                    && content
+                        .iter()
+                        .any(|block| matches!(block, AssistantContentBlock::Image(_))),
+            );
         }
-        ModelMessageView::RequestOnly(_) => false,
-    }
+        ModelMessageView::RequestOnly(_) => 0,
+    };
+    (count, count > remaining)
 }
 
 fn project_derived_images(
@@ -567,7 +567,7 @@ mod tests {
                 id: MessageId::new("result"),
                 tool_call_id: ToolCallId::new("call"),
                 tool_id: ToolId::new("tool-read-image"),
-                result,
+                result: result.into(),
             }),
         )];
         let canonical = messages.clone();
@@ -594,6 +594,18 @@ mod tests {
         })
         .unwrap();
         assert_eq!(resolved[&id].as_bytes(), bytes);
+        project(&mut messages, true);
+        let [crate::model::input::ModelInputMessage::Canonical(MessageBlock::Tool(kept))] =
+            messages.as_slice()
+        else {
+            panic!("one canonical tool result");
+        };
+        let [crate::model::input::ModelInputMessage::Canonical(MessageBlock::Tool(original))] =
+            canonical.as_slice()
+        else {
+            panic!("one canonical tool result");
+        };
+        assert!(Arc::ptr_eq(&kept.result, &original.result));
         omit_images(&mut messages);
         let crate::model::input::ModelInputMessage::Canonical(MessageBlock::Tool(projected)) =
             &messages[0]

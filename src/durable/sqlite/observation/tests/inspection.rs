@@ -119,7 +119,8 @@ pub(in crate::durable::sqlite) fn inspection_result(
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }))
         .unwrap();
 }

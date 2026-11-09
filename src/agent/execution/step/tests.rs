@@ -406,7 +406,8 @@ fn expected_trace(adopted: Option<&str>) -> Vec<crate::events::types::RuntimeEve
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         },
         RuntimeEvent::ToolMessageCommitted {
             // The existing tool owner derives new message identity from the

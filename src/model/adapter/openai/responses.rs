@@ -2047,7 +2047,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let encoded = translate_tool_result(
             &message.tool_call_id,
@@ -2098,7 +2099,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             };
             let encoded = translate_tool_result(
                 &message.tool_call_id,
@@ -2144,7 +2146,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let encoded = translate_tool_result(
             &message.tool_call_id,

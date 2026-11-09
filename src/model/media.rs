@@ -1181,7 +1181,7 @@ mod tests {
                         ContentBlockIndex::new(0),
                     ),
                     tool_id: ToolId::new("tool"),
-                    result,
+                    result: result.into(),
                 }))
             })
             .collect();

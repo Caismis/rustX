@@ -773,7 +773,7 @@ pub struct ToolMessageBlock {
     /// Identity of the executed tool.
     pub tool_id: ToolId,
     /// The normalized execution result.
-    pub result: ToolExecutionResult,
+    pub result: std::sync::Arc<ToolExecutionResult>,
 }
 
 #[cfg(test)]
@@ -825,7 +825,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         });
         for (block, role) in [(user, "user"), (assistant, "assistant"), (tool, "tool")] {
             let value = serde_json::to_value(&block).expect("serialize block");

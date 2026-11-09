@@ -24,7 +24,7 @@ fn complete_tool_row_fixture(store: &SqliteConversationStore) {
     };
     store.append_event(envelope(
         store.conversation_id(), "tool-row-settled", Some(attempt.clone()),
-        RuntimeEvent::ToolExecutionCompleted { tool_call_id: call.id.clone(), tool_id: call.tool_id.clone(), result: result.clone() },
+        RuntimeEvent::ToolExecutionCompleted { tool_call_id: call.id.clone(), tool_id: call.tool_id.clone(), result: result.clone().into() },
     )).unwrap();
     commit_original_tool_result(store, &attempt, &proposal, &call, &result);
     response_message(store, &attempt, "tool-row-final");

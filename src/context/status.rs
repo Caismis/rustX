@@ -1921,7 +1921,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     }
 

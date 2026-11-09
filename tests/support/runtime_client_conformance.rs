@@ -1586,9 +1586,9 @@ pub async fn before_start_cancellation_repairs_runtime_client(factory: &dyn Driv
     );
     assert_eq!(
         foreground[0].committed_result.as_ref(),
-        Some(&tool_message.result)
+        Some(tool_message.result.as_ref())
     );
-    assert_eq!(&tool_message.result, settlements[0].1);
+    assert_eq!(tool_message.result.as_ref(), settlements[0].1);
     assert_eq!(Some(&attempt_id), attempt.attempt_id.as_ref());
     assert!(calls.borrow().is_empty(), "the executor was never invoked");
 }

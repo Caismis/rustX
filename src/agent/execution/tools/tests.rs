@@ -2,6 +2,7 @@ use crate::agent::cancellation::AgentCancellation;
 use crate::agent::execution::AgentExecution;
 use crate::agent::execution::test_fixtures::*;
 use crate::agent::execution::tools::ForegroundProgressBuffer;
+use crate::agent::{LifecycleError, ToolResultObservation, ToolResultObserver};
 use crate::events::types::{AttemptOutcome, RuntimeEvent};
 use crate::message::types::ContentBlockIndex;
 use crate::model::event::ModelEvent;
@@ -16,6 +17,7 @@ use crate::tools::types::{
     ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::watch;
 
 /// An empty bounded foreground progress buffer for one scripted call.
@@ -217,6 +219,25 @@ impl ToolExecutor for ParkedProgressTool {
     }
 }
 
+#[derive(Default)]
+struct ResultAddress(AtomicUsize);
+
+impl ToolResultObserver for ResultAddress {
+    fn observe_tool_result<'a>(
+        &'a self,
+        observation: &'a ToolResultObservation<'a>,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Vec<crate::context::ContextProposal>, LifecycleError>,
+    > {
+        self.0.store(
+            std::ptr::from_ref(observation.result).addr(),
+            Ordering::Relaxed,
+        );
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
 /// Issue #178: with an observation seam installed, a progress-reporting
 /// foreground tool's live reports reach `observe_tool_progress` WHILE
 /// the tool still executes — before any durable `ToolExecutionProgress`
@@ -271,6 +292,10 @@ async fn live_tool_progress_reaches_the_observer_before_settlement() {
     let lease = capability_lease(tools, &tool_runtime).await.into_lease();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let observer = RecordingObserver::default();
+    let address = Arc::new(ResultAddress::default());
+    let lifecycle = crate::agent::AttemptLifecycle::inert()
+        .with_native_tool_result_observer(address.clone())
+        .expect("one native result observer");
     let mut execution = AgentExecution::new(
         request(&adapter),
         lease,
@@ -278,7 +303,7 @@ async fn live_tool_progress_reaches_the_observer_before_settlement() {
         crate::scripted_suites::support::default_execution_policy(),
         runtime(&adapter),
         &tool_runtime,
-        crate::agent::AttemptLifecycle::inert(),
+        lifecycle,
     )
     .expect("execution construction");
     execution.observe(&observer);
@@ -364,4 +389,27 @@ async fn live_tool_progress_reaches_the_observer_before_settlement() {
         })
         .collect();
     assert_eq!(messages, vec!["first", "second"]);
+
+    let event_records = observer.events();
+    let completion_result = event_records
+        .iter()
+        .find_map(|event| match event {
+            RuntimeEvent::ToolExecutionCompleted { result, .. } => Some(result),
+            _ => None,
+        })
+        .expect("observed completion");
+    let committed = observer.committed.lock().expect("canonical observations");
+    let canonical_result = committed
+        .iter()
+        .find_map(|message| match message {
+            crate::message::types::MessageBlock::Tool(tool) => Some(&tool.result),
+            _ => None,
+        })
+        .expect("observed canonical tool result");
+    assert!(Arc::ptr_eq(completion_result, canonical_result));
+    assert_eq!(
+        address.0.load(Ordering::Relaxed),
+        Arc::as_ptr(canonical_result).addr(),
+        "the result observer borrows the canonical body"
+    );
 }

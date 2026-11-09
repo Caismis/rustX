@@ -814,7 +814,9 @@ fn a_durable_approval_and_a_crash_before_tool_start_executes_nothing() {
         .expect("canonical")
         .into_iter()
         .find_map(|message| match message {
-            MessageBlock::Tool(tool) if tool.tool_call_id == call_id() => Some(tool.result.status),
+            MessageBlock::Tool(tool) if tool.tool_call_id == call_id() => {
+                Some(std::sync::Arc::unwrap_or_clone(tool.result).status)
+            }
             _ => None,
         })
         .expect("the approved call received its canonical result slot");
@@ -1842,7 +1844,7 @@ fn transcript_tool_occurrences_do_not_alias_across_attempts_and_reopen() {
                         id: id.clone(),
                         tool_call_id: generation.call.id.clone(),
                         tool_id: generation.call.tool_id.clone(),
-                        result,
+                        result: result.into(),
                     }),
                     generation.envelope(
                         &format!("{id}-committed"),

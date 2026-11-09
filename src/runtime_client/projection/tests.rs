@@ -3058,7 +3058,7 @@ fn representative_sequence() -> Vec<ConversationObservation> {
         event_observation(RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: ToolId::new("tool-alpha"),
-            result: success_result(),
+            result: success_result().into(),
         }),
         event_observation(RuntimeEvent::TurnCompleted),
         event_observation(RuntimeEvent::AttemptCompleted {
@@ -3604,7 +3604,7 @@ fn foreground_tool_identity_survives_reversed_completion() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call_b"),
             tool_id: ToolId::new("tool-beta"),
-            result: success_result(),
+            result: success_result().into(),
         },
     );
     apply_event(
@@ -3612,7 +3612,7 @@ fn foreground_tool_identity_survives_reversed_completion() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call_a"),
             tool_id: ToolId::new("tool-alpha"),
-            result: success_result(),
+            result: success_result().into(),
         },
     );
     let (snapshot, _) = projection.snapshot().expect("snapshot");
@@ -3705,7 +3705,7 @@ fn issue136_foreground_cancellation_phase_round_trips_through_projection() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         },
     );
 
@@ -3800,7 +3800,7 @@ fn issue202_outcome_unknown_flows_through_projection_unchanged() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         },
     );
 
@@ -3879,7 +3879,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
         id: MessageId::new("message-before-start"),
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
-        result: result.clone(),
+        result: result.clone().into(),
     });
     let (_, before_commit) = projection.snapshot().unwrap();
     let (events, _) = store
@@ -3950,7 +3950,7 @@ fn issue136_live_settlement_is_not_duplicated_by_tool_message_commit() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         },
     );
     let (_, before_commit) = projection.snapshot().expect("snapshot before commit");
@@ -3964,7 +3964,7 @@ fn issue136_live_settlement_is_not_duplicated_by_tool_message_commit() {
             id: MessageId::new("message-during-execution"),
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         }),
         transcript_cursor: Some(crate::durable::TranscriptCursor::new(1)),
     });
@@ -5621,7 +5621,7 @@ fn t14_t19_prepared_started_witness_preserves_exact_live_progress_and_terminal_f
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id,
                 tool_id: call.tool_id,
-                result: success_result(),
+                result: success_result().into(),
             },
             "progress-tool-completed",
         ))
@@ -6177,7 +6177,7 @@ fn canonical_tool_result_capture_case() -> serde_json::Value {
             id: MessageId::new("canonical-boundary-result"),
             tool_call_id: call.id,
             tool_id: call.tool_id,
-            result: result.clone(),
+            result: result.clone().into(),
         }))
         .unwrap();
     publish_source_fact(&mut projection, |projection| {

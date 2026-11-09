@@ -373,7 +373,8 @@ fn tool_block(id: &str) -> MessageBlock {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 

@@ -467,7 +467,7 @@ fn settle_tool_call(
                 ),
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
-                result,
+                result: result.into(),
             }),
             event(
                 store,
@@ -1197,7 +1197,8 @@ fn parallel_tool_completion_keeps_exact_call_order_and_certainty() {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
             at,
         );

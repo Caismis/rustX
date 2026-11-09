@@ -494,7 +494,7 @@ impl RuntimeClientProjection {
                 tool_id,
                 result,
             } => {
-                if self.settle_foreground(attempt_id, tool_call_id, None, result.clone())
+                if self.settle_foreground(attempt_id, tool_call_id, None, result)
                     == ForegroundSettlement::AlreadySettled
                 {
                     return Vec::new();
@@ -507,7 +507,7 @@ impl RuntimeClientProjection {
                     metadata_ref: self.tool_display_metadata(),
                     tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
                     tool_id: crate::observation::tool::inline_tool_id(tool_id),
-                    result: result.clone(),
+                    result: result.as_ref().clone(),
                 }]
             }
             RuntimeEvent::ToolExecutionFailed {
@@ -528,7 +528,7 @@ impl RuntimeClientProjection {
                     workflow: None,
                     managed_output: None,
                 };
-                if self.settle_foreground(attempt_id, tool_call_id, None, result.clone())
+                if self.settle_foreground(attempt_id, tool_call_id, None, &result)
                     == ForegroundSettlement::AlreadySettled
                 {
                     return Vec::new();

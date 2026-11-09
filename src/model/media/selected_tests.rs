@@ -299,7 +299,7 @@ fn tool_image(index: usize, id: &ArtifactId) -> ModelInputMessage {
             ContentBlockIndex::new(0),
         ),
         tool_id: ToolId::new("image-tool"),
-        result,
+        result: result.into(),
     }))
 }
 

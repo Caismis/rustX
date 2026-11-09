@@ -1085,7 +1085,10 @@ impl TodoBatch {
     /// `blocks` is the exact `ToolResult` batch that just became canonical.
     /// The newest `todo` result in it *is* the list now; a batch that
     /// committed no `todo` result moves nothing, whatever was staged.
-    pub fn settle(self, blocks: &[MessageBlock]) -> TodoSettlement {
+    pub fn settle<'a>(
+        self,
+        blocks: impl IntoIterator<Item = &'a MessageBlock, IntoIter: DoubleEndedIterator>,
+    ) -> TodoSettlement {
         let list = self.list.clone();
         let mut state = list.state();
         // Releasing what this token holds, not claiming something that might
@@ -1104,12 +1107,13 @@ impl TodoBatch {
         // Canonical history is the authority: the list becomes exactly what
         // these committed blocks published, never whatever this batch
         // happened to stage.
-        let moved = if let Some(Ok(published)) = blocks.iter().rev().find_map(published_snapshot) {
-            state.committed = published;
-            true
-        } else {
-            false
-        };
+        let moved =
+            if let Some(Ok(published)) = blocks.into_iter().rev().find_map(published_snapshot) {
+                state.committed = published;
+                true
+            } else {
+                false
+            };
         drop(state);
         if moved {
             TodoSettlement::Installed
@@ -1952,7 +1956,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     }
 
@@ -2125,7 +2130,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             })]),
             TodoSettlement::Unchanged
         );
@@ -2475,7 +2481,7 @@ mod tests {
         let MessageBlock::Tool(tool) = &mut malformed else {
             panic!("a tool result");
         };
-        tool.result.content = vec![ToolResultContent::Json {
+        std::sync::Arc::make_mut(&mut tool.result).content = vec![ToolResultContent::Json {
             value: serde_json::json!({ "tasks": [{ "id": 1 }], "next_id": 2 }),
         }];
 
@@ -2497,9 +2503,10 @@ mod tests {
         let MessageBlock::Tool(tool) = &mut missing else {
             panic!("a tool result");
         };
-        tool.result.content = vec![ToolResultContent::Text(TextBlock {
-            text: "Created #1".to_owned(),
-        })];
+        std::sync::Arc::make_mut(&mut tool.result).content =
+            vec![ToolResultContent::Text(TextBlock {
+                text: "Created #1".to_owned(),
+            })];
         assert_eq!(
             ConversationTodoList::rebuilt(
                 ConversationId::new("conv_97f22362-c165-70d9-8ae7-6f04b44108e1"),
@@ -2534,7 +2541,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             })],
         )
         .expect("rebuild");

@@ -527,7 +527,7 @@ pub enum RuntimeEvent {
         /// Identity of the executed tool.
         tool_id: ToolId,
         /// The normalized execution result.
-        result: ToolExecutionResult,
+        result: std::sync::Arc<ToolExecutionResult>,
     },
     /// Tool execution failed without producing a result.
     ToolExecutionFailed {
@@ -1403,7 +1403,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let value = serde_json::to_value(event).expect("serialize event");
         assert_eq!(value["type"], "tool_execution_completed");
@@ -1604,7 +1605,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call_a.clone(),
@@ -1619,7 +1621,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
         ];
         let mut completed: Vec<(ToolCallId, u64)> = Vec::new();

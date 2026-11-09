@@ -237,7 +237,7 @@ fn commit_delivery(
                 occurrence: ToolCallOccurrenceRef::new(assistant, ContentBlockIndex::new(0)),
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id,
-                result,
+                result: result.into(),
             }),
             event(
                 "result",

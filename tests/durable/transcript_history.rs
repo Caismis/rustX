@@ -133,7 +133,8 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
                     locator: "/tmp/rx-0000000000000001/r-0000000000000001.txt".into(),
                 },
             )),
-        },
+        }
+        .into(),
     })
 }
 

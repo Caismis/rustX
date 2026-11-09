@@ -382,7 +382,7 @@ fn t08_t14_t19_event_probe_pruning_preserves_original_progress_sources_and_large
                 RuntimeEvent::ToolExecutionCompleted {
                     tool_call_id: call.id,
                     tool_id: call.tool_id,
-                    result: original_success_tool_result(),
+                    result: original_success_tool_result().into(),
                 },
             ))
             .unwrap();
@@ -1072,7 +1072,7 @@ fn inline_journal_sources_preserve_opaque_numbers_aliases_and_paginated_previews
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id,
                 tool_id: call.tool_id,
-                result,
+                result: result.into(),
             },
         ))
         .unwrap();

@@ -2908,7 +2908,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
         });
         assert_eq!(queue.queued(), 1, "the settlement evicted the live report");

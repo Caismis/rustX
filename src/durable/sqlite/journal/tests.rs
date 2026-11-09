@@ -357,7 +357,8 @@ fn resumed_agent_origin_survives_creation_call_compaction() {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             }),
         ])
         .unwrap();
@@ -1777,7 +1778,8 @@ fn issue136_cancellation_phases_survive_durable_reload() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     };
     let before_start = cancelled(

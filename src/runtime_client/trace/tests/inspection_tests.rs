@@ -497,7 +497,7 @@ fn t08_t14_t19_tool_inspection_keeps_c_without_j_and_old_cut_after_terminal() {
             occurrence: ToolCallOccurrenceRef::new(proposal, ContentBlockIndex::new(0)),
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         }))
         .unwrap();
     let after = TraceProjection::new(store.as_ref())
@@ -537,7 +537,7 @@ fn t08_t14_t19_tool_inspection_keeps_c_without_j_and_old_cut_after_terminal() {
         E::ToolExecutionCompleted {
             tool_call_id: call.id,
             tool_id: call.tool_id,
-            result: result.clone(),
+            result: result.clone().into(),
         },
         5,
     );

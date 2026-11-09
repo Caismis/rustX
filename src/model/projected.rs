@@ -106,7 +106,7 @@ impl From<&MessageBlock> for ProjectedMessage {
             MessageBlock::Tool(m) => Self::Tool {
                 tool_call_id: m.tool_call_id.clone(),
                 tool_id: m.tool_id.clone(),
-                result: m.result.clone(),
+                result: m.result.as_ref().clone(),
             },
         }
     }

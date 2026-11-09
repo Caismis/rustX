@@ -65,6 +65,22 @@ impl From<SurfaceError> for ConversationError {
     }
 }
 
+/// An owned canonical batch validated against the same conversation head.
+pub(crate) struct PreparedCanonicalBatch(Vec<MessageBlock>);
+
+impl PreparedCanonicalBatch {
+    pub(crate) fn messages(&self) -> &[MessageBlock] {
+        &self.0
+    }
+
+    pub(crate) fn into_commits(self) -> impl Iterator<Item = PreparedCanonicalCommit> {
+        self.0.into_iter().map(|message| PreparedCanonicalCommit {
+            id: message.id().clone(),
+            message,
+        })
+    }
+}
+
 /// A validated, not-yet-installed canonical commit.
 ///
 /// Produced by [`ConversationState::prepare_commit`] after every fallible
@@ -341,17 +357,18 @@ impl ConversationState {
         Ok(self.install_prepared(prepared))
     }
 
-    fn validate_commit(&self, message: &MessageBlock) -> Result<MessageId, ConversationError> {
-        let id = message_id_of(message);
-        if self.surface.is_active(&id) {
-            return Err(ConversationError::Surface(SurfaceError::AlreadyActive(id)));
-        }
-        if self.ledger.contains(&id) {
-            return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
-                id,
+    fn validate_commit(&self, id: &MessageId) -> Result<(), ConversationError> {
+        if self.surface.is_active(id) {
+            return Err(ConversationError::Surface(SurfaceError::AlreadyActive(
+                id.clone(),
             )));
         }
-        Ok(id)
+        if self.ledger.contains(id) {
+            return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
+                id.clone(),
+            )));
+        }
+        Ok(())
     }
 
     /// Validates that `message` can be committed without mutating anything,
@@ -373,9 +390,10 @@ impl ConversationState {
         &self,
         message: &MessageBlock,
     ) -> Result<PreparedCanonicalCommit, ConversationError> {
-        let id = self.validate_commit(message)?;
+        let id = message.id();
+        self.validate_commit(id)?;
         Ok(PreparedCanonicalCommit {
-            id,
+            id: id.clone(),
             message: message.clone(),
         })
     }
@@ -385,8 +403,25 @@ impl ConversationState {
         &self,
         message: MessageBlock,
     ) -> Result<PreparedCanonicalCommit, ConversationError> {
-        let id = self.validate_commit(&message)?;
+        self.validate_commit(message.id())?;
+        let id = message.id().clone();
         Ok(PreparedCanonicalCommit { id, message })
+    }
+
+    pub(crate) fn prepare_owned_batch(
+        &self,
+        messages: Vec<MessageBlock>,
+    ) -> Result<PreparedCanonicalBatch, ConversationError> {
+        let mut ids = std::collections::HashSet::with_capacity(messages.len());
+        for message in &messages {
+            self.validate_commit(message.id())?;
+            if !ids.insert(message.id()) {
+                return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
+                    message.id().clone(),
+                )));
+            }
+        }
+        Ok(PreparedCanonicalBatch(messages))
     }
 
     /// Installs a commit whose exact message was already validated by

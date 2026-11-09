@@ -155,7 +155,7 @@ mod tests {
         let MessageBlock::Tool(tool) = &mut messages[3] else {
             unreachable!()
         };
-        tool.result
+        std::sync::Arc::make_mut(&mut tool.result)
             .content
             .push(crate::tools::types::ToolResultContent::Image(image));
         assert_eq!(
