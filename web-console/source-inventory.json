@@ -4088,7 +4088,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "8c4c31f2d1c4bd946f88127e4844fe71eca6c281b4a0311504135b52907021a0"
+      "local_sha256": "e900733345ff9276760ad10e8cf122ee6c211990834ec86436fa5a838b47f8c0"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

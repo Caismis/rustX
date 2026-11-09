@@ -271,6 +271,14 @@ source and revision — or reveals `diverged`, which keeps its review semantics.
 Other units stay editable throughout, behind the target-wide submission
 barrier.
 
+When a read carries the exact revision returned by a successful local write,
+drafts of other units in that document can advance from the revision that
+write replaced. The native mutation address proves those units were untouched.
+This does not change the draft or authorize another write; an unproven revision
+change still requires review. Discard restores the currently observed value for
+the selected unit. Routine save progress stays on the action itself, without
+an inline success message.
+
 #### Discarding browser intent
 
 `DISCARD` abandons browser authoring intent and nothing else. What is

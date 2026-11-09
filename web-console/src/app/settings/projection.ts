@@ -259,18 +259,30 @@ export function effectiveStateLabel(tx: Translate, effective: EffectiveFacts): s
  * one submitted mutation.
  *
  * A mutation's authored payload may carry Provider credentials, MCP literal
- * environment values or literal headers. Settlement never needs any of them: it
- * needs only which native document the commit landed in, which is the mutation
- * *family* plus, for a named Agent resource, its identity. Deriving the selector
- * at submission time is what lets the transaction owner keep a submitted
- * mutation settleable without retaining its secret-bearing payload. */
+ * environment values or literal headers. The selector retains only the
+ * document and unit address, enough to settle a write and identify drafts
+ * of different units in the same document. */
 export type RevisionSelector =
-  | { kind: 'config' }
-  | { kind: 'mcp' }
+  | { kind: 'config'; unit?: Extract<SourceMutation, { kind: 'config' }>['mutation']['unit']; entry?: string }
+  | { kind: 'mcp'; entry: string }
   | { kind: 'agent'; name: string };
 export function revisionSelector(mutation: SourceMutation): RevisionSelector {
+  if (mutation.kind === 'config') {
+    const config = mutation.mutation;
+    return { kind: 'config', unit: config.unit, entry: 'id' in config ? config.id : 'name' in config ? config.name : undefined };
+  }
   return mutation.kind === 'agent' ? { kind: 'agent', name: mutation.name }
-    : mutation.kind === 'mcp' ? { kind: 'mcp' } : { kind: 'config' };
+    : mutation.kind === 'mcp' ? { kind: 'mcp', entry: mutation.id } : { kind: 'config' };
+}
+
+/** These mutations share a document revision but write different native units.
+ * A document repair or a new entry with no chosen identity proves no such
+ * separation within its own catalog. */
+export function separateUnitsInDocument(draft: RevisionSelector, written: RevisionSelector): boolean {
+  if (draft.kind === 'config' && written.kind === 'config' && draft.unit && written.unit) {
+    return draft.unit !== written.unit || (!!draft.entry && !!written.entry && draft.entry !== written.entry);
+  }
+  return draft.kind === 'mcp' && written.kind === 'mcp' && !!draft.entry && !!written.entry && draft.entry !== written.entry;
 }
 
 /** The exact revision this projection carries for the selected native document

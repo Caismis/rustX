@@ -301,6 +301,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
   const availability = useSelector(actor, snapshot => snapshot.context.connection !== 'connected' ? 'offline'
     : snapshot.context.readError ? 'failed' : !snapshot.context.observation ? 'loading' : undefined);
   const unavailable = availability !== undefined;
+  const saving = unit.busy || unit.awaitingObservation;
   const workspace = unit.scope === 'workspace';
   /** The unit's own card: the region that owns its in-flight mutation and
    * presents the outcome. A confirmed removal submits, which closes every
@@ -348,16 +349,11 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
       {unit.reviewNeeded && unit.outcome.kind !== 'conflict' && <div className={css.review}>
         <p role="status">{tx('settings:forms.changed-elsewhere')}</p>
       </div>}
-      {/* Two different facts, reported separately: the native write is
-          definitively committed, and the authoritative reread that settles it
-          has been observed. Neither is ever presented as the other. Both sit
-          above the actions, which close the card. */}
-      {unit.awaitingObservation && <p role="status">{tx('settings:forms.saved-refreshing')}</p>}
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       {presentation === 'dialog' && removal && <div className={css.unitRemoval}>{removal}</div>}
       </div>
       <div className={css.actions}>
-        <Button variant="primary" type="submit" aria-label={`${tx('settings:bridge.save')} ${title}`} disabled={!unit.draft || !unit.admitted}>{tx('settings:bridge.save')}</Button>
+        <Button variant="primary" type="submit" aria-label={`${tx('settings:bridge.save')} ${title}`} aria-busy={saving} disabled={!unit.draft || !unit.admitted}>{tx(saving ? 'settings:catalog.saving' : 'settings:bridge.save')}</Button>
         {/* Authoring an absent unit is always an explicit gesture, never
             something rendering it does. For a Workspace it is an override of
             the inherited value; for User it starts this scope's own authored
@@ -394,17 +390,10 @@ export function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
   </>;
 }
 
-/** One native semantic unit's own outcome, named so it can never be read as a
- * neighbouring unit's. A definition that committed and a permission that
- * conflicted are reported separately, because they are two native mutations. */
+/** Only outcomes that need attention occupy space in the editor. */
 export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: MutationOutcome }) {
   const tx = useTranslation();
   switch (outcome.kind) {
-    // A commit whose authoritative reread is still owed is announced by the
-    // line above; it is not yet an observed settlement, so it is not repeated
-    // here as one.
-    case 'submitting': case 'committed': return null;
-    case 'saved': return <p role="status">{title} {tx('settings:bridge.saved-native-coordination-owns-application')}</p>;
     case 'conflict': return <p role="alert" className={css.error}>{title} {tx('settings:bridge.was-not-saved-the-source-changed-your-draft-and-base-revision-ar')}</p>;
     case 'rejected': return <p role="alert" className={css.error}>{title} {tx('settings:bridge.was-not-saved')}{' '}{outcome.detail}</p>;
     case 'uncertain': return <p role="alert" className={css.error}>{tx('settings:bridge.the-outcome-of-saving')}{' '}{title} {tx('settings:bridge.is-unknown-authority-is-reread-the-write-is-never-replayed-revie')}</p>;

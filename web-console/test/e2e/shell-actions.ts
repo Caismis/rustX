@@ -1,6 +1,12 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import type { AttachmentTarget } from '../../../protocol/app-server/v77';
 import type { wireProbe } from './wire-probe';
+
+/** A dirty editor's save has settled when its button is idle and disabled. */
+export function settledSave(scope: Page | Locator, title: string) {
+  return scope.getByRole('button', { name: `Save ${title}`, exact: true })
+    .and(scope.locator('button[aria-busy="false"]:disabled'));
+}
 export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('button', { name: 'View options', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Close view', exact: true }).hover();

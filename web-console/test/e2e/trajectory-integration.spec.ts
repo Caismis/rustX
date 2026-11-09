@@ -1,3 +1,4 @@
+import { settledSave } from './shell-actions';
 import{domainOriginalValue}from '../../../protocol/app-server/domain-observation';
 import { followRoot, readApplication, readEffective, readSource } from './source-reading';
 import { expect, test } from '@playwright/test';
@@ -58,14 +59,14 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     await openSettingsPage(page, 'Agent');
     await settings.getByLabel('Instructions', { exact: true }).fill('TRACE_NEW_INSTRUCTIONS');
     await settings.getByRole('button', { name: 'Save Instructions', exact: true }).click();
-    await expect(settings.getByText('Instructions saved.')).toBeVisible();
+    await expect(settledSave(settings, 'Instructions')).toBeVisible();
     await returnHome(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
     await openSettingsPage(page, 'Tools & Permissions');
     await settings.getByLabel('read', { exact: true }).uncheck();
     await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
-    await expect(settings.getByText('Built-in tools saved.')).toBeVisible();
+    await expect(settledSave(settings, 'Built-in tools')).toBeVisible();
     const source = await readSource(remote,{kind:'user'});
     const workspaceA = (await f.workspaceHost.host.listWorkspaces()).workspaces.find(workspace => workspace.displayName === 'Workspace A')!;
     const workspaceSource = await f.workspaceHost.host.configureWorkspace(workspaceA.id, f.endpoint, { kind: 'read' });

@@ -1,3 +1,4 @@
+import { settledSave } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
@@ -34,7 +35,7 @@ for (const width of [1440, 390]) test(`provider single-click navigation and work
     await second.getByLabel('Base URL', {exact:true}).fill(`${fixture.providerUrl}/v1`);
     await second.getByLabel('API Key', {exact:true}).fill('fixture-only');
     await second.getByRole('button', {name:'Save Provider second',exact:true}).click();
-    await expect(second.getByRole('status')).toHaveText('Provider second saved.');
+    await expect(settledSave(second, 'Provider second')).toBeVisible();
     await expect(second.getByRole('button', {name:'Save Provider second',exact:true})).toBeDisabled();
     // Every transition below is one mouse click, including returning to the first provider.
     await settings.getByRole('row', {name:'fixture',exact:true}).click();

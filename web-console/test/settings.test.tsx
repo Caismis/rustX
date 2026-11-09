@@ -1,3 +1,4 @@
+import { waitForSettingsSave } from './settings-harness';
 import {openResourceModule} from './settings-harness';
 import { settingsContext } from './settings-harness';
 import { observedRevision } from './settings-harness';
@@ -201,7 +202,7 @@ it('saves a whole Workspace Provider with explicit credentials without copying U
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   await chooseOption('API format', 'OpenAI Responses (/v1/responses)');
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
-  await screen.findByText(/Provider transport saved/);
+  await waitForSettingsSave();
   expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
   expect(screen.queryByRole('button', { name: /Adopt/ })).toBeNull();
 });
@@ -291,7 +292,7 @@ it('replaces against the newer revision only after an explicit review gesture', 
   fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Use latest setting' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
-  await screen.findByText(/Built-in tools saved/);
+  await waitForSettingsSave();
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')[1][0]).toMatchObject({ params: { expected_revision: 'reviewed', mutation: { mutation: { authored: ['read'] } } } });
 });
 
@@ -392,7 +393,7 @@ it('removes literal credentials from a successful Provider draft using the redac
   fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
   fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
-  await screen.findByText(/Provider secret saved/);
+  await waitForSettingsSave();
   await waitFor(() => expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe(''));
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
   fireEvent.click(screen.getByRole('button', { name: '← Models' }));
@@ -423,7 +424,7 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
   for (const enabled of [false, true]) {
     fireEvent.click(nativeSchema());
     fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
-    await screen.findByText(/Model main saved/);
+    await waitForSettingsSave();
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Model main' })).getByRole('button', { name: 'Close' }));
     fireEvent.click(screen.getByRole('button', { name: '← Models' }));
     const reads = subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead').length;
@@ -523,7 +524,7 @@ it.each([
   } else {
     fireEvent.click(screen.getByLabelText('read'));
     fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
-    await screen.findByText(/Built-in tools saved/);
+    await waitForSettingsSave();
     await openSettingsPage('Advanced');
   }
   const revision = successor === 'refresh' ? 'new-authority' : 'saved-2';
@@ -650,7 +651,7 @@ it('keeps a confirmed Workspace save when the post-write authoritative reread fa
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
   // The commit is reported as saved, and the failed reread is a separate fact.
-  await screen.findByText(/Built-in tools saved/);
+  await waitForSettingsSave();
   await screen.findByText(/Saved, but the authoritative reread failed/);
   expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1);
   // A failed reread never turns the confirmed write back into an unsaved draft:

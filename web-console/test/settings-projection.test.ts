@@ -240,10 +240,10 @@ it('S1-14 a revision selector names the settling native document without any aut
   const mcp: SourceMutation = { kind: 'mcp', id: 'search', authored: { definition: { type: 'stdio', command: 'search', env: { TOKEN: 'SECRET_SENTINEL' } } } };
   const agent: SourceMutation = { kind: 'agent', name: 'reviewer', authored: { instructions: 'Inspect' } };
   const repair: SourceMutation = { kind: 'repair_config', document: '[agent]\n' };
-  // Only the family, and for a named resource its identity, is retained.
-  expect(revisionSelector(literal)).toEqual({ kind: 'config' });
+  // Only the document and the unit's address are retained.
+  expect(revisionSelector(literal)).toEqual({ kind: 'config', unit: 'provider', entry: 'secret' });
   expect(revisionSelector(repair)).toEqual({ kind: 'config' });
-  expect(revisionSelector(mcp)).toEqual({ kind: 'mcp' });
+  expect(revisionSelector(mcp)).toEqual({ kind: 'mcp', entry: 'search' });
   expect(revisionSelector(agent)).toEqual({ kind: 'agent', name: 'reviewer' });
   for (const mutation of [literal, mcp, agent]) expect(JSON.stringify(revisionSelector(mutation))).not.toContain('SECRET_SENTINEL');
   // Each selector resolves the exact revision of its own native document, in

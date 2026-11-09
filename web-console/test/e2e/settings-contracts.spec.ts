@@ -1,4 +1,4 @@
-import {openResourceModule} from './shell-actions';
+import {openResourceModule, settledSave } from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
@@ -53,7 +53,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       const form = surface.getByRole('form', { name: title, exact: true });
       const save = async () => {
         await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
-        await expect(surface.getByText(`${title} saved.`)).toBeVisible();
+        await expect(settledSave(surface, title)).toBeVisible();
       };
       await choose(form, `${auxiliary} model`, 'summary-b');
       if (owner === 'Agent') {

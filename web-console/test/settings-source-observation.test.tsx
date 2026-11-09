@@ -1,3 +1,4 @@
+import { waitForSettingsSave, settingsOutcome } from './settings-harness';
 import {openResourceModule} from './settings-harness';
 import { settingsContext } from './settings-harness';
 import {applicationReceipt} from './fixture';
@@ -108,7 +109,7 @@ it('S1 a newer applied notification preceding an older preparing acknowledgement
   // Save success settles only after the post-commit authoritative read lands.
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeGreaterThan(2));
   await settleReads(s);
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   await expectApplied();
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
 });
@@ -139,7 +140,7 @@ it('S3 an accepted newer application observation is not regressed by a late ackn
   await deliver(s, write);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeGreaterThan(2));
   await settleReads(s, 2);
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   expect(bindings().max_connections).toBe(19);
   expect(acceptedProjection().application?.units.process_bindings?.status).toBe('applied');
 });
@@ -150,7 +151,7 @@ it('S4 the acknowledgement-first order converges under the same observation mode
   await deliver(s, write);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   await settleReads(s);
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   await publish(s, native.applied('2', 'applied'));
   await expectApplied();
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
@@ -200,7 +201,7 @@ it('S6 a publication arriving during an outstanding convergence read still drive
   await deliver(s, r2);
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(3));
   await settleReads(s, 2);
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   await expectApplied();
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
@@ -235,7 +236,7 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   // post-commit authoritative read owed by that commit.
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(3));
   await settleReads(s, 2);
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   expect(observedRevision('user-3')).toBeTruthy();
   expect((agentPage().getByRole('textbox', { name: 'Description' }) as HTMLInputElement).value).toBe('revision C');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
@@ -266,7 +267,7 @@ it('S8 a write acknowledgement cannot cancel an outstanding newer-authority read
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(3));
   await deliver(s, read);
   await settleReads(s, 2);
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   await expectApplied();
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1);
   expect(sent(s, 'configuration/sourcesRead').length).toBe(3);
@@ -354,7 +355,7 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   await deliver(s, write);
   expect(observedRevision('user-2')).toBeNull();
   expect(observedRevision('ws-1')).toBeTruthy();
-  expect(screen.queryByText(/saved\./)).toBeNull();
+  expect(settingsOutcome().kind).not.toBe('saved');
   expect(sent(s, 'configuration/sourcesRead').length).toBe(reads);
   // The replacement lifetime still converges on its own publications.
   workspaceApplication = { ...native.applied('2', 'applied'), scope: 'source:workspace:/workspace/A' };
@@ -400,7 +401,7 @@ it('S11 a superseded convergence worker transfers a publication that arrived beh
   // the transferred obligation is discharged by exactly one new authoritative
   // read instead of waiting for a response no owner is left for.
   await deliver(s, r2);
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   diagnostics();
   expect(acceptedProjection().application?.version).toBe('2');
   expect(acceptedProjection().application?.units.process_bindings?.status).not.toBe('applied');
@@ -476,7 +477,7 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
   await waitForSettingsRevision('ws-C');
   // Step: release the held response carrying the equal-version reread B.
   releaseWrite();
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   // The newer accepted projection C is never regressed by the late, stale B.
   expect(observedRevision('ws-C')).toBeTruthy();
   expect(observedRevision('ws-B')).toBeNull();
@@ -571,7 +572,7 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   // The commit is definitive, but the saved notice is truthful only against the
   // projection this presentation is actually showing, so it waits for the read
   // that owns the read sequence instead of racing it with a redundant one.
-  expect(screen.queryByText(/saved\./)).toBeNull();
+  expect(settingsOutcome().kind).not.toBe('saved');
   expect(screen.queryByRole('alert')).toBeNull();
   expect(sent(s, 'configuration/sourcesRead')).toHaveLength(3);
   // Step 8: reject N+1.
@@ -581,7 +582,7 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
   // owns the read sequence — and the definitive commit is still reported saved.
   await screen.findByText(/Could not load settings/);
   expect(screen.getByText(/authoritative read unavailable/)).toBeTruthy();
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   // Step 10: the older B projection never became authoritative presentation.
   expect(observedRevision('ws-B')).toBeNull();
   expect(observedRevision('ws-A')).toBeTruthy();
@@ -636,13 +637,13 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
   expect(screen.queryByRole('alert')).toBeNull();
   // The superseded reread is silent in both directions: it publishes no read
   // failure, and it settles no saved notice. The newer initiated read owns both.
-  expect(screen.queryByText(/saved\./)).toBeNull();
+  expect(settingsOutcome().kind).not.toBe('saved');
   // The newer authoritative read settles and owns the presentation; the
   // definitive commit is then reported saved against the revision that read
   // actually carries.
   s.held.delete('configuration/sourcesRead');
   await settleReads(s, 1);
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   expect(screen.queryByText(/Saved, but the authoritative reread failed/)).toBeNull();
   await waitFor(() => expect(observedRevision('ws-B')).toBeTruthy());
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeLessThanOrEqual(4));

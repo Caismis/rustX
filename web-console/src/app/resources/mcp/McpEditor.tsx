@@ -138,14 +138,13 @@ function Editor({ source,scope,revision,focus, scopeControl, close, document }: 
         </fieldset>}
         {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button type="button" onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
         {unit.reviewNeeded && <div className={css.notice}><p role="status">{tx('settings:mcp.review')}</p><Button onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
-        {unit.awaitingObservation && <p role="status">{tx('settings:forms.saved-refreshing')}</p>}
         <UnitOutcomeNotice title={identityTitle} outcome={unit.outcome}/>
         {error && mode !== 'json' && <p role="alert" className={css.error}>{tx('settings:mcp.invalid-json',{error})}</p>}
       </fieldset>
       <div className={css.footer}>
         {focus.name && unit.authoredPresent && <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')} title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})} description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')} confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={blocked || !unit.admitted} onConfirm={() => {submitted.current=true;unit.submit(true);}}/></span>}
         <div className={css.footerButtons}>
-          <Button variant="primary" type="submit" disabled={!canSave}>{tx('settings:mcp.save')}</Button>
+          <Button variant="primary" type="submit" aria-label={tx('settings:mcp.save')} aria-busy={blocked} disabled={!canSave}>{tx(blocked ? 'settings:catalog.saving' : 'settings:mcp.save')}</Button>
           {unit.intent && <Button type="button" disabled={blocked} onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
           <Button type="button" disabled={blocked} onClick={() => {if (!duplicate) unit.discard();close();}}>{tx('settings:mcp.cancel')}</Button>
         </div>

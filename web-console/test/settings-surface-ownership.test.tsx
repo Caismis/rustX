@@ -1,3 +1,4 @@
+import { waitForSettingsSave } from './settings-harness';
 import {changeJson} from './json-editor-helpers';
 import {openResourceModule} from './settings-harness';
 import { sourceReceipt } from './fixture';
@@ -289,7 +290,7 @@ it('S1-07 a committed save followed by a failed reread is saved plus uncertain, 
   fireEvent.click(screen.getByLabelText('read'));
   failReads = true;
   fireEvent.click(screen.getByRole('button', { name: 'Save Built-in tools' }));
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   expect(screen.getByText(/Could not load settings/)).toBeTruthy();
   expect(document.querySelector('[data-lifecycle=stale]')).toBeTruthy();
   // Exactly one write: the committed mutation is never replayed or presented as unsaved.
@@ -437,7 +438,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   // The write commits and native acknowledges it; the post-write authoritative
   // reread fails, so the transaction cannot settle yet.
-  await screen.findByText(/saved\./);
+  await waitForSettingsSave();
   await screen.findAllByText(/Saved, but the authoritative reread failed/);
   expect(writes(s)).toHaveLength(1);
   // Navigating away unmounts the editor; the store survives, and it must no
@@ -738,7 +739,7 @@ it('S1-35 while one unit owns the target mutation barrier every other unit stays
   expect(submitted).toHaveBeenCalledTimes(1);
   // The commit is acknowledged; its post-commit read is still outstanding.
   await act(async () => { write.resolve({ acknowledgement: sourceReceipt(committed) }); });
-  await screen.findByText('Saved. Refreshing settings…');
+  await waitFor(() => expect(tools.getByRole('button', { name: 'Save Tools' }).getAttribute('aria-busy')).toBe('true'));
   expect(saveStatus().disabled).toBe(true);
   expect(statusInput.disabled).toBe(false);
   // The authoritative post-commit observation releases the barrier in place:

@@ -1,5 +1,5 @@
 import { readSource } from './source-reading';
-import { openEmptySession } from './shell-actions';
+import { openEmptySession, settledSave } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
@@ -23,7 +23,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
    await settings.getByLabel('Reserved tokens', { exact: true }).fill('19');
    await settings.getByRole('button', { name: 'Save Context', exact: true }).click();
-   await expect(settings.getByText('Context saved.')).toBeVisible();
+   await expect(settledSave(settings, 'Context')).toBeVisible();
    const source = await readSource(remote,{kind:'user'});
    expect(source.user.authored?.context?.reserve_tokens).toBe('19');
    expect(source.workspace).toBeNull();
@@ -51,7 +51,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
    await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
-   await expect(settings.getByText('Built-in tools saved.')).toBeVisible();
+   await expect(settledSave(settings, 'Built-in tools')).toBeVisible();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
    if (authored.kind !== 'read') throw new Error('expected a read outcome');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');

@@ -1,3 +1,4 @@
+import { waitForSettingsSave } from './settings-harness';
 import {openResourceModule} from './settings-harness';
 import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
@@ -108,7 +109,7 @@ it('S2-03 saving the default model writes the root_model source unit and sends n
   fireEvent.click(within(form).getByRole('button', { name: 'Save Default model' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ target: { kind: 'user' }, mutation: { kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main' } } } });
-  await screen.findByText(/Default model saved/);
+  await waitForSettingsSave();
   // Only source reads and the one source write: no Session model selection,
   // adoption or effective-configuration request is ever issued.
   expect(methods(s).slice(before).every(method => method === 'configuration/sourceWrite' || method === 'configuration/sourcesRead')).toBe(true);
@@ -358,7 +359,7 @@ it('S2-06 a rejected definition and a saved selection are reported as two outcom
   // The rejected definition keeps its draft.
   expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('search-server-2');
   fireEvent.click(screen.getByRole('button', { name: 'Save Tools: search' }));
-  await screen.findByText(/Tools: search saved/);
+  await waitForSettingsSave();
   // The selection's success is not the definition's: the definition is still
   // unsaved, still holds its draft and can still be submitted on its own.
   expect(screen.queryByText(/MCP search saved/)).toBeNull();
@@ -848,6 +849,7 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
     if (op.method === 'configuration/sourceWrite') {
       const { mutation } = op.params.mutation as Extract<Write['params']['mutation'], { kind: 'config' }>;
       if (mutation.unit === 'model') source.user.authored!.models![mutation.id] = mutation.authored!;
+      if (mutation.unit === 'provider') source.user.authored!.providers![mutation.id].base_url = mutation.authored!.base_url;
       source.user.revision = `user-${++revision}`;
       reread = deferred<void>();
       return {type:'sources_written',revision:sourceReceipt(structuredClone(source)).revision,configuration_revision:null};
@@ -868,7 +870,7 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params.expected_revision).toBe('user-1');
   expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...fullModel(), id: 'wire-new' } } });
-  await screen.findByText('Saved. Refreshing settings…');
+  await waitFor(() => expect(save('Model main').getAttribute('aria-busy')).toBe('true'));
   // The post-commit read is outstanding: the presentation still holds the
   // pre-commit Model, and it is no base for a new draft of the same unit.
   expect(wire().value).toBe('wire');
@@ -888,6 +890,7 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   // The authoritative observation of the committed Model releases both.
   await act(async () => reread!.resolve());
   await waitFor(() => expect(save('Provider transport').disabled).toBe(false));
+  expect(screen.queryByRole('button', { name: 'Use latest setting' })).toBeNull();
   fireEvent.click(within(screen.getByRole('grid', { name: 'Models of Provider transport' })).getByRole('row', { name: 'main' }));
   await waitFor(() => expect(wire().value).toBe('wire-new'));
   expect(contextWindow().closest('fieldset')!.disabled).toBe(false);
@@ -900,6 +903,20 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   expect(writes(s)[1].params.mutation).toEqual({ kind: 'config', mutation: {
     unit: 'model', id: 'main', authored: { ...fullModel(), id: 'wire-new', context_window: '256000' },
   } });
+  await act(async () => reread!.resolve());
+  await waitForSettingsSave();
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://draft.invalid');
+  expect(screen.queryByRole('button', { name: 'Use latest setting' })).toBeNull();
+  fireEvent.click(save('Provider transport'));
+  await waitFor(() => expect(writes(s)).toHaveLength(3));
+  expect(writes(s)[2].params).toMatchObject({ expected_revision: 'user-3', mutation: {
+    kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://draft.invalid' } },
+  } });
+  await act(async () => reread!.resolve());
+  await waitForSettingsSave();
+  expect(save('Provider transport').disabled).toBe(true);
+  expect(screen.queryByText('Provider transport saved.')).toBeNull();
 });
 
 // ── S2-10 Deletion confirmation ─────────────────────────────────────────────

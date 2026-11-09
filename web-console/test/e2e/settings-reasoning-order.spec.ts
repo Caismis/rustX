@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { returnHome, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { returnHome, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings, settledSave } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -49,7 +49,7 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
     for (const id of ['high', 'low']) await expect(modal.getByRole('button', { name: `Profile ${id}`, exact: true })).toBeVisible();
     await modal.getByRole('button', { name: 'Move low up', exact: true }).click();
     await modal.getByRole('button', { name: 'Save Model b', exact: true }).click();
-    await expect(page.getByText('Model b saved.', { exact: true })).toBeVisible();
+    await expect(settledSave(page, 'Model b')).toBeVisible();
     expect(readFileSync(source, 'utf8')).toMatch(/\[models\.b\][\s\S]*?reasoning_profile_order = \[\s*"low",\s*"high",?\s*\]/s);
   } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });
@@ -93,7 +93,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     const ids = () => list.locator('li').evaluateAll(rows => rows.map(row => row.getAttribute('data-profile-order')));
     const save = async () => {
       await modal.getByRole('button', { name: 'Save Model ordered', exact: true }).click();
-      await expect(page.getByText('Model ordered saved.', { exact: true })).toBeVisible();
+      await expect(settledSave(page, 'Model ordered')).toBeVisible();
       await expect(modal.getByRole('button', { name: 'Save Model ordered', exact: true })).toBeDisabled();
     };
     await expect(modal.getByText('Not configured', { exact: true })).toBeVisible();

@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {startDogfood} from './dogfood-server';
 import {routeWorkspaceHost} from './workspace-host';
-import {confirmSettingsAction,connectRemote,openSettingsPage,returnHome} from './shell-actions';
+import {confirmSettingsAction,connectRemote,openSettingsPage,returnHome,settledSave} from './shell-actions';
 import {captureEvidence} from './screenshot';
 import {wireProbe} from './wire-probe';
 
@@ -90,7 +90,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await agents.getByLabel('Description',{exact:true}).fill('Reviews code');
   await agents.getByLabel('Instructions',{exact:true}).fill('Check the changes carefully.');
   await agents.getByRole('button',{name:'Save Agent auditor',exact:true}).click();
-  await expect(agents.getByText('Agent auditor saved.',{exact:true})).toBeVisible();
+  await expect(settledSave(agents, 'Agent auditor')).toBeVisible();
   expect(readFileSync(join(userRoot,'agents/auditor.toml'),'utf8')).toContain('Check the changes carefully.');
   await agents.getByRole('button',{name:'Back to list',exact:true}).click();
   await agents.getByRole('listitem',{name:'auditor',exact:true}).getByRole('switch').click();

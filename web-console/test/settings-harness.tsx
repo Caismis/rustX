@@ -5,7 +5,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../src/client/app-server';
 import { ConnectionController } from '../src/connection/controller';
 import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v77';
-import { settingsTargetMachine, type SettingsTargetContext } from '../src/app/settings/machines/settings-target';
+import { mutationOutcome, settingsTargetMachine, type SettingsTargetContext } from '../src/app/settings/machines/settings-target';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { SettingsActorContext } from '../src/app/settings/machines/react';
 import { SourceContext } from '../src/app/settings/source-context';
@@ -206,6 +206,13 @@ export function currentSettingsPage(): string {
 export function settingsContext() {
   if (!contractAuthority) throw new Error('No Settings surface mounted');
   return contractAuthority().getSnapshot().context;
+}
+export function settingsOutcome() {
+  if (!contractAuthority) throw new Error('No Settings surface mounted');
+  return mutationOutcome(contractAuthority().getSnapshot());
+}
+export async function waitForSettingsSave() {
+  await waitFor(() => expect(settingsOutcome().kind).toBe('saved'));
 }
 export function observedRevision(expected?: string) {
   const { observation, target } = settingsContext();

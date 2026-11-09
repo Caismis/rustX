@@ -557,7 +557,7 @@ it('R22 reopening with an unobserved commit coalesces validation and post-commit
   // The definitive commit lands while nothing is presented.
   scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
-  expect(actor.getSnapshot().context.unobservedSettlement).toEqual({ identity: toolsIdentity, selector: revisionSelector(toolsMutation), committed: true, revision: 'r2' });
+  expect(actor.getSnapshot().context.unobservedSettlement).toEqual({ identity: toolsIdentity, selector: revisionSelector(toolsMutation), committed: true, expected: 'r1', revision: 'r2' });
   actor.send({ type: 'ATTACH' });
   await flush();
   // The new attachment's validation and the commit's post-commit read are the
@@ -2568,7 +2568,7 @@ it('R35 a mutation natively submitting refuses every other unit, which keeps its
   expect(unitOf(actor, statusIdentity).getSnapshot().context.draft).toEqual({ value: { enabled: true } });
 });
 
-it('R35 a definitive commit awaiting its post-commit observation refuses a second unit fenced on the pre-commit revision', async () => {
+it.each(['r2', 'r-external'])('R35 only observing the exact sibling commit advances a draft (observed %s)', async revision => {
   const scripted = scriptedPort();
   const actor = settingsActor(scripted.port);
   await flush();
@@ -2589,18 +2589,20 @@ it('R35 a definitive commit awaiting its post-commit observation refuses a secon
   await flush();
   expect(scripted.writes).toHaveLength(1);
   expectStatusDraftIntact(actor);
-  // The authoritative post-commit observation at r2 releases the barrier.
-  scripted.reads[1].resolve(projection('r2'));
+  scripted.reads[1].resolve(projection(revision));
   await flush();
   expect(admitted(actor)).toBe(true);
-  // B's pinned base still names r1, which the source moved on from: its CAS
-  // is never silently rebased. The explicit review fences it on r2.
-  expect(requiresReview(unitOf(actor, statusIdentity).getSnapshot())).toBe(true);
-  actor.send({ type: 'UNIT.REVIEW', identity: statusIdentity });
-  submitStatus(actor, 'r2');
+  const draft = unitOf(actor, statusIdentity).getSnapshot();
+  expect(draft.context.draft).toEqual({ value: { enabled: true } });
+  expect(requiresReview(draft)).toBe(revision !== 'r2');
+  if (revision !== 'r2') {
+    expect(draft.context.base).toBe('r1');
+    actor.send({ type: 'UNIT.REVIEW', identity: statusIdentity });
+  }
+  submitStatus(actor, revision);
   await flush();
   expect(scripted.writes).toHaveLength(2);
-  expect(scripted.writes[1].expected).toBe('r2');
+  expect(scripted.writes[1].expected).toBe(revision);
   expect(scripted.writes[1].mutation).toEqual(statusMutation);
 });
 

@@ -1,5 +1,5 @@
 import { formatArguments } from '../../src/app/resources/mcp/form-values';
-import {openResourceModule,newSubagent} from './shell-actions';
+import {openResourceModule,newSubagent,settledSave} from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import {
@@ -86,7 +86,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.getByLabel('Instructions', { exact: true }).fill('Review the requested change and report concrete findings.');
     await settings.getByLabel('read', { exact: true }).check();
     await settings.getByRole('button', { name: 'Save Agent reviewer', exact: true }).click();
-    await expect(settings.getByText('Agent reviewer saved.')).toBeVisible();
+    await expect(settledSave(settings, 'Agent reviewer')).toBeVisible();
     await settings.getByRole('button', { name: 'Back to list', exact: true }).click();
     await settings.getByRole('listitem',{name:'reviewer',exact:true}).getByRole('button',{name:'reviewer',exact:true}).click();
     await expect(settings.getByLabel('Description',{exact:true})).toHaveValue('Independent review profile');

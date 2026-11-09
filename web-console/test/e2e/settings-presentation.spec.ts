@@ -9,7 +9,7 @@ const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { openResourceModule, returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
+import { openResourceModule, returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu, settledSave } from './shell-actions';
 
 const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
 const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
@@ -657,7 +657,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await expect(unit).toBeFocused();
   await releaseWrites(page);
   await expect.poll(writes).toBe(1);
-  await expect(unit.getByText('Agent name saved.')).toBeVisible();
+  await expect(settledSave(unit, 'Agent name')).toBeVisible();
   await expect(unit).toHaveAttribute('data-authored', 'absent');
   await expect(unit).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

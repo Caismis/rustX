@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openSettingsPage } from './shell-actions';
+import { connectRemote, openSettingsPage, settledSave } from './shell-actions';
 import { readSource } from './source-reading';
 
 /** Observe the real socket and hold selected server responses until the test
@@ -71,7 +71,7 @@ test('publications and an acknowledgement during outstanding convergence reads c
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     const field = settings.getByLabel('Reserved tokens', { exact: true });
     const save = settings.getByRole('button', { name: 'Save Context', exact: true });
-    const notice = settings.getByText('Context saved.');
+    const notice = settledSave(settings, 'Context');
     // Settle a save whose acknowledgement already landed: release held
     // authoritative reads one at a time until the post-commit read is adopted.
     // Each stale or superseded read may owe exactly one more bounded read.
@@ -154,7 +154,7 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     // The delayed acknowledgement settles only the save outcome. The visible
     // whole projection stays the authoritative one and nothing is replayed.
     probe.releaseWrites();
-    await expect(settings.getByText('Context saved.')).toBeVisible();
+    await expect(settledSave(settings, 'Context')).toBeVisible();
     await expect(timeout).toHaveValue('600001');
     expect(probe.writes()).toBe(1);
   } finally { await remote.shutdown(); await f.stop(false); }

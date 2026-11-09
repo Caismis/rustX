@@ -3,7 +3,7 @@ import type { ConfigurationApplication, SourceMutation, SourceSettings } from '.
 import { isOutcomeUncertain, RpcFailure } from '../../../client/errors';
 import type { ConnectionState } from '../../../client/contracts';
 import { WorkspaceHostError } from '../../../workspaces/host';
-import { applicationScope, selectedRevision, type RevisionSelector, type SettingsTarget } from '../projection';
+import { applicationScope, revisionSelector, selectedRevision, separateUnitsInDocument, type RevisionSelector, type SettingsTarget } from '../projection';
 import type { ConfigurationPort, WriteOutcome } from './port';
 import { unitTransactionMachine } from './unit-transaction';
 
@@ -91,7 +91,7 @@ export interface SettingsTargetContext {
    * observation of the commit. While it stands, the observation this target
    * holds is known to predate the settlement, so it admits no new source
    * mutation (see `admitsSourceMutation`). */
-  unobservedSettlement?: { identity: string; selector: RevisionSelector; committed: boolean; revision?: string };
+  unobservedSettlement?: { identity: string; selector: RevisionSelector; committed: boolean; revision?: string; expected?: string };
   /** The mutation in flight: its owning transaction, the token that identifies
    * it, its non-sensitive revision selector and the exact CAS revision it is
    * fenced on. Deliberately never the authored payload. */
@@ -457,14 +457,22 @@ export const settingsTargetMachine = setup({
       const projection = (event as unknown as { output?: SourceSettings; projection?: SourceSettings }).output
         ?? (event as unknown as { projection: SourceSettings }).projection;
       enqueue.assign({ observation: () => projection, readError: () => '', convergenceError: () => '', staleObservation: () => undefined });
+      const settlement = context.unobservedSettlement;
       for (const unit of Object.values(context.units)) {
-        const revision = unitRevision(projection, unit.getSnapshot().context.selector);
-        if (revision !== undefined) enqueue.sendTo(unit, { type: 'OBSERVED', revision, postCommit: params.postCommit });
+        const { identity, selector } = unit.getSnapshot().context;
+        const revision = unitRevision(projection, selector);
+        if (revision === undefined) continue;
+        // Exact CAS proved the entire transition from expected to revision.
+        // Only that observed commit can advance a draft of a different unit
+        // in the same document, without copying or comparing secret values.
+        const previousRevision = settlement?.committed && identity !== settlement.identity
+          && revision === settlement.revision && separateUnitsInDocument(selector, settlement.selector)
+          ? settlement.expected : undefined;
+        enqueue.sendTo(unit, { type: 'OBSERVED', revision, postCommit: params.postCommit, previousRevision });
       }
       // A read issued after a settlement discharges that settlement's
       // observation obligation, whatever revision it happens to carry: the
       // transaction's own settlement is the separate fact broadcast above.
-      const settlement = context.unobservedSettlement;
       if (settlement && (params.postCommit || (settlement.revision !== undefined && unitRevision(projection, settlement.selector) === settlement.revision))) {
         enqueue.assign({ unobservedSettlement: () => undefined });
         if (settlement.committed) enqueue.raise({ type: 'COMMIT.OBSERVED' });
@@ -528,7 +536,7 @@ export const settingsTargetMachine = setup({
         nextToken: () => token + 1,
         rejection: () => undefined,
         outcomeUnit: () => request.identity,
-        submission: () => ({ identity: request.identity, token, selector: request.selector, expected: unit.getSnapshot().context.base }),
+        submission: () => ({ identity: request.identity, token, selector: revisionSelector(request.mutation), expected: unit.getSnapshot().context.base }),
       });
       enqueue.sendTo(unit, { type: 'SUBMIT', token });
       enqueue.raise({ type: 'WRITE.STARTED' });
@@ -547,7 +555,7 @@ export const settingsTargetMachine = setup({
       const unit = context.units[submission.identity];
       if (unit && revision !== undefined) enqueue.sendTo(unit, { type: 'COMMITTED', token: submission.token, revision });
       enqueue.assign({
-        unobservedSettlement: () => ({ identity: submission.identity, selector: submission.selector, committed: true, revision }),
+        unobservedSettlement: () => ({ identity: submission.identity, selector: submission.selector, committed: true, revision, expected: submission.expected }),
         submission: () => undefined,
         rereadReservation: () => undefined,
       });

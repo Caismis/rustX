@@ -103,7 +103,7 @@ export type UnitTransactionEvent =
    * `postCommit` is true exactly when the read that produced it was issued after
    * every definitive commit the owning target has recorded, so it is evidence
    * about this unit's commit rather than about the source before it. */
-  | { type: 'OBSERVED'; revision: string; postCommit: boolean }
+  | { type: 'OBSERVED'; revision: string; postCommit: boolean; previousRevision?: string }
   /** Internal: a discard or a commit settlement has been answered by every
    * region; retire if the transaction now owns nothing. */
   | { type: 'RELEASE' };
@@ -140,6 +140,9 @@ export const unitTransactionMachine = setup({
      * observation or carries its divergence, so a pinned base is browser intent
      * rather than the committed revision of a commit. */
     noMutationObligation: and([not('inFlight'), not(stateIn({ mutation: 'acknowledged' }))]),
+    /** The target proved this local commit left our unit untouched. A draft
+     * already based on an older revision still needs its own review. */
+    continuesUnaffectedDraft: ({ context, event }) => event.type === 'OBSERVED' && event.previousRevision === context.base,
     /** No browser intent, no pinned base and no native commit whose
      * observation is still owed: the transaction owns nothing. */
     ownsNothing: and([stateIn({ intent: 'clean' }), stateIn({ base: 'following' }), 'noMutationObligation']),
@@ -218,14 +221,12 @@ export const unitTransactionMachine = setup({
         },
         pinned: {
           on: {
-            // A pinned base never advances on an observation alone. Only a
-            // confirmed commit, the explicit reviewed-revision gesture, or the
-            // observation that settles the commit of a transaction that
-            // authored nothing since moves it. The settling observation is the
-            // same event the `mutation` region settles on, so both regions
-            // answer it in one microstep, before `RELEASE` is evaluated.
+            // A pinned draft follows an unrelated local commit only when the
+            // target proved its exact revision transition. Otherwise native
+            // changes still require explicit review.
             OBSERVED: [
               { guard: and(['settlesCommit', 'nothingAuthored']), target: 'following', actions: ['recordObservation', 'followObservation'] },
+              { guard: and(['continuesUnaffectedDraft', 'noMutationObligation']), actions: ['recordObservation', 'followObservation'] },
               { actions: 'recordObservation' },
             ],
             REVIEW: { actions: ['reviewObservation', 'announceReset'] },

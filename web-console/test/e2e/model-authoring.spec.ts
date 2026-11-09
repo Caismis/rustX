@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { choose, connectRemote, openEmptySession, openSettingsPage } from './shell-actions';
+import { choose, connectRemote, openEmptySession, openSettingsPage, settledSave } from './shell-actions';
 import { captureEvidence } from './screenshot';
 import { wireProbe } from './wire-probe';
 
@@ -46,7 +46,7 @@ request_params = '{}'
     await limit.fill('2048');
     const save = modal.getByRole('button', {name:'Save Model OpenAI/gpt-6-luna',exact:true});
     await save.click();
-    await expect(modal.getByRole('status')).toHaveText('Model OpenAI/gpt-6-luna saved.');
+    await expect(settledSave(modal, 'Model OpenAI/gpt-6-luna')).toBeVisible();
     await expect(save).toBeDisabled();
     await expect(modal.getByRole('alert')).toHaveCount(0);
     const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
@@ -65,7 +65,7 @@ request_params = '{}'
     await limit.fill('');
     await save.click();
     await expect.poll(() => readFileSync(fixture.settings, 'utf8')).toContain('\"reasoning\":{\"effort\":\"high\"}');
-    await expect(modal.getByRole('status')).toHaveText('Model OpenAI/gpt-6-luna saved.');
+    await expect(settledSave(modal, 'Model OpenAI/gpt-6-luna')).toBeVisible();
     await expect(save).toBeDisabled();
     await expect(modal.getByRole('alert')).toHaveCount(0);
     expect(writes()).toHaveLength(2);

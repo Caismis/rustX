@@ -31,13 +31,12 @@ export function ResourceAvailability({ family, name, valid, source, scope, revis
   const names = Array.isArray(selection) ? selection : (source.prospective_resources?.definitions ?? []).filter(row => row.family === family && row.valid).map(row => row.name);
   const selected = selection === 'all' || (family === 'mcp' ? names.length > 0 : names.includes(name));
   const review = !!unit.draft || unit.reviewNeeded;
-  return <div className={css.availability}>
+  return <div className={css.availability} aria-busy={unit.busy || unit.awaitingObservation}>
     <Switch label={tx('settings:catalog.enable', { name })} checked={selected}
       disabled={review || !unit.writable || !unit.admitted || unit.busy || valid === false && !selected}
       onChange={enabled => unit.apply(family === 'mcp' ? enabled ? 'all' : [] : enabled ? [...new Set([...names, name])] : names.filter(item => item !== name))}/>
-    {(unit.busy || unit.awaitingObservation) && <span role="status" className={css.count}>{tx('settings:catalog.saving')}</span>}
     {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
     {unit.draft && !unit.busy && !unit.awaitingObservation && <Button size="sm" onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
-    {!['idle','saved'].includes(unit.outcome.kind) && <UnitOutcomeNotice title={name} outcome={unit.outcome}/>}
+    <UnitOutcomeNotice title={name} outcome={unit.outcome}/>
   </div>;
 }

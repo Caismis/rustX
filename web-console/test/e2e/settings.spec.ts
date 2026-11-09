@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { connectRemote, openSettingsPage, openWorkspaceSettings, settledSave } from './shell-actions';
 
 // Model/provider creation and shared API format have their own real-native
 // coverage in model-authoring.spec.ts. This flow covers the other settings.
@@ -16,7 +16,7 @@ test('Workspace settings save permissions and features, and keep configuration r
     await connectRemote(page, fixture.endpoint, fixture.token);
     await openWorkspaceSettings(page, 'Workspace A');
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    const saved = async (unit: string) => expect(settings.getByText(`${unit} saved.`, { exact: true })).toBeVisible();
+    const saved = async (unit: string) => expect(settledSave(settings, unit)).toBeVisible();
     await openSettingsPage(page, 'Agent');
     const instructions = settings.getByRole('form', { name: 'Instructions', exact: true });
     await instructions.getByLabel('Instructions', { exact: true }).fill('Follow the project conventions.');

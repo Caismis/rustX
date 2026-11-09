@@ -1,3 +1,4 @@
+import { settledSave } from './shell-actions';
 import { selectedSessionId, selectedTarget, selectedCheckpoint } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
 import { expandModelAuthoring } from './shell-actions';
@@ -62,13 +63,13 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     const defaultModel = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaultModel, 'Model', 'fixture/second-model');
     await defaultModel.getByRole('button', { name: 'Save Default model', exact: true }).click();
-    await expect(settings.getByText('Default model saved.')).toBeVisible();
+    await expect(settledSave(settings, 'Default model')).toBeVisible();
     await openSettingsPage(page, 'Advanced');
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await confirmSettingsAction(page, 'Use global default Default model');
-    await expect(settings.getByText('Default model saved.')).toBeVisible();
+    await expect(settledSave(settings, 'Default model')).toBeVisible();
     await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await openSession(idB); await send('Use B while A runs');
