@@ -1106,22 +1106,15 @@ impl ObservationStore for SqliteConversationStore {
         offset: u64,
         limit: usize,
     ) -> Result<crate::durable::observation::MessageBlockHeaderPage, ConversationStoreError> {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-        let result = observation::blocks_by_locator(
-            &transaction,
+        let connection = self.lock()?;
+        observation::blocks_by_locator(
+            &connection,
             &self.conversation_id,
             cut,
             locator,
             offset,
             limit,
-        )?;
-        transaction
-            .commit()
-            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-        Ok(result)
+        )
     }
     fn observation_tool_trace_sequence(
         &self,
