@@ -1,5 +1,6 @@
 //! Bounded encoding of finite native display values. Allocation depends only on
 //! the selected display budget, never on source size.
+use crate::bounded_json::encode_capped_bytes;
 #[cfg(test)]
 use crate::observation::capture::{record_capture_work, record_item_work};
 use serde::{Serialize, de::DeserializeOwned};
@@ -7,46 +8,6 @@ use serde::{Serialize, de::DeserializeOwned};
 pub const CHECKPOINT_TARGET_BYTES: usize = 786_432;
 pub const CHECKPOINT_PAGE_ITEMS: usize = 32;
 pub const CHECKPOINT_ITEM_BYTES: usize = 16_384;
-struct Buffer {
-    bytes: Vec<u8>,
-    limit: usize,
-}
-impl std::io::Write for Buffer {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
-            return Err(std::io::Error::other("bounded JSON encoding"));
-        }
-        let required = self.bytes.len() + bytes.len();
-        if required > self.bytes.capacity() {
-            let capacity = self
-                .bytes
-                .capacity()
-                .max(8)
-                .saturating_mul(2)
-                .max(required)
-                .min(self.limit);
-            self.bytes.reserve_exact(capacity - self.bytes.len());
-        }
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-/// Exact JSON encoding with a hard byte and buffer-capacity limit.
-pub(crate) fn encode_capped_bytes<T: Serialize + ?Sized>(
-    value: &T,
-    limit: usize,
-) -> serde_json::Result<Vec<u8>> {
-    let mut buffer = Buffer {
-        bytes: Vec::new(),
-        limit,
-    };
-    serde_json::to_writer(&mut buffer, value)?;
-    Ok(buffer.bytes)
-}
-
 struct Length {
     bytes: usize,
     limit: usize,

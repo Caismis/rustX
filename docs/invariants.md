@@ -49,7 +49,11 @@ Checkpoint descriptors are frozen under Projection synchronization, materialized
 off-lock at the same native cut, then validated within two attempts and one shared
 five-second deadline. Loaded bytes are caches. Native field/page ordinals, positive
 settlement heads and publication frontiers remain authority despite cache eviction
-(C1, N3). Native Journal readiness and direct-publication provenance index existing
+(C1, N3). A prepared metadata array can be shared by complete transitions and
+checkpoints. The arrays describe ordered immutable content. Each issued cut
+retains its own authority, source validation and replay admission, even when
+two publications share the same arrays. Clipping and enrichment that change
+the content detach before mutation. Native Journal readiness and direct-publication provenance index existing
 source facts; they create no second journal, client ACK registry or execution owner.
 Within a connection epoch, readiness retains only pending Journal and transcript
 positions. Releasing a native batch deletes its pending positions and unions its
@@ -494,6 +498,10 @@ refusal, missing required properties, unexpected properties, incomplete output
 and exceeded budgets cannot become a typed accepted result or business commit.
 Native rejection never causes a prompt-mode retry. Technical retries retain
 the exact prepared request, fingerprint, invocation and resource revision.
+The admitted native Call worker prepares one provider body before CallStart.
+Its ordinary retries share that body and the captured media. Every dispatch
+still requires its own confirmed RequestStart and one-shot grant. Workflow
+performs its bounded count-only validation before capacity admission.
 
 Manual maintenance keeps an actual native task join. Reply waiter loss does
 not release its native lifetime or lose the checked-out conversation. The
