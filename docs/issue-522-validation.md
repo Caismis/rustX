@@ -101,6 +101,8 @@ worker. Generated v73 schema/TypeScript, Protocol/Web/TUI typechecks, the Web
 translation audit, `cargo fmt --all -- --check` and strict
 `cargo clippy --locked --offline --all-targets --all-features -- -D warnings`
 also pass. Node typechecks use the declared locked dependencies.
+The production Web build, source/artifact provenance audits and production
+dependency notice audit also pass.
 
 Real HTTP conformance covers more than twelve accepted chunks, one authorized
 Native-to-Prompt downgrade, cross-Provider/Profile selection, repeated compaction

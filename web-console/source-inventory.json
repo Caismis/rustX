@@ -3324,7 +3324,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "127f2fa1d546224c9071a20810ebdf6e6c01d8b09df2bbb69713eb14f4fe8d13"
+      "local_sha256": "ad001ef87030d9250f4d471fa5460b633664b0acc8061f5c9b36d343f5e4e3f1"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3964,7 +3964,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "8f8425238c3fb7702c0f8dca63d24d72f9f52ec5beb000694ba1c12ec5e642c0"
+      "local_sha256": "35358e0de9de3f9f6b62c376fb0ecde78cb99b0226f94fc445fa546bd5ae72ef"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
