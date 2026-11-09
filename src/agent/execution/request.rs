@@ -88,10 +88,11 @@ pub(super) struct StagedModelTurn {
     /// The staged projection (over the scratch conversation that includes
     /// the not-yet-committed request-scoped context).
     projection: ContextProjection,
-    /// The staged Effective System Prompt.
-    effective_system_prompt: String,
-    /// Snapshot metadata; exact input is frozen only after final preflight.
-    snapshot: RequestSnapshot,
+    identity: RequestIdentity,
+    request_id: crate::runtime::identity::RequestId,
+    history_cut: crate::durable::projection::RequestHistoryCut,
+    carryover: Option<RenderedUnresolvedOutputCarryover>,
+    tool_associations: crate::model::occurrence::FrozenToolAssociations,
     /// The exact provider-neutral request of the staged projection.
     request: ModelRequest,
     /// Native selection root carried through the actual request mutations.
@@ -371,7 +372,7 @@ impl AgentExecution<'_> {
             self.perform_compaction(
                 must_cover.as_ref(),
                 fresh.as_ref(),
-                &staged.effective_system_prompt,
+                &staged.request.effective_system_prompt,
                 None,
                 &staged_context,
                 None,
@@ -697,58 +698,12 @@ impl AgentExecution<'_> {
         let retire_continuation = request
             .reconcile_continuation()
             .map_err(compatibility_failure)?;
-        let accepted = self.logical_step.accepted_context.as_ref().ok_or_else(|| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::Internal,
-                "model request built before context staging",
-            ))
-        })?;
-        let primary = self.request.model.primary();
-        let mut snapshot = RequestSnapshot::new(
-            RequestIdentity {
-                attempt_id: self.request.attempt_id.clone(),
-                turn: TurnId::new(self.turn.to_string()),
-                retry_number,
-            },
-            crate::context::resources::LedgerFrontier((projection.surface_revision).get()),
-            // `model_request_from_projection` may append request-scoped
-            // protocol feedback (for example, a rejected workflow_output).
-            // The snapshot must freeze the exact prompt sent to the provider,
-            // not the pre-feedback projection prompt, so durable
-            // reconstruction remains byte-for-byte identical on the next
-            // turn.
-            request.effective_system_prompt.clone(),
-            accepted.system_sections.clone(),
-            self.context_runtime.resource_revision,
-            request.invocation.clone(),
-            primary.context_window(),
-            primary.profile().cloned(),
-            request.tools.clone(),
-            self.capability.snapshot().revision(),
-            accepted.generation.clone(),
-            request.continuation.clone(),
-            staged_context
-                .iter()
-                .map(crate::conversation::message_id_of)
-                .collect(),
-        );
-        snapshot.history_cut = history.cut.clone();
-        if let Some(frozen_carryover) = self.logical_step.frozen_carryover.as_ref() {
-            snapshot.unresolved_output_carryover_source =
-                Some(frozen_carryover.full.source_stream_id.clone());
-            snapshot.unresolved_output_carryover = carryover;
-            snapshot
-                .unresolved_output_carryover_anchor
-                .clone_from(&frozen_carryover.anchor);
-        }
-        // Recovery stages no new Context: the first start already committed
-        // this logical step's accepted records. Retain their frozen receipts
-        // together with that input instead of treating an empty append delta
-        // as an empty contribution set.
-        snapshot.contributions = self.logical_step.current_input.as_ref().map_or_else(
-            || accepted.request_contributions(staged_context),
-            |input| input.snapshot.contributions.clone(),
-        );
+        let identity = RequestIdentity {
+            attempt_id: self.request.attempt_id.clone(),
+            turn: TurnId::new(self.turn.to_string()),
+            retry_number,
+        };
+        let request_id = identity.request_id();
         let inserted_at = request
             .messages
             .has_request_only()
@@ -759,9 +714,9 @@ impl AgentExecution<'_> {
                     .position(|message| matches!(message, ModelInputMessage::RequestOnly(_)))
             })
             .flatten();
-        snapshot.tool_associations = crate::model::occurrence::freeze_associations(
+        let tool_associations = crate::model::occurrence::freeze_associations(
             &history,
-            &snapshot.request_id,
+            &request_id,
             &request,
             inserted_at,
         )
@@ -784,8 +739,11 @@ impl AgentExecution<'_> {
             input_manifest,
             retire_continuation,
             projection,
-            effective_system_prompt: request.effective_system_prompt.clone(),
-            snapshot,
+            identity,
+            request_id,
+            history_cut: history.cut,
+            carryover,
+            tool_associations,
             request,
             estimated_input,
         })
@@ -795,10 +753,11 @@ impl AgentExecution<'_> {
     /// staged context block is validated against the canonical conversation
     /// state, so the post-commit installation is infallible (Issue #63,
     /// Finding 2). Nothing commits here.
+    #[allow(clippy::too_many_lines)] // Keep admission, snapshot freeze and handoff in one boundary.
     pub(super) fn finalize_model_turn(
         &mut self,
         staged_context: &[MessageBlock],
-        mut staged: StagedModelTurn,
+        staged: StagedModelTurn,
     ) -> Result<PreparedModelTurn, Terminal> {
         let soft_limit = self
             .context_runtime
@@ -811,12 +770,18 @@ impl AgentExecution<'_> {
                 "final frozen request exceeds the soft input limit",
             )));
         }
+        let accepted = self.logical_step.accepted_context.as_ref().ok_or_else(|| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::Internal,
+                "model request built before context staging",
+            ))
+        })?;
         // The single mandatory adapter-owned semantic admission boundary follows
         // all compaction/carryover/media transformations, before freeze and start.
         // Ordinary retries bypass finalization and reuse this validated input.
         #[cfg(feature = "issue-387-profile")]
         let adapter_preflight_profile = crate::model::adapter::profile::NativeScope::new(
-            staged.snapshot.request_id.as_str(),
+            staged.request_id.as_str(),
             staged.adapter_input_profile,
         );
         let protocol = staged.request.protocol();
@@ -830,21 +795,42 @@ impl AgentExecution<'_> {
             })?;
         #[cfg(feature = "issue-387-profile")]
         drop(adapter_preflight_profile);
-        let associations = std::mem::take(&mut staged.snapshot.tool_associations);
-        staged
-            .snapshot
-            .freeze_selected_input(
-                &self.request.conversation_id,
-                request.input(),
-                &staged.input_manifest,
-            )
-            .map_err(|error| {
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::CannotFit,
-                    error,
-                ))
-            })?;
-        staged.snapshot.tool_associations = associations;
+        let primary = self.request.model.primary();
+        let mut snapshot = RequestSnapshot::from_selected(
+            staged.identity,
+            crate::context::resources::LedgerFrontier(staged.projection.surface_revision.get()),
+            accepted.system_sections.clone(),
+            self.context_runtime.resource_revision,
+            primary.context_window(),
+            primary.profile().cloned(),
+            self.capability.snapshot().revision(),
+            accepted.generation.clone(),
+            staged_context
+                .iter()
+                .map(crate::conversation::message_id_of)
+                .collect(),
+            request.input(),
+            &staged.input_manifest,
+        )
+        .map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(ContextErrorKind::CannotFit, error))
+        })?;
+        debug_assert_eq!(snapshot.request_id, staged.request_id);
+        snapshot.history_cut = staged.history_cut;
+        snapshot.tool_associations = staged.tool_associations;
+        if let Some(frozen) = &self.logical_step.frozen_carryover {
+            snapshot.unresolved_output_carryover_source =
+                Some(frozen.full.source_stream_id.clone());
+            snapshot.unresolved_output_carryover = staged.carryover;
+            snapshot
+                .unresolved_output_carryover_anchor
+                .clone_from(&frozen.anchor);
+        }
+        // Recovery retains the first start's accepted Context receipts.
+        snapshot.contributions = self.logical_step.current_input.as_ref().map_or_else(
+            || accepted.request_contributions(staged_context),
+            |input| input.snapshot.contributions.clone(),
+        );
         if staged.retire_continuation {
             self.retire_continuation();
             self.measurements.withdraw();
@@ -875,7 +861,7 @@ impl AgentExecution<'_> {
             #[cfg(feature = "issue-387-profile")]
             adapter_input_profile: staged.adapter_input_profile,
             context,
-            snapshot: staged.snapshot,
+            snapshot,
             request,
             anchor,
             request_identity,

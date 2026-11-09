@@ -193,7 +193,8 @@ mod tests {
             crate::model::images::resolve(&first, |id| artifacts
                 .read_bounded(id)
                 .map_err(|e| e.to_string()))
-            .unwrap()[&crate::runtime::ArtifactId::new("artifact_1")],
+            .unwrap()[&crate::runtime::ArtifactId::new("artifact_1")]
+                .as_bytes(),
             bytes
         );
     }
@@ -211,12 +212,17 @@ mod tests {
             "",
         );
         request.messages = canonical_input(&[image(id.clone(), 0)]).into();
-        request.images.insert(id, png(1, 1));
+        request.images.insert(
+            id,
+            crate::model::images::FrozenImage::new(png(1, 1)).unwrap(),
+        );
         assert_eq!(
             estimator.estimate_model_input(&request.messages, "", &[]),
             u64::MAX
         );
+        crate::model::images::take_decodes();
         let frozen = estimator.estimate_frozen_request(&request);
+        assert_eq!(crate::model::images::take_decodes(), 0);
         assert!(frozen > 1_000 && frozen < u64::MAX);
     }
 }

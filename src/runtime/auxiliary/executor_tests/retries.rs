@@ -833,7 +833,7 @@ async fn retry_keeps_selected_occurrences_and_captured_media_after_source_mutati
         bytes.len()
     );
     let requests = adapter.requests.lock().unwrap();
-    assert_eq!(requests[1].images[&image_id], bytes);
+    assert_eq!(requests[1].images[&image_id].as_bytes(), bytes);
     assert_eq!(
         requests[1].messages.len(),
         2,

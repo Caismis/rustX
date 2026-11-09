@@ -197,11 +197,10 @@ impl Execution {
             use crate::context::tokens::{DefaultTokenEstimator, TokenEstimator};
             let input = DefaultTokenEstimator.estimate_frozen_request(&request);
             let image_tokens = crate::model::media::image_cost_input(&request.messages, |id| {
-                request.images.get(id).and_then(|bytes| {
-                    crate::model::images::measure_png(bytes)
-                        .ok()
-                        .map(crate::model::images::ImageMeasurement::input_tokens)
-                })
+                request
+                    .images
+                    .get(id)
+                    .and_then(crate::model::images::FrozenImage::input_tokens)
             });
             if input
                 .saturating_add(image_tokens)

@@ -48,7 +48,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 # Correctly rounded float parsing: authored request-parameter numbers must read
 # back as exactly the binary64 value that was written (and that JSON clients
 # print), or a native source round trip would silently move them.
-serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 # Compact private observation records; already locked transitively.
 rmp-serde = "1.3.1"
 thiserror = "2"

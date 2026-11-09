@@ -189,7 +189,7 @@ async fn managed_images_materialize_exact_clone_fork_branch_cuts() {
         })
         .unwrap();
         assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved.values().next().unwrap(), &bytes);
+        assert_eq!(resolved.values().next().unwrap().as_bytes(), bytes);
         assert_eq!(resolved.keys().next().unwrap().as_str(), "artifact_1");
         assert_eq!(
             ArtifactStore::archive_lengths(owner.root(), || Ok(()))
