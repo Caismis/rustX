@@ -366,3 +366,37 @@ fn completed_readiness_ranges_follow_direct_fragmentation_across_history_sizes()
         }
     }
 }
+
+#[test]
+fn rolled_back_direct_release_cannot_classify_a_reused_sequence() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let started = |label: &str| {
+        let attempt_id = AttemptId::new(label);
+        envelope(
+            store.conversation_id(),
+            label,
+            Some(attempt_id.clone()),
+            RuntimeEvent::AttemptStarted { attempt_id },
+        )
+    };
+    {
+        let connection = store.lock().unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        let temporary = persist_event_tx(
+            &store.conn.event_guard,
+            &transaction,
+            store.conversation_id(),
+            started("rolled-back-direct"),
+        ).unwrap();
+        assert_eq!(temporary.sequence, 1);
+        super::super::observation_readiness::mark_direct(&transaction, 1, 1).unwrap();
+        assert!(super::super::observation_event::witness(&transaction, 1, 1).unwrap().unwrap().native_direct);
+        transaction.rollback().unwrap();
+    }
+    let replacement = store.append_event(started("normal-replacement")).unwrap();
+    assert_eq!(replacement.sequence, 1);
+    assert!(!store.observation_event_witness(1, 1).unwrap().unwrap().native_direct);
+    store.mark_observation_ready(1, 1).unwrap();
+    assert!(!store.observation_event_witness(1, 1).unwrap().unwrap().native_direct);
+}

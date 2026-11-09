@@ -112,17 +112,19 @@ mod tests {
         )
     }
     fn inventory(store: &SqliteConversationStore) -> (i32, i32, i32, [u64; 3]) {
-        use rusqlite::ffi::{SQLITE_DBSTATUS_CACHE_USED, SQLITE_DBSTATUS_SCHEMA_USED};
         use rusqlite::ffi::SQLITE_DBSTATUS_STMT_USED;
+        use rusqlite::ffi::{SQLITE_DBSTATUS_CACHE_USED, SQLITE_DBSTATUS_SCHEMA_USED};
         let slot = store.conn.available.lock().unwrap();
         let connection = slot.connection.as_ref().unwrap();
-        let temp = connection.query_row(
-            "SELECT (SELECT count(*) FROM temp.event_observation_readiness),
+        let temp = connection
+            .query_row(
+                "SELECT (SELECT count(*) FROM temp.event_observation_readiness),
                     (SELECT count(*) FROM temp.transcript_observation_readiness),
                     (SELECT count(*) FROM temp.event_observation_direct)",
-            [],
-            |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?]),
-        ).unwrap();
+                [],
+                |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?]),
+            )
+            .unwrap();
         (
             memory(connection, SQLITE_DBSTATUS_CACHE_USED),
             memory(connection, SQLITE_DBSTATUS_STMT_USED),
