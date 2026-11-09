@@ -53,7 +53,9 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     };
     const openMcp = async () => {
       if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
-      await openResourceModule(page,'mcp','Global');
+      // A retained editor hides the scope tabs. Return to the catalog before
+      // selecting its scope, preserving the editor's transaction on the way.
+      await openResourceModule(page,'mcp');
       await expect(mcp.locator('[data-mcp-page]')).toBeVisible();
       const back = mcp.getByRole('button', { name: '← MCP servers', exact: true });
       const create = mcp.getByRole('button', { name: '＋ New MCP server', exact: true });
@@ -61,13 +63,14 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       // Wait for its actual surface before deciding whether to return to the list.
       await expect(back.or(create).first()).toBeVisible();
       if (await back.isVisible()) { await back.click(); await expect(back).toHaveCount(0); }
+      await mcp.getByRole('tab', { name: 'Global', exact: true }).click();
       await expect(create).toBeVisible();
     };
     await openModel('open');
     await model.getByLabel('Context window').fill('250000');
     appendFileSync(fixture.settings, '\n# external revision before save\n');
     await model.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
-    await expect(model.getByRole('alert')).toContainText('was not saved because it changed elsewhere');
+    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'was not saved because it changed elsewhere' })).toBeVisible();
     await expect(model.getByLabel('Context window')).toHaveValue('250000');
     expect(readFileSync(fixture.settings, 'utf8')).not.toContain('250000');
     expect(writes()).toHaveLength(1);

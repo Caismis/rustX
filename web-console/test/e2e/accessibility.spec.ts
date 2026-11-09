@@ -110,7 +110,11 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(endpoint); await expect(endpoint).toBeFocused();
     await page.keyboard.press('End'); await page.keyboard.type('/draft-only');
     const actions = settings.getByRole('button', { name: 'Provider actions', exact: true });
-    await tabTo(actions); await page.keyboard.press('Enter');
+    await tabTo(actions);
+    // Leaving the endpoint starts its native autosave. The focusable menu
+    // trigger refuses activation until that write has been observed.
+    await expect(actions).toHaveAttribute('aria-disabled', 'false');
+    await page.keyboard.press('Enter');
     await expect(page.getByRole('menuitem', { name: 'Choose provider icon', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(actions).toBeFocused();

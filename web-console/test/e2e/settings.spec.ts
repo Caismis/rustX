@@ -18,11 +18,13 @@ test('Workspace settings save permissions and features, and keep configuration r
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const saved = async (unit: string) => expect(settledSave(settings, unit)).toBeVisible();
     await openSettingsPage(page, 'Agent');
-    const instructions = settings.getByRole('form', { name: 'Instructions', exact: true });
-    await instructions.getByLabel('Instructions', { exact: true }).fill('Follow the project conventions.');
-    await instructions.getByRole('button', { name: 'Save Instructions', exact: true }).click();
-    await saved('Instructions');
-    expect(readFileSync(`${fixture.workspaceA}/rustx.toml`, 'utf8')).toContain('Follow the project conventions.');
+    await expect(settings.getByRole('form', { name: 'Global instructions', exact: true })).toHaveCount(0);
+    const guidance = settings.getByRole('form', { name: 'Project guidance', exact: true });
+    await guidance.getByRole('switch', { name: 'Automatically load project guidance' }).uncheck();
+    await guidance.getByRole('button', { name: 'Save Project guidance', exact: true }).click();
+    await saved('Project guidance');
+    expect(readFileSync(`${fixture.workspaceA}/rustx.toml`, 'utf8')).toContain('inherit = false');
+    await expect(settings.getByRole('form', { name: 'Instructions', exact: true })).toHaveCount(0);
 
     await openSettingsPage(page, 'Tools & Permissions');
     const tools = settings.getByRole('form', { name: 'Built-in tools', exact: true });
