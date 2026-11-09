@@ -102,7 +102,9 @@ impl ModelAdapter for AnthropicMessagesAdapter {
         request: PreparedModelRequest,
         cancellation: CancellationSignal,
     ) -> ModelStream {
-        let PreparedModelRequest { input, body, tools } = request;
+        let PreparedModelRequest {
+            input, body, tools, ..
+        } = request;
         if input.protocol() != self.protocol() {
             return model_stream_of_failure(invalid_request("prepared request protocol mismatch"));
         }

@@ -140,12 +140,50 @@ pub struct PreparedModelRequest {
     pub(super) input: std::sync::Arc<ModelRequest>,
     pub(super) body: bytes::Bytes,
     pub(super) tools: std::sync::Arc<ValidatedTools>,
+    #[cfg(test)]
+    body_lifetime: std::sync::Weak<()>,
 }
 
 impl PreparedModelRequest {
     pub(crate) fn input(&self) -> &ModelRequest {
         &self.input
     }
+
+    #[cfg(test)]
+    pub(crate) fn ownership_probe(&self) -> PreparedOwnershipProbe {
+        PreparedOwnershipProbe {
+            body: (self.body.as_ptr() as usize, self.body.len()),
+            body_lifetime: self.body_lifetime.clone(),
+            input: std::sync::Arc::downgrade(&self.input),
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct PreparedOwnershipProbe {
+    pub body: (usize, usize),
+    pub body_lifetime: std::sync::Weak<()>,
+    pub input: std::sync::Weak<ModelRequest>,
+}
+
+#[cfg(test)]
+fn track_body_lifetime(body: Vec<u8>) -> (bytes::Bytes, std::sync::Weak<()>) {
+    struct TrackedBody {
+        bytes: Vec<u8>,
+        _lifetime: std::sync::Arc<()>,
+    }
+    impl AsRef<[u8]> for TrackedBody {
+        fn as_ref(&self) -> &[u8] {
+            &self.bytes
+        }
+    }
+    let lifetime = std::sync::Arc::new(());
+    let probe = std::sync::Arc::downgrade(&lifetime);
+    let bytes = bytes::Bytes::from_owner(TrackedBody {
+        bytes: body,
+        _lifetime: lifetime,
+    });
+    (bytes, probe)
 }
 
 #[cfg(test)]
@@ -162,6 +200,14 @@ pub(crate) fn prepare_request(
     request: ModelRequest,
     protocol: ModelProtocol,
 ) -> Result<PreparedModelRequest, ModelError> {
+    prepare_request_with_limit(request, protocol, None)
+}
+
+pub(crate) fn prepare_request_with_limit(
+    request: ModelRequest,
+    protocol: ModelProtocol,
+    body_limit: Option<usize>,
+) -> Result<PreparedModelRequest, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _request = super::profile::RequestScope::new(protocol, "prepare");
     #[cfg(test)]
@@ -172,12 +218,30 @@ pub(crate) fn prepare_request(
     let _encoding = super::profile::phase(super::profile::Phase::HttpEncode);
     #[cfg(test)]
     PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated, encoded + 1)));
-    let body = serde_json::to_vec(&wire)
-        .map_err(|error| invalid_request(format!("failed to encode provider request: {error}")))?;
+    let body = match body_limit {
+        Some(limit) => crate::observation::bounded::encode_capped_bytes(&wire, limit),
+        None => serde_json::to_vec(&wire),
+    }
+    .map_err(|error| {
+        if error.is_io() {
+            let mut error =
+                invalid_request("translated provider request exceeds byte budget".into());
+            error.kind = ModelErrorKind::ContextWindowExceeded;
+            error
+        } else {
+            invalid_request(format!("failed to encode provider request: {error}"))
+        }
+    })?;
+    #[cfg(test)]
+    let (body, body_lifetime) = track_body_lifetime(body);
+    #[cfg(not(test))]
+    let body = body.into();
     Ok(PreparedModelRequest {
         input: std::sync::Arc::new(request),
-        body: body.into(),
+        body,
         tools: std::sync::Arc::new(tools),
+        #[cfg(test)]
+        body_lifetime,
     })
 }
 

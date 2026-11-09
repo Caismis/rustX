@@ -14,7 +14,7 @@ struct Buffer {
 impl std::io::Write for Buffer {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
-            return Err(std::io::Error::other("bounded display item"));
+            return Err(std::io::Error::other("bounded JSON encoding"));
         }
         let required = self.bytes.len() + bytes.len();
         if required > self.bytes.capacity() {
@@ -34,13 +34,17 @@ impl std::io::Write for Buffer {
         Ok(())
     }
 }
-fn encode_admitted_bytes<T: Serialize + ?Sized>(value: &T, limit: usize) -> Option<Vec<u8>> {
+/// Exact JSON encoding with a hard byte and buffer-capacity limit.
+pub(crate) fn encode_capped_bytes<T: Serialize + ?Sized>(
+    value: &T,
+    limit: usize,
+) -> serde_json::Result<Vec<u8>> {
     let mut buffer = Buffer {
         bytes: Vec::new(),
         limit,
     };
-    serde_json::to_writer(&mut buffer, value).ok()?;
-    Some(buffer.bytes)
+    serde_json::to_writer(&mut buffer, value)?;
+    Ok(buffer.bytes)
 }
 
 struct Length {
@@ -85,7 +89,7 @@ pub(crate) fn bounded_bytes<T: Serialize + ?Sized>(value: &T, limit: usize) -> O
     if !crate::observation::preflight::fits(value, limit) {
         return None;
     }
-    encode_admitted_bytes(value, limit)
+    encode_capped_bytes(value, limit).ok()
 }
 /// Decodes one source-typed native domain value, preserving exact native u64 fields.
 /// Opaque JSON fields retain their original JSON semantics.
@@ -156,7 +160,7 @@ pub(crate) fn bounded_item_admitted(
     }
     #[cfg(test)]
     record_item_work(0);
-    let bytes = encode_admitted_bytes(value, limit)?;
+    let bytes = encode_capped_bytes(value, limit).ok()?;
     #[cfg(test)]
     record_item_work(1);
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;

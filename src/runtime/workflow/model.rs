@@ -427,6 +427,7 @@ impl WorkflowRuntime {
             .submit(FrozenCall {
                 start,
                 request,
+                provider_body_limit: Some(MAX_RENDERED_PROMPT_BYTES),
                 invocation,
                 timeout: context.execution_policy().model_timeout,
                 resource_revision: context.resources().revision().get(),

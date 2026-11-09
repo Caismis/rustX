@@ -132,6 +132,7 @@ pub(crate) struct AuxiliaryReservation {
 pub(crate) struct FrozenCall {
     pub start: AuxiliaryCallStart,
     pub request: ModelRequest,
+    pub provider_body_limit: Option<usize>,
     pub invocation: ResolvedModelInvocation,
     pub timeout: ModelTimeoutPolicy,
     pub resource_revision: u64,
