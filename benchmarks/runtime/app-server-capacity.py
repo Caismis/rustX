@@ -5,6 +5,7 @@ not a production capacity or P99 guarantee. No Pi or DeepSeek execution.
 """
 import argparse
 import asyncio
+import base64
 import collections
 import hashlib
 import json
@@ -22,6 +23,7 @@ import websockets
 
 REPO = Path(__file__).resolve().parents[2]
 TOKEN = 'capacity_fixture_' + 'x' * 48
+PROTOCOL_VERSION = 76
 
 
 def write(path, value):
@@ -60,12 +62,13 @@ class Client:
 
     @classmethod
     async def open(cls, endpoint, path):
+        bearer = base64.urlsafe_b64encode(TOKEN.encode()).decode().rstrip('=')
         ws = await websockets.connect(endpoint,
-                                      subprotocols=['rustx.app-server.v52', 'rustx-token.' + TOKEN],
+                                      subprotocols=[f'rustx.app-server.v{PROTOCOL_VERSION}', 'rustx-token.' + bearer],
                                       compression=None, max_size=1048576, max_queue=32)
         self = cls(ws, path)
         initialized = await self.call('initialize', {
-            'protocol_version': 52, 'client': {'name': 'capacity', 'version': '1'},
+            'protocol_version': PROTOCOL_VERSION, 'client': {'name': 'capacity', 'version': '1'},
             'presentation': {'images': False, 'questionnaires': False, 'reviews': False}})
         assert initialized['type'] == 'initialized', initialized
         return self
@@ -96,7 +99,7 @@ class Client:
                 raise
 
     async def call(self, method, params):
-        lane = self.control if method in ['turn/cancel', 'session/detach'] else self.ordinary
+        lane = self.control if method in ['turn/interrupt', 'session/detach'] else self.ordinary
         async with lane:
             self.sequence += 1
             identity = self.sequence
@@ -128,7 +131,10 @@ async def main(a):
         'sha256': hashlib.sha256(a.binary.read_bytes()).hexdigest(),
         'websockets': websockets.__version__, 'affinity': sorted(os.sched_getaffinity(0)),
         'sessions': a.sessions, 'history_turns': a.history, 'widths': a.widths,
-        'rounds': a.rounds, 'cache_probes': a.cache_probes, 'scope': 'Actual native App Server over authenticated WebSocket. '
+        'rounds': a.rounds, 'cache_probes': a.cache_probes,
+        'protocol_version': PROTOCOL_VERSION, 'memory_only': a.memory_only,
+        'session_names': 'Explicit fixture names; automatic title generation is not part of this workload.',
+        'scope': 'Actual native App Server over authenticated WebSocket. '
         'Single-process samples, not a production capacity/P99 guarantee. '
         'Driver and provider are siblings; only server PID resource counters are reported.',
         'inputs': inputs, 'tokio_workers': 4})
@@ -146,12 +152,14 @@ async def main(a):
         'python', str(REPO / 'benchmarks/runtime/app-server-capacity-provider.py'),
         '--seed-requests', str(seed_requests), '--widths', ','.join(map(str, a.widths)),
         '--rounds', str(a.rounds),
+        *(['--memory-only'] if a.memory_only else []),
         '--cache-probe-requests', str(24 + 2 * a.sessions if a.cache_probes else 0),
         stdout=asyncio.subprocess.PIPE, stderr=provider_log,
         env=os.environ | {'UV_OFFLINE': '1'})
     process = None
     clients = []
     phases, latencies, sessions, targets, owners = [], [], [], [], []
+    threads = {}
     try:
         ready = json.loads(await asyncio.wait_for(provider.stdout.readline(), 30))
         base = f"http://127.0.0.1:{ready['port']}"
@@ -235,7 +243,7 @@ shutdown_deadline_ms = 30000
             write(out / 'phases.json', phases)
 
         async def attach(session, observer=True, owner=client):
-            target = (await owner.call('session/attach', {'session_id': session, 'node_id': None}))['target']
+            target = (await owner.call('thread/resume', {'threadId': threads[session]}))['target']
             if observer:
                 await subscribe(target, owner)
             return target
@@ -246,14 +254,17 @@ shutdown_deadline_ms = 30000
 
         turn_counts = collections.Counter()
 
-        async def turn(index, expected='completed'):
+        async def turn(index, expected='completed', accepted_turn=None):
             target = targets[index]
             turn = turn_counts[index]
             turn_counts[index] += 1
             began = time.monotonic_ns()
-            acknowledgement = await owners[index].call('turn/start', {'target': target, 'content': [
+            acknowledgement = await owners[index].call('turn/start', {'target': target,
+                'inputId': f'capacity-{index}-{turn}', 'content': [
                 {'type': 'text', 'text': f'capacity turn session={index:04} turn={turn:04}'}]})
             accepted = time.monotonic_ns()
+            if accepted_turn is not None:
+                accepted_turn.set_result(acknowledgement['turnId'])
             terminal = await asyncio.wait_for(owners[index].settled[target['conversation_id']].get(), 60)
             assert terminal['outcome']['type'] == expected, terminal
             finished = time.monotonic_ns()
@@ -266,9 +277,14 @@ shutdown_deadline_ms = 30000
         for index in range(a.sessions):
             workspace = out / 'workspaces' / str(index)
             workspace.mkdir(parents=True)
-            result = await client.call('session/create', {'settings': {'cwd': str(workspace)}})
+            result = await client.call('thread/start', {'settings': {'cwd': str(workspace)}})
             session = result['session']['id']
+            assert result['thread']['sessionId'] == session
+            threads[session] = result['thread']['id']
             sessions.append(session)
+            # Use normal naming so the finite provider scenario has exactly
+            # one request per turn, without auxiliary title generation.
+            await client.call('session/name', {'session_id': session, 'name': f'Capacity {index}'})
         await sample('metadata_only')
         primary_connections = (a.sessions + 31) // 32
         for i in range(1, primary_connections):
@@ -319,7 +335,6 @@ shutdown_deadline_ms = 30000
                 'target': targets[a.sessions-2], 'agent_id': None, 'content_ref': content_ref,
                 'offset': 0, 'max_bytes': 4096}) for _ in range(2)]
             assert chunks[0] == chunks[1]
-            import base64
             chunk = chunks[0]['chunk']
             assert chunk['content_ref'] == content_ref and chunk['offset'] == 0
             assert len(base64.b64decode(chunk['data_base64'], validate=True)) == chunk['end_offset']
@@ -332,91 +347,94 @@ shutdown_deadline_ms = 30000
                 write(out / f'cache-rotation-{label}.json', {'before': before, 'after': counter(process.pid), 'rows': rows,
                     'scope': 'One sequential turn per session. Cold excludes sessions0..3 kept active and the two Inspector targets when aggregating cold-eligible rows; warm repeats the same order promptly.'})
                 await sample('cache_rotation_' + label)
-        for width in a.widths:
-            before = counter(process.pid)
-            profiling = a.cpu_profiler is not None and width == a.widths[-1]
-            if profiling:
-                process.send_signal(signal.SIGUSR2)
-            for repeat in range(a.rounds):
-                # Only the first repeat deliberately holds requests to measure
-                # resident active state. Other repeats run without a gate delay.
-                if repeat:
-                    await asyncio.gather(*(control(f'gates/active-{width}-{repeat}-{i}/release', True)
-                                           for i in range(width)))
-                tasks = [asyncio.create_task(turn(i)) for i in range(width)]
-                if repeat == 0:
-                    await asyncio.gather(*(gate(f'active-{width}-{repeat}-{i}') for i in range(width)))
-                    await sample(f'active_held_{width}')
-                    release_ns = time.monotonic_ns()
-                    await asyncio.gather(*(control(f'gates/active-{width}-{repeat}-{i}/release', True)
-                                           for i in range(width)))
-                else:
-                    release_ns = None
-                rows = await asyncio.gather(*tasks)
-                latencies.append({'width': width, 'repeat': repeat, 'turns': rows,
-                                  'held': repeat == 0, 'release_began_ns': release_ns})
-            if profiling:
-                process.send_signal(signal.SIGUSR2)
-            await sample(f'active_finished_{width}')
-            write(out / f'active-{width}.json', {'before': before, 'after': counter(process.pid),
-                                               'rows': [r for r in latencies if r['width'] == width]})
-        # One controller per Session is the product contract. Move disjoint
-        # idle Sessions to other connections instead of inventing observers.
-        for copy in range(3):
-            observer = await Client.open(endpoint, out / f'observer-{copy}.log')
-            clients.append(observer)
-            for index in range(8 + 8 * copy, min(16 + 8 * copy, a.sessions - 1)):
-                await owners[index].call('session/detach', {'target': targets[index]})
-                await attach(sessions[index], owner=observer)
-                targets[index] = None
-        await sample('extra_controller_connections')
-        for session in sessions:
-            await client.call('session/history', {'session_id': session, 'node_id': None,
-                                                  'at': {'type': 'latest'}, 'limit': 32})
-        await sample('history_browsed')
-        task = asyncio.create_task(turn(0))
-        await gate('browse')
-        # History reads run while native generation is held, then settle normally.
-        await client.call('session/traceHistory', {'session_id': sessions[0], 'node_id': None,
-                                                   'before': None, 'limit': 16})
-        await control('gates/browse/release', True)
-        await task
-        slow = await Client.open(endpoint, out / 'slow-client.log')
-        clients.append(slow)
-        slow_index = a.sessions - 1
-        await owners[slow_index].call('session/detach', {'target': targets[slow_index]})
-        slow_target = await attach(sessions[slow_index], owner=slow)
-        targets[slow_index] = None
-        slow_turn = turn_counts[slow_index]
-        turn_counts[slow_index] += 1
-        await slow.call('turn/start', {'target': slow_target, 'content': [
-            {'type': 'text', 'text': f'capacity turn session={slow_index:04} turn={slow_turn:04}'}]})
-        await gate('slow')
-        slow.task.cancel()
-        await slow.task
-        await sample('slow_consumer_held')
-        await control('gates/slow/release', True)
-        deadline = time.monotonic() + 30
-        while (await client.call('server/diagnostics', {}))['snapshot']['active_roots']:
-            assert time.monotonic() < deadline
-            await asyncio.sleep(0.01)
-        history = await client.call('session/history', {'session_id': sessions[slow_index],
-                                                        'node_id': None, 'at': {'type': 'latest'},
-                                                        'limit': 32})
-        write(out / 'slow-completed-history.json', history)
-        await sample('slow_consumer_settled')
-        await slow.ws.close()
-        clients.remove(slow)
-        cancel = asyncio.create_task(turn(0, 'cancelled'))
-        await gate('cancel')
-        began = time.monotonic_ns()
-        await client.call('turn/cancel', {'target': targets[0]})
-        cancelled = await cancel
-        await control('observations/await?kind=client_disconnected&count=1&timeoutMs=30000')
-        await control('gates/cancel/release', True)
-        await control(f"observations/await?kind=response_completed&count={ready['steps']}&timeoutMs=30000")
-        write(out / 'cancellation.json', {'cancel_to_settled_us': (time.monotonic_ns() - began) / 1000,
-                                         'turn': cancelled})
+        if not a.memory_only:
+            for width in a.widths:
+                before = counter(process.pid)
+                profiling = a.cpu_profiler is not None and width == a.widths[-1]
+                if profiling:
+                    process.send_signal(signal.SIGUSR2)
+                for repeat in range(a.rounds):
+                    # Only the first repeat deliberately holds requests to measure
+                    # resident active state. Other repeats run without a gate delay.
+                    if repeat:
+                        await asyncio.gather(*(control(f'gates/active-{width}-{repeat}-{i}/release', True)
+                                               for i in range(width)))
+                    tasks = [asyncio.create_task(turn(i)) for i in range(width)]
+                    if repeat == 0:
+                        await asyncio.gather(*(gate(f'active-{width}-{repeat}-{i}') for i in range(width)))
+                        await sample(f'active_held_{width}')
+                        release_ns = time.monotonic_ns()
+                        await asyncio.gather(*(control(f'gates/active-{width}-{repeat}-{i}/release', True)
+                                               for i in range(width)))
+                    else:
+                        release_ns = None
+                    rows = await asyncio.gather(*tasks)
+                    latencies.append({'width': width, 'repeat': repeat, 'turns': rows,
+                                      'held': repeat == 0, 'release_began_ns': release_ns})
+                if profiling:
+                    process.send_signal(signal.SIGUSR2)
+                await sample(f'active_finished_{width}')
+                write(out / f'active-{width}.json', {'before': before, 'after': counter(process.pid),
+                                                   'rows': [r for r in latencies if r['width'] == width]})
+            # One controller per Session is the product contract. Move disjoint
+            # idle Sessions to other connections instead of inventing observers.
+            for copy in range(3):
+                observer = await Client.open(endpoint, out / f'observer-{copy}.log')
+                clients.append(observer)
+                for index in range(8 + 8 * copy, min(16 + 8 * copy, a.sessions - 1)):
+                    await owners[index].call('session/detach', {'target': targets[index]})
+                    await attach(sessions[index], owner=observer)
+                    targets[index] = None
+            await sample('extra_controller_connections')
+            for session in sessions:
+                await client.call('session/history', {'session_id': session, 'node_id': None,
+                                                      'at': {'type': 'latest'}, 'limit': 32})
+            await sample('history_browsed')
+            task = asyncio.create_task(turn(0))
+            await gate('browse')
+            # History reads run while native generation is held, then settle normally.
+            await client.call('session/traceHistory', {'session_id': sessions[0], 'node_id': None,
+                                                       'before': None, 'limit': 16})
+            await control('gates/browse/release', True)
+            await task
+            slow = await Client.open(endpoint, out / 'slow-client.log')
+            clients.append(slow)
+            slow_index = a.sessions - 1
+            await owners[slow_index].call('session/detach', {'target': targets[slow_index]})
+            slow_target = await attach(sessions[slow_index], owner=slow)
+            targets[slow_index] = None
+            slow_turn = turn_counts[slow_index]
+            turn_counts[slow_index] += 1
+            await slow.call('turn/start', {'target': slow_target, 'inputId': f'capacity-{slow_index}-{slow_turn}', 'content': [
+                {'type': 'text', 'text': f'capacity turn session={slow_index:04} turn={slow_turn:04}'}]})
+            await gate('slow')
+            slow.task.cancel()
+            await slow.task
+            await sample('slow_consumer_held')
+            await control('gates/slow/release', True)
+            deadline = time.monotonic() + 30
+            while (await client.call('server/diagnostics', {}))['snapshot']['active_roots']:
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.01)
+            history = await client.call('session/history', {'session_id': sessions[slow_index],
+                                                            'node_id': None, 'at': {'type': 'latest'},
+                                                            'limit': 32})
+            write(out / 'slow-completed-history.json', history)
+            await sample('slow_consumer_settled')
+            await slow.ws.close()
+            clients.remove(slow)
+            accepted_turn = asyncio.get_running_loop().create_future()
+            cancel = asyncio.create_task(turn(0, 'cancelled', accepted_turn))
+            await gate('cancel')
+            began = time.monotonic_ns()
+            await client.call('turn/interrupt', {'target': targets[0],
+                'turnId': await asyncio.wait_for(accepted_turn, 30)})
+            cancelled = await cancel
+            await control('observations/await?kind=client_disconnected&count=1&timeoutMs=30000')
+            await control('gates/cancel/release', True)
+            await control(f"observations/await?kind=response_completed&count={ready['steps']}&timeoutMs=30000")
+            write(out / 'cancellation.json', {'cancel_to_settled_us': (time.monotonic_ns() - began) / 1000,
+                                             'turn': cancelled})
         for index, target in enumerate(targets):
             if target is not None:
                 await owners[index].call('session/detach', {'target': target})
@@ -489,12 +507,12 @@ shutdown_deadline_ms = 30000
             users = [m for m in messages if m['role'] == 'user']
             assistants = [m for m in messages if m['role'] == 'assistant']
             assert len(users) == turn_counts[index]
-            assert len(assistants) == turn_counts[index] - int(index == 0)
+            assert len(assistants) == turn_counts[index] - int(not a.memory_only and index == 0)
             for turn, user in enumerate(users):
                 assert user['content'] == [{'type': 'text',
                     'text': f'capacity turn session={index:04} turn={turn:04}'}]
             for turn, assistant in enumerate(assistants):
-                text = 'S' * 32768 if index == slow_index and turn == len(assistants) - 1 else 'capacity response'
+                text = 'S' * 32768 if not a.memory_only and index == slow_index and turn == len(assistants) - 1 else 'capacity response'
                 assert assistant['content'] == [{'type': 'text', 'text': text}]
             assert not any('forbidden' in json.dumps(m) for m in messages)
             native.append({'path': str(db.relative_to(out)),
@@ -545,8 +563,11 @@ if __name__ == '__main__':
     parser.add_argument('--widths', type=int, nargs='+', default=[1, 4, 8])
     parser.add_argument('--rounds', type=int, default=16)
     parser.add_argument('--cpu-profiler', type=Path)
+    parser.add_argument('--memory-only', action='store_true', help='Measure empty/seeded memory and native close/reload checks without active, browse, slow-consumer or cancel scenarios')
     parser.add_argument('--cache-probes', action='store_true', help='Measure page/statement idle windows, four warm sessions, Inspector and cold/warm128-session rotation')
     options = parser.parse_args()
-    assert 2 <= options.sessions <= 256 and max(options.widths) <= options.sessions
+    assert (1 if options.memory_only else 2) <= options.sessions <= 256
+    assert options.memory_only or max(options.widths) <= options.sessions
+    assert options.history > 0 and options.rounds > 0
     assert not options.cache_probes or options.sessions >= 8
     asyncio.run(main(options))
