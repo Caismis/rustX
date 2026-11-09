@@ -2232,9 +2232,17 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "68c378f240b1fe2253c7aa953f50b337a335babbca68e2fb294e7e93971a06aa",
+      "local_sha256": "a398f2a0ba9ffd9f15b10197918e7ce7d3475c04bdbfaf58e9b11d586251ca8d",
       "retained_dependencies": [],
-      "classification": "A"
+      "classification": "A",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/HoverCard.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "e5dc1c4235065942925aecd48b36c29c8f4df79ec571345b95fdd7f2fef82c02",
+          "treatment": "Adapt the inset, viewport-bounded preview variant and its themed panel surface. Preserve the compact variant for workspace rows."
+        }
+      ]
     },
     {
       "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
@@ -2257,8 +2265,16 @@
         "react",
         "react-dom"
       ],
-      "local_sha256": "a03779db26aa4d324ae51be45f439f22e27b266f55f4e4c86826e2e6caf39f89",
-      "classification": "A"
+      "local_sha256": "8f5a33f622f82ddfac845f51c21327966377118472d117560479cdaa41584a3b",
+      "classification": "A",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "7d0d8071c3b31e1e96a2995b9cdc5a4161434517a53d83724250a6ef37122a73",
+          "treatment": "Adapt the inset, viewport-bounded preview variant and its themed panel surface. Preserve the compact variant for workspace rows."
+        }
+      ]
     },
     {
       "upstream": "packages/client/ui-primitives/src/Input.module.css",
@@ -3749,7 +3765,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "591a202b6d756a1ed58cdf982ad7dd374baf9b88c94cad9ac4eedda385612da6"
+      "local_sha256": "eda41494bea5e09e93b8f2454a028ec03c303fb2f7171a328cf1a0983a67c71b"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -7601,7 +7617,7 @@
       "destination": "web-console/src/presentation/attachments/ChangedFiles.tsx",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "563e61f5bc3317c96eda89227ccac506ee8d68795a62f004f896df2416382891",
-      "local_sha256": "acc6891b15b85672d22f6af528de59671b83d81c55ca4cb4437787b83f04226a",
+      "local_sha256": "1234691990484299bd9f21ba5bba945db51158d282118aa9a0d93fb2f204669b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "A",
       "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
@@ -7617,6 +7633,26 @@
         "Harness Session events and Host services",
         "Cordis injection and slot lifecycle",
         "Harness review/tab and diff-store authority"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "563e61f5bc3317c96eda89227ccac506ee8d68795a62f004f896df2416382891",
+          "treatment": "Align card-relative sizing, path descriptions and deferred file previews."
+        },
+        {
+          "upstream": "packages/client/ui-deliverables/src/client/FileDiff.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "96d2cd177bd5319ee7c19d02ac37cd1be7ce9b7ff9dc5a7d8b86d50b0d2e0ca8",
+          "treatment": "Consulted for numbered unified previews; rustX keeps its immutable comparison hunks and reuses its local patch and syntax-highlighting functions."
+        },
+        {
+          "upstream": "packages/client/ui-deliverables/src/client/FileDiff.module.css",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "a3d8aa354bf27c5652ceb1878b32e165b8ebbd9810b2adbeaa7abb78237e9d33",
+          "treatment": "Consulted for the independent path and code scrollers and numbered change gutters."
+        }
       ]
     },
     {
@@ -7624,7 +7660,7 @@
       "destination": "web-console/src/presentation/attachments/ChangedFiles.module.css",
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
       "upstream_sha256": "9195a2c60f3987266176a4b1d877ba022bb2b6c1bd9c8fabfc1f41f6277f1e67",
-      "local_sha256": "970d77257d9ab143bf5be5c2128e94e0010c8f755316a5a925004e57252f3230",
+      "local_sha256": "e1fa2ffb996f9198b1f766b9e156abcd87aa4f4461757ff7b10b991bc977a547",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "A",
       "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
