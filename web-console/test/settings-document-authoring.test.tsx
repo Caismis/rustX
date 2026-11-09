@@ -99,7 +99,7 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   open('Extensions');
   await openResourceModule('mcp');
   expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '＋ New' }));
+  fireEvent.click(screen.getByRole('button', { name: '＋ New MCP server' }));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'probe' } });
   openMcpContractEditor();
   const mcp = within(screen.getByRole('form', { name: 'New MCP server' }));
@@ -108,7 +108,7 @@ it('DA-03 a malformed rustx.toml leaves the independent MCP and named Agent docu
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ expected_revision: 'mcp-1', mutation: { kind: 'mcp', id: 'probe' } });
   // Named Agent: a whole resource document of its own.
-  await screen.findByRole('button', {name:'＋ New'});
+  await screen.findByRole('button', {name:'＋ New MCP server'});
   open('Extensions');
   await openResourceModule('subagents');
   expect(screen.queryByRole('form', { name: 'Repair invalid source' })).toBeNull();
@@ -130,7 +130,7 @@ it('DA-04 a malformed MCP document admits no MCP mutation and leaves rustx.toml 
   open('Extensions');
   await openResourceModule('mcp');
   expect(screen.getByText('invalid MCP document')).toBeTruthy();
-  expect(screen.getByRole('button',{name:'＋ New'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'＋ New MCP server'})).toHaveProperty('disabled',true);
   expect(screen.queryByLabelText('New MCP identity')).toBeNull();
   expect(forms()).toEqual([]);
   open('Tools & Permissions');

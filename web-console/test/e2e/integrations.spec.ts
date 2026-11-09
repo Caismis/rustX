@@ -36,7 +36,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await openSettingsPage(page, 'Advanced');
     await expect(settings).not.toContainText(fixture.settings);
     settings=await openResourceModule(page,'mcp','Global');
-    await settings.getByRole('button', { name: '＋ New', exact: true }).click();
+    await settings.getByRole('button', { name: '＋ New MCP server', exact: true }).click();
     await settings.getByLabel('Name', { exact: true }).fill('local-fixture');
     await settings.getByLabel('Command', { exact: true }).fill('python3');
     await settings.getByLabel('Arguments (space-separated)',{exact:true}).fill(formatArguments([fileURLToPath(new URL('./web09-mcp.py', import.meta.url)), join(fixture.directory, 'mcp-started')]));

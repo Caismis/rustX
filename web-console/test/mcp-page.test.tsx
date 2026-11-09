@@ -26,7 +26,8 @@ it('MCP has its own navigation and saves a new HTTP server before returning to t
  expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();
 });
 it('JSON import requires a supported configuration and saves only the selected identity',async()=>{
- const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'More actions'}));
+ fireEvent.click(await screen.findByRole('menuitem',{name:'Import'}));
  changeJson(await screen.findByLabelText('Complete configuration'), JSON.stringify({mcpServers:{docs:{command:'npx',args:['-y','docs'],sensitive_env:{TOKEN:'$TOKEN'}}}}));
  fireEvent.click(screen.getByRole('button',{name:'Form'}));
  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('docs');
@@ -78,7 +79,8 @@ it('invalid reference JSON cannot save an earlier valid draft or escape through 
  expect(writes(s)[0].mutation).toMatchObject({authored:{definition:{sensitive_env:{}}}});
 });
 it('saves directly from JSON using the same native source transaction',async()=>{
- const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'More actions'}));
+ fireEvent.click(await screen.findByRole('menuitem',{name:'Import'}));
  changeJson(await screen.findByLabelText('Complete configuration'), '{"mcpServers":{"json-save":{"url":"https://example.com/mcp"}}}');
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'json-save'});
@@ -105,7 +107,7 @@ it('shows the complete form immediately and keeps fields entered before the name
  fireEvent.click(save());await screen.findByRole('listitem',{name:'renamed'});
  expect(writes(s)).toHaveLength(1);
  expect(writes(s)[0].mutation).toMatchObject({kind:'mcp',id:'renamed',authored:{definition:{command:'npx'}}});
- fireEvent.click(screen.getByRole('button',{name:'＋ New'}));
+ fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('');
  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'first'}});
  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('');
@@ -126,7 +128,8 @@ it('JSON edits survive repeated mode selection and are applied when returning to
  expect(writes(s)[0].mutation).toMatchObject({id:'json-form',authored:{definition:{type:'http',url:'https://example.com/mcp'}}});
 });
 it('invalid JSON remains editable when switching back to the form',async()=>{
- const s=await open();fireEvent.click(screen.getByRole('button',{name:'Import'}));
+ const s=await open();fireEvent.click(screen.getByRole('button',{name:'More actions'}));
+ fireEvent.click(await screen.findByRole('menuitem',{name:'Import'}));
  changeJson(await screen.findByLabelText('Complete configuration'), '{broken');
  fireEvent.click(screen.getByRole('button',{name:'Form'}));
  expect(readJson(screen.getByLabelText('Complete configuration'))).toBe('{broken');
@@ -147,7 +150,7 @@ it('a duplicate name cannot overwrite a server and resolving it preserves the ne
  fireEvent.change(screen.getByLabelText('Command'),{target:{value:'original'}});
  fireEvent.click(screen.getByRole('button',{name:'Save'}));
  await screen.findByRole('listitem',{name:'existing'});
- fireEvent.click(screen.getByRole('button',{name:'＋ New'}));
+ fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
  fireEvent.change(screen.getByLabelText('Command'),{target:{value:'new-command'}});
  fireEvent.change(screen.getByLabelText('Name'),{target:{value:'existing'}});
  expect(screen.getByRole('alert').textContent).toContain('already exists');
@@ -183,24 +186,21 @@ it('workspace MCP management shows inherited global definitions without probing 
  const {McpPage}=await import('../src/app/resources/mcp/McpPage');
  const {vi}=await import('vitest');
  const onFocus=vi.fn();
- const props={source:s.source,scope:'workspace' as const,onFocus,scopeControl:<span>Workspace A</span>,refresh:vi.fn(),refreshing:false};
+ const props={source:s.source,scope:'workspace' as const,onFocus,scopeControl:<span>Workspace A</span>,query:'',view:'cards' as const};
  const ui=render(<McpPage {...props}/>);
  expect(screen.getByText('No MCP servers installed')).toBeTruthy();
  expect(within(screen.getByRole('group',{name:'Available from Global'})).getByRole('listitem',{name:'exa'})).toBeTruthy();
  expect(screen.queryByText('Inherited from user')).toBeNull();
- expect(ui.container.querySelector('[class*="total"]')?.textContent).toBe('MCP 1');
  expect(screen.getByRole('button',{name:'Test connection exa'})).toHaveProperty('disabled',true);
- fireEvent.change(screen.getByRole('searchbox'),{target:{value:'exa'}});
- expect(within(screen.getByRole('group',{name:'Available from Global'})).getByRole('listitem',{name:'exa'})).toBeTruthy();
  expect(s.request.mock.calls.some(([op])=>String(op.method).startsWith('mcp/'))).toBe(false);
  // Switching scope reveals the same user definition without copying or editing it.
  s.source.target={kind:'user'};
  ui.rerender(<McpPage {...props} source={{...s.source}} scope="user"/>);
  expect(screen.getByRole('listitem',{name:'exa'})).toBeTruthy();
- expect(ui.container.querySelector('[class*="total"]')?.textContent).toBe('MCP 1');
  expect(writes(s)).toHaveLength(0);
- fireEvent.change(screen.getByRole('searchbox'),{target:{value:'missing'}});
- expect(ui.container.querySelector('[class*="total"]')?.textContent).toBe('MCP 0');
+ ui.rerender(<McpPage {...props} source={{...s.source}} scope="user" query="missing"/>);
+ expect(screen.queryByRole('listitem',{name:'exa'})).toBeNull();
+ expect(screen.getByText('Try another name, description, or path.')).toBeTruthy();
 });
 
 it('literal imports and malformed JSON never echo secret input',()=>{

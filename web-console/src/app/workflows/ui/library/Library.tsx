@@ -4,6 +4,8 @@ import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../../locale/react';
+import { CatalogSearch, CatalogViewSwitch } from '../../../../presentation/catalog/CatalogControls';
+import css from '../../../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Switch } from '../../../../presentation/primitives/Switch';
@@ -12,11 +14,10 @@ import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import type { LibraryOperation } from '../../machines/library';
 import type { WorkflowSurfaceActor } from '../../machines/surface';
 import { USER_SCOPE, type WorkflowScope } from '../../port';
-import { IconFile, IconFolder, IconGrid, IconList } from '../icons';
+import { IconFile, IconFolder } from '../icons';
 import { WorkflowIcon } from '../WorkflowIcon';
 import { FailureText } from '../notices';
 import { LibraryDialog } from './dialogs';
-import css from '../Workflows.module.css';
 
 const VIEW = 'rustx-workflows-library-view';
 function readView(): 'cards' | 'list' {
@@ -163,11 +164,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
       </div>}
       {!showingWorkspace && context}
       <div className={css.controlsRight}>
-        <label className={css.search}><IconSearchOutline16 /><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('workflows:library.search')} aria-label={tx('workflows:library.search')} /></label>
-        <div className={css.viewSwitch} role="group" aria-label={tx('workflows:library.view')}>
-          <button type="button" aria-pressed={view === 'cards'} aria-label={tx('workflows:library.view-cards')} className={clsx(view === 'cards' && css.viewActive)} onClick={() => chooseView('cards')}><IconGrid size={15} /></button>
-          <button type="button" aria-pressed={view === 'list'} aria-label={tx('workflows:library.view-list')} className={clsx(view === 'list' && css.viewActive)} onClick={() => chooseView('list')}><IconList size={15} /></button>
-        </div>
+        <CatalogSearch label={tx('workflows:library.search')} value={query} onChange={setQuery} />
+        <CatalogViewSwitch view={view} onChange={chooseView} />
       </div>
     </div>
     {showingWorkspace && context}

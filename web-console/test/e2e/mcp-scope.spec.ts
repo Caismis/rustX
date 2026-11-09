@@ -11,7 +11,11 @@ test('MCP keeps its resource scope separate from Settings and identifies inherit
  const inherited=mcp.getByRole('group',{name:'Available from Global',exact:true});
  await expect(inherited.getByRole('listitem',{name:'exa',exact:true})).toBeVisible();
  await expect(inherited.getByRole('button',{name:'Test connection exa',exact:true})).toBeDisabled();
- await expect(mcp.locator('[class*="total"]')).toHaveText('MCP 1');
+ const search=mcp.getByRole('searchbox');
+ await search.fill('missing');
+ await expect(inherited).toHaveCount(0);
+ await search.clear();
+ await expect(inherited.getByRole('listitem',{name:'exa',exact:true})).toBeVisible();
  await openSettingsPage(page,'General');
  await expect(page.getByRole('heading',{name:'User Settings',exact:true})).toBeVisible();
  await openResourceModule(page,'mcp');

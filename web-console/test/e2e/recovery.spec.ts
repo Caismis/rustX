@@ -56,7 +56,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       await openResourceModule(page,'mcp','Global');
       await expect(mcp.locator('[data-mcp-page]')).toBeVisible();
       const back = mcp.getByRole('button', { name: '← MCP servers', exact: true });
-      const create = mcp.getByRole('button', { name: '＋ New', exact: true });
+      const create = mcp.getByRole('button', { name: '＋ New MCP server', exact: true });
       // Reconnecting can restore the retained editor after the tabpanel mounts.
       // Wait for its actual surface before deciding whether to return to the list.
       await expect(back.or(create).first()).toBeVisible();
@@ -82,7 +82,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect(model.getByLabel('Context window')).toHaveValue('250000');
     expect(writes()).toHaveLength(2);
     await openMcp();
-    await mcp.getByRole('button', { name: '＋ New', exact: true }).click();
+    await mcp.getByRole('button', { name: '＋ New MCP server', exact: true }).click();
     await mcp.getByLabel('Name', { exact: true }).fill('loss-fixture');
     await mcp.getByLabel('Command', { exact: true }).fill('inert-fixture');
     wire.loseNext('configuration/sourceWrite');

@@ -14,6 +14,18 @@ async function workspace(page:Page,scope:Locator) {
  await scope.getByRole('button',{name:'Choose Workspace',exact:true}).click();
  await page.getByRole('menuitem',{name:'Workspace A',exact:true}).click();
 }
+async function checkCatalogView(scope: Locator, item: Locator) {
+  const list = scope.getByRole('button', { name: 'List view', exact: true });
+  await list.click();
+  await expect(list).toHaveAttribute('aria-pressed', 'true');
+  await expect(item).toBeVisible();
+  const cards = scope.getByRole('button', { name: 'Card view', exact: true });
+  await cards.click();
+  await expect(cards).toHaveAttribute('aria-pressed', 'true');
+  await expect(item).toBeVisible();
+  expect(await scope.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+}
+
 for(const width of [1440,390]) test(`independent resources have exact global and workspace toggles, and read-only skills at ${width}px`,async({page})=>{
  const f=await startDogfood();
  const wire=await wireProbe(page);
@@ -70,6 +82,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect.poll(workspaceDocument).toContain('skills = ["local-guide"]');
   expect(readFileSync(f.settings,'utf8')).toContain('skills = ["global-guide"]');
   await expect(localSkill.getByRole('switch')).toBeEnabled();
+  await checkCatalogView(skills, localSkill);
   await captureEvidence(skills,`workspace-skills-${width}`);
   await skills.getByRole('tab',{name:'Global',exact:true}).click();
   await expect(globalSkill.getByRole('switch')).toBeChecked();
@@ -100,6 +113,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect.poll(workspaceDocument).toContain('global-reviewer');
   expect(readFileSync(f.settings,'utf8')).toContain('agents = ["auditor"]');
   await expect(agents.getByRole('listitem',{name:'global-reviewer',exact:true}).getByRole('switch')).toBeEnabled();
+  await checkCatalogView(agents, agents.getByRole('listitem',{name:'global-reviewer',exact:true}));
   await captureEvidence(agents,`workspace-subagents-${width}`);
 
   await page.getByRole('button',{name:'MCP servers',exact:true}).click();
@@ -114,6 +128,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect.poll(workspaceDocument).toContain('global-server = []');
   expect(readFileSync(f.settings,'utf8')).toContain('global-server = "all"');
   await expect(inheritedServer.getByRole('switch')).toBeEnabled();
+  await checkCatalogView(mcp, inheritedServer);
   await captureEvidence(mcp,`workspace-mcp-${width}`);
   const globalMcp=readFileSync(join(userRoot,'mcp.toml'),'utf8');
   await inheritedServer.getByRole('button',{name:'MCP global-server',exact:true}).click();

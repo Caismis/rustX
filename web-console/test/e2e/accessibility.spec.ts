@@ -120,7 +120,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await page.keyboard.press('Enter');
     const mcp=page.getByRole('region',{name:'MCP servers',exact:true});
     await tabTo(mcp.getByRole('tab',{selected:true}));await page.keyboard.press('End');
-    await tabTo(mcp.getByRole('button', { name: '＋ New', exact: true })); await page.keyboard.press('Enter');
+    await tabTo(mcp.getByRole('button', { name: '＋ New MCP server', exact: true })); await page.keyboard.press('Enter');
     await tabTo(mcp.getByLabel('Name', { exact: true })); await page.keyboard.type('keyboard-draft');
     await tabTo(mcp.getByLabel('Command', { exact: true })); await page.keyboard.type('inert-draft');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

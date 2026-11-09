@@ -473,7 +473,7 @@ it('S1-14 a confirmed MCP environment-reference save drops the submitted payload
   await waitForSettingsRevision('workspace-1');
   fireEvent.click(screen.getByRole('tab', { name: 'Extensions' }));
   await openResourceModule('mcp');
-  fireEvent.click(screen.getByRole('button',{name:'＋ New'}));
+  fireEvent.click(screen.getByRole('button',{name:'＋ New MCP server'}));
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'search' } });
   openMcpContractEditor();
   fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'search-server' } });
